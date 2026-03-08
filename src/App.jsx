@@ -760,14 +760,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return counts;
   }, [leads, LEAD_TABS]);
 
+  const parseDate = (s) => {
+    if (!s || s === "-") return 0;
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+    if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime();
+    const t = new Date(s).getTime();
+    return isNaN(t) ? 0 : t;
+  };
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
     const filtered = tab ? leads.filter(tab.filter) : [...leads];
-    return filtered.sort((a, b) => {
-      const da = a.createdAt ? new Date(a.createdAt) : new Date(0);
-      const db2 = b.createdAt ? new Date(b.createdAt) : new Date(0);
-      return db2 - da;
-    });
+    return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
   }, [leads, activeTab, LEAD_TABS]);
 
   const saleNames = useMemo(() => {
