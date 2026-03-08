@@ -1448,6 +1448,26 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
   try {
     const leadId = Number(req.params.id);
     const histId = Number(req.params.histId);
+
+    // Check if this was a "Chia lead" entry — if so, also undo the sale assignment
+    const hist = await get(db, "SELECT action, sale_name FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
+    if (hist && hist.action === "Chia lead") {
+      // Check if there's an older "Chia lead" entry for a different sale
+      const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND id != ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1", [leadId, histId]);
+      if (prev) {
+        // Revert to previous sale
+        await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [prev.sale_name, leadId]);
+      } else {
+        // No prior assignment — clear sale
+        await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
+      }
+      // Clear telegram pending for this sale
+      const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
+      if (saleUser) {
+        await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
+      }
+    }
+
     await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
     const data = await readData(db);
     res.json(data);
