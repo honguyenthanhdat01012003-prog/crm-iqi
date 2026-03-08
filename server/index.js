@@ -185,6 +185,16 @@ async function initDb() {
     )`
   );
 
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS telegram_pending (
+      telegram_id TEXT PRIMARY KEY,
+      lead_id INTEGER NOT NULL,
+      status TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+
   // Create default admin if no users exist
   const userCount = await get(db, "SELECT COUNT(*) as cnt FROM users");
   if (userCount.cnt === 0) {
@@ -1324,25 +1334,46 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         [leadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq]
       );
 
-      // Send Telegram notification
+      // Send Telegram notification with inline keyboard
       try {
         const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const msg = [
-            `📤 *Bạn vừa được chia lead mới!*`,
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `----------------------------------------------`,
+            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+            `📞 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
+            `🔗 Nhu cầu: ${lead ? lead.product || "-" : "-"}`,
+            `🕒 Nhận lúc: ${now}`,
+            `--------------------------`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
+            `Sau đó nhắn tin feedback cho bot.`,
             ``,
-            `👤 Khách hàng: *${lead ? lead.name : "N/A"}*`,
-            `📱 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
-            `🏗️ Dự án: *${projectRow ? projectRow.name : "-"}*`,
-            `📦 Sản phẩm: ${lead ? lead.product || "-" : "-"}`,
-            `📅 Ngày nhận lead: ${lead ? lead.created_at || "-" : "-"}`,
-            `📢 Chiến dịch: ${lead ? lead.campaign || "-" : "-"}`,
-            ``,
-            `👨‍💼 Được chia bởi: *${req.user.displayName}*`,
-            `⏰ Thời gian: ${now}`,
+            `⏳ _Lưu ý: Bạn có 30 phút để cập nhật trạng thái!_`,
           ].join("\n");
+
+          // Build inline keyboard with status buttons (3 per row)
+          const statusList = [
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
+          ];
+          const keyboard = [];
+          for (let i = 0; i < statusList.length; i += 3) {
+            keyboard.push(
+              statusList.slice(i, i + 3).map(([key, label]) => ({
+                text: label,
+                callback_data: `st:${leadId}:${key}`,
+              }))
+            );
+          }
 
           await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
             method: "POST",
@@ -1351,8 +1382,12 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
               chat_id: saleUser.telegram_id,
               text: msg,
               parse_mode: "Markdown",
+              reply_markup: { inline_keyboard: keyboard },
             }),
           });
+
+          // Save pending state for this user
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, '')", [saleUser.telegram_id, leadId]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
@@ -1416,6 +1451,148 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
     await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
     const data = await readData(db);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ===== Telegram Bot Webhook ===== */
+const TELE_STATUS_LABELS = {
+  new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
+  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Giữ chỗ", closed: "Chốt",
+  not_interested: "Không QT", spam: "Phá/rác", weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
+  callback: "Gọi lại sau", wrong_number: "Sai số", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
+};
+
+app.post("/api/telegram-webhook", async (req, res) => {
+  try {
+    const { callback_query, message } = req.body || {};
+    const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+    if (!activeBot) return res.json({ ok: true });
+    const botToken = activeBot.token;
+
+    const sendTg = (chatId, text, extra = {}) =>
+      fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown", ...extra }),
+      });
+
+    const answerCb = (cbId, text) =>
+      fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ callback_query_id: cbId, text }),
+      });
+
+    // Handle status button click
+    if (callback_query) {
+      const cbData = callback_query.data || "";
+      const chatId = String(callback_query.from?.id || "");
+      const parts = cbData.split(":");
+
+      if (parts[0] === "st" && parts.length === 3) {
+        const leadId = Number(parts[1]);
+        const statusKey = parts[2];
+        const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
+
+        // Update pending with chosen status
+        await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, ?)", [chatId, leadId, statusKey]);
+
+        await answerCb(callback_query.id, `✅ Đã chọn: ${statusLabel}`);
+        await sendTg(chatId, [
+          `✅ Trạng thái: *${statusLabel}*`,
+          ``,
+          `💬 Bây giờ hãy nhắn tin feedback về khách hàng này.`,
+          `VD: _"Khách quan tâm căn 2PN, hẹn xem thứ 7"_`,
+        ].join("\n"));
+      }
+      return res.json({ ok: true });
+    }
+
+    // Handle text message (feedback)
+    if (message && message.text) {
+      const chatId = String(message.from?.id || "");
+      const feedbackText = message.text.trim();
+
+      // Ignore bot commands
+      if (feedbackText.startsWith("/")) return res.json({ ok: true });
+
+      const pending = await get(db, "SELECT lead_id, status FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+      if (!pending) {
+        await sendTg(chatId, "⚠️ Không có lead nào đang chờ feedback.\nHãy bấm nút trạng thái từ thông báo lead trước.");
+        return res.json({ ok: true });
+      }
+
+      if (!pending.status) {
+        await sendTg(chatId, "⚠️ Bạn chưa chọn trạng thái.\nHãy bấm nút trạng thái từ thông báo lead trước, sau đó nhắn feedback.");
+        return res.json({ ok: true });
+      }
+
+      const leadId = pending.lead_id;
+      const statusKey = pending.status;
+      const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
+
+      // Find sale user
+      const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+      const saleName = saleUser ? saleUser.display_name : "Sale";
+
+      // Save to lead_history
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      const now = new Date().toLocaleString("vi-VN");
+      await run(
+        db,
+        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq]
+      );
+
+      // Update lead status
+      await run(db, "UPDATE leads SET status = ? WHERE id = ?", [statusKey, leadId]);
+
+      // Clear pending
+      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+
+      // Get lead info for confirmation
+      const lead = await get(db, "SELECT name, phone FROM leads WHERE id = ?", [leadId]);
+      await sendTg(chatId, [
+        `✅ *Đã lưu feedback thành công!*`,
+        ``,
+        `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+        `📊 Trạng thái: *${statusLabel}*`,
+        `💬 Feedback: _${feedbackText}_`,
+        `⏰ Lúc: ${now}`,
+        ``,
+        `📋 Feedback đã được lưu vào lịch sử liên hệ trên CRM.`,
+      ].join("\n"));
+
+      return res.json({ ok: true });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Telegram Webhook] Error:", err.message);
+    res.json({ ok: true });
+  }
+});
+
+/* ===== Setup Telegram webhook ===== */
+app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+    if (!activeBot) return res.status(400).json({ error: "Không có bot nào đang hoạt động" });
+    const webhookUrl = `https://crm-iqi.id.vn/api/telegram-webhook`;
+    const r = await fetch(`https://api.telegram.org/bot${activeBot.token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      res.json({ ok: true, msg: `Webhook đã được cài đặt: ${webhookUrl}` });
+    } else {
+      res.status(400).json({ error: data.description || "Cài đặt webhook thất bại" });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

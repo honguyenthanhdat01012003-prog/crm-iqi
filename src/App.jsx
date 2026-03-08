@@ -1691,7 +1691,16 @@ function UsersPage({ projects }) {
       {/* ===== TELEGRAM BOT ===== */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>🤖 Telegram Bot ({bots.length})</div>
-        <button onClick={openNewBot} style={btnPrimary}>+ Thêm Bot</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={async () => {
+            try {
+              const r = await apiFetch(`${API}/telegram-webhook/setup`, { method: "POST" });
+              const d = await r.json();
+              alert(d.ok ? `✅ ${d.msg}` : `❌ ${d.error}`);
+            } catch (e) { alert("❌ " + e.message); }
+          }} style={{ ...btnSecondary, fontSize: 12, padding: "6px 12px" }}>🔗 Setup Webhook</button>
+          <button onClick={openNewBot} style={btnPrimary}>+ Thêm Bot</button>
+        </div>
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
