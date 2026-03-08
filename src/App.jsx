@@ -725,7 +725,15 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleProject, setShuffleProject] = useState("1");
   const [shuffling, setShuffling] = useState(false);
   const [shuffleMsg, setShuffleMsg] = useState("");
+  const [allUsers, setAllUsers] = useState([]);
   const isAdmin = user.role === "admin";
+
+  useEffect(() => {
+    if (isAdmin) {
+      apiFetch(`${API}/users`).then(r => r.json()).then(setAllUsers).catch(() => {});
+    }
+  }, [isAdmin]);
+
   const projectMap = useMemo(() => {
     const m = {};
     projects.forEach((p) => (m[p.id] = p.name));
@@ -778,6 +786,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     leads.forEach(l => { if (l.saleName) names.add(l.saleName); });
     return [...names].sort();
   }, [leads]);
+
+  const getProjectSaleNames = (projectId) => {
+    const assignedNames = allUsers
+      .filter(u => u.role === "sale" && u.projectIds && u.projectIds.includes(projectId))
+      .map(u => u.displayName)
+      .filter(Boolean);
+    const fromLeads = saleNames;
+    const merged = new Set([...assignedNames, ...fromLeads]);
+    return [...merged].sort();
+  };
 
   const handleShuffle = async () => {
     const names = shuffleSales.split(",").map((s) => s.trim()).filter(Boolean);
@@ -940,7 +958,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={saleNames} />
+                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} />
                   </div>
                 )}
               </div>
@@ -999,7 +1017,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #3b82f6" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={saleNames} />
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} />
                       </td>
                     </tr>
                   );
