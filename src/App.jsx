@@ -1063,6 +1063,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
 
+  const handleDeleteHistory = async (histId) => {
+    if (!confirm("Xóa lịch sử liên hệ này?")) return;
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}/history/${histId}`, { method: "DELETE" });
+      if (r.ok) applyApiData(await r.json());
+      else alert("Xóa thất bại");
+    } catch (e) { console.error(e); }
+  };
+
   const handleAddHistory = async () => {
     if (!histStatus && !histFeedback) return;
     setSaving(true);
@@ -1227,7 +1236,14 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                         color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#2563eb",
                       }}>{h.action}</span>
                     </span>
-                    <span style={{ fontSize: 11, color: "#9ca3af" }}>{h.date || "-"}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{h.date || "-"}</span>
+                      {isAdmin && h.id && (
+                        <button onClick={() => handleDeleteHistory(h.id)}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                          title="Xóa lịch sử này">🗑️</button>
+                      )}
+                    </div>
                   </div>
                   {h.status && <div style={{ fontSize: 12, marginBottom: 2 }}>Trạng thái: <b>{h.status}</b></div>}
                   {h.feedback && <div style={{ fontSize: 12, color: "#6b7280" }}>Feedback: {h.feedback}</div>}

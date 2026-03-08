@@ -816,7 +816,7 @@ async function readData(db) {
   const historyMap = {};
   for (const h of historyRows) {
     if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    historyMap[h.lead_id].push({ saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback });
+    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback });
   }
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
@@ -1312,6 +1312,53 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       await run(db, `UPDATE leads SET ${sets.join(", ")} WHERE id = ?`, params);
     }
 
+    // When admin assigns lead to a sale: save history + send Telegram
+    if (req.user.role === "admin" && saleName) {
+      const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+      const now = new Date().toLocaleString("vi-VN");
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      await run(
+        db,
+        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        [leadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq]
+      );
+
+      // Send Telegram notification
+      try {
+        const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+        const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+        if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
+          const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
+          const msg = [
+            `📤 *Bạn vừa được chia lead mới!*`,
+            ``,
+            `👤 Khách hàng: *${lead ? lead.name : "N/A"}*`,
+            `📱 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
+            `🏗️ Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `📦 Sản phẩm: ${lead ? lead.product || "-" : "-"}`,
+            `📅 Ngày nhận lead: ${lead ? lead.created_at || "-" : "-"}`,
+            `📢 Chiến dịch: ${lead ? lead.campaign || "-" : "-"}`,
+            ``,
+            `👨‍💼 Được chia bởi: *${req.user.displayName}*`,
+            `⏰ Thời gian: ${now}`,
+          ].join("\n");
+
+          await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: saleUser.telegram_id,
+              text: msg,
+              parse_mode: "Markdown",
+            }),
+          });
+        }
+      } catch (teleErr) {
+        console.error("[Telegram] Send failed:", teleErr.message);
+      }
+    }
+
     const data = await readData(db);
     if (req.user.role === "sale") {
       filterLeadsForSale(data, req.user.displayName);
@@ -1355,6 +1402,19 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     if (req.user.role === "sale") {
       filterLeadsForSale(data, req.user.displayName);
     }
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ===== Delete history entry (admin only) ===== */
+app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const histId = Number(req.params.histId);
+    await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
+    const data = await readData(db);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
