@@ -335,20 +335,27 @@ function normalizeStatus(raw = "") {
 function extractSaleBlocks(rawHeaders) {
   const blocks = [];
   const foldedH = rawHeaders.map((h) => foldText(h));
+  const usedNhanLead = new Set();
 
   for (let i = 0; i < rawHeaders.length; i++) {
+    // Pattern 1: "Tên Sale Feedback Khách"
     const m = foldedH[i].match(/^(.+?)\s*feedback\s*khach/);
-    if (!m) continue;
-    const nameNorm = m[1].trim();
+    // Pattern 2: "Feedback Khách Tên Sale"
+    const m2 = !m ? foldedH[i].match(/^feedback\s*khach\s+(.+)/) : null;
+    if (!m && !m2) continue;
+    const nameNorm = (m ? m[1] : m2[1]).trim();
     if (!nameNorm || ["status", "ngay", "nhan lead"].includes(nameNorm)) continue;
 
-    const origName = rawHeaders[i].replace(/\s*[Ff]eedback\s*[Kk]h[áa]ch.*$/i, "").trim();
+    const origName = m
+      ? rawHeaders[i].replace(/\s*[Ff]eedback\s*[Kk]h[áa]ch.*$/i, "").trim()
+      : rawHeaders[i].replace(/^.*?[Ff]eedback\s*[Kk]h[áa]ch\s*/i, "").trim();
     if (!origName) continue;
 
     let nhanLeadIdx = -1;
     for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-      if (foldedH[j].includes("nhan lead")) { nhanLeadIdx = j; break; }
+      if (foldedH[j].includes("nhan lead") && !usedNhanLead.has(j)) { nhanLeadIdx = j; break; }
     }
+    if (nhanLeadIdx >= 0) usedNhanLead.add(nhanLeadIdx);
 
     const middleCols = nhanLeadIdx >= 0
       ? Array.from({ length: i - nhanLeadIdx - 1 }, (_, k) => nhanLeadIdx + 1 + k)
@@ -364,32 +371,43 @@ function pickSaleInfo(rawCols, saleBlocks) {
   let bestStatus = "";
 
   for (const block of saleBlocks) {
-    if (block.nhanLeadIdx < 0) continue;
-    const nhanVal = (rawCols[block.nhanLeadIdx] || "").trim();
-    if (!nhanVal) continue;
+    if (block.nhanLeadIdx >= 0) {
+      const nhanVal = (rawCols[block.nhanLeadIdx] || "").trim();
+      if (!nhanVal) continue;
 
-    let statusText = "";
-    for (const ci of block.middleCols) {
-      const val = (rawCols[ci] || "").trim();
-      if (val && !/^\d{1,2}\/\d{1,2}/.test(val)) statusText = val;
-    }
-    if (!statusText) {
-      const fb = (rawCols[block.feedbackIdx] || "").trim();
-      if (fb) statusText = fb;
-    }
-    if (statusText) bestStatus = statusText;
-
-    const isRecalled = foldText(nhanVal).includes("thu hoi");
-    if (!isRecalled) {
-      currentSale = block.name;
+      let statusText = "";
+      for (const ci of block.middleCols) {
+        const val = (rawCols[ci] || "").trim();
+        if (val && !/^\d{1,2}\/\d{1,2}/.test(val)) statusText = val;
+      }
+      if (!statusText) {
+        const fb = (rawCols[block.feedbackIdx] || "").trim();
+        if (fb) statusText = fb;
+      }
       if (statusText) bestStatus = statusText;
+
+      const isRecalled = foldText(nhanVal).includes("thu hoi");
+      if (!isRecalled) {
+        currentSale = block.name;
+        if (statusText) bestStatus = statusText;
+      }
+    } else {
+      // Block without Nhận Lead column — check feedback column for data
+      const fb = (rawCols[block.feedbackIdx] || "").trim();
+      if (fb) {
+        currentSale = block.name;
+        bestStatus = fb;
+      }
     }
   }
 
   if (!currentSale) {
     for (let i = saleBlocks.length - 1; i >= 0; i--) {
-      const v = (rawCols[saleBlocks[i].nhanLeadIdx] || "").trim();
-      if (v) { currentSale = saleBlocks[i].name; break; }
+      const b = saleBlocks[i];
+      const v = b.nhanLeadIdx >= 0
+        ? (rawCols[b.nhanLeadIdx] || "").trim()
+        : (rawCols[b.feedbackIdx] || "").trim();
+      if (v) { currentSale = b.name; break; }
     }
   }
 
@@ -399,19 +417,26 @@ function pickSaleInfo(rawCols, saleBlocks) {
 function extractSaleHistory(rawCols, saleBlocks) {
   const history = [];
   for (const block of saleBlocks) {
-    if (block.nhanLeadIdx < 0) continue;
-    const action = (rawCols[block.nhanLeadIdx] || "").trim();
-    if (!action) continue;
-    let dateText = "";
-    let statusText = "";
-    for (const ci of block.middleCols) {
-      const val = (rawCols[ci] || "").trim();
-      if (!val) continue;
-      if (/^\d{1,2}\/\d{1,2}/.test(val)) dateText = val;
-      else statusText = val;
+    if (block.nhanLeadIdx >= 0) {
+      const action = (rawCols[block.nhanLeadIdx] || "").trim();
+      if (!action) continue;
+      let dateText = "";
+      let statusText = "";
+      for (const ci of block.middleCols) {
+        const val = (rawCols[ci] || "").trim();
+        if (!val) continue;
+        if (/^\d{1,2}\/\d{1,2}/.test(val)) dateText = val;
+        else statusText = val;
+      }
+      const feedback = (rawCols[block.feedbackIdx] || "").trim();
+      history.push({ saleName: block.name, action, date: dateText, status: statusText, feedback });
+    } else {
+      // Block without Nhận Lead — use feedback column only
+      const feedback = (rawCols[block.feedbackIdx] || "").trim();
+      if (feedback) {
+        history.push({ saleName: block.name, action: "Chia lead", date: "", status: "", feedback });
+      }
     }
-    const feedback = (rawCols[block.feedbackIdx] || "").trim();
-    history.push({ saleName: block.name, action, date: dateText, status: statusText, feedback });
   }
   return history;
 }
