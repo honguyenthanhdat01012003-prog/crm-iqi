@@ -191,9 +191,12 @@ async function initDb() {
       telegram_id TEXT PRIMARY KEY,
       lead_id INTEGER NOT NULL,
       status TEXT DEFAULT '',
+      message_id INTEGER,
       created_at TEXT DEFAULT (datetime('now'))
     )`
   );
+  // Add message_id column if missing (migration)
+  try { await run(db, "ALTER TABLE telegram_pending ADD COLUMN message_id INTEGER"); } catch (_) {}
 
   // Create default admin if no users exist
   const userCount = await get(db, "SELECT COUNT(*) as cnt FROM users");
@@ -1375,7 +1378,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
             );
           }
 
-          await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+          const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -1385,9 +1388,11 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
               reply_markup: { inline_keyboard: keyboard },
             }),
           });
+          const teleJson = await teleRes.json();
+          const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
 
-          // Save pending state for this user
-          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, '')", [saleUser.telegram_id, leadId]);
+          // Save pending state for this user (include message_id for recall)
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, leadId, sentMsgId]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
@@ -1459,14 +1464,23 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
+          // Delete the original notification message (with inline keyboard)
+          const pending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
+          if (pending && pending.message_id) {
+            await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: pending.message_id }),
+            });
+          }
+
+          // Send recall notification
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const recallMsg = [
             `🚫 *LEAD ĐÃ BỊ THU HỒI*`,
             `Dự án: *${projectRow ? projectRow.name : "-"}*`,
             `----------------------------------------------`,
             `👤 Khách: *${lead ? lead.name : "N/A"}*`,
-            `📞 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
-            `🔗 Nhu cầu: ${lead ? lead.product || "-" : "-"}`,
             ``,
             `❌ _Lead này đã được Admin thu hồi._`,
             `_Bạn không cần liên hệ khách hàng này nữa._`,
