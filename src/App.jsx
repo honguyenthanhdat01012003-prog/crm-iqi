@@ -718,6 +718,8 @@ function DashboardPage({ stats, cost, saleRanking }) {
 function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout }) {
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
+  const [pageSize, setPageSize] = useState(15);
+  const [currentPage, setCurrentPage] = useState(1);
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [shuffleSales, setShuffleSales] = useState("");
   const [shuffleProject, setShuffleProject] = useState("1");
@@ -837,7 +839,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           const isActive = activeTab === t.key;
           const count = tabCounts[t.key] || 0;
           return (
-            <button key={t.key} onClick={() => setActiveTab(t.key)}
+            <button key={t.key} onClick={() => { setActiveTab(t.key); setCurrentPage(1); }}
               style={{
                 padding: "8px 14px", borderRadius: 20, border: isActive ? "2px solid #3b82f6" : "1px solid #e5e7eb",
                 background: isActive ? "#eff6ff" : "#fff", color: isActive ? "#1d4ed8" : "#374151",
@@ -877,14 +879,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       </div>
 
-      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>
-        Hiển thị {tabFiltered.length} khách hàng — click vào dòng để xem chi tiết & lịch sử
+      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span>Hiển thị {Math.min(pageSize, tabFiltered.length)} / {tabFiltered.length} khách hàng</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12 }}>Số dòng:</span>
+          <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+            style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
+            <option value={5}>5</option>
+            <option value={15}>15</option>
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+          </select>
+        </div>
       </div>
 
       {/* Lead cards (Bitrix-style for sale) / table for admin */}
       {!isAdmin ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {tabFiltered.map((l) => {
+          {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             return (
@@ -941,12 +953,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </tr>
             </thead>
             <tbody>
-              {tabFiltered.flatMap((l, i) => {
+              {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).flatMap((l, i) => {
                 const isOpen = expandedId === l.id;
+                const globalIdx = (currentPage - 1) * pageSize + i;
                 const rows = [
                   <tr key={l.id} onClick={() => setExpandedId(isOpen ? null : l.id)}
-                    style={{ background: isOpen ? "#eff6ff" : i % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
-                    <td style={tdStyle}>{i + 1}</td>
+                    style={{ background: isOpen ? "#eff6ff" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
+                    <td style={tdStyle}>{globalIdx + 1}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.campaign}</td>
@@ -986,6 +999,21 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {tabFiltered.length > pageSize && (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage === 1 ? "#f3f4f6" : "#fff", cursor: currentPage === 1 ? "default" : "pointer", fontSize: 12 }}>«</button>
+          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage === 1 ? "#f3f4f6" : "#fff", cursor: currentPage === 1 ? "default" : "pointer", fontSize: 12 }}>‹</button>
+          <span style={{ fontSize: 13, color: "#374151" }}>Trang {currentPage} / {Math.ceil(tabFiltered.length / pageSize)}</span>
+          <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(tabFiltered.length / pageSize), p + 1))} disabled={currentPage >= Math.ceil(tabFiltered.length / pageSize)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "#f3f4f6" : "#fff", cursor: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "default" : "pointer", fontSize: 12 }}>›</button>
+          <button onClick={() => setCurrentPage(Math.ceil(tabFiltered.length / pageSize))} disabled={currentPage >= Math.ceil(tabFiltered.length / pageSize)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "#f3f4f6" : "#fff", cursor: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "default" : "pointer", fontSize: 12 }}>»</button>
         </div>
       )}
     </>
