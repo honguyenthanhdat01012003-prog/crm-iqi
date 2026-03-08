@@ -10,6 +10,8 @@ const STATUS_LABELS = {
   booked: "Giữ chỗ",
   closed: "Chốt",
   not_interested: "Không quan tâm",
+  spam: "Phá",
+  weak_finance: "Tài chính yếu",
   unreachable: "Không liên lạc được",
   lost: "Mất",
 };
@@ -22,6 +24,8 @@ const STATUS_COLORS = {
   booked: "#10b981",
   closed: "#059669",
   not_interested: "#ef4444",
+  spam: "#b91c1c",
+  weak_finance: "#d97706",
   unreachable: "#9ca3af",
   lost: "#dc2626",
 };
@@ -323,11 +327,14 @@ function CRMApp({ user, onLogout }) {
     const statusCounts = {};
     Object.keys(STATUS_LABELS).forEach((s) => (statusCounts[s] = 0));
     let noFeedback = 0;
+    let other = 0;
+    const knownKeys = ["interested", "not_interested", "spam", "weak_finance", "unreachable"];
     filteredLeads.forEach((l) => {
       statusCounts[l.status] = (statusCounts[l.status] || 0) + 1;
       if (!l.status || l.status === "new") noFeedback++;
+      else if (!knownKeys.includes(l.status)) other++;
     });
-    return { total: filteredLeads.length, noFeedback, ...statusCounts };
+    return { total: filteredLeads.length, noFeedback, other, ...statusCounts };
   }, [filteredLeads]);
 
   // --- Sale ranking ---
@@ -590,35 +597,78 @@ function Card({ title, value, sub, color = "#3b82f6", percent }) {
   );
 }
 
+function DonutChart({ segments, size = 220 }) {
+  const cx = size / 2, cy = size / 2, r = 80, strokeWidth = 32;
+  const total = segments.reduce((s, g) => s + g.value, 0);
+  if (!total) return <div style={{ textAlign: "center", color: "#9ca3af", padding: 40 }}>Không có dữ liệu</div>;
+  let cumAngle = -90;
+  const arcs = segments.filter(s => s.value > 0).map((seg) => {
+    const angle = (seg.value / total) * 360;
+    const startAngle = cumAngle;
+    cumAngle += angle;
+    const endAngle = cumAngle;
+    const largeArc = angle > 180 ? 1 : 0;
+    const toRad = (a) => (a * Math.PI) / 180;
+    const x1 = cx + r * Math.cos(toRad(startAngle));
+    const y1 = cy + r * Math.sin(toRad(startAngle));
+    const x2 = cx + r * Math.cos(toRad(endAngle - 0.1));
+    const y2 = cy + r * Math.sin(toRad(endAngle - 0.1));
+    return { ...seg, d: `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`, pct: ((seg.value / total) * 100).toFixed(1) };
+  });
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 32, justifyContent: "center" }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        {arcs.map((a, i) => (
+          <path key={i} d={a.d} fill="none" stroke={a.color} strokeWidth={strokeWidth} strokeLinecap="round" />
+        ))}
+        <text x={cx} y={cy - 6} textAnchor="middle" fontSize="22" fontWeight="700" fill="#1f2937">{total}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" fontSize="11" fill="#6b7280">Tổng lead</text>
+      </svg>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {arcs.map((a, i) => (
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 3, background: a.color, display: "inline-block", flexShrink: 0 }} />
+            <span style={{ color: "#374151", fontWeight: 500 }}>{a.label}</span>
+            <span style={{ color: "#6b7280" }}>{a.value} ({a.pct}%)</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DashboardPage({ stats, cost, saleRanking }) {
   const pct = (v) => stats.total ? ((v / stats.total) * 100).toFixed(1) : "0.0";
+
+  const statusCards = [
+    { title: "Quan tâm", value: stats.interested || 0, color: "#f59e0b" },
+    { title: "Chưa feedback", value: stats.noFeedback || 0, color: "#6b7280" },
+    { title: "Không quan tâm", value: stats.not_interested || 0, color: "#ef4444" },
+    { title: "Phá", value: stats.spam || 0, color: "#b91c1c" },
+    { title: "Tài chính yếu", value: stats.weak_finance || 0, color: "#d97706" },
+    { title: "Chưa liên lạc được", value: stats.unreachable || 0, color: "#9ca3af" },
+    { title: "Khác", value: stats.other || 0, color: "#8b5cf6" },
+  ];
+
+  const donutSegments = statusCards.map(c => ({ label: c.title, value: c.value, color: c.color }));
+
   return (
     <>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         <Card title="Tổng Lead" value={stats.total} color="#3b82f6" />
-        <Card title="Chưa feedback" value={stats.noFeedback || 0} color="#ef4444" percent={pct(stats.noFeedback || 0)} />
-        <Card title="Quan tâm" value={stats.interested || 0} color="#f59e0b" percent={pct(stats.interested || 0)} />
-        <Card title="Giữ chỗ" value={stats.booked || 0} color="#10b981" percent={pct(stats.booked || 0)} />
-        <Card title="Chốt" value={stats.closed || 0} color="#059669" percent={pct(stats.closed || 0)} />
+        {statusCards.map((c) => (
+          <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} />
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(cost.cpLead)}`} color="#8b5cf6" />
         <Card title="Tổng lead (sheet)" value={cost.totalLeads || 0} sub={`Booking: ${cost.totalBooking || 0}`} color="#ec4899" />
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        <h4 style={{ margin: "0 0 12px" }}>Phân bổ trạng thái</h4>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {Object.entries(STATUS_LABELS).map(([key, label]) => (
-            <span
-              key={key}
-              style={{
-                padding: "4px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
-                background: STATUS_COLORS[key] + "18", color: STATUS_COLORS[key],
-              }}
-            >
-              {label}: {stats[key] || 0} ({pct(stats[key] || 0)}%)
-            </span>
-          ))}
-        </div>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, marginBottom: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+        <h4 style={{ margin: "0 0 16px", fontSize: 16, color: "#1f2937" }}>📊 Biểu đồ phân bổ trạng thái</h4>
+        <DonutChart segments={donutSegments} />
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
