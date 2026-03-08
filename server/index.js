@@ -1006,8 +1006,6 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (telegramId !== undefined) {
       await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId).trim(), id]);
     }
-    // Invalidate active sessions for this user
-    for (const [t, s] of sessions) { if (s.userId === id) sessions.delete(t); }
     const users = await selectUsers();
     res.json(users.map(mapUser));
   } catch (err) {
@@ -1020,7 +1018,6 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     if (req.user.userId === id) return res.status(400).json({ error: "Cannot delete yourself" });
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
-    for (const [t, s] of sessions) { if (s.userId === id) sessions.delete(t); }
     const users = await selectUsers();
     res.json(users.map(mapUser));
   } catch (err) {
