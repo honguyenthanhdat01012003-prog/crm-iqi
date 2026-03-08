@@ -522,7 +522,7 @@ function CRMApp({ user, onLogout }) {
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} />}
-        {page === "users" && isAdmin && <UsersPage />}
+        {page === "users" && isAdmin && <UsersPage projects={projects} />}
       </main>
 
       {/* Project Modal */}
@@ -1455,12 +1455,13 @@ function SalesPage({ ranking }) {
   );
 }
 
-function UsersPage() {
+function UsersPage({ projects }) {
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
-  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale", telegramId: "" });
+  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [] });
   const [error, setError] = useState("");
+  const [projectSearch, setProjectSearch] = useState("");
 
   // Telegram Bots
   const [bots, setBots] = useState([]);
@@ -1487,15 +1488,17 @@ function UsersPage() {
 
   const openNew = () => {
     setEditingUser(null);
-    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "" });
+    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [] });
     setError("");
+    setProjectSearch("");
     setShowForm(true);
   };
 
   const openEdit = (u) => {
     setEditingUser(u);
-    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "" });
+    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "", projectIds: u.projectIds || [] });
     setError("");
+    setProjectSearch("");
     setShowForm(true);
   };
 
@@ -1503,7 +1506,7 @@ function UsersPage() {
     setError("");
     try {
       if (editingUser) {
-        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId };
+        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds };
         if (draft.password) body.password = draft.password;
         const r = await apiFetch(`${API}/users/${editingUser.id}`, { method: "PUT", body: JSON.stringify(body) });
         if (!r.ok) { const d = await r.json(); setError(d.error); return; }
@@ -1596,6 +1599,7 @@ function UsersPage() {
               <th style={thStyle}>#</th>
               <th style={thStyle}>Username</th>
               <th style={thStyle}>Tên hiển thị</th>
+              <th style={thStyle}>Dự án</th>
               <th style={thStyle}>Telegram ID</th>
               <th style={thStyle}>Quyền</th>
               <th style={thStyle}>Ngày tạo</th>
@@ -1608,6 +1612,20 @@ function UsersPage() {
                 <td style={tdStyle}>{i + 1}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{u.username}</td>
                 <td style={tdStyle}>{u.displayName}</td>
+                <td style={tdStyle}>
+                  {u.role === "admin" ? (
+                    <span style={{ color: "#6b7280", fontSize: 11, fontStyle: "italic" }}>Tất cả</span>
+                  ) : (u.projectIds && u.projectIds.length > 0) ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                      {u.projectIds.map(pid => {
+                        const p = projects.find(pr => pr.id === pid);
+                        return p ? <span key={pid} style={{ background: "#f0fdf4", color: "#16a34a", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, whiteSpace: "nowrap" }}>{p.name}</span> : null;
+                      })}
+                    </div>
+                  ) : (
+                    <span style={{ color: "#9ca3af", fontSize: 11 }}>Chưa gán</span>
+                  )}
+                </td>
                 <td style={tdStyle}>
                   {u.telegramId
                     ? <span style={{ background: "#eff6ff", color: "#2563eb", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>✈️ {u.telegramId}</span>
@@ -1710,6 +1728,59 @@ function UsersPage() {
             <option value="sale">Sale</option>
             <option value="admin">Admin</option>
           </select>
+          {draft.role === "sale" && (
+            <>
+              <label style={labelStyle}>🏗️ Dự án được phép truy cập</label>
+              {projects.length > 5 && (
+                <input
+                  style={{ ...inputStyle, marginBottom: 6 }}
+                  placeholder="🔍 Tìm dự án..."
+                  value={projectSearch}
+                  onChange={(e) => setProjectSearch(e.target.value)}
+                />
+              )}
+              <div style={{
+                border: "1px solid #d1d5db", borderRadius: 8, padding: 8,
+                maxHeight: 180, overflowY: "auto", marginBottom: 8, background: "#fafafa"
+              }}>
+                {projects
+                  .filter(p => !projectSearch || p.name.toLowerCase().includes(projectSearch.toLowerCase()))
+                  .map(p => (
+                    <label key={p.id} style={{
+                      display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
+                      borderRadius: 6, cursor: "pointer", fontSize: 13,
+                      background: draft.projectIds.includes(p.id) ? "#eff6ff" : "transparent",
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={draft.projectIds.includes(p.id)}
+                        onChange={(e) => {
+                          const ids = e.target.checked
+                            ? [...draft.projectIds, p.id]
+                            : draft.projectIds.filter(id => id !== p.id);
+                          setDraft({ ...draft, projectIds: ids });
+                        }}
+                        style={{ accentColor: "#3b82f6" }}
+                      />
+                      <span>{p.name}</span>
+                    </label>
+                  ))
+                }
+                {projects.filter(p => !projectSearch || p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
+                  <div style={{ color: "#9ca3af", fontSize: 12, textAlign: "center", padding: 8 }}>Không tìm thấy dự án</div>
+                )}
+              </div>
+              {draft.projectIds.length > 0 && (
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 4 }}>
+                  Đã chọn: {draft.projectIds.length} dự án
+                  <button
+                    onClick={() => setDraft({ ...draft, projectIds: [] })}
+                    style={{ marginLeft: 8, background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textDecoration: "underline" }}
+                  >Bỏ chọn tất cả</button>
+                </div>
+              )}
+            </>
+          )}
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSave} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
             <button onClick={() => setShowForm(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>

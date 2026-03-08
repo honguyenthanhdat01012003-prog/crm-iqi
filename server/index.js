@@ -174,6 +174,17 @@ async function initDb() {
     )`
   );
 
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS user_projects (
+      user_id INTEGER NOT NULL,
+      project_id INTEGER NOT NULL,
+      PRIMARY KEY (user_id, project_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    )`
+  );
+
   // Create default admin if no users exist
   const userCount = await get(db, "SELECT COUNT(*) as cnt FROM users");
   if (userCount.cnt === 0) {
@@ -983,13 +994,30 @@ app.get("/api/me", requireAuth, (req, res) => {
 });
 
 /* ---------- User management (admin only) ---------- */
-const mapUser = u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", createdAt: u.created_at });
+const mapUser = (u, projectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", createdAt: u.created_at, projectIds: projectIds || [] });
 const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, created_at FROM users ORDER BY id");
+const getUserProjectIds = async (userId) => {
+  const rows = await all(db, "SELECT project_id FROM user_projects WHERE user_id = ? ORDER BY project_id", [userId]);
+  return rows.map(r => r.project_id);
+};
+const getAllUserProjects = async () => {
+  const rows = await all(db, "SELECT user_id, project_id FROM user_projects ORDER BY user_id, project_id");
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.user_id]) map[r.user_id] = [];
+    map[r.user_id].push(r.project_id);
+  }
+  return map;
+};
+const mapUsersWithProjects = async (users) => {
+  const upMap = await getAllUserProjects();
+  return users.map(u => mapUser(u, upMap[u.id] || []));
+};
 
 app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
   try {
     const users = await selectUsers();
-    res.json(users.map(mapUser));
+    res.json(await mapUsersWithProjects(users));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1001,13 +1029,18 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
     const validRole = ["admin", "sale"].includes(role) ? role : "sale";
     const { hash, salt } = hashPassword(String(password));
-    await run(
+    const result = await run(
       db,
       "INSERT INTO users(username, password_hash, salt, role, display_name, telegram_id) VALUES(?, ?, ?, ?, ?, ?)",
       [String(username).trim(), hash, salt, validRole, String(displayName || username).trim(), String(telegramId || "").trim()]
     );
+    if (req.body.projectIds && Array.isArray(req.body.projectIds)) {
+      for (const pid of req.body.projectIds) {
+        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?, ?)", [result.lastID, Number(pid)]);
+      }
+    }
     const users = await selectUsers();
-    res.json(users.map(mapUser));
+    res.json(await mapUsersWithProjects(users));
   } catch (err) {
     if (err.message?.includes("UNIQUE")) return res.status(400).json({ error: "Username already exists" });
     res.status(500).json({ error: err.message });
@@ -1031,8 +1064,14 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (telegramId !== undefined) {
       await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId).trim(), id]);
     }
+    if (req.body.projectIds !== undefined && Array.isArray(req.body.projectIds)) {
+      await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
+      for (const pid of req.body.projectIds) {
+        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?, ?)", [id, Number(pid)]);
+      }
+    }
     const users = await selectUsers();
-    res.json(users.map(mapUser));
+    res.json(await mapUsersWithProjects(users));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1042,9 +1081,10 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (req.user.userId === id) return res.status(400).json({ error: "Cannot delete yourself" });
+    await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
     const users = await selectUsers();
-    res.json(users.map(mapUser));
+    res.json(await mapUsersWithProjects(users));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
