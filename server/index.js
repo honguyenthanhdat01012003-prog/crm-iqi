@@ -684,75 +684,71 @@ function sanitizeSheetUrl(raw) {
 }
 
 async function replaceProjectData(db, projectId, leads, campaigns) {
-  const tx = await db.transaction("write");
-  try {
-    // Preserve user-edited fields for this project
-    const existing = await all(
-      tx,
-      "SELECT name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
-      [projectId]
-    );
-    const editMap = new Map();
-    for (const e of existing) {
-      editMap.set(`${e.name}||${e.phone}`, e);
-    }
+  // Preserve user-edited fields for this project
+  const existing = await all(
+    db,
+    "SELECT name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
+    [projectId]
+  );
+  const editMap = new Map();
+  for (const e of existing) {
+    editMap.set(`${e.name}||${e.phone}`, e);
+  }
 
-    await run(tx, "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", [projectId]);
-    await run(tx, "DELETE FROM leads WHERE project_id = ?", [projectId]);
-    await run(tx, "DELETE FROM campaigns WHERE project_id = ?", [projectId]);
+  // Build all SQL statements as a batch (single HTTP request to Turso)
+  const stmts = [];
 
-    const campNameToId = new Map();
-    for (const c of campaigns) {
-      const result = await run(
-        tx,
-        `INSERT INTO campaigns(name, project_id, channel, budget, spent) VALUES(?, ?, ?, ?, ?)`,
-        [c.name, projectId, c.channel, c.budget, c.spent]
-      );
-      campNameToId.set(c.name, result.lastID);
-    }
+  // Delete old data
+  stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", args: [projectId] });
+  stmts.push({ sql: "DELETE FROM leads WHERE project_id = ?", args: [projectId] });
+  stmts.push({ sql: "DELETE FROM campaigns WHERE project_id = ?", args: [projectId] });
 
-    for (const l of leads) {
-      const prev = editMap.get(`${l.name}||${l.phone}`);
-      const status = prev ? prev.status : l.status;
-      const rawStatus = prev ? prev.raw_status : l.rawStatus;
-      const notes = prev && prev.notes ? prev.notes : l.notes || "";
-      const saleId = prev ? prev.sale_id : l.saleId;
-      const saleName = l.saleName || (prev ? prev.sale_name : "") || "";
-      const isHot = prev ? prev.is_hot : l.isHot ? 1 : 0;
-      const campaignId = campNameToId.get(l.campaign) || null;
+  // Insert campaigns
+  for (const c of campaigns) {
+    stmts.push({
+      sql: "INSERT INTO campaigns(name, project_id, channel, budget, spent) VALUES(?, ?, ?, ?, ?)",
+      args: [c.name, projectId, c.channel, c.budget, c.spent],
+    });
+  }
 
-      const leadResult = await run(
-        tx,
-        `INSERT INTO leads(
-          project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
-          product, raw_status, status,
-          created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          projectId, l.name, l.phone, l.campaign, campaignId,
-          l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product,
-          rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
-          l.source, l.budget, l.syncAt, notes,
-        ]
-      );
+  // Insert leads (without campaign_id for now — not critical)
+  for (const l of leads) {
+    const prev = editMap.get(`${l.name}||${l.phone}`);
+    const status = prev ? prev.status : l.status;
+    const rawStatus = prev ? prev.raw_status : l.rawStatus;
+    const notes = prev && prev.notes ? prev.notes : l.notes || "";
+    const saleId = prev ? prev.sale_id : l.saleId;
+    const saleName = l.saleName || (prev ? prev.sale_name : "") || "";
+    const isHot = prev ? prev.is_hot : l.isHot ? 1 : 0;
 
-      if (l.saleHistory && l.saleHistory.length) {
-        for (let si = 0; si < l.saleHistory.length; si++) {
-          const sh = l.saleHistory[si];
-          await run(tx,
-            "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-            [leadResult.lastID, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si]
-          );
-        }
+    stmts.push({
+      sql: `INSERT INTO leads(
+        project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
+        product, raw_status, status,
+        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        projectId, l.name, l.phone, l.campaign, null,
+        l.adsetName || "-", l.adName || "-", l.formName || "-",
+        l.product,
+        rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
+        l.source, l.budget, l.syncAt, notes,
+      ],
+    });
+
+    if (l.saleHistory && l.saleHistory.length) {
+      for (let si = 0; si < l.saleHistory.length; si++) {
+        const sh = l.saleHistory[si];
+        stmts.push({
+          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?)",
+          args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si],
+        });
       }
     }
-
-    await tx.commit();
-  } catch (err) {
-    await tx.rollback();
-    throw err;
   }
+
+  // Send all in one batch (single HTTP round-trip)
+  await db.batch(stmts, "write");
 }
 
 async function readData(db) {
@@ -1113,17 +1109,11 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       [pid]
     );
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
-    const tx = await db.transaction("write");
-    try {
-      for (let i = 0; i < leads.length; i++) {
-        const sale = saleNames[i % saleNames.length];
-        await run(tx, "UPDATE leads SET sale_name = ? WHERE id = ?", [sale, leads[i].id]);
-      }
-      await tx.commit();
-    } catch (err) {
-      await tx.rollback();
-      throw err;
-    }
+    const stmts = leads.map((l, i) => ({
+      sql: "UPDATE leads SET sale_name = ? WHERE id = ?",
+      args: [saleNames[i % saleNames.length], l.id],
+    }));
+    await db.batch(stmts, "write");
     const data = await readData(db);
     res.json({ msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
   } catch (err) {
