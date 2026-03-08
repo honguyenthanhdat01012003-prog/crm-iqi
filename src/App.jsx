@@ -1041,8 +1041,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [histFeedback, setHistFeedback] = useState("");
   const [saving, setSaving] = useState(false);
   const [editStatus, setEditStatus] = useState(lead.status);
+  const [savingStatus, setSavingStatus] = useState(false);
   const [editSale, setEditSale] = useState(lead.saleName || "");
-  const [savingAdmin, setSavingAdmin] = useState(false);
+  const [savingSale, setSavingSale] = useState(false);
 
   const handleAddHistory = async () => {
     if (!histStatus && !histFeedback) return;
@@ -1064,21 +1065,36 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     }
   };
 
-  const handleAdminUpdate = async () => {
-    setSavingAdmin(true);
+  const handleStatusUpdate = async () => {
+    setSavingStatus(true);
     try {
-      const body = { status: editStatus };
-      if (isAdmin) body.saleName = editSale;
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ status: editStatus }),
       });
       const data = await r.json();
       applyApiData(data);
     } catch (e) {
       console.error(e);
     } finally {
-      setSavingAdmin(false);
+      setSavingStatus(false);
+    }
+  };
+
+  const handleAssignSale = async () => {
+    if (!editSale) return;
+    setSavingSale(true);
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ saleName: editSale }),
+      });
+      const data = await r.json();
+      applyApiData(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingSale(false);
     }
   };
 
@@ -1099,24 +1115,38 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
       </div>
 
-      {/* Admin controls */}
+      {/* Admin: Cập nhật trạng thái */}
       {isAdmin && (
-        <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 }}>
-          <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Quản trị</b>
+        <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13 }}>
+          <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Cập nhật trạng thái</b>
           <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
               style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
+            <button onClick={handleStatusUpdate} disabled={savingStatus}
+              style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
+              {savingStatus ? "..." : "Cập nhật"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Chia lead cho Sale */}
+      {isAdmin && (
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 }}>
+          <b style={{ fontSize: 12, color: "#1e40af" }}>📤 Chia lead cho Sale</b>
+          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, minWidth: 140 }}>
+              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, minWidth: 160 }}>
               <option value="">-- Chọn Sale --</option>
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <button onClick={handleAdminUpdate} disabled={savingAdmin}
-              style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
-              {savingAdmin ? "..." : "Cập nhật"}
+            <button onClick={handleAssignSale} disabled={savingSale || !editSale}
+              style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12, background: !editSale ? "#93c5fd" : "#2563eb" }}>
+              {savingSale ? "Đang chia..." : "📤 Chia lead"}
             </button>
+            {lead.saleName && <span style={{ fontSize: 12, color: "#6b7280" }}>Hiện tại: <b style={{ color: "#1d4ed8" }}>{lead.saleName}</b></span>}
           </div>
         </div>
       )}
