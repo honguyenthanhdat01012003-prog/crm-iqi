@@ -496,7 +496,7 @@ function CRMApp({ user, onLogout }) {
 
       {/* Project Modal */}
       {showProjectModal && (
-        <Modal onClose={() => setShowProjectModal(false)} title={editingProject ? "Sửa dự án" : "Thêm dự án"}>
+        <Modal onClose={() => !savingProject && setShowProjectModal(false)} title={editingProject ? "Sửa dự án" : "Thêm dự án"}>
           <label style={labelStyle}>Tên dự án</label>
           <input
             style={inputStyle}
