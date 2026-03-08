@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 const API = "/api";
 
 const STATUS_LABELS = {
-  new: "Mới",
+  new: "Chưa feedback",
   called: "Đã gọi",
   interested: "Quan tâm",
   low_interest: "Quan tâm hời hợt",
