@@ -34,7 +34,7 @@ const STATUS_LABELS = {
 };
 
 const STATUS_COLORS = {
-  new: "#d1d5db",
+  new: "#f59e0b",
   called: "#4ade80",
   interested: "#22c55e",
   low_interest: "#38bdf8",
@@ -182,18 +182,75 @@ function CRMApp({ user, onLogout }) {
   const [editingProject, setEditingProject] = useState(null);
   const [draftProject, setDraftProject] = useState({ name: "", leadUrl: "", costUrl: "" });
 
+  // Notification state
+  const [notifications, setNotifications] = useState([]);
+  const [showNotif, setShowNotif] = useState(false);
+  const [seenLeadIds, setSeenLeadIds] = useState(() => {
+    try { const s = localStorage.getItem("crm_seen_ids"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
+  });
+
   const applyApiData = useCallback((data) => {
-    if (data.leads) setLeads(data.leads);
+    if (data.leads) {
+      setLeads((prev) => {
+        // Detect new leads
+        const prevIds = new Set(prev.map(l => l.id));
+        const newLeads = data.leads.filter(l => !prevIds.has(l.id) && !seenLeadIds.has(l.id));
+        if (newLeads.length > 0 && prev.length > 0) {
+          setNotifications(n => {
+            const existing = new Set(n.map(x => x.id));
+            const fresh = newLeads.filter(l => !existing.has(l.id));
+            return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...n].slice(0, 50);
+          });
+        }
+        return data.leads;
+      });
+    }
     if (data.campaigns) setCampaigns(data.campaigns);
     if (data.projects) setProjects(data.projects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, []);
+  }, [seenLeadIds]);
+
+  // Mark notifications as seen
+  const markAllSeen = useCallback(() => {
+    setSeenLeadIds(prev => {
+      const next = new Set(prev);
+      notifications.forEach(n => next.add(n.id));
+      localStorage.setItem("crm_seen_ids", JSON.stringify([...next]));
+      return next;
+    });
+    setNotifications([]);
+    setShowNotif(false);
+  }, [notifications]);
 
   useEffect(() => {
     apiFetch(`${API}/data`)
       .then((r) => r.json())
-      .then(applyApiData)
+      .then((data) => {
+        // First load: set all current IDs as seen
+        if (data.leads) {
+          setSeenLeadIds(prev => {
+            if (prev.size === 0) {
+              const ids = new Set(data.leads.map(l => l.id));
+              localStorage.setItem("crm_seen_ids", JSON.stringify([...ids]));
+              return ids;
+            }
+            return prev;
+          });
+        }
+        applyApiData(data);
+      })
       .catch(console.error);
+  }, [applyApiData]);
+
+  // Auto-refresh every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      apiFetch(`${API}/data`)
+        .then((r) => r.json())
+        .then(applyApiData)
+        .catch(() => {});
+    }, 30000);
+    return () => clearInterval(interval);
   }, [applyApiData]);
 
   const handleSync = async () => {
@@ -507,24 +564,88 @@ function CRMApp({ user, onLogout }) {
             </h2>
           </div>
           {isAdmin && (
-            <button
-              onClick={handleSync}
-              disabled={syncing}
-              style={{
-                padding: isMobile ? "8px 14px" : "8px 20px",
-                background: syncing ? "#94a3b8" : "#3b82f6",
-                color: "#fff",
-                border: "none",
-                borderRadius: 8,
-                cursor: syncing ? "not-allowed" : "pointer",
-                fontWeight: 600,
-                fontSize: 14,
-                flexShrink: 0,
-                minHeight: 40,
-              }}
-            >
-              {syncing ? "Đồng bộ..." : "🔄 Đồng bộ"}
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {/* Notification bell */}
+              <div style={{ position: "relative" }}>
+                <button onClick={() => setShowNotif(!showNotif)} style={{
+                  background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #d1d5db",
+                  borderRadius: 8, width: 40, height: 40, fontSize: 18, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
+                }}>
+                  🔔
+                  {notifications.length > 0 && (
+                    <span style={{
+                      position: "absolute", top: -4, right: -4, background: "#ef4444", color: "#fff",
+                      borderRadius: 10, padding: "0 5px", fontSize: 10, fontWeight: 700, minWidth: 18,
+                      textAlign: "center", lineHeight: "18px", animation: "fadeIn .3s ease",
+                    }}>{notifications.length}</span>
+                  )}
+                </button>
+                {showNotif && (
+                  <>
+                    <div onClick={() => setShowNotif(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+                    <div style={{
+                      position: "absolute", top: 44, right: 0, width: isMobile ? "calc(100vw - 24px)" : 360,
+                      maxHeight: 400, overflowY: "auto", background: "#fff", borderRadius: 12,
+                      boxShadow: "0 8px 30px rgba(0,0,0,.18)", border: "1px solid #e5e7eb", zIndex: 999,
+                      ...(isMobile ? { right: -60 } : {}),
+                    }}>
+                      <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <b style={{ fontSize: 14 }}>🔔 Thông báo</b>
+                        {notifications.length > 0 && (
+                          <button onClick={markAllSeen} style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                            Đánh dấu đã đọc
+                          </button>
+                        )}
+                      </div>
+                      {notifications.length === 0 ? (
+                        <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có thông báo mới</div>
+                      ) : (
+                        <div style={{ padding: 8 }}>
+                          {notifications.map((n) => {
+                            const proj = projects.find(p => p.id === n.projectId);
+                            return (
+                              <div key={n.id} style={{
+                                padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
+                                background: "#eff6ff", border: "1px solid #dbeafe", transition: "background .15s",
+                              }} onClick={() => { setPage("leads"); setShowNotif(false); }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                                  <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
+                                  <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
+                                </div>
+                                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                  <span>📱 {n.phone || "-"}</span>
+                                  {proj && <span>🏗️ {proj.name}</span>}
+                                  <span>📅 {n.createdAt || "-"}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                style={{
+                  padding: isMobile ? "8px 14px" : "8px 20px",
+                  background: syncing ? "#94a3b8" : "#3b82f6",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  cursor: syncing ? "not-allowed" : "pointer",
+                  fontWeight: 600,
+                  fontSize: 14,
+                  flexShrink: 0,
+                  minHeight: 40,
+                }}
+              >
+                {syncing ? "Đồng bộ..." : "🔄 Đồng bộ"}
+              </button>
+            </div>
           )}
         </div>
 
@@ -806,6 +927,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     }
   }, [isAdmin]);
 
+  // Check if lead is recently created (within 24h)
+  const isRecentLead = useCallback((l) => {
+    const d = parseLeadDate(l.createdAt);
+    if (!d) return false;
+    return (Date.now() - d.getTime()) < 24 * 60 * 60 * 1000;
+  }, []);
+
   const projectMap = useMemo(() => {
     const m = {};
     projects.forEach((p) => (m[p.id] = p.name));
@@ -1018,6 +1146,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>MỚI</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
@@ -1074,7 +1203,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <tr key={l.id} onClick={() => setExpandedId(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#eff6ff" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{l.name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.campaign}</td>
                     <td style={tdStyle}>
@@ -1232,16 +1361,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Cập nhật trạng thái */}
       {isAdmin && (
-        <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
           <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Cập nhật trạng thái</b>
           <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
-              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff" }}>
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             <button onClick={handleStatusUpdate} disabled={savingStatus}
-              style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
-              {savingStatus ? "..." : "Cập nhật"}
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              {savingStatus ? "Đang cập nhật..." : "✅ Cập nhật"}
             </button>
           </div>
         </div>
@@ -1249,19 +1378,19 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Chia lead cho Sale */}
       {isAdmin && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 13 }}>
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
           <b style={{ fontSize: 12, color: "#1e40af" }}>📤 Chia lead cho Sale</b>
+          {lead.saleName && <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}>Hiện tại: <b style={{ color: "#1d4ed8" }}>{lead.saleName}</b></span>}
           <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, minWidth: 160 }}>
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff" }}>
               <option value="">-- Chọn Sale --</option>
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
-              style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12, background: !editSale ? "#93c5fd" : "#2563eb" }}>
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#93c5fd" : "#2563eb", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
               {savingSale ? "Đang chia..." : "📤 Chia lead"}
             </button>
-            {lead.saleName && <span style={{ fontSize: 12, color: "#6b7280" }}>Hiện tại: <b style={{ color: "#1d4ed8" }}>{lead.saleName}</b></span>}
           </div>
         </div>
       )}
