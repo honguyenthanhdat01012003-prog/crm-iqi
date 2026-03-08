@@ -762,8 +762,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
-    return tab ? leads.filter(tab.filter) : leads;
+    const filtered = tab ? leads.filter(tab.filter) : [...leads];
+    return filtered.sort((a, b) => {
+      const da = a.createdAt ? new Date(a.createdAt) : new Date(0);
+      const db2 = b.createdAt ? new Date(b.createdAt) : new Date(0);
+      return db2 - da;
+    });
   }, [leads, activeTab, LEAD_TABS]);
+
+  const saleNames = useMemo(() => {
+    const names = new Set();
+    leads.forEach(l => { if (l.saleName) names.add(l.saleName); });
+    return [...names].sort();
+  }, [leads]);
 
   const handleShuffle = async () => {
     const names = shuffleSales.split(",").map((s) => s.trim()).filter(Boolean);
@@ -926,7 +937,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={false} user={user} applyApiData={applyApiData} />
+                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={false} user={user} applyApiData={applyApiData} saleNames={saleNames} />
                   </div>
                 )}
               </div>
@@ -985,7 +996,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #3b82f6" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} />
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={saleNames} />
                       </td>
                     </tr>
                   );
@@ -1020,7 +1031,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [] }) {
   const history = lead.saleHistory || [];
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
@@ -1094,8 +1105,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData }) {
               style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
-            <input value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              placeholder="Tên sale" style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, width: 140 }} />
+            <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
+              style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, minWidth: 140 }}>
+              <option value="">-- Chọn Sale --</option>
+              {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
             <button onClick={handleAdminUpdate} disabled={savingAdmin}
               style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
               {savingAdmin ? "..." : "Cập nhật"}
