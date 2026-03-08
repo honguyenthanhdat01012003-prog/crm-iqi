@@ -39,6 +39,7 @@ function foldText(value = "") {
   return String(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/_/g, " ")
     .toLowerCase();
 }
 
@@ -562,10 +563,10 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   // Standard header-based mapping
   const standardResult = rows
     .map((r, i) => {
-      const name = findVal(r, ["full name", "full_name", "ho ten", "ten", "name"]);
+      const name = findVal(r, ["full name", "full_name", "ho ten", "ten", "name", "ten day du"]);
       if (!name) return null;
 
-      let phone = findVal(r, ["phone", "so dien thoai", "sdt"]);
+      let phone = findVal(r, ["phone", "so dien thoai", "sdt", "dien thoai", "phone number", "mobile", "di dong", "so dt"]);
       if (phone.startsWith("p:")) phone = phone.slice(2);
       const campaign = findVal(r, ["campaign_name", "campaign name", "chien dich", "ten chien dich"]);
       const adsetName = findVal(r, ["adset_name", "adset name", "nhom quang cao", "ten nhom"]);

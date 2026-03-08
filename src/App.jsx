@@ -58,6 +58,16 @@ function formatVND(n) {
   return Number(n).toLocaleString("vi-VN") + " ₫";
 }
 
+function getLeadTemp(createdAt) {
+  const d = parseLeadDate(createdAt);
+  if (!d) return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#3b82f6", icon: "❄️" };
+  const hours = (Date.now() - d.getTime()) / (1000 * 60 * 60);
+  if (hours <= 24) return { label: "🔥🔥 Cực nóng", bg: "#fef2f2", color: "#dc2626", icon: "🔥🔥" };
+  if (hours <= 72) return { label: "🔥 Nóng", bg: "#fff7ed", color: "#ea580c", icon: "🔥" };
+  if (hours <= 168) return { label: "🌤️ Ấm", bg: "#fffbeb", color: "#d97706", icon: "🌤️" };
+  return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#3b82f6", icon: "❄️" };
+}
+
 function authHeaders() {
   const token = localStorage.getItem("crm_token");
   return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
@@ -1156,7 +1166,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       }}>
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
-                      {l.isHot && <span style={{ fontSize: 11 }}>🔥</span>}
+                      {l.isHot && <span style={{ fontSize: 11 }}>{getLeadTemp(l.createdAt).icon}</span>}
                     </div>
                     <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap" }}>
                       <span>📱 {l.phone || "-"}</span>
@@ -1193,7 +1203,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <th style={thStyle}>Sale hiện tại</th>
                 <th style={thStyle}>Dự án</th>
                 <th style={thStyle}>Ngày nhận lead</th>
-                <th style={thStyle}>Loại</th>
+                <th style={thStyle}>Nhiệt độ</th>
               </tr>
             </thead>
             <tbody>
@@ -1218,10 +1228,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     <td style={{ ...tdStyle, fontSize: 11 }}>{projectMap[l.projectId] || "-"}</td>
                     <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>
                     <td style={tdStyle}>
-                      {l.isHot
-                        ? <span style={{ background: "#fef2f2", color: "#dc2626", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>🔥 Nóng</span>
-                        : <span style={{ background: "#f0f9ff", color: "#3b82f6", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>❄️ Cũ</span>
-                      }
+                      {(() => { const t = getLeadTemp(l.createdAt); return (
+                        <span style={{ background: t.bg, color: t.color, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{t.label}</span>
+                      ); })()}
                     </td>
                   </tr>,
                 ];
@@ -1352,11 +1361,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b>{lead.product || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>
         <div>
-          <span style={{ color: "#6b7280", fontSize: 11 }}>Loại</span><br />
-          {lead.isHot
-            ? <span style={{ color: "#dc2626", fontWeight: 700 }}>🔥 Lead nóng (≤ 7 ngày, chưa chia)</span>
-            : <span style={{ color: "#3b82f6", fontWeight: 700 }}>❄️ Lead cũ (đã chia hoặc {'>'} 7 ngày)</span>
-          }
+          <span style={{ color: "#6b7280", fontSize: 11 }}>Nhiệt độ lead</span><br />
+          {(() => { const t = getLeadTemp(lead.createdAt); return (
+            <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
+          ); })()}
         </div>
       </div>
 
