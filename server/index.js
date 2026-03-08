@@ -1452,6 +1452,43 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
     // Check if this was a "Chia lead" entry — if so, also undo the sale assignment
     const hist = await get(db, "SELECT action, sale_name FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
     if (hist && hist.action === "Chia lead") {
+      const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+
+      // Send Telegram recall message to the sale being removed
+      try {
+        const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+        const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
+        if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
+          const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
+          const recallMsg = [
+            `🚫 *LEAD ĐÃ BỊ THU HỒI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `----------------------------------------------`,
+            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+            `📞 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
+            `🔗 Nhu cầu: ${lead ? lead.product || "-" : "-"}`,
+            ``,
+            `❌ _Lead này đã được Admin thu hồi._`,
+            `_Bạn không cần liên hệ khách hàng này nữa._`,
+          ].join("\n");
+
+          await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: saleUser.telegram_id,
+              text: recallMsg,
+              parse_mode: "Markdown",
+            }),
+          });
+
+          // Clear telegram pending for this sale
+          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
+        }
+      } catch (teleErr) {
+        console.error("[Telegram] Recall message failed:", teleErr.message);
+      }
+
       // Check if there's an older "Chia lead" entry for a different sale
       const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND id != ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1", [leadId, histId]);
       if (prev) {
@@ -1461,10 +1498,14 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         // No prior assignment — clear sale
         await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
       }
-      // Clear telegram pending for this sale
-      const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
-      if (saleUser) {
-        await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
+
+      // Revert lead status to the most recent history entry's status (excluding the one being deleted)
+      const prevHist = await get(db, "SELECT status FROM lead_history WHERE lead_id = ? AND id != ? AND status != '' ORDER BY seq DESC LIMIT 1", [leadId, histId]);
+      if (prevHist && prevHist.status) {
+        await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [normalizeStatus(prevHist.status), prevHist.status, leadId]);
+      } else {
+        // No previous status — reset to empty
+        await run(db, "UPDATE leads SET status = '', raw_status = '' WHERE id = ?", [leadId]);
       }
     }
 
