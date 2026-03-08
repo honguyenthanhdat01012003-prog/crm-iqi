@@ -927,11 +927,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     }
   }, [isAdmin]);
 
-  // Check if lead is recently created (within 24h)
+  // Show MỚI tag: only for leads not assigned to sale AND within 7 days
   const isRecentLead = useCallback((l) => {
+    if (l.saleName) return false;
     const d = parseLeadDate(l.createdAt);
     if (!d) return false;
-    return (Date.now() - d.getTime()) < 24 * 60 * 60 * 1000;
+    return (Date.now() - d.getTime()) < 7 * 24 * 60 * 60 * 1000;
   }, []);
 
   const projectMap = useMemo(() => {
@@ -1275,7 +1276,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [histStatus, setHistStatus] = useState("");
   const [histFeedback, setHistFeedback] = useState("");
   const [saving, setSaving] = useState(false);
-  const [editStatus, setEditStatus] = useState(lead.status);
+  const [editStatus, setEditStatus] = useState(lead.status || "new");
   const [savingStatus, setSavingStatus] = useState(false);
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
@@ -1362,10 +1363,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {/* Admin: Cập nhật trạng thái */}
       {isAdmin && (
         <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
-          <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Cập nhật trạng thái</b>
-          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Trạng thái:</b>
+            <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: (STATUS_COLORS[lead.status] || STATUS_COLORS.new) + "20", color: STATUS_COLORS[lead.status] || STATUS_COLORS.new }}>
+              {STATUS_LABELS[lead.status] || STATUS_LABELS.new}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
-              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff" }}>
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: "#1f2937" }}>
               {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             <button onClick={handleStatusUpdate} disabled={savingStatus}
@@ -1379,11 +1385,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {/* Admin: Chia lead cho Sale */}
       {isAdmin && (
         <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
-          <b style={{ fontSize: 12, color: "#1e40af" }}>📤 Chia lead cho Sale</b>
-          {lead.saleName && <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 8 }}>Hiện tại: <b style={{ color: "#1d4ed8" }}>{lead.saleName}</b></span>}
-          <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <b style={{ fontSize: 12, color: "#1e40af" }}>📤 Sale phụ trách:</b>
+            {lead.saleName
+              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#dbeafe", color: "#1d4ed8" }}>{lead.saleName}</span>
+              : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
+            }
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff" }}>
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Sale --</option>
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
