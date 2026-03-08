@@ -155,6 +155,21 @@ async function initDb() {
       salt TEXT NOT NULL,
       role TEXT NOT NULL DEFAULT 'sale',
       display_name TEXT NOT NULL DEFAULT '',
+      telegram_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+
+  // Migration: add telegram_id if missing
+  try { await run(db, "ALTER TABLE users ADD COLUMN telegram_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS telegram_bots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
+      token TEXT NOT NULL DEFAULT '',
+      is_active INTEGER NOT NULL DEFAULT 1,
       created_at TEXT DEFAULT (datetime('now'))
     )`
   );
@@ -943,10 +958,13 @@ app.get("/api/me", requireAuth, (req, res) => {
 });
 
 /* ---------- User management (admin only) ---------- */
+const mapUser = u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", createdAt: u.created_at });
+const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, created_at FROM users ORDER BY id");
+
 app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
   try {
-    const users = await all(db, "SELECT id, username, role, display_name, created_at FROM users ORDER BY id");
-    res.json(users.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, createdAt: u.created_at })));
+    const users = await selectUsers();
+    res.json(users.map(mapUser));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -954,17 +972,17 @@ app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
 
 app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { username, password, role, displayName } = req.body;
+    const { username, password, role, displayName, telegramId } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
     const validRole = ["admin", "sale"].includes(role) ? role : "sale";
     const { hash, salt } = hashPassword(String(password));
     await run(
       db,
-      "INSERT INTO users(username, password_hash, salt, role, display_name) VALUES(?, ?, ?, ?, ?)",
-      [String(username).trim(), hash, salt, validRole, String(displayName || username).trim()]
+      "INSERT INTO users(username, password_hash, salt, role, display_name, telegram_id) VALUES(?, ?, ?, ?, ?, ?)",
+      [String(username).trim(), hash, salt, validRole, String(displayName || username).trim(), String(telegramId || "").trim()]
     );
-    const users = await all(db, "SELECT id, username, role, display_name, created_at FROM users ORDER BY id");
-    res.json(users.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, createdAt: u.created_at })));
+    const users = await selectUsers();
+    res.json(users.map(mapUser));
   } catch (err) {
     if (err.message?.includes("UNIQUE")) return res.status(400).json({ error: "Username already exists" });
     res.status(500).json({ error: err.message });
@@ -974,7 +992,7 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
 app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { password, role, displayName } = req.body;
+    const { password, role, displayName, telegramId } = req.body;
     if (password) {
       const { hash, salt } = hashPassword(String(password));
       await run(db, "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", [hash, salt, id]);
@@ -985,10 +1003,13 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (displayName !== undefined) {
       await run(db, "UPDATE users SET display_name = ? WHERE id = ?", [String(displayName).trim(), id]);
     }
+    if (telegramId !== undefined) {
+      await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId).trim(), id]);
+    }
     // Invalidate active sessions for this user
     for (const [t, s] of sessions) { if (s.userId === id) sessions.delete(t); }
-    const users = await all(db, "SELECT id, username, role, display_name, created_at FROM users ORDER BY id");
-    res.json(users.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, createdAt: u.created_at })));
+    const users = await selectUsers();
+    res.json(users.map(mapUser));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1000,11 +1021,51 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (req.user.userId === id) return res.status(400).json({ error: "Cannot delete yourself" });
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
     for (const [t, s] of sessions) { if (s.userId === id) sessions.delete(t); }
-    const users = await all(db, "SELECT id, username, role, display_name, created_at FROM users ORDER BY id");
-    res.json(users.map(u => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, createdAt: u.created_at })));
+    const users = await selectUsers();
+    res.json(users.map(mapUser));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+/* ---------- Telegram Bots CRUD ---------- */
+const mapBot = b => ({ id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, createdAt: b.created_at });
+
+app.get("/api/telegram-bots", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
+    res.json(bots.map(mapBot));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/telegram-bots", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, token } = req.body;
+    if (!name || !token) return res.status(400).json({ error: "Tên bot và token bắt buộc" });
+    await run(db, "INSERT INTO telegram_bots(name, token) VALUES(?, ?)", [String(name).trim(), String(token).trim()]);
+    const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
+    res.json(bots.map(mapBot));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, token, isActive } = req.body;
+    if (name !== undefined) await run(db, "UPDATE telegram_bots SET name = ? WHERE id = ?", [String(name).trim(), id]);
+    if (token !== undefined) await run(db, "UPDATE telegram_bots SET token = ? WHERE id = ?", [String(token).trim(), id]);
+    if (isActive !== undefined) await run(db, "UPDATE telegram_bots SET is_active = ? WHERE id = ?", [isActive ? 1 : 0, id]);
+    const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
+    res.json(bots.map(mapBot));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM telegram_bots WHERE id = ?", [Number(req.params.id)]);
+    const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
+    res.json(bots.map(mapBot));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* ---------- Public health ---------- */

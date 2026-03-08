@@ -1459,8 +1459,15 @@ function UsersPage() {
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
-  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale" });
+  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale", telegramId: "" });
   const [error, setError] = useState("");
+
+  // Telegram Bots
+  const [bots, setBots] = useState([]);
+  const [showBotForm, setShowBotForm] = useState(false);
+  const [editingBot, setEditingBot] = useState(null);
+  const [botDraft, setBotDraft] = useState({ name: "", token: "" });
+  const [botError, setBotError] = useState("");
 
   const loadUsers = async () => {
     try {
@@ -1469,18 +1476,25 @@ function UsersPage() {
     } catch (e) { console.error(e); }
   };
 
-  useEffect(() => { loadUsers(); }, []);
+  const loadBots = async () => {
+    try {
+      const r = await apiFetch(`${API}/telegram-bots`);
+      setBots(await r.json());
+    } catch (e) { console.error(e); }
+  };
+
+  useEffect(() => { loadUsers(); loadBots(); }, []);
 
   const openNew = () => {
     setEditingUser(null);
-    setDraft({ username: "", password: "", displayName: "", role: "sale" });
+    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "" });
     setError("");
     setShowForm(true);
   };
 
   const openEdit = (u) => {
     setEditingUser(u);
-    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role });
+    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "" });
     setError("");
     setShowForm(true);
   };
@@ -1489,7 +1503,7 @@ function UsersPage() {
     setError("");
     try {
       if (editingUser) {
-        const body = { displayName: draft.displayName, role: draft.role };
+        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId };
         if (draft.password) body.password = draft.password;
         const r = await apiFetch(`${API}/users/${editingUser.id}`, { method: "PUT", body: JSON.stringify(body) });
         if (!r.ok) { const d = await r.json(); setError(d.error); return; }
@@ -1518,20 +1532,71 @@ function UsersPage() {
     } catch (e) { console.error(e); }
   };
 
+  // Bot handlers
+  const openNewBot = () => {
+    setEditingBot(null);
+    setBotDraft({ name: "", token: "" });
+    setBotError("");
+    setShowBotForm(true);
+  };
+
+  const openEditBot = (b) => {
+    setEditingBot(b);
+    setBotDraft({ name: b.name, token: b.token });
+    setBotError("");
+    setShowBotForm(true);
+  };
+
+  const handleSaveBot = async () => {
+    setBotError("");
+    if (!botDraft.name || !botDraft.token) { setBotError("Tên bot và token bắt buộc"); return; }
+    try {
+      const url = editingBot ? `${API}/telegram-bots/${editingBot.id}` : `${API}/telegram-bots`;
+      const r = await apiFetch(url, {
+        method: editingBot ? "PUT" : "POST",
+        body: JSON.stringify(botDraft),
+      });
+      if (!r.ok) { const d = await r.json(); setBotError(d.error); return; }
+      setBots(await r.json());
+      setShowBotForm(false);
+    } catch (e) { setBotError(e.message); }
+  };
+
+  const handleDeleteBot = async (id) => {
+    if (!confirm("Xóa bot này?")) return;
+    try {
+      const r = await apiFetch(`${API}/telegram-bots/${id}`, { method: "DELETE" });
+      if (!r.ok) { const d = await r.json(); alert(d.error); return; }
+      setBots(await r.json());
+    } catch (e) { console.error(e); }
+  };
+
+  const toggleBot = async (b) => {
+    try {
+      const r = await apiFetch(`${API}/telegram-bots/${b.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ isActive: !b.isActive }),
+      });
+      if (r.ok) setBots(await r.json());
+    } catch (e) { console.error(e); }
+  };
+
   return (
     <>
+      {/* ===== TÀI KHOẢN ===== */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div style={{ fontSize: 14, color: "#6b7280" }}>{users.length} tài khoản</div>
+        <div style={{ fontSize: 14, color: "#6b7280" }}>👤 {users.length} tài khoản</div>
         <button onClick={openNew} style={btnPrimary}>+ Thêm tài khoản</button>
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 32 }}>
         <table style={tableStyle}>
           <thead>
             <tr>
               <th style={thStyle}>#</th>
               <th style={thStyle}>Username</th>
               <th style={thStyle}>Tên hiển thị</th>
+              <th style={thStyle}>Telegram ID</th>
               <th style={thStyle}>Quyền</th>
               <th style={thStyle}>Ngày tạo</th>
               <th style={thStyle}>Hành động</th>
@@ -1543,6 +1608,12 @@ function UsersPage() {
                 <td style={tdStyle}>{i + 1}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{u.username}</td>
                 <td style={tdStyle}>{u.displayName}</td>
+                <td style={tdStyle}>
+                  {u.telegramId
+                    ? <span style={{ background: "#eff6ff", color: "#2563eb", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>✈️ {u.telegramId}</span>
+                    : <span style={{ color: "#9ca3af", fontSize: 11 }}>Chưa cập nhật</span>
+                  }
+                </td>
                 <td style={tdStyle}>
                   <span style={{
                     padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
@@ -1565,6 +1636,59 @@ function UsersPage() {
         </table>
       </div>
 
+      {/* ===== TELEGRAM BOT ===== */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ fontSize: 14, color: "#6b7280" }}>🤖 Telegram Bot ({bots.length})</div>
+        <button onClick={openNewBot} style={btnPrimary}>+ Thêm Bot</button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+        {bots.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Chưa có bot nào. Thêm bot để gửi thông báo qua Telegram.</div>
+        ) : (
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thStyle}>#</th>
+                <th style={thStyle}>Tên Bot</th>
+                <th style={thStyle}>Token</th>
+                <th style={thStyle}>Trạng thái</th>
+                <th style={thStyle}>Ngày tạo</th>
+                <th style={thStyle}>Hành động</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bots.map((b, i) => (
+                <tr key={b.id} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
+                  <td style={tdStyle}>{i + 1}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>🤖 {b.name}</td>
+                  <td style={{ ...tdStyle, fontSize: 11, fontFamily: "monospace", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {b.token.slice(0, 12)}...{b.token.slice(-6)}
+                  </td>
+                  <td style={tdStyle}>
+                    <button onClick={() => toggleBot(b)} style={{
+                      padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer",
+                      background: b.isActive ? "#f0fdf4" : "#fef2f2",
+                      color: b.isActive ? "#16a34a" : "#dc2626",
+                    }}>
+                      {b.isActive ? "✅ Hoạt động" : "⛔ Tắt"}
+                    </button>
+                  </td>
+                  <td style={{ ...tdStyle, fontSize: 11 }}>{b.createdAt || "-"}</td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>✏️</button>
+                      <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}>🗑️</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* Modal thêm/sửa tài khoản */}
       {showForm && (
         <Modal onClose={() => setShowForm(false)} title={editingUser ? "Sửa tài khoản" : "Thêm tài khoản"}>
           {error && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -1577,6 +1701,9 @@ function UsersPage() {
           <label style={labelStyle}>Tên hiển thị</label>
           <input style={inputStyle} value={draft.displayName}
             onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} placeholder="VD: Nguyễn Văn A" />
+          <label style={labelStyle}>Telegram ID</label>
+          <input style={inputStyle} value={draft.telegramId}
+            onChange={(e) => setDraft({ ...draft, telegramId: e.target.value })} placeholder="VD: 123456789" />
           <label style={labelStyle}>Quyền</label>
           <select value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })}
             style={{ ...inputStyle }}>
@@ -1586,6 +1713,23 @@ function UsersPage() {
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSave} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
             <button onClick={() => setShowForm(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal thêm/sửa bot */}
+      {showBotForm && (
+        <Modal onClose={() => setShowBotForm(false)} title={editingBot ? "Sửa Bot Telegram" : "Thêm Bot Telegram"}>
+          {botError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{botError}</div>}
+          <label style={labelStyle}>Tên Bot</label>
+          <input style={inputStyle} value={botDraft.name}
+            onChange={(e) => setBotDraft({ ...botDraft, name: e.target.value })} placeholder="VD: CRM Notification Bot" />
+          <label style={labelStyle}>Bot Token</label>
+          <input style={inputStyle} value={botDraft.token}
+            onChange={(e) => setBotDraft({ ...botDraft, token: e.target.value })} placeholder="VD: 7123456789:AAH..." />
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button onClick={handleSaveBot} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
+            <button onClick={() => setShowBotForm(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
           </div>
         </Modal>
       )}
