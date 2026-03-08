@@ -23,22 +23,22 @@ const STATUS_LABELS = {
 };
 
 const STATUS_COLORS = {
-  new: "#9ca3af",
-  called: "#22c55e",
-  interested: "#eab308",
-  low_interest: "#ca8a04",
-  other_project: "#b45309",
+  new: "#d1d5db",
+  called: "#4ade80",
+  interested: "#22c55e",
+  low_interest: "#38bdf8",
+  other_project: "#92400e",
   appointment: "#8b5cf6",
   booked: "#10b981",
   closed: "#059669",
   not_interested: "#ef4444",
-  spam: "#b91c1c",
+  spam: "#eab308",
   weak_finance: "#f97316",
   unreachable: "#6b7280",
   callback: "#3b82f6",
-  wrong_number: "#374151",
-  blocked: "#1e293b",
-  has_sale: "#0ea5e9",
+  wrong_number: "#9ca3af",
+  blocked: "#1f2937",
+  has_sale: "#0284c7",
   lost: "#dc2626",
 };
 
