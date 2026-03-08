@@ -322,10 +322,12 @@ function CRMApp({ user, onLogout }) {
   const stats = useMemo(() => {
     const statusCounts = {};
     Object.keys(STATUS_LABELS).forEach((s) => (statusCounts[s] = 0));
+    let noFeedback = 0;
     filteredLeads.forEach((l) => {
       statusCounts[l.status] = (statusCounts[l.status] || 0) + 1;
+      if (!l.status || l.status === "new") noFeedback++;
     });
-    return { total: filteredLeads.length, ...statusCounts };
+    return { total: filteredLeads.length, noFeedback, ...statusCounts };
   }, [filteredLeads]);
 
   // --- Sale ranking ---
@@ -571,7 +573,7 @@ function Modal({ onClose, title, children }) {
   );
 }
 
-function Card({ title, value, sub, color = "#3b82f6" }) {
+function Card({ title, value, sub, color = "#3b82f6", percent }) {
   return (
     <div
       style={{
@@ -582,19 +584,22 @@ function Card({ title, value, sub, color = "#3b82f6" }) {
     >
       <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>{title}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
+      {percent !== undefined && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>{percent}%</div>}
       {sub && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
 
 function DashboardPage({ stats, cost, saleRanking }) {
+  const pct = (v) => stats.total ? ((v / stats.total) * 100).toFixed(1) : "0.0";
   return (
     <>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         <Card title="Tổng Lead" value={stats.total} color="#3b82f6" />
-        <Card title="Quan tâm" value={stats.interested || 0} color="#f59e0b" />
-        <Card title="Giữ chỗ" value={stats.booked || 0} color="#10b981" />
-        <Card title="Chốt" value={stats.closed || 0} color="#059669" />
+        <Card title="Chưa feedback" value={stats.noFeedback || 0} color="#ef4444" percent={pct(stats.noFeedback || 0)} />
+        <Card title="Quan tâm" value={stats.interested || 0} color="#f59e0b" percent={pct(stats.interested || 0)} />
+        <Card title="Giữ chỗ" value={stats.booked || 0} color="#10b981" percent={pct(stats.booked || 0)} />
+        <Card title="Chốt" value={stats.closed || 0} color="#059669" percent={pct(stats.closed || 0)} />
         <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(cost.cpLead)}`} color="#8b5cf6" />
         <Card title="Tổng lead (sheet)" value={cost.totalLeads || 0} sub={`Booking: ${cost.totalBooking || 0}`} color="#ec4899" />
       </div>
@@ -610,7 +615,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
                 background: STATUS_COLORS[key] + "18", color: STATUS_COLORS[key],
               }}
             >
-              {label}: {stats[key] || 0}
+              {label}: {stats[key] || 0} ({pct(stats[key] || 0)}%)
             </span>
           ))}
         </div>
