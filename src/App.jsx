@@ -733,14 +733,23 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   // Bitrix-style lead categories
   const LEAD_TABS = useMemo(() => [
     { key: "all", label: "Tất cả", icon: "📋", filter: () => true },
-    { key: "new", label: "Chưa liên hệ", icon: "🆕", filter: (l) => l.status === "new" },
+    { key: "new", label: "Chưa feedback", icon: "🆕", filter: (l) => l.status === "new" || !l.status },
     { key: "interested", label: "Quan tâm", icon: "⭐", filter: (l) => l.status === "interested" },
+    { key: "low_interest", label: "QT hời hợt", icon: "💫", filter: (l) => l.status === "low_interest" },
+    { key: "other_project", label: "QT DA khác", icon: "🔄", filter: (l) => l.status === "other_project" },
     { key: "appointment", label: "Hẹn xem", icon: "📅", filter: (l) => l.status === "appointment" },
     { key: "booked", label: "Giữ chỗ", icon: "✅", filter: (l) => l.status === "booked" },
     { key: "closed", label: "Chốt", icon: "🏆", filter: (l) => l.status === "closed" },
-    { key: "unreachable", label: "KLH / Thuê bao", icon: "📵", filter: (l) => l.status === "unreachable" },
     { key: "not_interested", label: "Không quan tâm", icon: "👎", filter: (l) => l.status === "not_interested" },
+    { key: "spam", label: "Phá/rác", icon: "🚫", filter: (l) => l.status === "spam" },
+    { key: "weak_finance", label: "Tài chính yếu", icon: "💸", filter: (l) => l.status === "weak_finance" },
+    { key: "unreachable", label: "Chưa liên lạc được", icon: "📵", filter: (l) => l.status === "unreachable" },
+    { key: "callback", label: "Liên lạc lại sau", icon: "📲", filter: (l) => l.status === "callback" },
+    { key: "wrong_number", label: "Thuê bao/Sai số", icon: "❌", filter: (l) => l.status === "wrong_number" },
+    { key: "blocked", label: "Chặn", icon: "🚷", filter: (l) => l.status === "blocked" },
+    { key: "has_sale", label: "Có sale khác", icon: "👥", filter: (l) => l.status === "has_sale" },
     { key: "called", label: "Đã gọi", icon: "📞", filter: (l) => l.status === "called" },
+    { key: "lost", label: "Mất", icon: "💀", filter: (l) => l.status === "lost" },
   ], []);
 
   const tabCounts = useMemo(() => {
