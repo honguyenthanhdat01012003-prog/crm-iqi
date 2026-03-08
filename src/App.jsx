@@ -690,7 +690,8 @@ function DashboardPage({ stats, cost, saleRanking }) {
               <th style={thStyle}>#</th>
               <th style={thStyle}>Sale</th>
               <th style={thStyle}>Tổng</th>
-              {Object.entries(STATUS_LABELS).map(([k, v]) => (
+              <th style={{ ...thStyle, color: "#6b7280", whiteSpace: "nowrap", fontSize: 11 }}>Chưa FB</th>
+              {Object.entries(STATUS_LABELS).filter(([k]) => k !== "new").map(([k, v]) => (
                 <th key={k} style={{ ...thStyle, color: STATUS_COLORS[k], whiteSpace: "nowrap", fontSize: 11 }}>{v}</th>
               ))}
             </tr>
@@ -701,7 +702,8 @@ function DashboardPage({ stats, cost, saleRanking }) {
                 <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
                 <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{s.name}</td>
                 <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
-                {Object.keys(STATUS_LABELS).map(k => (
+                <td style={{ ...tdStyle, color: s.new ? "#6b7280" : "#d1d5db" }}>{s.new || 0}</td>
+                {Object.keys(STATUS_LABELS).filter(k => k !== "new").map(k => (
                   <td key={k} style={{ ...tdStyle, color: s[k] ? STATUS_COLORS[k] : "#d1d5db" }}>{s[k] || 0}</td>
                 ))}
               </tr>
