@@ -673,8 +673,8 @@ function DashboardPage({ stats, cost, saleRanking }) {
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
-        <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(cost.cpLead)}`} color="#8b5cf6" />
-        <Card title="Tổng lead (sheet)" value={cost.totalLeads || 0} sub={`Booking: ${cost.totalBooking || 0}`} color="#ec4899" />
+        <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(stats.total ? Math.round(cost.totalSpent / stats.total) : 0)}`} color="#8b5cf6" />
+        <Card title="Booking" value={cost.totalBooking || 0} color="#ec4899" />
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: 24, marginBottom: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
