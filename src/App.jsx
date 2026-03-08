@@ -2,6 +2,17 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 
 const API = "/api";
 
+/* ===== Mobile detection hook ===== */
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= breakpoint);
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 const STATUS_LABELS = {
   new: "Chưa feedback",
   called: "Đã gọi",
@@ -122,10 +133,11 @@ function LoginPage({ onLogin }) {
     <div style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
       background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
-      fontFamily: "'Segoe UI', system-ui, sans-serif",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      padding: 16,
     }}>
       <form onSubmit={handleSubmit} style={{
-        background: "#fff", borderRadius: 16, padding: 40, width: 380, maxWidth: "90vw",
+        background: "#fff", borderRadius: 16, padding: "32px 24px", width: 380, maxWidth: "100%",
         boxShadow: "0 20px 60px rgba(0,0,0,.3)",
       }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
@@ -151,6 +163,7 @@ function LoginPage({ onLogin }) {
 
 function CRMApp({ user, onLogout }) {
   const isAdmin = user.role === "admin";
+  const isMobile = useIsMobile();
   const [page, setPage] = useState(isAdmin ? "dashboard" : "leads");
   const [leads, setLeads] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
@@ -162,7 +175,7 @@ function CRMApp({ user, onLogout }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Project modal state
   const [showProjectModal, setShowProjectModal] = useState(false);
@@ -381,34 +394,48 @@ function CRMApp({ user, onLogout }) {
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: "#f0f2f5" }}>
+    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5" }}>
+      {/* Mobile overlay backdrop */}
+      {isMobile && sidebarOpen && (
+        <div onClick={() => setSidebarOpen(false)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 998,
+          animation: "fadeIn .2s ease",
+        }} />
+      )}
+
       {/* Sidebar */}
       <aside
         style={{
-          width: sidebarOpen ? 220 : 56,
+          width: isMobile ? 280 : (sidebarOpen ? 220 : 56),
           background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)",
           color: "#fff",
-          transition: "width .2s",
+          transition: isMobile ? "transform .25s ease" : "width .2s",
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
+          ...(isMobile ? {
+            position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 999,
+            transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
+            boxShadow: sidebarOpen ? "4px 0 20px rgba(0,0,0,.3)" : "none",
+          } : {}),
         }}
       >
         <div
-          style={{ padding: "16px 12px", cursor: "pointer", fontWeight: 700, fontSize: 18, whiteSpace: "nowrap" }}
+          style={{ padding: "16px 12px", cursor: "pointer", fontWeight: 700, fontSize: 18, whiteSpace: "nowrap", display: "flex", justifyContent: "space-between", alignItems: "center" }}
           onClick={() => setSidebarOpen(!sidebarOpen)}
         >
-          {sidebarOpen ? "☰ RealCRM" : "☰"}
+          <span>{(isMobile || sidebarOpen) ? "🏠 RealCRM" : "☰"}</span>
+          {isMobile && sidebarOpen && <span style={{ fontSize: 20, padding: 4 }}>✕</span>}
         </div>
 
         {/* Project selector */}
-        {sidebarOpen && (
+        {(isMobile || sidebarOpen) && (
           <div style={{ padding: "0 12px 12px" }}>
             <select
               value={selectedProject}
               onChange={(e) => setSelectedProject(e.target.value)}
-              style={{ width: "100%", padding: "6px", borderRadius: 6, border: "none", fontSize: 13 }}
+              style={{ width: "100%", padding: "8px", borderRadius: 6, border: "none", fontSize: 14 }}
             >
               <option value="all">Tất cả dự án</option>
               {projects.map((p) => (
@@ -422,25 +449,25 @@ function CRMApp({ user, onLogout }) {
           {visibleNav.map((n) => (
             <div
               key={n.key}
-              onClick={() => setPage(n.key)}
+              onClick={() => { setPage(n.key); if (isMobile) setSidebarOpen(false); }}
               style={{
-                padding: "12px 16px",
+                padding: isMobile ? "14px 16px" : "12px 16px",
                 cursor: "pointer",
                 background: page === n.key ? "rgba(255,255,255,.12)" : "transparent",
                 borderLeft: page === n.key ? "3px solid #3b82f6" : "3px solid transparent",
                 whiteSpace: "nowrap",
-                fontSize: 14,
+                fontSize: isMobile ? 15 : 14,
                 transition: "background .15s",
               }}
             >
-              {sidebarOpen ? n.label : n.label.slice(0, 2)}
+              {(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}
             </div>
           ))}
         </nav>
 
-        {sidebarOpen && (
+        {(isMobile || sidebarOpen) && (
           <div style={{ padding: "12px", borderTop: "1px solid rgba(255,255,255,.1)" }}>
-            <div style={{ fontSize: 12, marginBottom: 6, opacity: 0.9 }}>
+            <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.9 }}>
               {user.displayName} <span style={{
                 fontSize: 10, padding: "1px 6px", borderRadius: 8,
                 background: user.role === "admin" ? "#ef4444" : "#3b82f6", color: "#fff",
@@ -449,9 +476,9 @@ function CRMApp({ user, onLogout }) {
             <button
               onClick={onLogout}
               style={{
-                width: "100%", padding: "6px", background: "rgba(255,255,255,.1)",
+                width: "100%", padding: "8px", background: "rgba(255,255,255,.1)",
                 border: "1px solid rgba(255,255,255,.2)", borderRadius: 6,
-                color: "#fff", cursor: "pointer", fontSize: 12,
+                color: "#fff", cursor: "pointer", fontSize: 13,
               }}
             >
               🚪 Đăng xuất
@@ -464,18 +491,27 @@ function CRMApp({ user, onLogout }) {
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, padding: 24, overflow: "auto" }}>
+      <main style={{ flex: 1, padding: isMobile ? 12 : 24, overflow: "auto", minWidth: 0 }}>
         {/* Top bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h2 style={{ margin: 0, color: "#1a1a2e" }}>
-            {visibleNav.find((n) => n.key === page)?.label || "Dashboard"}
-          </h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMobile ? 12 : 20, gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            {isMobile && (
+              <button onClick={() => setSidebarOpen(true)} style={{
+                background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 8,
+                width: 40, height: 40, fontSize: 18, cursor: "pointer", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}>☰</button>
+            )}
+            <h2 style={{ margin: 0, color: "#1a1a2e", fontSize: isMobile ? 16 : 20, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {visibleNav.find((n) => n.key === page)?.label || "Dashboard"}
+            </h2>
+          </div>
           {isAdmin && (
             <button
               onClick={handleSync}
               disabled={syncing}
               style={{
-                padding: "8px 20px",
+                padding: isMobile ? "8px 14px" : "8px 20px",
                 background: syncing ? "#94a3b8" : "#3b82f6",
                 color: "#fff",
                 border: "none",
@@ -483,9 +519,11 @@ function CRMApp({ user, onLogout }) {
                 cursor: syncing ? "not-allowed" : "pointer",
                 fontWeight: 600,
                 fontSize: 14,
+                flexShrink: 0,
+                minHeight: 40,
               }}
             >
-              {syncing ? "Đang đồng bộ..." : "🔄 Đồng bộ"}
+              {syncing ? "Đồng bộ..." : "🔄 Đồng bộ"}
             </button>
           )}
         </div>
@@ -569,47 +607,59 @@ function CRMApp({ user, onLogout }) {
 /* ===== Components ===== */
 
 function Modal({ onClose, title, children }) {
+  const isMobile = useIsMobile();
   return (
     <div
       onClick={onClose}
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,.45)",
-        display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999,
+        display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999,
+        animation: "fadeIn .2s ease",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: "#fff", borderRadius: 12, padding: 24, width: 460, maxWidth: "90vw",
+          background: "#fff",
+          borderRadius: isMobile ? "16px 16px 0 0" : 12,
+          padding: isMobile ? "20px 16px 32px" : 24,
+          width: isMobile ? "100%" : 460,
+          maxWidth: "100%",
+          maxHeight: isMobile ? "90vh" : "85vh",
+          overflowY: "auto",
           boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+          animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease",
         }}
       >
-        <h3 style={{ margin: "0 0 16px" }}>{title}</h3>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 17 : 16 }}>{title}</h3>
+          {isMobile && <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#6b7280", cursor: "pointer", padding: 4 }}>✕</button>}
+        </div>
         {children}
       </div>
     </div>
   );
 }
 
-function Card({ title, value, sub, color = "#3b82f6", percent }) {
+function Card({ title, value, sub, color = "#3b82f6", percent, compact }) {
   return (
     <div
       style={{
-        background: "#fff", borderRadius: 12, padding: 20,
+        background: "#fff", borderRadius: compact ? 10 : 12, padding: compact ? 12 : 20,
         boxShadow: "0 1px 3px rgba(0,0,0,.08)",
-        borderTop: `3px solid ${color}`, minWidth: 160, flex: "1 1 160px",
+        borderTop: `3px solid ${color}`,
       }}
     >
-      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
-      {percent !== undefined && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>{percent}%</div>}
-      {sub && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{sub}</div>}
+      <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 2 }}>{title}</div>
+      <div style={{ fontSize: compact ? 18 : 24, fontWeight: 700, color }}>{value}</div>
+      {percent !== undefined && <div style={{ fontSize: compact ? 10 : 12, color: "#9ca3af", marginTop: 1 }}>{percent}%</div>}
+      {sub && <div style={{ fontSize: compact ? 10 : 11, color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
 function DonutChart({ segments, size = 220 }) {
-  const cx = size / 2, cy = size / 2, r = 80, strokeWidth = 32;
+  const cx = size / 2, cy = size / 2, r = size * 0.36, strokeWidth = size * 0.14;
   const total = segments.reduce((s, g) => s + g.value, 0);
   if (!total) return <div style={{ textAlign: "center", color: "#9ca3af", padding: 40 }}>Không có dữ liệu</div>;
   let cumAngle = -90;
@@ -627,17 +677,17 @@ function DonutChart({ segments, size = 220 }) {
     return { ...seg, d: `M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2}`, pct: ((seg.value / total) * 100).toFixed(1) };
   });
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 32, justifyContent: "center" }}>
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: size < 200 ? 16 : 32, justifyContent: "center" }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         {arcs.map((a, i) => (
           <path key={i} d={a.d} fill="none" stroke={a.color} strokeWidth={strokeWidth} strokeLinecap="round" />
         ))}
-        <text x={cx} y={cy - 6} textAnchor="middle" fontSize="22" fontWeight="700" fill="#1f2937">{total}</text>
-        <text x={cx} y={cy + 14} textAnchor="middle" fontSize="11" fill="#6b7280">Tổng lead</text>
+        <text x={cx} y={cy - 6} textAnchor="middle" fontSize={size < 200 ? "16" : "22"} fontWeight="700" fill="#1f2937">{total}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" fontSize={size < 200 ? "9" : "11"} fill="#6b7280">Tổng lead</text>
       </svg>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {arcs.map((a, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: size < 200 ? 11 : 13 }}>
             <span style={{ width: 12, height: 12, borderRadius: 3, background: a.color, display: "inline-block", flexShrink: 0 }} />
             <span style={{ color: "#374151", fontWeight: 500 }}>{a.label}</span>
             <span style={{ color: "#6b7280" }}>{a.value} ({a.pct}%)</span>
@@ -649,6 +699,7 @@ function DonutChart({ segments, size = 220 }) {
 }
 
 function DashboardPage({ stats, cost, saleRanking }) {
+  const isMobile = useIsMobile();
   const pct = (v) => stats.total ? ((v / stats.total) * 100).toFixed(1) : "0.0";
 
   const statusCards = Object.entries(STATUS_LABELS)
@@ -665,25 +716,44 @@ function DashboardPage({ stats, cost, saleRanking }) {
 
   return (
     <>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
-        <Card title="Tổng Lead" value={stats.total} color="#3b82f6" />
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
+        <Card title="Tổng Lead" value={stats.total} color="#3b82f6" compact={isMobile} />
         {allCards.map((c) => (
-          <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} />
+          <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} compact={isMobile} />
         ))}
       </div>
 
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
-        <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(stats.total ? Math.round(cost.totalSpent / stats.total) : 0)}`} color="#8b5cf6" />
-        <Card title="Booking" value={cost.totalBooking || 0} color="#ec4899" />
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
+        <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(stats.total ? Math.round(cost.totalSpent / stats.total) : 0)}`} color="#8b5cf6" compact={isMobile} />
+        <Card title="Booking" value={cost.totalBooking || 0} color="#ec4899" compact={isMobile} />
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: 24, marginBottom: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        <h4 style={{ margin: "0 0 16px", fontSize: 16, color: "#1f2937" }}>📊 Biểu đồ phân bổ trạng thái</h4>
-        <DonutChart segments={donutSegments} />
+      <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 24, marginBottom: isMobile ? 16 : 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+        <h4 style={{ margin: "0 0 16px", fontSize: isMobile ? 14 : 16, color: "#1f2937" }}>📊 Biểu đồ phân bổ trạng thái</h4>
+        <DonutChart segments={donutSegments} size={isMobile ? 160 : 220} />
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflowX: "auto" }}>
-        <h4 style={{ margin: "0 0 12px" }}>🏆 Bảng xếp hạng Sale</h4>
+      <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 12 : 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <h4 style={{ margin: "0 0 12px", fontSize: isMobile ? 14 : 16 }}>🏆 Bảng xếp hạng Sale</h4>
+        {isMobile ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {saleRanking.map((s, i) => (
+              <div key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 10, padding: 12, border: "1px solid #e5e7eb" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
+                  <span style={{ fontWeight: 700, fontSize: 16, color: "#3b82f6" }}>{s.total} lead</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {Object.entries(STATUS_LABELS).map(([k, v]) => {
+                    const val = s[k] || 0;
+                    if (!val) return null;
+                    return <span key={k} style={{ padding: "2px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[k] || "#6b7280") + "18", color: STATUS_COLORS[k] }}>{v}: {val}</span>;
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
         <table style={tableStyle}>
           <thead>
             <tr>
@@ -710,12 +780,14 @@ function DashboardPage({ stats, cost, saleRanking }) {
             ))}
           </tbody>
         </table>
+        )}
       </div>
     </>
   );
 }
 
 function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout }) {
+  const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
   const [pageSize, setPageSize] = useState(15);
@@ -865,18 +937,27 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       )}
 
-      {/* Bitrix-style tabs */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+      {/* Bitrix-style tabs - horizontal scroll on mobile */}
+      <div style={{
+        display: "flex", gap: 6, marginBottom: isMobile ? 10 : 16,
+        flexWrap: isMobile ? "nowrap" : "wrap",
+        overflowX: isMobile ? "auto" : "visible",
+        WebkitOverflowScrolling: "touch",
+        paddingBottom: isMobile ? 4 : 0,
+        msOverflowStyle: "none", scrollbarWidth: "none",
+      }}>
         {LEAD_TABS.map((t) => {
           const isActive = activeTab === t.key;
           const count = tabCounts[t.key] || 0;
           return (
             <button key={t.key} onClick={() => { setActiveTab(t.key); setCurrentPage(1); }}
               style={{
-                padding: "8px 14px", borderRadius: 20, border: isActive ? "2px solid #3b82f6" : "1px solid #e5e7eb",
+                padding: isMobile ? "8px 12px" : "8px 14px", borderRadius: 20,
+                border: isActive ? "2px solid #3b82f6" : "1px solid #e5e7eb",
                 background: isActive ? "#eff6ff" : "#fff", color: isActive ? "#1d4ed8" : "#374151",
                 cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 500,
                 display: "flex", alignItems: "center", gap: 4, transition: "all .15s",
+                whiteSpace: "nowrap", flexShrink: 0,
               }}>
               <span>{t.icon}</span>
               <span>{t.label}</span>
@@ -890,20 +971,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       </div>
 
       {/* Search / Date filters */}
-      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
         <input
-          style={{ ...inputStyle, flex: "1 1 200px", marginBottom: 0 }}
+          style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
           placeholder="🔍 Tìm tên, SĐT, chiến dịch, sale..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
         />
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, flexWrap: "wrap", width: isMobile ? "100%" : "auto" }}>
           <span style={{ color: "#6b7280" }}>Từ:</span>
           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
-            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12 }} />
+            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, flex: isMobile ? 1 : "none" }} />
           <span style={{ color: "#6b7280", marginLeft: 4 }}>Đến:</span>
           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
-            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12 }} />
+            style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, flex: isMobile ? 1 : "none" }} />
           {(dateFrom || dateTo) && (
             <button onClick={() => { setDateFrom(""); setDateTo(""); }}
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày">✕</button>
@@ -925,8 +1006,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       </div>
 
-      {/* Lead cards (Bitrix-style for sale) / table for admin */}
-      {!isAdmin ? (
+      {/* Lead cards - card layout for all on mobile, table for admin desktop */}
+      {(!isAdmin || isMobile) ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
@@ -934,10 +1015,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             return (
               <div key={l.id} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #3b82f6" : "1px solid #e5e7eb", overflow: "hidden" }}>
                 <div onClick={() => setExpandedId(isOpen ? null : l.id)}
-                  style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                      <span style={{ fontWeight: 700, fontSize: 14 }}>{l.name}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
                         background: (STATUS_COLORS[l.status] || "#6b7280") + "18",
@@ -947,18 +1028,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       </span>
                       {l.isHot && <span style={{ fontSize: 11 }}>🔥</span>}
                     </div>
-                    <div style={{ display: "flex", gap: 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap" }}>
+                    <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap" }}>
                       <span>📱 {l.phone || "-"}</span>
                       <span>📅 {l.createdAt || "-"}</span>
-                      {histCount > 0 && <span>📋 {histCount} lần LH</span>}
-                      <span style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📢 {l.campaign}</span>
+                      {histCount > 0 && <span>📋 {histCount}</span>}
+                      {isAdmin && l.saleName && <span>👤 {l.saleName}</span>}
+                      {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
                     </div>
                   </div>
-                  <span style={{ fontSize: 16, color: "#9ca3af" }}>{isOpen ? "▼" : "▶"}</span>
+                  <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? "▼" : "▶"}</span>
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} />
+                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={isMobile} />
                   </div>
                 )}
               </div>
@@ -1017,7 +1099,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #3b82f6" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} />
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={false} />
                       </td>
                     </tr>
                   );
@@ -1035,24 +1117,30 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       )}
 
       {/* Pagination */}
-      {tabFiltered.length > pageSize && (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage === 1 ? "#f3f4f6" : "#fff", cursor: currentPage === 1 ? "default" : "pointer", fontSize: 12 }}>«</button>
-          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage === 1 ? "#f3f4f6" : "#fff", cursor: currentPage === 1 ? "default" : "pointer", fontSize: 12 }}>‹</button>
-          <span style={{ fontSize: 13, color: "#374151" }}>Trang {currentPage} / {Math.ceil(tabFiltered.length / pageSize)}</span>
-          <button onClick={() => setCurrentPage(p => Math.min(Math.ceil(tabFiltered.length / pageSize), p + 1))} disabled={currentPage >= Math.ceil(tabFiltered.length / pageSize)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "#f3f4f6" : "#fff", cursor: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "default" : "pointer", fontSize: 12 }}>›</button>
-          <button onClick={() => setCurrentPage(Math.ceil(tabFiltered.length / pageSize))} disabled={currentPage >= Math.ceil(tabFiltered.length / pageSize)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "#f3f4f6" : "#fff", cursor: currentPage >= Math.ceil(tabFiltered.length / pageSize) ? "default" : "pointer", fontSize: 12 }}>»</button>
+      {tabFiltered.length > pageSize && (() => {
+        const totalPages = Math.ceil(tabFiltered.length / pageSize);
+        const btnStyle = (disabled) => ({
+          padding: isMobile ? "10px 14px" : "6px 10px", borderRadius: 8,
+          border: "1px solid #d1d5db", background: disabled ? "#f3f4f6" : "#fff",
+          cursor: disabled ? "default" : "pointer", fontSize: 14, fontWeight: 600,
+          minHeight: isMobile ? 44 : 32, minWidth: isMobile ? 44 : 32,
+          display: "flex", alignItems: "center", justifyContent: "center",
+        });
+        return (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: isMobile ? 6 : 8, marginTop: 16, flexWrap: "wrap" }}>
+          <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} style={btnStyle(currentPage === 1)}>«</button>
+          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={btnStyle(currentPage === 1)}>‹</button>
+          <span style={{ fontSize: 13, color: "#374151", padding: "0 4px" }}>{currentPage} / {totalPages}</span>
+          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} style={btnStyle(currentPage >= totalPages)}>›</button>
+          <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage >= totalPages} style={btnStyle(currentPage >= totalPages)}>»</button>
         </div>
-      )}
+        );
+      })()}
     </>
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [] }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], isMobile = false }) {
   const history = lead.saleHistory || [];
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
@@ -1126,13 +1214,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   };
 
   return (
-    <div style={{ padding: "16px 24px" }}>
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 16, fontSize: 13 }}>
+    <div style={{ padding: isMobile ? "12px" : "16px 24px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: 12, fontSize: 13 }}>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b>{lead.name}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b>{lead.phone || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b>{projectName}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b>{lead.product || "-"}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b>{lead.createdAt || "-"}</b></div>
+        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>
         <div>
           <span style={{ color: "#6b7280", fontSize: 11 }}>Loại</span><br />
           {lead.isHot
@@ -1178,32 +1266,32 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
       )}
 
-      <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>📋 Lịch sử liên hệ ({history.length} lần)</span>
+      <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span>📋 Lịch sử ({history.length})</span>
         <button onClick={() => setShowForm(!showForm)}
-          style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
-          {showForm ? "Hủy" : "+ Thêm cập nhật"}
+          style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
+          {showForm ? "Hủy" : "+ Thêm"}
         </button>
       </h4>
 
       {/* Add history form */}
       {showForm && (
         <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ flex: "1 1 200px" }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", flexDirection: isMobile ? "column" : "row" }}>
+            <div style={{ flex: "1 1 200px", width: isMobile ? "100%" : "auto" }}>
               <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Trạng thái</label>
               <input value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
                 placeholder="VD: Quan tâm, Hẹn xem..."
                 style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }} />
             </div>
-            <div style={{ flex: "2 1 300px" }}>
+            <div style={{ flex: "2 1 300px", width: isMobile ? "100%" : "auto" }}>
               <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Feedback</label>
               <input value={histFeedback} onChange={(e) => setHistFeedback(e.target.value)}
                 placeholder="Ghi chú về khách hàng..."
                 style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }} />
             </div>
             <button onClick={handleAddHistory} disabled={saving}
-              style={{ ...btnPrimary, padding: "8px 16px", whiteSpace: "nowrap" }}>
+              style={{ ...btnPrimary, padding: "10px 16px", whiteSpace: "nowrap", width: isMobile ? "100%" : "auto", minHeight: 44 }}>
               {saving ? "Đang lưu..." : "💾 Lưu"}
             </button>
           </div>
@@ -1213,31 +1301,31 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {history.length === 0 ? (
         <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử liên hệ</div>
       ) : (
-        <div style={{ position: "relative", paddingLeft: 24, paddingBottom: 8 }}>
-          <div style={{ position: "absolute", left: 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
+        <div style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, paddingBottom: 8 }}>
+          <div style={{ position: "absolute", left: isMobile ? 6 : 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
           {history.map((h, idx) => {
             const recalled = (h.action || "").toLowerCase().includes("thu h");
             const isUpdate = (h.action || "").toLowerCase().includes("cập nhật") || (h.action || "").toLowerCase().includes("cap nhat");
             const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#3b82f6";
             return (
-              <div key={idx} style={{ position: "relative", marginBottom: 12, paddingLeft: 16 }}>
+              <div key={idx} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
                 <div style={{
-                  position: "absolute", left: -16, top: 6, width: 10, height: 10,
+                  position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10,
                   borderRadius: "50%", background: dotColor,
                   border: "2px solid #fff", boxShadow: `0 0 0 2px ${dotColor}33`,
                 }} />
-                <div style={{ background: "#fff", borderRadius: 8, padding: 12, border: "1px solid #e5e7eb" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: 13 }}>
-                      Lần {idx + 1}: {h.saleName}
+                <div style={{ background: "#fff", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #e5e7eb" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13 }}>
+                      {idx + 1}. {h.saleName}
                       <span style={{
-                        marginLeft: 8, fontSize: 11, padding: "1px 6px", borderRadius: 8,
+                        marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
                         background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#eff6ff",
                         color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#2563eb",
                       }}>{h.action}</span>
                     </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{h.date || "-"}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.date || "-"}</span>
                       {isAdmin && h.id && (
                         <button onClick={() => handleDeleteHistory(h.id)}
                           style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
@@ -1258,6 +1346,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 }
 
 function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData }) {
+  const isMobile = useIsMobile();
   const [syncingId, setSyncingId] = React.useState(null);
 
   const syncOne = async (id) => {
@@ -1286,7 +1375,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
         <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>
       </div>
 
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
         {projects.map((p) => {
           const c = p.costData || {};
           const isSyncing = syncingId === p.id;
@@ -1294,7 +1383,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
             <div
               key={p.id}
               style={{
-                background: "#fff", borderRadius: 12, padding: 20, width: 320,
+                background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 20,
                 boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderTop: "3px solid #3b82f6",
               }}
             >
@@ -1323,6 +1412,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
 }
 
 function CampaignsPage({ leads }) {
+  const isMobile = useIsMobile();
   const [expandedCampaigns, setExpandedCampaigns] = React.useState({});
   const [expandedAdsets, setExpandedAdsets] = React.useState({});
 
@@ -1374,9 +1464,9 @@ function CampaignsPage({ leads }) {
 
   return (
     <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-      <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ margin: 0, fontSize: 16 }}>📊 Thống kê chiến dịch</h3>
-        <span style={{ fontSize: 13, color: "#6b7280" }}>Tổng: {leads.length} lead · {campaignNames.length} chiến dịch · Kênh: Facebook</span>
+      <div style={{ padding: isMobile ? "12px" : "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>📊 Thống kê chiến dịch</h3>
+        <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{leads.length} lead · {campaignNames.length} chiến dịch</span>
       </div>
       <table style={tableStyle}>
         <thead>
@@ -1459,7 +1549,24 @@ function CampaignsPage({ leads }) {
 }
 
 function SalesPage({ ranking }) {
-  return (
+  const isMobile = useIsMobile();
+  return isMobile ? (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {ranking.map((s, i) => (
+        <div key={s.name} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
+            <span style={{ fontWeight: 700, fontSize: 18, color: "#3b82f6" }}>{s.total}</span>
+          </div>
+          <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
+            <span>⭐ {s.interested || 0}</span>
+            <span>✅ {s.booked || 0}</span>
+            <span>🏆 {s.closed || 0}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : (
     <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
       <table style={tableStyle}>
         <thead>
@@ -1490,6 +1597,7 @@ function SalesPage({ ranking }) {
 }
 
 function UsersPage({ projects }) {
+  const isMobile = useIsMobile();
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
@@ -1623,9 +1731,46 @@ function UsersPage({ projects }) {
       {/* ===== TÀI KHOẢN ===== */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>👤 {users.length} tài khoản</div>
-        <button onClick={openNew} style={btnPrimary}>+ Thêm tài khoản</button>
+        <button onClick={openNew} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm tài khoản</button>
       </div>
 
+      {isMobile ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 32 }}>
+          {users.map((u) => (
+            <div key={u.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{u.displayName || u.username}</span>
+                  <span style={{
+                    marginLeft: 8, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
+                    background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
+                    color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                  }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>✏️</button>
+                  <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>🗑️</button>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexDirection: "column", gap: 3 }}>
+                <div>👤 @{u.username}</div>
+                {u.telegramId && <div>✈️ {u.telegramId}</div>}
+                {u.role !== "admin" && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 2 }}>
+                    {(u.projectIds && u.projectIds.length > 0)
+                      ? u.projectIds.map(pid => {
+                          const p = projects.find(pr => pr.id === pid);
+                          return p ? <span key={pid} style={{ background: "#f0fdf4", color: "#16a34a", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600 }}>{p.name}</span> : null;
+                        })
+                      : <span style={{ color: "#9ca3af", fontSize: 11 }}>Chưa gán dự án</span>
+                    }
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 32 }}>
         <table style={tableStyle}>
           <thead>
@@ -1687,26 +1832,46 @@ function UsersPage({ projects }) {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* ===== TELEGRAM BOT ===== */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>🤖 Telegram Bot ({bots.length})</div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={async () => {
             try {
               const r = await apiFetch(`${API}/telegram-webhook/setup`, { method: "POST" });
               const d = await r.json();
               alert(d.ok ? `✅ ${d.msg}` : `❌ ${d.error}`);
             } catch (e) { alert("❌ " + e.message); }
-          }} style={{ ...btnSecondary, fontSize: 12, padding: "6px 12px" }}>🔗 Setup Webhook</button>
-          <button onClick={openNewBot} style={btnPrimary}>+ Thêm Bot</button>
+          }} style={{ ...btnSecondary, fontSize: 12, padding: "8px 12px", minHeight: 40 }}>🔗 Webhook</button>
+          <button onClick={openNewBot} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm Bot</button>
         </div>
       </div>
 
+      {bots.length === 0 ? (
+        <div style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>Chưa có bot nào. Thêm bot để gửi thông báo qua Telegram.</div>
+      ) : isMobile ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {bots.map((b) => (
+            <div key={b.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: 14 }}>🤖 {b.name}</span>
+                <button onClick={() => toggleBot(b)} style={{
+                  padding: "4px 12px", borderRadius: 12, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", minHeight: 32,
+                  background: b.isActive ? "#f0fdf4" : "#fef2f2", color: b.isActive ? "#16a34a" : "#dc2626",
+                }}>{b.isActive ? "✅ On" : "⛔ Off"}</button>
+              </div>
+              <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", marginBottom: 8, wordBreak: "break-all" }}>{b.token.slice(0, 12)}...{b.token.slice(-6)}</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36 }}>✏️ Sửa</button>
+                <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, flex: 1, padding: "8px", fontSize: 12, minHeight: 36 }}>🗑️ Xóa</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        {bots.length === 0 ? (
-          <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Chưa có bot nào. Thêm bot để gửi thông báo qua Telegram.</div>
-        ) : (
           <table style={tableStyle}>
             <thead>
               <tr>
@@ -1746,8 +1911,8 @@ function UsersPage({ projects }) {
               ))}
             </tbody>
           </table>
-        )}
       </div>
+      )}
 
       {/* Modal thêm/sửa tài khoản */}
       {showForm && (
