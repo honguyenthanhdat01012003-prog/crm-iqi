@@ -1056,6 +1056,8 @@ app.post("/api/projects", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { name, leadUrl, costUrl } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "Name required" });
+    const existing = await get(db, "SELECT id FROM projects WHERE name = ?", [String(name).trim()]);
+    if (existing) return res.status(409).json({ error: "Dự án đã tồn tại" });
     const cleanLead = sanitizeSheetUrl(leadUrl);
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
@@ -1063,11 +1065,21 @@ app.post("/api/projects", requireAuth, requireAdmin, async (req, res) => {
       "INSERT INTO projects(name, lead_url, cost_url) VALUES(?, ?, ?)",
       [String(name).trim(), cleanLead, cleanCost]
     );
-    const newId = result.lastID;
-    try { await syncProject(db, newId); } catch { /* first sync may fail */ }
+    const data = await readData(db);
+    res.json({ ...data, newProjectId: result.lastID });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await syncProject(db, id);
     const data = await readData(db);
     res.json(data);
   } catch (err) {
+    console.error("[syncProject] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1083,7 +1095,6 @@ app.put("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
       "UPDATE projects SET name = ?, lead_url = ?, cost_url = ? WHERE id = ?",
       [String(name || "").trim(), cleanLead, cleanCost, id]
     );
-    try { await syncProject(db, id); } catch { /* sync may fail */ }
     const data = await readData(db);
     res.json(data);
   } catch (err) {

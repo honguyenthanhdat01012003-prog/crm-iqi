@@ -193,17 +193,48 @@ function CRMApp({ user, onLogout }) {
     setShowProjectModal(true);
   };
 
+  const [savingProject, setSavingProject] = useState(false);
+  const [projectProgress, setProjectProgress] = useState("");
+
   const saveProject = async () => {
+    if (savingProject) return;
+    setSavingProject(true);
+    setProjectProgress("Đang lưu dự án...");
     const body = draftProject;
     const url = editingProject ? `${API}/projects/${editingProject.id}` : `${API}/projects`;
     const method = editingProject ? "PUT" : "POST";
     try {
       const r = await apiFetch(url, { method, body: JSON.stringify(body) });
+      if (!r.ok) {
+        const err = await r.json();
+        alert(err.error || "Lỗi khi lưu dự án");
+        setSavingProject(false);
+        setProjectProgress("");
+        return;
+      }
       const data = await r.json();
       applyApiData(data);
       setShowProjectModal(false);
+
+      const projectId = data.newProjectId || (editingProject && editingProject.id);
+      if (projectId) {
+        setProjectProgress("Đang đồng bộ dữ liệu...");
+        setSyncing(true);
+        try {
+          const sr = await apiFetch(`${API}/projects/${projectId}/sync`, { method: "POST" });
+          if (sr.ok) {
+            const syncData = await sr.json();
+            applyApiData(syncData);
+          }
+        } catch { /* sync error is not critical */ }
+        setSyncing(false);
+      }
     } catch (e) {
       console.error("Save project failed", e);
+      alert("Lỗi khi lưu dự án");
+    } finally {
+      setSavingProject(false);
+      setProjectProgress("");
     }
   };
 
@@ -488,8 +519,15 @@ function CRMApp({ user, onLogout }) {
             placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?gid=...&single=true&output=csv"
           />
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button onClick={saveProject} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
-            <button onClick={() => setShowProjectModal(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+            <button
+              onClick={saveProject}
+              disabled={savingProject}
+              style={{ ...btnPrimary, flex: 1, opacity: savingProject ? 0.6 : 1, cursor: savingProject ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+            >
+              {savingProject && <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
+              {savingProject ? projectProgress : "Lưu"}
+            </button>
+            <button onClick={() => !savingProject && setShowProjectModal(false)} disabled={savingProject} style={{ ...btnSecondary, flex: 1, opacity: savingProject ? 0.6 : 1 }}>Hủy</button>
           </div>
         </Modal>
       )}
