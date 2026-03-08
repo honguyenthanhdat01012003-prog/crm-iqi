@@ -348,13 +348,16 @@ function CRMApp({ user, onLogout }) {
   // --- Sale ranking ---
   const saleRanking = useMemo(() => {
     const map = {};
+    const statusKeys = Object.keys(STATUS_LABELS);
     filteredLeads.forEach((l) => {
       const sale = l.saleName || "Chưa chia";
-      if (!map[sale]) map[sale] = { name: sale, total: 0, interested: 0, booked: 0, closed: 0 };
+      if (!map[sale]) {
+        map[sale] = { name: sale, total: 0 };
+        statusKeys.forEach(k => map[sale][k] = 0);
+      }
       map[sale].total++;
-      if (l.status === "interested") map[sale].interested++;
-      if (l.status === "booked") map[sale].booked++;
-      if (l.status === "closed") map[sale].closed++;
+      const st = l.status || "new";
+      if (map[sale][st] !== undefined) map[sale][st]++;
     });
     return Object.values(map).sort((a, b) => b.total - a.total);
   }, [filteredLeads]);
@@ -679,28 +682,28 @@ function DashboardPage({ stats, cost, saleRanking }) {
         <DonutChart segments={donutSegments} />
       </div>
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflowX: "auto" }}>
         <h4 style={{ margin: "0 0 12px" }}>🏆 Bảng xếp hạng Sale</h4>
         <table style={tableStyle}>
           <thead>
             <tr>
               <th style={thStyle}>#</th>
               <th style={thStyle}>Sale</th>
-              <th style={thStyle}>Tổng Lead</th>
-              <th style={thStyle}>Quan tâm</th>
-              <th style={thStyle}>Giữ chỗ</th>
-              <th style={thStyle}>Chốt</th>
+              <th style={thStyle}>Tổng</th>
+              {Object.entries(STATUS_LABELS).map(([k, v]) => (
+                <th key={k} style={{ ...thStyle, color: STATUS_COLORS[k], whiteSpace: "nowrap", fontSize: 11 }}>{v}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {saleRanking.map((s, i) => (
               <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
                 <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
-                <td style={tdStyle}>{s.name}</td>
-                <td style={tdStyle}>{s.total}</td>
-                <td style={tdStyle}>{s.interested}</td>
-                <td style={tdStyle}>{s.booked}</td>
-                <td style={tdStyle}>{s.closed}</td>
+                <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{s.name}</td>
+                <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
+                {Object.keys(STATUS_LABELS).map(k => (
+                  <td key={k} style={{ ...tdStyle, color: s[k] ? STATUS_COLORS[k] : "#d1d5db" }}>{s[k] || 0}</td>
+                ))}
               </tr>
             ))}
           </tbody>
