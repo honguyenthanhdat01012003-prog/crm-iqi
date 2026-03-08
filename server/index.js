@@ -748,7 +748,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
 
   // Send all in one batch (single HTTP round-trip)
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} leads=${leads.length} campaigns=${campaigns.length}`);
   await db.batch(stmts, "write");
+  console.log(`[replaceProjectData] batch done for project=${projectId}`);
 }
 
 async function readData(db) {
@@ -861,13 +863,16 @@ async function syncProject(db, projectId) {
 
 async function syncAllProjects(db) {
   const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
+  const errors = [];
   for (const p of projects) {
     try {
       await syncProject(db, p.id);
     } catch (e) {
-      console.error("Sync project", p.id, "failed:", e.message);
+      console.error("Sync project", p.id, "failed:", e.message, e.stack);
+      errors.push(`Project ${p.id} (${p.name}): ${e.message}`);
     }
   }
+  if (errors.length) console.error("Sync errors:", errors);
   const lastSync = new Date().toISOString();
   await upsertSetting(db, "lastSync", lastSync);
   return lastSync;
@@ -1026,10 +1031,13 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
 app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
   try {
+    console.log("[sync] Starting sync...");
     const lastSync = await syncAllProjects(db);
     const data = await readData(db);
+    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length}`);
     res.json({ lastSync, ...data });
   } catch (err) {
+    console.error("[sync] Top-level error:", err.message, err.stack);
     res.status(500).json({ error: err.message || "Sync failed" });
   }
 });
