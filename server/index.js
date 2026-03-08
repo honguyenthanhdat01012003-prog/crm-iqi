@@ -1,11 +1,11 @@
+import { createClient } from "@libsql/client";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
-import rateLimit from "express-rate-limit";
 import fs from "fs";
 import helmet from "helmet";
+import jwt from "jsonwebtoken";
 import path from "path";
-import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,8 +14,7 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
-const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
-const ALLOWED_ORIGINS = process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(",") : [];
+const JWT_SECRET = process.env.JWT_SECRET || "crm-dev-secret-change-in-production";
 
 const PUBLISH_BASE =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vR768IcRYeqkD4K4tuy78f8C_Bpue7VB_VZ4GRhVVm_N-JiR-PnIfUz9Tm1EyLXIER2XojzoYrNBGgA/pub";
@@ -24,15 +23,6 @@ const DEFAULT_COST_GID = "371649615";
 const buildCsvUrl = (gid) => `${PUBLISH_BASE}?gid=${gid}&single=true&output=csv`;
 
 /* ---------- Auth helpers ---------- */
-const sessions = new Map(); // token -> { userId, username, role, displayName, createdAt }
-
-// Cleanup expired sessions every 30 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [t, s] of sessions) {
-    if (now - s.createdAt > SESSION_TTL) sessions.delete(t);
-  }
-}, 30 * 60 * 1000);
 
 function hashPassword(plain, salt) {
   if (!salt) salt = crypto.randomBytes(16).toString("hex");
@@ -45,10 +35,6 @@ function verifyPassword(plain, storedHash, storedSalt) {
   return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(storedHash, "hex"));
 }
 
-function generateToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
 function foldText(value = "") {
   return String(value)
     .normalize("NFD")
@@ -56,37 +42,30 @@ function foldText(value = "") {
     .toLowerCase();
 }
 
-function run(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(err) {
-      if (err) return reject(err);
-      return resolve(this);
-    });
-  });
+async function run(client, sql, params = []) {
+  const result = await client.execute({ sql, args: params });
+  return { lastID: Number(result.lastInsertRowid), changes: result.rowsAffected };
 }
 
-function all(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) return reject(err);
-      return resolve(rows);
-    });
-  });
+async function all(client, sql, params = []) {
+  const result = await client.execute({ sql, args: params });
+  return result.rows.map((r) => ({ ...r }));
 }
 
-function get(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) return reject(err);
-      return resolve(row);
-    });
-  });
+async function get(client, sql, params = []) {
+  const result = await client.execute({ sql, args: params });
+  return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
 async function initDb() {
-  fs.mkdirSync(DB_DIR, { recursive: true });
-
-  const db = new sqlite3.Database(DB_PATH);
+  const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
+  if (dbUrl.startsWith("file:")) {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+  }
+  const db = createClient({
+    url: dbUrl,
+    authToken: process.env.TURSO_AUTH_TOKEN || undefined,
+  });
 
   await run(
     db,
@@ -705,11 +684,11 @@ function sanitizeSheetUrl(raw) {
 }
 
 async function replaceProjectData(db, projectId, leads, campaigns) {
-  await run(db, "BEGIN TRANSACTION");
+  const tx = await db.transaction("write");
   try {
     // Preserve user-edited fields for this project
     const existing = await all(
-      db,
+      tx,
       "SELECT name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
       [projectId]
     );
@@ -718,14 +697,14 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       editMap.set(`${e.name}||${e.phone}`, e);
     }
 
-    await run(db, "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", [projectId]);
-    await run(db, "DELETE FROM leads WHERE project_id = ?", [projectId]);
-    await run(db, "DELETE FROM campaigns WHERE project_id = ?", [projectId]);
+    await run(tx, "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", [projectId]);
+    await run(tx, "DELETE FROM leads WHERE project_id = ?", [projectId]);
+    await run(tx, "DELETE FROM campaigns WHERE project_id = ?", [projectId]);
 
     const campNameToId = new Map();
     for (const c of campaigns) {
       const result = await run(
-        db,
+        tx,
         `INSERT INTO campaigns(name, project_id, channel, budget, spent) VALUES(?, ?, ?, ?, ?)`,
         [c.name, projectId, c.channel, c.budget, c.spent]
       );
@@ -743,7 +722,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       const campaignId = campNameToId.get(l.campaign) || null;
 
       const leadResult = await run(
-        db,
+        tx,
         `INSERT INTO leads(
           project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
           product, raw_status, status,
@@ -761,7 +740,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (l.saleHistory && l.saleHistory.length) {
         for (let si = 0; si < l.saleHistory.length; si++) {
           const sh = l.saleHistory[si];
-          await run(db,
+          await run(tx,
             "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
             [leadResult.lastID, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si]
           );
@@ -769,9 +748,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       }
     }
 
-    await run(db, "COMMIT");
+    await tx.commit();
   } catch (err) {
-    await run(db, "ROLLBACK");
+    await tx.rollback();
     throw err;
   }
 }
@@ -902,32 +881,8 @@ const app = express();
 
 // --- Security headers ---
 app.use(helmet({ contentSecurityPolicy: false }));
-
-// --- CORS ---
-if (ALLOWED_ORIGINS.length) {
-  app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
-} else {
-  app.use(cors());
-}
-
+app.use(cors());
 app.use(express.json({ limit: "2mb" }));
-
-// --- Rate limiting ---
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // max 10 login attempts per IP per window
-  message: { error: "Quá nhiều lần đăng nhập. Vui lòng thử lại sau 15 phút." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const apiLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 120, // 120 requests per minute
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use("/api", apiLimiter);
 
 // --- Serve static build ---
 const distPath = path.join(__dirname, "..", "dist");
@@ -940,15 +895,13 @@ const db = await initDb();
 /* ---------- Auth middleware ---------- */
 function requireAuth(req, res, next) {
   const token = (req.headers.authorization || "").replace("Bearer ", "");
-  const session = sessions.get(token);
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
-  // Check session expiration
-  if (Date.now() - session.createdAt > SESSION_TTL) {
-    sessions.delete(token);
-    return res.status(401).json({ error: "Session expired" });
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-  req.user = session;
-  next();
 }
 
 function requireAdmin(req, res, next) {
@@ -957,7 +910,7 @@ function requireAdmin(req, res, next) {
 }
 
 /* ---------- Auth endpoints ---------- */
-app.post("/api/login", loginLimiter, async (req, res) => {
+app.post("/api/login", async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
@@ -966,18 +919,15 @@ app.post("/api/login", loginLimiter, async (req, res) => {
     if (!verifyPassword(String(password), user.password_hash, user.salt)) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    const token = generateToken();
-    const session = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name, createdAt: Date.now() };
-    sessions.set(token, session);
-    res.json({ token, user: { userId: user.id, username: user.username, role: user.role, displayName: user.display_name } });
+    const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name };
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+    res.json({ token, user: payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post("/api/logout", (req, res) => {
-  const token = (req.headers.authorization || "").replace("Bearer ", "");
-  sessions.delete(token);
+app.post("/api/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
@@ -1163,15 +1113,15 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       [pid]
     );
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
-    await run(db, "BEGIN");
+    const tx = await db.transaction("write");
     try {
       for (let i = 0; i < leads.length; i++) {
         const sale = saleNames[i % saleNames.length];
-        await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [sale, leads[i].id]);
+        await run(tx, "UPDATE leads SET sale_name = ? WHERE id = ?", [sale, leads[i].id]);
       }
-      await run(db, "COMMIT");
+      await tx.commit();
     } catch (err) {
-      await run(db, "ROLLBACK");
+      await tx.rollback();
       throw err;
     }
     const data = await readData(db);
@@ -1280,6 +1230,11 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`CRM API running at http://localhost:${PORT}`);
-});
+// Only listen when running directly (not on Vercel)
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`CRM API running at http://localhost:${PORT}`);
+  });
+}
+
+export default app;
