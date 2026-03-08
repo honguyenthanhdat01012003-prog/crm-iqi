@@ -171,10 +171,19 @@ function CRMApp({ user, onLogout }) {
     setSyncing(true);
     try {
       const r = await apiFetch(`${API}/sync`, { method: "POST" });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert("Đồng bộ thất bại: " + (err.error || r.statusText));
+        return;
+      }
       const data = await r.json();
       applyApiData(data);
+      if (data.syncErrors && data.syncErrors.length) {
+        alert("Đồng bộ hoàn tất nhưng có lỗi:\n\n" + data.syncErrors.join("\n"));
+      }
     } catch (e) {
       console.error("Sync failed", e);
+      alert("Đồng bộ thất bại: " + e.message);
     } finally {
       setSyncing(false);
     }
@@ -487,6 +496,8 @@ function CRMApp({ user, onLogout }) {
             openNewProject={openNewProject}
             openEditProject={openEditProject}
             deleteProject={deleteProject}
+            apiFetch={apiFetch}
+            applyApiData={applyApiData}
           />
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
@@ -1060,7 +1071,28 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData }) {
   );
 }
 
-function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject }) {
+function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData }) {
+  const [syncingId, setSyncingId] = React.useState(null);
+
+  const syncOne = async (id) => {
+    if (syncingId) return;
+    setSyncingId(id);
+    try {
+      const r = await apiFetch(`${API}/projects/${id}/sync`, { method: "POST" });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert("Đồng bộ thất bại: " + (err.error || r.statusText));
+      } else {
+        const data = await r.json();
+        applyApiData(data);
+      }
+    } catch (e) {
+      alert("Đồng bộ thất bại: " + e.message);
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
@@ -1071,6 +1103,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
         {projects.map((p) => {
           const c = p.costData || {};
+          const isSyncing = syncingId === p.id;
           return (
             <div
               key={p.id}
@@ -1084,6 +1117,14 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Lead: <b>{c.totalLeads || 0}</b> | Booking: <b>{c.totalBooking || 0}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>CPL: <b>{formatVND(c.cpLead)}</b></div>
               <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => syncOne(p.id)}
+                  disabled={!!syncingId}
+                  style={{ ...btnPrimary, flex: 1, fontSize: 12, opacity: syncingId ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
+                >
+                  {isSyncing && <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
+                  {isSyncing ? "Đồng bộ..." : "🔄 Sync"}
+                </button>
                 <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12 }}>✏️ Sửa</button>
                 <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12 }}>🗑️ Xóa</button>
               </div>

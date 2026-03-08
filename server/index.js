@@ -869,13 +869,13 @@ async function syncAllProjects(db) {
       await syncProject(db, p.id);
     } catch (e) {
       console.error("Sync project", p.id, "failed:", e.message, e.stack);
-      errors.push(`Project ${p.id} (${p.name}): ${e.message}`);
+      errors.push(`${p.name}: ${e.message}`);
     }
   }
   if (errors.length) console.error("Sync errors:", errors);
   const lastSync = new Date().toISOString();
   await upsertSetting(db, "lastSync", lastSync);
-  return lastSync;
+  return { lastSync, syncErrors: errors };
 }
 
 const app = express();
@@ -1032,10 +1032,10 @@ app.get("/api/data", requireAuth, async (req, res) => {
 app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
   try {
     console.log("[sync] Starting sync...");
-    const lastSync = await syncAllProjects(db);
+    const { lastSync, syncErrors } = await syncAllProjects(db);
     const data = await readData(db);
-    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length}`);
-    res.json({ lastSync, ...data });
+    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length} errors=${syncErrors.length}`);
+    res.json({ lastSync, syncErrors, ...data });
   } catch (err) {
     console.error("[sync] Top-level error:", err.message, err.stack);
     res.status(500).json({ error: err.message || "Sync failed" });
