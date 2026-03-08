@@ -297,17 +297,23 @@ function findVal(obj, candidates) {
 
 function normalizeStatus(raw = "") {
   const v = foldText(raw);
-  if (!v) return "new";
+  if (!v || v === "created" || v.includes("chua xu ly")) return "new";
   if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
   if (v.includes("giu cho") || v.includes("coc") || v.includes("book")) return "booked";
-  if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha")) return "appointment";
-  if (v.includes("thue bao") || v.includes("sai so") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("unreachable")) return "unreachable";
-  if (v.includes("chan kb") || v.includes("chan zalo") || (v.includes("chan") && !v.includes("chien"))) return "unreachable";
+  if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha") || v.includes("hen gap") || v.includes("hen xem")) return "appointment";
+  if (v.includes("pha") || v.includes("rac") || v.includes("spam")) return "spam";
+  if (v.includes("tai chinh yeu") || v.includes("tai chinh")) return "weak_finance";
+  if (v.includes("thue bao") || v.includes("sai so") || v.includes("sai")) return "wrong_number";
+  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("tat may") || v.includes("unreachable")) return "unreachable";
+  if (v.includes("lien lac lai") || v.includes("goi lai")) return "callback";
+  if (v.includes("chan kb") || v.includes("chan zalo") || (v.includes("chan") && !v.includes("chien"))) return "blocked";
   if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested")) return "not_interested";
+  if (v.includes("quan tam hoi hot") || v.includes("hoi hot")) return "low_interest";
+  if (v.includes("quan tam du an khac") || v.includes("du an khac")) return "other_project";
+  if (v.includes("sale khac") || v.includes("co sale")) return "has_sale";
   if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested")) return "interested";
   if (v.includes("goi") || v.includes("lien he") || v.includes("called") || v.includes("zalo")) return "called";
   if (v.includes("mat") || v.includes("lost") || v.includes("huy")) return "lost";
-  if (v.includes("sai")) return "unreachable";
   return "new";
 }
 

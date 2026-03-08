@@ -6,13 +6,19 @@ const STATUS_LABELS = {
   new: "Mới",
   called: "Đã gọi",
   interested: "Quan tâm",
+  low_interest: "Quan tâm hời hợt",
+  other_project: "Quan tâm DA khác",
   appointment: "Hẹn xem",
   booked: "Giữ chỗ",
   closed: "Chốt",
   not_interested: "Không quan tâm",
-  spam: "Phá",
+  spam: "Phá/rác",
   weak_finance: "Tài chính yếu",
-  unreachable: "Không liên lạc được",
+  unreachable: "Chưa liên lạc được",
+  callback: "Liên lạc lại sau",
+  wrong_number: "Thuê bao/Sai số",
+  blocked: "Chặn",
+  has_sale: "Có sale khác chăm",
   lost: "Mất",
 };
 
@@ -20,13 +26,19 @@ const STATUS_COLORS = {
   new: "#6b7280",
   called: "#3b82f6",
   interested: "#f59e0b",
+  low_interest: "#fbbf24",
+  other_project: "#d97706",
   appointment: "#8b5cf6",
   booked: "#10b981",
   closed: "#059669",
   not_interested: "#ef4444",
   spam: "#b91c1c",
-  weak_finance: "#d97706",
+  weak_finance: "#ea580c",
   unreachable: "#9ca3af",
+  callback: "#6366f1",
+  wrong_number: "#78716c",
+  blocked: "#64748b",
+  has_sale: "#0ea5e9",
   lost: "#dc2626",
 };
 
@@ -326,15 +338,11 @@ function CRMApp({ user, onLogout }) {
   const stats = useMemo(() => {
     const statusCounts = {};
     Object.keys(STATUS_LABELS).forEach((s) => (statusCounts[s] = 0));
-    let noFeedback = 0;
-    let other = 0;
-    const knownKeys = ["interested", "not_interested", "spam", "weak_finance", "unreachable"];
     filteredLeads.forEach((l) => {
-      statusCounts[l.status] = (statusCounts[l.status] || 0) + 1;
-      if (!l.status || l.status === "new") noFeedback++;
-      else if (!knownKeys.includes(l.status)) other++;
+      const key = l.status || "new";
+      statusCounts[key] = (statusCounts[key] || 0) + 1;
     });
-    return { total: filteredLeads.length, noFeedback, other, ...statusCounts };
+    return { total: filteredLeads.length, ...statusCounts };
   }, [filteredLeads]);
 
   // --- Sale ranking ---
@@ -640,23 +648,23 @@ function DonutChart({ segments, size = 220 }) {
 function DashboardPage({ stats, cost, saleRanking }) {
   const pct = (v) => stats.total ? ((v / stats.total) * 100).toFixed(1) : "0.0";
 
-  const statusCards = [
-    { title: "Quan tâm", value: stats.interested || 0, color: "#f59e0b" },
-    { title: "Chưa feedback", value: stats.noFeedback || 0, color: "#6b7280" },
-    { title: "Không quan tâm", value: stats.not_interested || 0, color: "#ef4444" },
-    { title: "Phá", value: stats.spam || 0, color: "#b91c1c" },
-    { title: "Tài chính yếu", value: stats.weak_finance || 0, color: "#d97706" },
-    { title: "Chưa liên lạc được", value: stats.unreachable || 0, color: "#9ca3af" },
-    { title: "Khác", value: stats.other || 0, color: "#8b5cf6" },
+  const statusCards = Object.entries(STATUS_LABELS)
+    .filter(([key]) => key !== "new")
+    .map(([key, label]) => ({ title: label, value: stats[key] || 0, color: STATUS_COLORS[key] }))
+    .filter(c => c.value > 0);
+
+  const allCards = [
+    { title: "Mới (chưa feedback)", value: stats.new || 0, color: STATUS_COLORS.new },
+    ...statusCards,
   ];
 
-  const donutSegments = statusCards.map(c => ({ label: c.title, value: c.value, color: c.color }));
+  const donutSegments = allCards.map(c => ({ label: c.title, value: c.value, color: c.color }));
 
   return (
     <>
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 24 }}>
         <Card title="Tổng Lead" value={stats.total} color="#3b82f6" />
-        {statusCards.map((c) => (
+        {allCards.map((c) => (
           <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} />
         ))}
       </div>
