@@ -924,8 +924,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [pageSize, setPageSize] = useState(15);
   const [currentPage, setCurrentPage] = useState(1);
   const [shuffleOpen, setShuffleOpen] = useState(false);
-  const [shuffleSales, setShuffleSales] = useState("");
-  const [shuffleProject, setShuffleProject] = useState("1");
+  const [shuffleProject, setShuffleProject] = useState("");
+  const [shuffleSale, setShuffleSale] = useState("");
+  const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
+  const [shuffleStatus, setShuffleStatus] = useState("all");
+  const [shufflePickCount, setShufflePickCount] = useState("all");
+  const [shuffleSelected, setShuffleSelected] = useState(new Set());
   const [shuffling, setShuffling] = useState(false);
   const [shuffleMsg, setShuffleMsg] = useState("");
   const [allUsers, setAllUsers] = useState([]);
@@ -1008,19 +1012,47 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return [...merged].sort();
   };
 
-  const handleShuffle = async () => {
-    const names = shuffleSales.split(",").map((s) => s.trim()).filter(Boolean);
-    if (!names.length) return;
+  // Get leads filtered for chia lead panel
+  const shuffleFilteredLeads = useMemo(() => {
+    const pid = Number(shuffleProject);
+    if (!pid) return [];
+    let list = leads.filter(l => l.projectId === pid);
+    if (shuffleStatus !== "all") {
+      if (shuffleStatus === "unassigned") list = list.filter(l => !l.saleName || l.saleName === "Chưa chia");
+      else list = list.filter(l => l.status === shuffleStatus);
+    }
+    return list;
+  }, [leads, shuffleProject, shuffleStatus]);
+
+  // Auto-select based on pick count
+  useEffect(() => {
+    if (shufflePickCount === "all") {
+      setShuffleSelected(new Set(shuffleFilteredLeads.map(l => l.id)));
+    } else if (shufflePickCount === "manual") {
+      // keep current selection
+    } else {
+      const n = Number(shufflePickCount);
+      setShuffleSelected(new Set(shuffleFilteredLeads.slice(0, n).map(l => l.id)));
+    }
+  }, [shufflePickCount, shuffleFilteredLeads]);
+
+  // Reset when project/status changes
+  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus]);
+
+  const handleShuffleAssign = async () => {
+    if (!shuffleSale) return;
+    const ids = [...shuffleSelected];
+    if (!ids.length) return;
     setShuffling(true);
     setShuffleMsg("");
     try {
-      const r = await apiFetch(`${API}/leads/shuffle`, {
+      const r = await apiFetch(`${API}/leads/assign-bulk`, {
         method: "POST",
-        body: JSON.stringify({ projectId: Number(shuffleProject), saleNames: names }),
+        body: JSON.stringify({ saleName: shuffleSale, leadIds: ids }),
       });
       const data = await r.json();
       if (data.error) { setShuffleMsg("❌ " + data.error); }
-      else { setShuffleMsg("✅ " + data.msg); applyApiData(data); }
+      else { setShuffleMsg("✅ " + data.msg); applyApiData(data); setShuffleSelected(new Set()); }
     } catch (e) {
       setShuffleMsg("❌ Lỗi: " + e.message);
     } finally {
@@ -1040,37 +1072,138 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       )}
 
-      {/* Admin shuffle */}
+      {/* Admin chia lead */}
       {isAdmin && (
         <div style={{ marginBottom: 12 }}>
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
             style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13 }}>
-            🔀 Xáo Lead cho Sale
+            🔀 Chia Lead cho Sale
           </button>
           {shuffleOpen && (
-            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 12, marginTop: 8, fontSize: 13 }}>
-              <div style={{ fontWeight: 600, marginBottom: 8, color: "#9a3412" }}>🔀 Xáo Lead (chia đều cho sale)</div>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-                <div>
-                  <label style={{ fontSize: 11, color: "#6b7280" }}>Dự án</label>
-                  <select value={shuffleProject} onChange={(e) => setShuffleProject(e.target.value)}
-                    style={{ display: "block", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, marginTop: 4 }}>
+            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13 }}>
+              <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15 }}>🔀 Chia Lead cho Sale</div>
+
+              {/* Row 1: Chọn dự án + Chọn sale */}
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                <div style={{ minWidth: 180 }}>
+                  <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>1. Chọn dự án</label>
+                  <select value={shuffleProject} onChange={(e) => { setShuffleProject(e.target.value); setShuffleSelected(new Set()); }}
+                    style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: shuffleProject ? "#1f2937" : "#9ca3af" }}>
+                    <option value="">-- Chọn dự án --</option>
                     {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label style={{ fontSize: 11, color: "#6b7280" }}>Tên Sale (phân cách bằng dấu phẩy)</label>
-                  <input value={shuffleSales} onChange={(e) => setShuffleSales(e.target.value)}
-                    placeholder="VD: Nguyễn Văn A, Trần Văn B, Lê Văn C"
-                    style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%" }} />
+                <div style={{ minWidth: 200, flex: 1, position: "relative" }}>
+                  <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>2. Chọn Sale</label>
+                  <input value={shuffleSaleSearch} onChange={(e) => { setShuffleSaleSearch(e.target.value); setShuffleSale(""); }}
+                    placeholder="🔍 Tìm sale..."
+                    style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%", fontSize: 13 }} />
+                  {(() => {
+                    const q = shuffleSaleSearch.toLowerCase();
+                    const saleList = allUsers.filter(u => u.role === "sale" && u.displayName).filter(u => !q || u.displayName.toLowerCase().includes(q));
+                    if (!shuffleSale && saleList.length > 0) return (
+                      <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,.1)" }}>
+                        {saleList.map(u => (
+                          <div key={u.id} onClick={() => { setShuffleSale(u.displayName); setShuffleSaleSearch(u.displayName); }}
+                            style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", transition: "background .1s" }}
+                            onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
+                            onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                            👤 {u.displayName}
+                          </div>
+                        ))}
+                        {saleList.length === 0 && <div style={{ padding: "8px 12px", color: "#9ca3af", fontSize: 12 }}>Không tìm thấy sale</div>}
+                      </div>
+                    );
+                    return null;
+                  })()}
+                  {shuffleSale && (
+                    <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ background: "#dbeafe", color: "#1d4ed8", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600 }}>✅ {shuffleSale}</span>
+                      <button onClick={() => { setShuffleSale(""); setShuffleSaleSearch(""); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }}>✕</button>
+                    </div>
+                  )}
                 </div>
-                <button onClick={handleShuffle} disabled={shuffling}
-                  style={{ ...btnPrimary, padding: "8px 16px", whiteSpace: "nowrap" }}>
-                  {shuffling ? "Đang xáo..." : "🔀 Xáo ngay"}
-                </button>
               </div>
+
+              {/* Row 2: Lọc trạng thái + Số lượng */}
+              {shuffleProject && shuffleSale && (
+                <>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12, alignItems: "flex-end" }}>
+                    <div style={{ minWidth: 180 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>3. Lọc theo trạng thái</label>
+                      <select value={shuffleStatus} onChange={(e) => setShuffleStatus(e.target.value)}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
+                        <option value="all">Tất cả trạng thái</option>
+                        <option value="unassigned">📌 Chưa chia (chưa có sale)</option>
+                        {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ minWidth: 150 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Chọn số lượng</label>
+                      <select value={shufflePickCount} onChange={(e) => setShufflePickCount(e.target.value)}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
+                        <option value="all">Tất cả ({shuffleFilteredLeads.length})</option>
+                        <option value="10">10 lead</option>
+                        <option value="25">25 lead</option>
+                        <option value="50">50 lead</option>
+                        <option value="manual">Chọn tay</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Lead list for manual pick */}
+                  <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, maxHeight: 300, overflowY: "auto", marginBottom: 12 }}>
+                    <div style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#f9fafb", zIndex: 1 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                        Đã chọn: <span style={{ color: "#2563eb" }}>{shuffleSelected.size}</span> / {shuffleFilteredLeads.length} lead
+                      </span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => setShuffleSelected(new Set(shuffleFilteredLeads.map(l => l.id)))}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#2563eb", fontWeight: 600 }}>Chọn tất cả</button>
+                        <button onClick={() => setShuffleSelected(new Set())}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>Bỏ tất cả</button>
+                      </div>
+                    </div>
+                    {shuffleFilteredLeads.length === 0 && <div style={{ padding: 16, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có lead nào</div>}
+                    {shuffleFilteredLeads.map(l => (
+                      <label key={l.id} style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
+                        borderBottom: "1px solid #f3f4f6", cursor: "pointer",
+                        background: shuffleSelected.has(l.id) ? "#eff6ff" : "#fff",
+                        transition: "background .1s",
+                      }}>
+                        <input type="checkbox" checked={shuffleSelected.has(l.id)}
+                          onChange={() => {
+                            const next = new Set(shuffleSelected);
+                            next.has(l.id) ? next.delete(l.id) : next.add(l.id);
+                            setShuffleSelected(next);
+                            setShufflePickCount("manual");
+                          }}
+                          style={{ width: 16, height: 16, accentColor: "#2563eb" }} />
+                        <span style={{ flex: 1, fontSize: 12 }}>
+                          <strong>{l.name}</strong>
+                          <span style={{ color: "#6b7280", marginLeft: 6 }}>{l.phone || ""}</span>
+                        </span>
+                        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: (STATUS_COLORS[l.status] || "#d1d5db") + "18", color: STATUS_COLORS[l.status] || "#6b7280", fontWeight: 600 }}>
+                          {STATUS_LABELS[l.status] || l.status || "Chưa feedback"}
+                        </span>
+                        <span style={{ fontSize: 10, color: "#9ca3af" }}>{l.saleName || "Chưa chia"}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  {/* Action button */}
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button onClick={handleShuffleAssign} disabled={shuffling || !shuffleSelected.size}
+                      style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling) ? 0.5 : 1 }}>
+                      {shuffling ? "Đang chia..." : `📤 Chia ${shuffleSelected.size} lead cho ${shuffleSale}`}
+                    </button>
+                  </div>
+                </>
+              )}
+
               {shuffleMsg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: shuffleMsg.startsWith("✅") ? "#059669" : "#dc2626" }}>{shuffleMsg}</div>}
-              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6 }}>Chỉ xáo lead "Chưa chia" — lead đã có sale sẽ không bị thay đổi</div>
             </div>
           )}
         </div>

@@ -1260,6 +1260,79 @@ app.delete("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+/* ===== Bulk assign leads to a sale — Admin only ===== */
+app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { saleName, leadIds } = req.body;
+    if (!saleName) return res.status(400).json({ error: "Cần chọn sale" });
+    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
+    const now = new Date().toLocaleString("vi-VN");
+    const stmts = [];
+    for (const lid of leadIds) {
+      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+      // Add history
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      stmts.push({
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        args: [lid, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq],
+      });
+    }
+    await db.batch(stmts, "write");
+
+    // Send Telegram for each lead
+    try {
+      const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+      const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+      if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
+        for (const lid of leadIds) {
+          const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [lid]);
+          if (!lead) continue;
+          const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+          const msg = [
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `----------------------------------------------`,
+            `👤 Khách: *${lead.name || "N/A"}*`,
+            `📞 SĐT: \`${lead.phone || "-"}\``,
+            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🕒 Nhận lúc: ${now}`,
+            `--------------------------`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
+          ].join("\n");
+          const statusList = [
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
+          ];
+          const keyboard = [];
+          for (let i = 0; i < statusList.length; i += 3) {
+            keyboard.push(statusList.slice(i, i + 3).map(([key, label]) => ({ text: label, callback_data: `st:${lid}:${key}` })));
+          }
+          const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: saleUser.telegram_id, text: msg, parse_mode: "Markdown", reply_markup: { inline_keyboard: keyboard } }),
+          });
+          const teleJson = await teleRes.json();
+          const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, lid, sentMsgId]);
+        }
+      }
+    } catch (teleErr) {
+      console.error("[Telegram bulk] Send failed:", teleErr.message);
+    }
+
+    const data = await readData(db);
+    res.json({ msg: `Đã chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Assign failed" });
+  }
+});
+
 /* ===== Lead shuffle (round-robin) — Admin only ===== */
 app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
   try {
