@@ -756,26 +756,21 @@ function sanitizeSheetUrl(raw) {
 }
 
 async function replaceProjectData(db, projectId, leads, campaigns) {
-  // Preserve user-edited fields for this project
+  // Fetch existing leads for this project (keyed by name+phone for stable matching)
   const existing = await all(
     db,
-    "SELECT name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
     [projectId]
   );
-  const editMap = new Map();
+  const existingMap = new Map();
   for (const e of existing) {
-    editMap.set(`${e.name}||${e.phone}`, e);
+    existingMap.set(`${e.name}||${e.phone}`, e);
   }
 
-  // Build all SQL statements as a batch (single HTTP request to Turso)
   const stmts = [];
 
-  // Delete old data
-  stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", args: [projectId] });
-  stmts.push({ sql: "DELETE FROM leads WHERE project_id = ?", args: [projectId] });
+  // Replace campaigns (these have no IDs we need to preserve)
   stmts.push({ sql: "DELETE FROM campaigns WHERE project_id = ?", args: [projectId] });
-
-  // Insert campaigns
   for (const c of campaigns) {
     stmts.push({
       sql: "INSERT INTO campaigns(name, project_id, channel, budget, spent) VALUES(?, ?, ?, ?, ?)",
@@ -783,44 +778,69 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     });
   }
 
-  // Insert leads (without campaign_id for now — not critical)
+  // Track which existing leads are still in the sheet
+  const incomingKeys = new Set();
+
   for (const l of leads) {
-    const prev = editMap.get(`${l.name}||${l.phone}`);
-    const status = prev ? prev.status : l.status;
-    const rawStatus = prev ? prev.raw_status : l.rawStatus;
-    const notes = prev && prev.notes ? prev.notes : l.notes || "";
-    const saleId = prev ? prev.sale_id : l.saleId;
-    const saleName = l.saleName || (prev ? prev.sale_name : "") || "";
-    const isHot = prev ? prev.is_hot : l.isHot ? 1 : 0;
+    const key = `${l.name}||${l.phone}`;
+    incomingKeys.add(key);
+    const prev = existingMap.get(key);
 
-    stmts.push({
-      sql: `INSERT INTO leads(
-        project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
-        product, raw_status, status,
-        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        projectId, l.name, l.phone, l.campaign, null,
-        l.adsetName || "-", l.adName || "-", l.formName || "-",
-        l.product,
-        rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
-        l.source, l.budget, l.syncAt, notes,
-      ],
-    });
+    if (prev) {
+      // Lead exists — UPDATE (preserve user-edited fields: status, sale, notes, is_hot)
+      stmts.push({
+        sql: `UPDATE leads SET campaign = ?, adset_name = ?, ad_name = ?, form_name = ?,
+              product = ?, created_at = ?, inbox_url = ?, source = ?, budget = ?, sync_at = ?
+              WHERE id = ?`,
+        args: [
+          l.campaign, l.adsetName || "-", l.adName || "-", l.formName || "-",
+          l.product, l.createdAt, l.inboxUrl, l.source, l.budget, l.syncAt, prev.id,
+        ],
+      });
+    } else {
+      // New lead — INSERT
+      const status = l.status;
+      const rawStatus = l.rawStatus;
+      const notes = l.notes || "";
+      const saleId = l.saleId;
+      const saleName = l.saleName || "";
+      const isHot = l.isHot ? 1 : 0;
 
-    if (l.saleHistory && l.saleHistory.length) {
-      for (let si = 0; si < l.saleHistory.length; si++) {
-        const sh = l.saleHistory[si];
-        stmts.push({
-          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?)",
-          args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si],
-        });
+      stmts.push({
+        sql: `INSERT INTO leads(
+          project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
+          product, raw_status, status,
+          created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          projectId, l.name, l.phone, l.campaign, null,
+          l.adsetName || "-", l.adName || "-", l.formName || "-",
+          l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
+          l.source, l.budget, l.syncAt, notes,
+        ],
+      });
+
+      if (l.saleHistory && l.saleHistory.length) {
+        for (let si = 0; si < l.saleHistory.length; si++) {
+          const sh = l.saleHistory[si];
+          stmts.push({
+            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?)",
+            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si],
+          });
+        }
       }
     }
   }
 
-  // Send all in one batch (single HTTP round-trip)
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} leads=${leads.length} campaigns=${campaigns.length}`);
+  // Remove leads that no longer exist in the sheet (but keep user-assigned ones)
+  for (const [key, e] of existingMap) {
+    if (!incomingKeys.has(key)) {
+      stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id = ?", args: [e.id] });
+      stmts.push({ sql: "DELETE FROM leads WHERE id = ?", args: [e.id] });
+    }
+  }
+
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} leads=${leads.length} existing=${existing.length} new=${leads.length - incomingKeys.size + (leads.length - [...incomingKeys].filter(k => existingMap.has(k)).length)}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 }
