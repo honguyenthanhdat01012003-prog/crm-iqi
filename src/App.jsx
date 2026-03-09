@@ -257,19 +257,21 @@ function CRMApp({ user, onLogout }) {
       .catch(console.error);
   }, [applyApiData]);
 
-  // Auto-refresh from DB every 30 seconds + countdown (NOT full sync from Google Sheets)
+  // Auto-sync from Google Sheets every 30 seconds + countdown
   useEffect(() => {
     setSyncCountdown(30);
     const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 30 : c - 1), 1000);
     const interval = setInterval(() => {
-      apiFetch(`${API}/data`)
-        .then(r => r.json())
+      const endpoint = isAdmin ? `${API}/sync` : `${API}/data`;
+      const opts = isAdmin ? { method: "POST" } : {};
+      apiFetch(endpoint, opts)
+        .then(r => r.ok ? r.json() : Promise.reject())
         .then(applyApiData)
-        .catch(() => {});
+        .catch(() => apiFetch(`${API}/data`).then(r => r.json()).then(applyApiData).catch(() => {}));
       setSyncCountdown(30);
     }, 30000);
     return () => { clearInterval(interval); clearInterval(tick); };
-  }, [applyApiData]);
+  }, [applyApiData, isAdmin]);
 
   const handleSync = async () => {
     setSyncing(true);

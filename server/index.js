@@ -897,6 +897,13 @@ async function syncProject(db, projectId) {
 
   const { headers, rawHeaders, rows, rawRows } = parseCSV(cleanLeadCsv);
   const mappedLeads = mapLeads(rows, headers, rawRows, rawHeaders);
+
+  // Safety: if Google Sheets returned 0 leads, skip to prevent wiping existing data
+  if (mappedLeads.length === 0) {
+    console.log(`[syncProject] project=${projectId} got 0 leads from Google Sheets, skipping to preserve data`);
+    return;
+  }
+
   mappedLeads.forEach((l) => {
     l.projectId = projectId;
   });
