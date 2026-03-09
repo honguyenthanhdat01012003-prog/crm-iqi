@@ -254,15 +254,17 @@ function CRMApp({ user, onLogout }) {
       .catch(console.error);
   }, [applyApiData]);
 
-  // Auto-refresh every 30 seconds + countdown
+  // Auto-sync every 30 seconds + countdown
   useEffect(() => {
     setSyncCountdown(30);
     const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 30 : c - 1), 1000);
     const interval = setInterval(() => {
-      apiFetch(`${API}/data`)
-        .then((r) => r.json())
+      setSyncing(true);
+      apiFetch(`${API}/sync`, { method: "POST" })
+        .then(r => r.ok ? r.json() : Promise.reject())
         .then(applyApiData)
-        .catch(() => {});
+        .catch(() => apiFetch(`${API}/data`).then(r => r.json()).then(applyApiData).catch(() => {}))
+        .finally(() => setSyncing(false));
       setSyncCountdown(30);
     }, 30000);
     return () => { clearInterval(interval); clearInterval(tick); };
@@ -596,7 +598,6 @@ function CRMApp({ user, onLogout }) {
                     }}>{notifications.length}</span>
                   )}
                 </button>
-                <span style={{ fontSize: 9, color: "#9ca3af", marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{syncCountdown}s</span>
                 {showNotif && (
                   <>
                     <div onClick={() => setShowNotif(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
@@ -648,20 +649,25 @@ function CRMApp({ user, onLogout }) {
               <button
                 onClick={handleSync}
                 disabled={syncing}
+                title={syncing ? "Đang đồng bộ..." : `Đồng bộ (${syncCountdown}s)`}
                 style={{
-                  padding: isMobile ? "8px 14px" : "8px 20px",
-                  background: syncing ? "#94a3b8" : "#3b82f6",
-                  color: "#fff",
+                  background: "transparent",
                   border: "none",
-                  borderRadius: 8,
                   cursor: syncing ? "not-allowed" : "pointer",
-                  fontWeight: 600,
-                  fontSize: 14,
-                  flexShrink: 0,
-                  minHeight: 40,
+                  display: "flex", flexDirection: "column", alignItems: "center",
+                  padding: "2px 6px", minWidth: 44, flexShrink: 0,
                 }}
               >
-                {syncing ? "Đồng bộ..." : "🔄 Đồng bộ"}
+                <span style={{
+                  fontSize: 22, lineHeight: 1,
+                  display: "inline-block",
+                  animation: syncing ? "spin 1s linear infinite" : (syncCountdown <= 5 ? "pulse 1s ease-in-out infinite" : "none"),
+                }}>⏳</span>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, marginTop: 1,
+                  color: syncing ? "#3b82f6" : (syncCountdown <= 5 ? "#ef4444" : "#6b7280"),
+                  fontVariantNumeric: "tabular-nums",
+                }}>{syncing ? "..." : `${syncCountdown}s`}</span>
               </button>
             </div>
           )}
