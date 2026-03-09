@@ -241,13 +241,13 @@ function CRMApp({ user, onLogout }) {
     apiFetch(`${API}/data`)
       .then((r) => r.json())
       .then((data) => {
-        // First load: set all current IDs as seen
+        // First load: mark all current leads as seen so they don't trigger notifications
         if (data.leads) {
-          setSeenLeadIds(prev => {
+          setSeenLeadKeys(prev => {
             if (prev.size === 0) {
-              const ids = new Set(data.leads.map(l => l.id));
-              localStorage.setItem("crm_seen_ids", JSON.stringify([...ids]));
-              return ids;
+              const keys = new Set(data.leads.map(l => `${l.name}||${l.phone}`));
+              localStorage.setItem("crm_seen_keys", JSON.stringify([...keys]));
+              return keys;
             }
             return prev;
           });
