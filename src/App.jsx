@@ -197,20 +197,23 @@ function CRMApp({ user, onLogout }) {
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
   const [syncCountdown, setSyncCountdown] = useState(30);
-  const [seenLeadIds, setSeenLeadIds] = useState(() => {
-    try { const s = localStorage.getItem("crm_seen_ids"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
+  const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
+    try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
 
   const applyApiData = useCallback((data) => {
     if (data.leads) {
       setLeads((prev) => {
-        // Detect new leads
-        const prevIds = new Set(prev.map(l => l.id));
-        const newLeads = data.leads.filter(l => !prevIds.has(l.id) && !seenLeadIds.has(l.id));
+        // Use name+phone as stable key (IDs change every sync)
+        const prevKeys = new Set(prev.map(l => `${l.name}||${l.phone}`));
+        const newLeads = data.leads.filter(l => {
+          const key = `${l.name}||${l.phone}`;
+          return !prevKeys.has(key) && !seenLeadKeys.has(key);
+        });
         if (newLeads.length > 0 && prev.length > 0) {
           setNotifications(n => {
-            const existing = new Set(n.map(x => x.id));
-            const fresh = newLeads.filter(l => !existing.has(l.id));
+            const existing = new Set(n.map(x => `${x.name}||${x.phone}`));
+            const fresh = newLeads.filter(l => !existing.has(`${l.name}||${l.phone}`));
             return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...n].slice(0, 50);
           });
         }
@@ -220,14 +223,14 @@ function CRMApp({ user, onLogout }) {
     if (data.campaigns) setCampaigns(data.campaigns);
     if (data.projects) setProjects(data.projects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, [seenLeadIds]);
+  }, [seenLeadKeys]);
 
   // Mark notifications as seen
   const markAllSeen = useCallback(() => {
-    setSeenLeadIds(prev => {
+    setSeenLeadKeys(prev => {
       const next = new Set(prev);
-      notifications.forEach(n => next.add(n.id));
-      localStorage.setItem("crm_seen_ids", JSON.stringify([...next]));
+      notifications.forEach(n => next.add(`${n.name}||${n.phone}`));
+      localStorage.setItem("crm_seen_keys", JSON.stringify([...next]));
       return next;
     });
     setNotifications([]);
