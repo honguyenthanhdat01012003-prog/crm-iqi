@@ -195,6 +195,8 @@ function CRMApp({ user, onLogout }) {
   // Notification state
   const [notifications, setNotifications] = useState([]);
   const [showNotif, setShowNotif] = useState(false);
+  const [highlightLeadId, setHighlightLeadId] = useState(null);
+  const [syncCountdown, setSyncCountdown] = useState(30);
   const [seenLeadIds, setSeenLeadIds] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_ids"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
@@ -252,15 +254,18 @@ function CRMApp({ user, onLogout }) {
       .catch(console.error);
   }, [applyApiData]);
 
-  // Auto-refresh every 30 seconds
+  // Auto-refresh every 30 seconds + countdown
   useEffect(() => {
+    setSyncCountdown(30);
+    const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 30 : c - 1), 1000);
     const interval = setInterval(() => {
       apiFetch(`${API}/data`)
         .then((r) => r.json())
         .then(applyApiData)
         .catch(() => {});
+      setSyncCountdown(30);
     }, 30000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); clearInterval(tick); };
   }, [applyApiData]);
 
   const handleSync = async () => {
@@ -575,8 +580,8 @@ function CRMApp({ user, onLogout }) {
           </div>
           {isAdmin && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {/* Notification bell */}
-              <div style={{ position: "relative" }}>
+              {/* Notification bell + countdown */}
+              <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
                 <button onClick={() => setShowNotif(!showNotif)} style={{
                   background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #d1d5db",
                   borderRadius: 8, width: 40, height: 40, fontSize: 18, cursor: "pointer",
@@ -591,14 +596,17 @@ function CRMApp({ user, onLogout }) {
                     }}>{notifications.length}</span>
                   )}
                 </button>
+                <span style={{ fontSize: 9, color: "#9ca3af", marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{syncCountdown}s</span>
                 {showNotif && (
                   <>
                     <div onClick={() => setShowNotif(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
                     <div style={{
-                      position: "absolute", top: 44, right: 0, width: isMobile ? "calc(100vw - 24px)" : 360,
-                      maxHeight: 400, overflowY: "auto", background: "#fff", borderRadius: 12,
+                      position: isMobile ? "fixed" : "absolute",
+                      ...(isMobile
+                        ? { top: 60, left: 12, right: 12, width: "auto" }
+                        : { top: 44, right: 0, width: 360 }),
+                      maxHeight: isMobile ? "calc(100vh - 80px)" : 400, overflowY: "auto", background: "#fff", borderRadius: 12,
                       boxShadow: "0 8px 30px rgba(0,0,0,.18)", border: "1px solid #e5e7eb", zIndex: 999,
-                      ...(isMobile ? { right: -60 } : {}),
                     }}>
                       <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <b style={{ fontSize: 14 }}>🔔 Thông báo</b>
@@ -618,7 +626,7 @@ function CRMApp({ user, onLogout }) {
                               <div key={n.id} style={{
                                 padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
                                 background: "#eff6ff", border: "1px solid #dbeafe", transition: "background .15s",
-                              }} onClick={() => { setPage("leads"); setShowNotif(false); }}>
+                              }} onClick={() => { setHighlightLeadId(n.id); setPage("leads"); setShowNotif(false); }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                                   <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
                                   <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
@@ -677,6 +685,8 @@ function CRMApp({ user, onLogout }) {
             user={user}
             applyApiData={applyApiData}
             onLogout={onLogout}
+            highlightLeadId={highlightLeadId}
+            setHighlightLeadId={setHighlightLeadId}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -917,7 +927,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId }) {
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
@@ -995,6 +1005,29 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const filtered = tab ? leads.filter(tab.filter) : [...leads];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
   }, [leads, activeTab, LEAD_TABS]);
+
+  // Navigate to highlighted lead from notification click
+  useEffect(() => {
+    if (!highlightLeadId) return;
+    // Switch to "all" tab so we can find the lead
+    setActiveTab("all");
+  }, [highlightLeadId]);
+
+  useEffect(() => {
+    if (!highlightLeadId || activeTab !== "all") return;
+    const idx = tabFiltered.findIndex(l => l.id === highlightLeadId);
+    if (idx >= 0) {
+      const targetPage = Math.floor(idx / pageSize) + 1;
+      setCurrentPage(targetPage);
+      setExpandedId(highlightLeadId);
+      // Scroll to the lead after render
+      setTimeout(() => {
+        const el = document.getElementById(`lead-${highlightLeadId}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 100);
+    }
+    setHighlightLeadId(null);
+  }, [highlightLeadId, tabFiltered, pageSize]);
 
   const saleNames = useMemo(() => {
     const names = new Set();
@@ -1285,7 +1318,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             return (
-              <div key={l.id} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #3b82f6" : "1px solid #e5e7eb", overflow: "hidden" }}>
+              <div key={l.id} id={`lead-${l.id}`} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #3b82f6" : "1px solid #e5e7eb", overflow: "hidden" }}>
                 <div onClick={() => setExpandedId(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1344,7 +1377,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 const isOpen = expandedId === l.id;
                 const globalIdx = (currentPage - 1) * pageSize + i;
                 const rows = [
-                  <tr key={l.id} onClick={() => setExpandedId(isOpen ? null : l.id)}
+                  <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#eff6ff" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
