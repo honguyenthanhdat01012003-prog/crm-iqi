@@ -39,6 +39,7 @@ function foldText(value = "") {
   return String(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, "d")
     .replace(/_/g, " ")
     .toLowerCase();
 }
@@ -547,7 +548,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   const saleBlocks = rawHeaders ? extractSaleBlocks(rawHeaders) : [];
 
   // Column R: system-recorded date — right after lead_status, often has empty header
-  const lsIdx = rawHeaders ? rawHeaders.findIndex((h) => foldText(h).includes("lead_status")) : -1;
+  const lsIdx = rawHeaders ? rawHeaders.findIndex((h) => foldText(h).includes("lead status")) : -1;
   const dateColIdx = lsIdx >= 0 ? lsIdx + 1 : -1;
 
   const normalizedHeaders = headers.map((h) => ({ raw: h, norm: foldText(h) }));
