@@ -1373,7 +1373,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <th style={thStyle}>#</th>
                 <th style={thStyle}>Tên</th>
                 <th style={thStyle}>SĐT</th>
-                <th style={thStyle}>Chiến dịch</th>
+                <th style={thStyle}>Nhu cầu KH</th>
                 <th style={thStyle}>Trạng thái</th>
                 <th style={thStyle}>Sale hiện tại</th>
                 <th style={thStyle}>Dự án</th>
@@ -1391,7 +1391,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     <td style={tdStyle}>{globalIdx + 1}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
-                    <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.campaign}</td>
+                    <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
                     <td style={tdStyle}>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
