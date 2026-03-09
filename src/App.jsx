@@ -1203,7 +1203,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <th style={thStyle}>Sale hiện tại</th>
                 <th style={thStyle}>Dự án</th>
                 <th style={thStyle}>Ngày nhận lead</th>
-                <th style={thStyle}>Nhiệt độ</th>
+                <th style={thStyle}>Trạng thái</th>
               </tr>
             </thead>
             <tbody>
@@ -1361,7 +1361,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b>{lead.product || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>
         <div>
-          <span style={{ color: "#6b7280", fontSize: 11 }}>Nhiệt độ lead</span><br />
+          <span style={{ color: "#6b7280", fontSize: 11 }}>Trạng thái lead</span><br />
           {(() => { const t = getLeadTemp(lead.createdAt); return (
             <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
           ); })()}
