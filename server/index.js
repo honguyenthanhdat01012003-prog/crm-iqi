@@ -787,14 +787,23 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const prev = existingMap.get(key);
 
     if (prev) {
-      // Lead exists — UPDATE (preserve user-edited fields: status, sale, notes, is_hot)
+      // Lead exists — UPDATE non-editable fields + sync status/sale from sheet
+      const sheetStatus = normalizeStatus(l.rawStatus);
+      const sheetSale = l.saleName || "";
+      // Update status from sheet (sheet is source of truth for status)
+      // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
+      const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
+        ? sheetSale : prev.sale_name;
       stmts.push({
         sql: `UPDATE leads SET campaign = ?, adset_name = ?, ad_name = ?, form_name = ?,
-              product = ?, created_at = ?, inbox_url = ?, source = ?, budget = ?, sync_at = ?
+              product = ?, created_at = ?, inbox_url = ?, source = ?, budget = ?, sync_at = ?,
+              raw_status = ?, status = ?, sale_name = ?
               WHERE id = ?`,
         args: [
           l.campaign, l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product, l.createdAt, l.inboxUrl, l.source, l.budget, l.syncAt, prev.id,
+          l.product, l.createdAt, l.inboxUrl, l.source, l.budget, l.syncAt,
+          l.rawStatus || prev.raw_status, sheetStatus || prev.status, newSale,
+          prev.id,
         ],
       });
     } else {
