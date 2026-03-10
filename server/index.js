@@ -269,6 +269,20 @@ async function initDb() {
     )`
   );
 
+  /* ---------- Lead status log for time-in-stage tracking ---------- */
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS lead_status_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      old_status TEXT DEFAULT '',
+      new_status TEXT NOT NULL,
+      changed_by TEXT NOT NULL,
+      changed_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
+    )`
+  );
+
   // Migrate legacy single sheet_script_url into sheet_configs
   {
     const scCount = await get(db, "SELECT COUNT(*) as cnt FROM sheet_configs");
@@ -1405,6 +1419,63 @@ app.delete("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res)
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ---------- Sales analytics ---------- */
+app.get("/api/sales/analytics", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const logs = await all(db, "SELECT * FROM lead_status_log ORDER BY changed_at ASC");
+    const hRows = await all(db, "SELECT * FROM lead_history ORDER BY id ASC");
+    const leadRows = await all(db, "SELECT * FROM leads");
+    const users = await all(db, "SELECT display_name FROM users WHERE role = 'sale'");
+
+    // Per-agent stats
+    const agents = {};
+    for (const u of users) {
+      agents[u.display_name] = { name: u.display_name, totalLeads: 0, closed: 0, avgResponseMs: null, responseTimes: [] };
+    }
+    for (const l of leadRows) {
+      const sn = l.sale_name;
+      if (!sn) continue;
+      if (!agents[sn]) agents[sn] = { name: sn, totalLeads: 0, closed: 0, avgResponseMs: null, responseTimes: [] };
+      agents[sn].totalLeads++;
+      if (l.status === "closed") agents[sn].closed++;
+      // Response time: time from lead created_at to first history entry by this sale
+      const firstAction = hRows.find(h => String(h.lead_id) === String(l.id));
+      if (firstAction && l.created_at && firstAction.contact_date) {
+        const diff = new Date(firstAction.contact_date).getTime() - new Date(l.created_at).getTime();
+        if (diff > 0) agents[sn].responseTimes.push(diff);
+      }
+    }
+    const agentList = Object.values(agents).map(a => {
+      const rt = a.responseTimes;
+      return {
+        name: a.name,
+        totalLeads: a.totalLeads,
+        closed: a.closed,
+        conversionRate: a.totalLeads ? +(a.closed / a.totalLeads * 100).toFixed(1) : 0,
+        avgResponseMs: rt.length ? Math.round(rt.reduce((s, v) => s + v, 0) / rt.length) : null,
+      };
+    });
+
+    // Time-in-stage from logs
+    const stageTime = {};
+    for (const log of logs) {
+      const key = log.new_status;
+      if (!stageTime[key]) stageTime[key] = [];
+      // Find next log for this lead
+      const next = logs.find(l2 => l2.lead_id === log.lead_id && new Date(l2.changed_at) > new Date(log.changed_at));
+      if (next) {
+        stageTime[key].push(new Date(next.changed_at).getTime() - new Date(log.changed_at).getTime());
+      }
+    }
+    const avgStageTime = {};
+    for (const [k, arr] of Object.entries(stageTime)) {
+      avgStageTime[k] = Math.round(arr.reduce((s, v) => s + v, 0) / arr.length);
+    }
+
+    res.json({ agents: agentList, avgStageTime, totalLogs: logs.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* ---------- Public health ---------- */
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, dbPath: DB_PATH });
@@ -1656,6 +1727,15 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
 
     if (sets.length) {
+      // Log status change
+      if (status !== undefined) {
+        const oldLead = await get(db, "SELECT status FROM leads WHERE id = ?", [leadId]);
+        const oldStatus = oldLead?.status || "new";
+        if (oldStatus !== status) {
+          await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
+            [leadId, oldStatus, status, req.user.displayName, new Date().toISOString()]);
+        }
+      }
       params.push(leadId);
       await run(db, `UPDATE leads SET ${sets.join(", ")} WHERE id = ?`, params);
     }
@@ -1770,7 +1850,13 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
 
     // Also update lead status if provided
     if (status) {
-      await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [normalizeStatus(status), status, leadId]);
+      const oldStatus = lead.status || "new";
+      const newNorm = normalizeStatus(status);
+      if (oldStatus !== newNorm) {
+        await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
+          [leadId, oldStatus, newNorm, req.user.displayName, new Date().toISOString()]);
+      }
+      await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [newNorm, status, leadId]);
     }
 
     const data = await readData(db);

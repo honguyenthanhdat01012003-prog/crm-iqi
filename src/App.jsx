@@ -907,7 +907,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           />
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
-        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} />}
+        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
@@ -2519,50 +2519,292 @@ function CampaignsPage({ leads }) {
   );
 }
 
-function SalesPage({ ranking }) {
+function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
   const isMobile = useIsMobile();
-  return isMobile ? (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {ranking.map((s, i) => (
-        <div key={s.name} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-            <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
-            <span style={{ fontWeight: 700, fontSize: 18, color: "#3b82f6" }}>{s.total}</span>
+  const [tab, setTab] = useState("kanban");
+  const [analytics, setAnalytics] = useState(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [dragId, setDragId] = useState(null);
+
+  const PIPELINE_STAGES = [
+    { key: "new", label: "Mới", statuses: ["new"], color: "#f59e0b" },
+    { key: "contacting", label: "Đang liên hệ", statuses: ["called", "unreachable", "callback"], color: "#3b82f6" },
+    { key: "potential", label: "Tiềm năng", statuses: ["interested", "low_interest", "other_project"], color: "#8b5cf6" },
+    { key: "site_visit", label: "Hẹn xem", statuses: ["appointment"], color: "#ec4899" },
+    { key: "closing", label: "Chốt", statuses: ["booked", "closed"], color: "#10b981" },
+    { key: "lost", label: "Mất", statuses: ["not_interested", "spam", "weak_finance", "wrong_number", "blocked", "has_sale", "lost"], color: "#ef4444" },
+  ];
+
+  const stageLeads = useMemo(() => {
+    const map = {};
+    PIPELINE_STAGES.forEach(s => { map[s.key] = []; });
+    (leads || []).forEach(l => {
+      const st = l.status || "new";
+      const stage = PIPELINE_STAGES.find(p => p.statuses.includes(st));
+      if (stage) map[stage.key].push(l);
+      else map["new"].push(l);
+    });
+    return map;
+  }, [leads]);
+
+  useEffect(() => {
+    if (tab === "analytics" && !analytics) {
+      setLoadingAnalytics(true);
+      apiFetch("/api/sales/analytics").then(r => r.json()).then(d => setAnalytics(d)).catch(() => {}).finally(() => setLoadingAnalytics(false));
+    }
+  }, [tab]);
+
+  const handleDrop = async (stageKey) => {
+    if (!dragId) return;
+    const stage = PIPELINE_STAGES.find(s => s.key === stageKey);
+    if (!stage) return;
+    const newStatus = stage.statuses[0];
+    const lead = (leads || []).find(l => l.id === dragId);
+    if (!lead || lead.status === newStatus) { setDragId(null); return; }
+    try {
+      const res = await apiFetch(`/api/leads/${dragId}`, { method: "PUT", body: JSON.stringify({ status: newStatus }) });
+      if (res.ok) {
+        const r2 = await apiFetch("/api/data");
+        if (r2.ok) { const d = await r2.json(); applyApiData(d); }
+      }
+    } catch {}
+    setDragId(null);
+  };
+
+  const tabBtnStyle = (active) => ({
+    padding: "8px 20px", border: "none", borderBottom: active ? "3px solid #3b82f6" : "3px solid transparent",
+    background: "none", fontWeight: active ? 700 : 500, color: active ? "#3b82f6" : "#6b7280",
+    cursor: "pointer", fontSize: 14, transition: "all .2s",
+  });
+
+  const formatMs = (ms) => {
+    if (!ms) return "—";
+    const hrs = ms / 3600000;
+    if (hrs < 1) return `${Math.round(ms / 60000)}p`;
+    if (hrs < 24) return `${hrs.toFixed(1)}h`;
+    return `${(hrs / 24).toFixed(1)}d`;
+  };
+
+  /* -- KANBAN TAB -- */
+  const renderKanban = () => (
+    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 12, minHeight: 400 }}>
+      {PIPELINE_STAGES.map(stage => (
+        <div key={stage.key}
+          onDragOver={e => e.preventDefault()}
+          onDrop={() => handleDrop(stage.key)}
+          style={{
+            minWidth: isMobile ? 260 : 220, flex: 1, background: "#f9fafb", borderRadius: 12,
+            padding: 10, display: "flex", flexDirection: "column", gap: 8,
+            border: "2px dashed transparent", transition: "border .2s",
+          }}
+          onDragEnter={e => { e.currentTarget.style.borderColor = stage.color; }}
+          onDragLeave={e => { e.currentTarget.style.borderColor = "transparent"; }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+            <span style={{ fontWeight: 700, fontSize: 13, color: stage.color }}>{stage.label}</span>
+            <span style={{
+              background: stage.color + "22", color: stage.color, fontWeight: 700,
+              borderRadius: 12, padding: "2px 10px", fontSize: 12,
+            }}>{stageLeads[stage.key]?.length || 0}</span>
           </div>
-          <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
-            <span>⭐ {s.interested || 0}</span>
-            <span>✅ {s.booked || 0}</span>
-            <span>🏆 {s.closed || 0}</span>
+          <div style={{ flex: 1, overflowY: "auto", maxHeight: 520, display: "flex", flexDirection: "column", gap: 6 }}>
+            {(stageLeads[stage.key] || []).slice(0, 50).map(lead => (
+              <div key={lead.id} draggable
+                onDragStart={() => setDragId(lead.id)}
+                onDragEnd={() => setDragId(null)}
+                style={{
+                  background: "#fff", borderRadius: 8, padding: "8px 10px", cursor: "grab",
+                  boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderLeft: `3px solid ${stage.color}`,
+                  opacity: dragId === lead.id ? 0.5 : 1, fontSize: 13, transition: "opacity .2s",
+                }}>
+                <div style={{ fontWeight: 600, marginBottom: 2 }}>{lead.name || "—"}</div>
+                <div style={{ color: "#6b7280", fontSize: 11 }}>{lead.phone || ""}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11 }}>
+                  <span style={{ color: "#9ca3af" }}>{lead.saleName || "Chưa chia"}</span>
+                  <span style={{
+                    background: (STATUS_COLORS[lead.status] || "#888") + "22",
+                    color: STATUS_COLORS[lead.status] || "#888",
+                    padding: "1px 6px", borderRadius: 6, fontWeight: 600,
+                  }}>{STATUS_LABELS[lead.status] || lead.status}</span>
+                </div>
+              </div>
+            ))}
+            {(stageLeads[stage.key]?.length || 0) > 50 && (
+              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 11, padding: 4 }}>
+                +{stageLeads[stage.key].length - 50} khác
+              </div>
+            )}
           </div>
         </div>
       ))}
     </div>
-  ) : (
-    <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-      <table style={tableStyle}>
-        <thead>
-          <tr>
-            <th style={thStyle}>#</th>
-            <th style={thStyle}>Sale</th>
-            <th style={thStyle}>Tổng Lead</th>
-            <th style={thStyle}>Quan tâm</th>
-            <th style={thStyle}>Giữ chỗ</th>
-            <th style={thStyle}>Chốt</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ranking.map((s, i) => (
-            <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
-              <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
-              <td style={{ ...tdStyle, fontWeight: 600 }}>{s.name}</td>
-              <td style={tdStyle}>{s.total}</td>
-              <td style={tdStyle}>{s.interested}</td>
-              <td style={tdStyle}>{s.booked}</td>
-              <td style={tdStyle}>{s.closed}</td>
+  );
+
+  /* -- ANALYTICS TAB -- */
+  const renderAnalytics = () => {
+    if (loadingAnalytics) return <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Đang tải...</div>;
+    if (!analytics) return <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Không có dữ liệu</div>;
+
+    const maxLeads = Math.max(...(analytics.agents || []).map(a => a.totalLeads), 1);
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {/* Pipeline funnel */}
+        <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>📊 Pipeline Funnel</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {PIPELINE_STAGES.map(stage => {
+              const count = stageLeads[stage.key]?.length || 0;
+              const total = (leads || []).length || 1;
+              const pct = (count / total * 100).toFixed(1);
+              return (
+                <div key={stage.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ width: 100, fontSize: 13, fontWeight: 600, color: stage.color, textAlign: "right" }}>{stage.label}</span>
+                  <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 6, height: 28, position: "relative", overflow: "hidden" }}>
+                    <div style={{ width: `${pct}%`, background: stage.color, height: "100%", borderRadius: 6, minWidth: count ? 2 : 0, transition: "width .5s" }} />
+                    <span style={{ position: "absolute", right: 8, top: 4, fontSize: 12, fontWeight: 600 }}>{count} ({pct}%)</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Conversion rates table */}
+        <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>🎯 Tỷ lệ chuyển đổi theo Sale</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Sale</th>
+                  <th style={thStyle}>Tổng Lead</th>
+                  <th style={thStyle}>Chốt</th>
+                  <th style={thStyle}>Tỷ lệ chuyển đổi</th>
+                  <th style={thStyle}>Thời gian phản hồi TB</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(analytics.agents || []).sort((a, b) => b.conversionRate - a.conversionRate).map((a, i) => (
+                  <tr key={a.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{a.name}</td>
+                    <td style={tdStyle}>{a.totalLeads}</td>
+                    <td style={tdStyle}>{a.closed}</td>
+                    <td style={tdStyle}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 4, height: 8, maxWidth: 100 }}>
+                          <div style={{ width: `${Math.min(a.conversionRate, 100)}%`, background: a.conversionRate >= 20 ? "#10b981" : a.conversionRate >= 10 ? "#f59e0b" : "#ef4444", height: "100%", borderRadius: 4 }} />
+                        </div>
+                        <span style={{ fontWeight: 700, color: a.conversionRate >= 20 ? "#059669" : a.conversionRate >= 10 ? "#d97706" : "#dc2626" }}>{a.conversionRate}%</span>
+                      </div>
+                    </td>
+                    <td style={tdStyle}>{formatMs(a.avgResponseMs)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Avg time in stage */}
+        {analytics.avgStageTime && Object.keys(analytics.avgStageTime).length > 0 && (
+          <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>⏱️ Thời gian trung bình mỗi giai đoạn</h3>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+              {Object.entries(analytics.avgStageTime).map(([status, ms]) => (
+                <div key={status} style={{
+                  background: (STATUS_COLORS[status] || "#888") + "15", borderRadius: 10, padding: "12px 16px",
+                  minWidth: 140, textAlign: "center",
+                }}>
+                  <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>{STATUS_LABELS[status] || status}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: STATUS_COLORS[status] || "#333" }}>{formatMs(ms)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /* -- LEADERBOARD TAB -- */
+  const renderLeaderboard = () => {
+    const sorted = [...ranking].sort((a, b) => (b.closed || 0) - (a.closed || 0) || b.total - a.total);
+    return isMobile ? (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {sorted.map((s, i) => (
+          <div key={s.name} style={{
+            background: i < 3 ? `linear-gradient(135deg, ${i === 0 ? "#fef3c7" : i === 1 ? "#f3f4f6" : "#fef0e1"}, #fff)` : "#fff",
+            borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
+              <span style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>{s.closed || 0} chốt</span>
+            </div>
+            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
+              <span>📋 {s.total} lead</span>
+              <span>⭐ {s.interested || 0}</span>
+              <span>✅ {s.booked || 0}</span>
+              <span>📊 {s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0}%</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>#</th>
+              <th style={thStyle}>Sale</th>
+              <th style={thStyle}>Tổng Lead</th>
+              <th style={thStyle}>Quan tâm</th>
+              <th style={thStyle}>Hẹn xem</th>
+              <th style={thStyle}>Giữ chỗ</th>
+              <th style={thStyle}>Chốt</th>
+              <th style={thStyle}>Tỷ lệ chốt</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {sorted.map((s, i) => {
+              const rate = s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0;
+              return (
+                <tr key={s.name} style={{
+                  background: i === 0 ? "#fef9c3" : i === 1 ? "#f5f5f5" : i === 2 ? "#fef3e2" : i % 2 ? "#f9fafb" : "#fff",
+                }}>
+                  <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
+                  <td style={{ ...tdStyle, fontWeight: 700 }}>{s.name}</td>
+                  <td style={tdStyle}>{s.total}</td>
+                  <td style={tdStyle}>{s.interested || 0}</td>
+                  <td style={tdStyle}>{s.appointment || 0}</td>
+                  <td style={tdStyle}>{s.booked || 0}</td>
+                  <td style={{ ...tdStyle, fontWeight: 700, color: "#059669" }}>{s.closed || 0}</td>
+                  <td style={tdStyle}>
+                    <span style={{
+                      fontWeight: 700, padding: "2px 8px", borderRadius: 8,
+                      background: rate >= 20 ? "#dcfce7" : rate >= 10 ? "#fef3c7" : "#fee2e2",
+                      color: rate >= 20 ? "#059669" : rate >= 10 ? "#d97706" : "#dc2626",
+                    }}>{rate}%</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb", marginBottom: 16, background: "#fff", borderRadius: "12px 12px 0 0", paddingLeft: 8 }}>
+        <button onClick={() => setTab("kanban")} style={tabBtnStyle(tab === "kanban")}>📋 Pipeline</button>
+        <button onClick={() => setTab("analytics")} style={tabBtnStyle(tab === "analytics")}>📊 Phân tích</button>
+        <button onClick={() => setTab("leaderboard")} style={tabBtnStyle(tab === "leaderboard")}>🏆 Bảng xếp hạng</button>
+      </div>
+      {tab === "kanban" && renderKanban()}
+      {tab === "analytics" && renderAnalytics()}
+      {tab === "leaderboard" && renderLeaderboard()}
     </div>
   );
 }
