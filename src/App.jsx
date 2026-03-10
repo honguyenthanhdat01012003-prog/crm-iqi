@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useMemo, useCallback } from "react";
+﻿import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 
 const API = "/api";
 
@@ -98,11 +98,26 @@ export default function App() {
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
 
+  const updateUser = (u, t) => {
+    setUser(u);
+    if (t) { setToken(t); localStorage.setItem("crm_token", t); }
+    localStorage.setItem("crm_user", JSON.stringify(u));
+  };
+
   if (!user || !token) {
     return <LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} />;
   }
 
-  return <CRMApp user={user} onLogout={() => {
+  if (user.mustChangePassword) {
+    return <ForceChangePasswordPage user={user} onChanged={(u, t) => updateUser(u, t)} onLogout={() => {
+      localStorage.removeItem("crm_token");
+      localStorage.removeItem("crm_user");
+      setUser(null);
+      setToken("");
+    }} />;
+  }
+
+  return <CRMApp user={user} updateUser={updateUser} onLogout={() => {
     apiFetch(`${API}/logout`, { method: "POST" }).catch(() => {});
     localStorage.removeItem("crm_token");
     localStorage.removeItem("crm_user");
@@ -114,6 +129,7 @@ export default function App() {
 function LoginPage({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -159,7 +175,13 @@ function LoginPage({ onLogin }) {
         <label style={{ ...labelStyle, marginTop: 0 }}>Tên đăng nhập</label>
         <input style={inputStyle} value={username} onChange={(e) => setUsername(e.target.value)} autoFocus placeholder="admin" />
         <label style={labelStyle}>Mật khẩu</label>
-        <input style={inputStyle} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" />
+        <div style={{ position: "relative" }}>
+          <input style={{ ...inputStyle, paddingRight: 40 }} type={showPwd ? "text" : "password"} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••" />
+          <button type="button" onClick={() => setShowPwd(!showPwd)} style={{
+            position: "absolute", right: 8, top: 8, background: "none", border: "none",
+            cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+          }}>{showPwd ? "🙈" : "👁️"}</button>
+        </div>
         <button type="submit" disabled={loading} style={{
           ...btnPrimary, width: "100%", marginTop: 16, padding: "10px 20px", fontSize: 15,
           opacity: loading ? 0.6 : 1,
@@ -171,7 +193,121 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function CRMApp({ user, onLogout }) {
+function ForceChangePasswordPage({ user, onChanged, onLogout }) {
+  const [newPwd, setNewPwd] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const pwdValid = {
+    length: newPwd.length >= 8,
+    upper: /[A-Z]/.test(newPwd),
+    lower: /[a-z]/.test(newPwd),
+    digit: /\d/.test(newPwd),
+    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPwd),
+  };
+  const allValid = Object.values(pwdValid).every(Boolean);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!allValid) { setError("Mật khẩu chưa đạt yêu cầu"); return; }
+    if (newPwd !== confirmPwd) { setError("Mật khẩu xác nhận không khớp"); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const res = await apiFetch(`${API}/change-password`, {
+        method: "PUT",
+        body: JSON.stringify({ newPassword: newPwd }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Lỗi đổi mật khẩu"); return; }
+      onChanged(data.user, data.token);
+    } catch {
+      setError("Lỗi kết nối server");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const PwdRule = ({ ok, text }) => (
+    <div style={{ fontSize: 12, color: ok ? "#16a34a" : "#dc2626", display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+      <span>{ok ? "✅" : "❌"}</span> {text}
+    </div>
+  );
+
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      padding: 16,
+    }}>
+      <form onSubmit={handleSubmit} style={{
+        background: "#fff", borderRadius: 16, padding: "32px 24px", width: 420, maxWidth: "100%",
+        boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+      }}>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <div style={{ fontSize: 40, marginBottom: 8 }}>🔐</div>
+          <h2 style={{ margin: 0, color: "#1a1a2e" }}>Đổi mật khẩu</h2>
+          <p style={{ color: "#6b7280", fontSize: 13, margin: "4px 0 0" }}>
+            Xin chào <strong>{user.displayName}</strong>, đây là lần đăng nhập đầu tiên.<br />
+            Vui lòng đổi mật khẩu để tiếp tục sử dụng.
+          </p>
+        </div>
+        {error && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{error}</div>}
+
+        <label style={{ ...labelStyle, marginTop: 0 }}>Mật khẩu mới</label>
+        <div style={{ position: "relative" }}>
+          <input style={{ ...inputStyle, paddingRight: 40 }} type={showNew ? "text" : "password"} value={newPwd}
+            onChange={(e) => setNewPwd(e.target.value)} placeholder="Nhập mật khẩu mới" autoFocus />
+          <button type="button" onClick={() => setShowNew(!showNew)} style={{
+            position: "absolute", right: 8, top: 8, background: "none", border: "none",
+            cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+          }}>{showNew ? "🙈" : "👁️"}</button>
+        </div>
+
+        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Yêu cầu mật khẩu:</div>
+          <PwdRule ok={pwdValid.length} text="Ít nhất 8 ký tự" />
+          <PwdRule ok={pwdValid.upper} text="Ít nhất 1 chữ hoa (A-Z)" />
+          <PwdRule ok={pwdValid.lower} text="Ít nhất 1 chữ thường (a-z)" />
+          <PwdRule ok={pwdValid.digit} text="Ít nhất 1 số (0-9)" />
+          <PwdRule ok={pwdValid.special} text="Ít nhất 1 ký tự đặc biệt (!@#$%...)" />
+        </div>
+
+        <label style={labelStyle}>Xác nhận mật khẩu</label>
+        <div style={{ position: "relative" }}>
+          <input style={{ ...inputStyle, paddingRight: 40 }} type={showConfirm ? "text" : "password"} value={confirmPwd}
+            onChange={(e) => setConfirmPwd(e.target.value)} placeholder="Nhập lại mật khẩu mới" />
+          <button type="button" onClick={() => setShowConfirm(!showConfirm)} style={{
+            position: "absolute", right: 8, top: 8, background: "none", border: "none",
+            cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+          }}>{showConfirm ? "🙈" : "👁️"}</button>
+        </div>
+        {confirmPwd && newPwd !== confirmPwd && (
+          <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8 }}>❌ Mật khẩu xác nhận không khớp</div>
+        )}
+
+        <button type="submit" disabled={loading || !allValid || newPwd !== confirmPwd} style={{
+          ...btnPrimary, width: "100%", marginTop: 12, padding: "10px 20px", fontSize: 15,
+          opacity: (loading || !allValid || newPwd !== confirmPwd) ? 0.6 : 1,
+        }}>
+          {loading ? "Đang xử lý..." : "Đổi mật khẩu & Tiếp tục"}
+        </button>
+        <button type="button" onClick={onLogout} style={{
+          width: "100%", marginTop: 8, padding: "8px 20px", fontSize: 13,
+          background: "none", border: "1px solid #d1d5db", borderRadius: 8, cursor: "pointer", color: "#6b7280",
+        }}>
+          Đăng xuất
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function CRMApp({ user, updateUser, onLogout }) {
   const isAdmin = user.role === "admin";
   const isMobile = useIsMobile();
   const [page, setPage] = useState(isAdmin ? "dashboard" : "leads");
@@ -272,6 +408,14 @@ function CRMApp({ user, onLogout }) {
     }, 30000);
     return () => { clearInterval(interval); clearInterval(tick); };
   }, [applyApiData, isAdmin]);
+
+  // Heartbeat - cập nhật trạng thái online mỗi 60 giây
+  useEffect(() => {
+    const beat = () => apiFetch(`${API}/heartbeat`, { method: "POST" }).catch(() => {});
+    beat();
+    const iv = setInterval(beat, 60000);
+    return () => clearInterval(iv);
+  }, []);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -466,6 +610,7 @@ function CRMApp({ user, onLogout }) {
     { key: "campaigns", label: "📢 Chiến dịch", adminOnly: true },
     { key: "sales", label: "🏆 Sale", adminOnly: true },
     { key: "users", label: "👤 Quản lý tài khoản", adminOnly: true },
+    { key: "profile", label: "🪪 Hồ sơ cá nhân", adminOnly: false },
     { key: "post_mgmt", label: "📝 Quản lý bài đăng", adminOnly: true, children: [
       { key: "posts", label: "📋 Tất cả bài" },
       { key: "calendar", label: "📅 Lịch đăng bài" },
@@ -763,7 +908,8 @@ function CRMApp({ user, onLogout }) {
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} />}
-        {page === "users" && isAdmin && <UsersPage projects={projects} />}
+        {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} />}
+        {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "sheet_config" && isAdmin && <SheetConfigPage />}
@@ -806,7 +952,338 @@ function CRMApp({ user, onLogout }) {
           </div>
         </Modal>
       )}
+      <ChatPopup currentUser={user} />
     </div>
+  );
+}
+
+/* ===== Chat Popup - Facebook Style ===== */
+function ChatPopup({ currentUser }) {
+  const [open, setOpen] = useState(false);
+  const [chatUsers, setChatUsers] = useState([]);
+  const [activeChat, setActiveChat] = useState(null); // user object
+  const [messages, setMessages] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [totalUnread, setTotalUnread] = useState(0);
+  const [sending, setSending] = useState(false);
+  const msgEndRef = useRef(null);
+  const pollRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Load chat users list
+  const loadUsers = useCallback(async () => {
+    try {
+      const r = await apiFetch(`${API}/chat/users`);
+      if (r.ok) {
+        const data = await r.json();
+        setChatUsers(data);
+        setTotalUnread(data.reduce((s, u) => s + (u.unread || 0), 0));
+      }
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  // Load messages for active chat
+  const loadMessages = useCallback(async (userId) => {
+    try {
+      const r = await apiFetch(`${API}/chat/messages/${userId}`);
+      if (r.ok) {
+        const data = await r.json();
+        setMessages(data);
+        setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      }
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  // Poll for new messages in active chat
+  const pollNew = useCallback(async () => {
+    if (!activeChat) return;
+    const lastId = messages.length > 0 ? messages[messages.length - 1].id : 0;
+    try {
+      const r = await apiFetch(`${API}/chat/new/${activeChat.id}?after=${lastId}`);
+      if (r.ok) {
+        const newMsgs = await r.json();
+        if (newMsgs.length > 0) {
+          setMessages(prev => [...prev, ...newMsgs]);
+          setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }, [activeChat, messages]);
+
+  // Load users on open
+  useEffect(() => {
+    if (open) { loadUsers(); }
+  }, [open, loadUsers]);
+
+  // Poll users list every 10 seconds when open
+  useEffect(() => {
+    if (!open) return;
+    const iv = setInterval(loadUsers, 10000);
+    return () => clearInterval(iv);
+  }, [open, loadUsers]);
+
+  // Poll new messages every 3 seconds when chatting
+  useEffect(() => {
+    if (!activeChat) return;
+    pollRef.current = setInterval(pollNew, 3000);
+    return () => clearInterval(pollRef.current);
+  }, [activeChat, pollNew]);
+
+  // Open a chat
+  const openChat = (chatUser) => {
+    setActiveChat(chatUser);
+    setMessages([]);
+    setDraft("");
+    loadMessages(chatUser.id);
+  };
+
+  // Send message
+  const sendMessage = async () => {
+    if (!draft.trim() || !activeChat || sending) return;
+    setSending(true);
+    try {
+      const r = await apiFetch(`${API}/chat/send`, {
+        method: "POST",
+        body: JSON.stringify({ receiverId: activeChat.id, content: draft.trim() }),
+      });
+      if (r.ok) {
+        const msg = await r.json();
+        setMessages(prev => [...prev, msg]);
+        setDraft("");
+        setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+        setTimeout(() => inputRef.current?.focus(), 100);
+      }
+    } catch (e) { /* ignore */ }
+    setSending(false);
+  };
+
+  const formatTime = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "Vừa xong";
+    if (diffMin < 60) return `${diffMin}p trước`;
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const isOnline = (u) => u.lastActive && (Date.now() - new Date(u.lastActive).getTime() < 5 * 60 * 1000);
+
+  const onlineStatus = (u) => {
+    if (isOnline(u)) return "Online";
+    if (!u.lastActive) return "Offline";
+    const diff = Math.floor((Date.now() - new Date(u.lastActive).getTime()) / 60000);
+    if (diff < 60) return `${diff} phút trước`;
+    if (diff < 1440) return `${Math.floor(diff / 60)} giờ trước`;
+    return `${Math.floor(diff / 1440)} ngày trước`;
+  };
+
+  // Fixed button style
+  const fabStyle = {
+    position: "fixed", bottom: 20, right: 20, width: 52, height: 52,
+    borderRadius: "50%", background: "linear-gradient(135deg, #0084ff, #0066cc)",
+    color: "#fff", border: "none", cursor: "pointer", fontSize: 24,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    boxShadow: "0 4px 16px rgba(0,0,0,.25)", zIndex: 9998,
+    transition: "transform .2s",
+  };
+
+  // Popup container
+  const popupStyle = {
+    position: "fixed", bottom: 80, right: 20, width: 340, maxHeight: 500,
+    background: "#fff", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,.2)",
+    display: "flex", flexDirection: "column", zIndex: 9999,
+    animation: "fadeIn .2s ease", overflow: "hidden",
+  };
+
+  // Chat window style
+  const chatWindowStyle = {
+    position: "fixed", bottom: 80, right: 20, width: 340, height: 460,
+    background: "#fff", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,.2)",
+    display: "flex", flexDirection: "column", zIndex: 9999,
+    animation: "fadeIn .2s ease", overflow: "hidden",
+  };
+
+  // Render active chat window
+  if (activeChat) {
+    return (
+      <>
+        <div style={chatWindowStyle}>
+          {/* Chat header */}
+          <div style={{
+            padding: "10px 12px", background: "linear-gradient(135deg, #0084ff, #0066cc)", color: "#fff",
+            display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
+          }}>
+            <button onClick={() => { setActiveChat(null); loadUsers(); }} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, padding: 0 }}>←</button>
+            <div style={{
+              width: 32, height: 32, borderRadius: "50%", flexShrink: 0, position: "relative",
+              background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "rgba(255,255,255,.2)",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#fff",
+            }}>
+              {!activeChat.avatarUrl && (activeChat.displayName || "?")[0]?.toUpperCase()}
+              <div style={{
+                position: "absolute", bottom: -1, right: -1, width: 10, height: 10, borderRadius: "50%",
+                background: isOnline(activeChat) ? "#44b700" : "#9ca3af", border: "2px solid #0084ff",
+              }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{activeChat.displayName}</div>
+              <div style={{ fontSize: 10, opacity: .85 }}>{onlineStatus(activeChat)}</div>
+            </div>
+            <button onClick={() => { setActiveChat(null); setOpen(false); }} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 16, padding: 0 }}>✕</button>
+          </div>
+
+          {/* Messages area */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", background: "#f0f2f5", display: "flex", flexDirection: "column", gap: 4 }}>
+            {messages.length === 0 && (
+              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, marginTop: 40 }}>Bắt đầu cuộc trò chuyện 👋</div>
+            )}
+            {messages.map((msg, i) => {
+              const isMine = msg.senderId === currentUser.id;
+              const showDate = i === 0 || new Date(msg.createdAt).toDateString() !== new Date(messages[i - 1].createdAt).toDateString();
+              return (
+                <React.Fragment key={msg.id}>
+                  {showDate && (
+                    <div style={{ textAlign: "center", fontSize: 10, color: "#9ca3af", margin: "8px 0 4px" }}>
+                      {new Date(msg.createdAt).toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit" })}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start" }}>
+                    <div style={{
+                      maxWidth: "75%", padding: "8px 12px", borderRadius: isMine ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                      background: isMine ? "#0084ff" : "#fff", color: isMine ? "#fff" : "#1c1e21",
+                      fontSize: 13, lineHeight: 1.4, wordBreak: "break-word",
+                      boxShadow: isMine ? "none" : "0 1px 2px rgba(0,0,0,.1)",
+                    }}>
+                      {msg.content}
+                      <div style={{ fontSize: 9, opacity: .6, textAlign: "right", marginTop: 2 }}>
+                        {new Date(msg.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  </div>
+                </React.Fragment>
+              );
+            })}
+            <div ref={msgEndRef} />
+          </div>
+
+          {/* Input area */}
+          <div style={{ padding: "8px 10px", borderTop: "1px solid #e4e6eb", display: "flex", gap: 8, alignItems: "center", background: "#fff", flexShrink: 0 }}>
+            <input
+              ref={inputRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
+              placeholder="Aa..."
+              style={{
+                flex: 1, border: "1px solid #e4e6eb", borderRadius: 20, padding: "8px 14px",
+                fontSize: 13, outline: "none", background: "#f0f2f5",
+              }}
+              autoFocus
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!draft.trim() || sending}
+              style={{
+                width: 34, height: 34, borderRadius: "50%", border: "none",
+                background: draft.trim() ? "#0084ff" : "#e4e6eb", color: draft.trim() ? "#fff" : "#bcc0c4",
+                cursor: draft.trim() ? "pointer" : "default", fontSize: 16,
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+              }}
+            >➤</button>
+          </div>
+        </div>
+        {/* FAB hidden when chat is open */}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {/* Floating Action Button */}
+      <button onClick={() => setOpen(!open)} style={fabStyle} title="Chat">
+        💬
+        {totalUnread > 0 && (
+          <span style={{
+            position: "absolute", top: -4, right: -4, minWidth: 20, height: 20,
+            borderRadius: 10, background: "#dc2626", color: "#fff", fontSize: 11,
+            fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "0 5px", border: "2px solid #fff",
+          }}>{totalUnread > 99 ? "99+" : totalUnread}</span>
+        )}
+      </button>
+
+      {/* Users list popup */}
+      {open && (
+        <div style={popupStyle}>
+          <div style={{
+            padding: "14px 16px 10px", borderBottom: "1px solid #e4e6eb",
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+          }}>
+            <span style={{ fontWeight: 700, fontSize: 18 }}>Chat</span>
+            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#65676b" }}>✕</button>
+          </div>
+          <div style={{ overflowY: "auto", maxHeight: 400 }}>
+            {chatUsers.length === 0 && (
+              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: 30 }}>Không có người dùng nào</div>
+            )}
+            {chatUsers.map(u => (
+              <div
+                key={u.id}
+                onClick={() => { openChat(u); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
+                  cursor: "pointer", transition: "background .15s",
+                  background: u.unread > 0 ? "#eff6ff" : "transparent",
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = "#f0f2f5"}
+                onMouseLeave={(e) => e.currentTarget.style.background = u.unread > 0 ? "#eff6ff" : "transparent"}
+              >
+                {/* Avatar with online dot */}
+                <div style={{
+                  width: 44, height: 44, borderRadius: "50%", flexShrink: 0, position: "relative",
+                  background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, color: "#fff",
+                }}>
+                  {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
+                  <div style={{
+                    position: "absolute", bottom: 1, right: 1, width: 12, height: 12, borderRadius: "50%",
+                    background: isOnline(u) ? "#44b700" : "#9ca3af", border: "2px solid #fff",
+                  }} />
+                </div>
+                {/* Name + last message */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontWeight: u.unread > 0 ? 700 : 500, fontSize: 14,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    color: "#1c1e21",
+                  }}>{u.displayName} <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>• {u.role === "admin" ? "Admin" : "Sale"}</span></div>
+                  <div style={{
+                    fontSize: 12, color: u.unread > 0 ? "#1c1e21" : "#65676b",
+                    fontWeight: u.unread > 0 ? 600 : 400,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  }}>
+                    {u.lastMessage ? (u.lastMessage.length > 30 ? u.lastMessage.slice(0, 30) + "..." : u.lastMessage) : <span style={{ fontStyle: "italic", color: "#bcc0c4" }}>Chưa có tin nhắn</span>}
+                  </div>
+                </div>
+                {/* Unread badge + time */}
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
+                  {u.lastMessageTime && <span style={{ fontSize: 10, color: "#65676b" }}>{formatTime(u.lastMessageTime)}</span>}
+                  {u.unread > 0 && (
+                    <span style={{
+                      minWidth: 18, height: 18, borderRadius: 9, background: "#0084ff", color: "#fff",
+                      fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+                    }}>{u.unread}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1007,6 +1484,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleSelected, setShuffleSelected] = useState(new Set());
   const [shuffling, setShuffling] = useState(false);
   const [shuffleMsg, setShuffleMsg] = useState("");
+  const [shuffleSaleFocused, setShuffleSaleFocused] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const isAdmin = user.role === "admin";
 
@@ -1100,13 +1578,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return [...names].sort();
   }, [leads]);
 
+  const allSaleUsers = useMemo(() => {
+    return allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
+  }, [allUsers]);
+
   const getProjectSaleNames = (projectId) => {
-    const assignedNames = allUsers
-      .filter(u => u.role === "sale" && u.projectIds && u.projectIds.includes(projectId))
-      .map(u => u.displayName)
-      .filter(Boolean);
-    const fromLeads = saleNames;
-    const merged = new Set([...assignedNames, ...fromLeads]);
+    const merged = new Set([...allSaleUsers, ...saleNames]);
     return [...merged].sort();
   };
 
@@ -1194,22 +1671,25 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <div style={{ minWidth: 200, flex: 1, position: "relative" }}>
                   <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>2. Chọn Sale</label>
                   <input value={shuffleSaleSearch} onChange={(e) => { setShuffleSaleSearch(e.target.value); setShuffleSale(""); }}
+                    onFocus={() => setShuffleSaleFocused(true)}
+                    onBlur={() => setTimeout(() => setShuffleSaleFocused(false), 200)}
                     placeholder="🔍 Tìm sale..."
                     style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%", fontSize: 13 }} />
                   {(() => {
                     const q = shuffleSaleSearch.toLowerCase();
-                    const saleList = allUsers.filter(u => u.role === "sale" && u.displayName).filter(u => !q || u.displayName.toLowerCase().includes(q));
-                    if (!shuffleSale && saleList.length > 0) return (
+                    const userSales = allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
+                    const allSales = [...new Set([...userSales, ...saleNames])].sort();
+                    const filtered = allSales.filter(s => !q || s.toLowerCase().includes(q));
+                    if (!shuffleSale && shuffleSaleFocused) return (
                       <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,.1)" }}>
-                        {saleList.map(u => (
-                          <div key={u.id} onClick={() => { setShuffleSale(u.displayName); setShuffleSaleSearch(u.displayName); }}
+                        {filtered.length > 0 ? filtered.map(s => (
+                          <div key={s} onClick={() => { setShuffleSale(s); setShuffleSaleSearch(s); setShuffleSaleFocused(false); }}
                             style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", transition: "background .1s" }}
                             onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
                             onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
-                            👤 {u.displayName}
+                            👤 {s}
                           </div>
-                        ))}
-                        {saleList.length === 0 && <div style={{ padding: "8px 12px", color: "#9ca3af", fontSize: 12 }}>Không tìm thấy sale</div>}
+                        )) : <div style={{ padding: "8px 12px", color: "#9ca3af", fontSize: 12 }}>Không tìm thấy sale nào</div>}
                       </div>
                     );
                     return null;
@@ -1597,6 +2077,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
           ); })()}
         </div>
+        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>
+        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>
+        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b></div>
       </div>
 
       {/* Admin: Cập nhật trạng thái */}
@@ -1975,14 +2458,434 @@ function SalesPage({ ranking }) {
   );
 }
 
-function UsersPage({ projects }) {
+/* ===== Profile Page ===== */
+/* === Image Lightbox === */
+function ImageLightbox({ src, onClose }) {
+  if (!src) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 99999,
+      display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+    }}>
+      <img src={src} alt="" style={{ maxWidth: "90vw", maxHeight: "90vh", borderRadius: 12, objectFit: "contain" }} onClick={e => e.stopPropagation()} />
+      <button onClick={onClose} style={{
+        position: "absolute", top: 20, right: 20, background: "rgba(255,255,255,.2)",
+        border: "none", color: "#fff", fontSize: 24, cursor: "pointer", borderRadius: "50%",
+        width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center",
+      }}>✕</button>
+    </div>
+  );
+}
+
+/* === Avatar Crop Modal === */
+function AvatarCropModal({ imageSrc, onConfirm, onClose }) {
+  const canvasRef = useRef(null);
+  const cropRef = useRef(null);
+  const imgRef = useRef(null);
+  const dragRef = useRef({ active: false, lx: 0, ly: 0 });
+  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+  const [ready, setReady] = useState(false);
+  const [baseScale, setBaseScale] = useState(1);
+  const BOX = 260;
+  const OUT = 400;
+
+  useEffect(() => {
+    const img = new Image();
+    img.onload = () => {
+      imgRef.current = img;
+      const bs = Math.max(BOX / img.naturalWidth, BOX / img.naturalHeight);
+      setBaseScale(bs);
+      setView({ scale: bs, x: (BOX - img.naturalWidth * bs) / 2, y: (BOX - img.naturalHeight * bs) / 2 });
+      setReady(true);
+    };
+    img.src = imageSrc;
+  }, [imageSrc]);
+
+  const gp = (e) => e.touches ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : { x: e.clientX, y: e.clientY };
+  const onDown = (e) => { e.preventDefault(); const p = gp(e); dragRef.current = { active: true, lx: p.x, ly: p.y }; };
+  const onMove = (e) => {
+    if (!dragRef.current.active) return;
+    e.preventDefault();
+    const p = gp(e);
+    const dx = p.x - dragRef.current.lx, dy = p.y - dragRef.current.ly;
+    dragRef.current.lx = p.x; dragRef.current.ly = p.y;
+    setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
+  };
+  const onUp = () => { dragRef.current.active = false; };
+
+  useEffect(() => {
+    const el = cropRef.current;
+    if (!el) return;
+    const wh = (e) => {
+      e.preventDefault();
+      setView(v => {
+        const d = e.deltaY > 0 ? 0.95 : 1.05;
+        const ns = Math.max(baseScale * 0.5, Math.min(baseScale * 5, v.scale * d));
+        const cx = BOX / 2, cy = BOX / 2, r = ns / v.scale;
+        return { scale: ns, x: cx - (cx - v.x) * r, y: cy - (cy - v.y) * r };
+      });
+    };
+    el.addEventListener("wheel", wh, { passive: false });
+    return () => el.removeEventListener("wheel", wh);
+  }, [baseScale]);
+
+  const handleZoom = (val) => {
+    const ns = baseScale * val / 100;
+    setView(v => {
+      const cx = BOX / 2, cy = BOX / 2, r = ns / v.scale;
+      return { scale: ns, x: cx - (cx - v.x) * r, y: cy - (cy - v.y) * r };
+    });
+  };
+
+  const handleConfirm = () => {
+    const img = imgRef.current;
+    if (!img) return;
+    const canvas = canvasRef.current;
+    canvas.width = OUT; canvas.height = OUT;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, OUT, OUT);
+    const sc = OUT / BOX;
+    ctx.drawImage(img, view.x * sc, view.y * sc, img.naturalWidth * view.scale * sc, img.naturalHeight * view.scale * sc);
+    onConfirm(canvas.toDataURL("image/jpeg", 0.92));
+  };
+
+  const sliderVal = baseScale > 0 ? Math.round(view.scale / baseScale * 100) : 100;
+
+  return (
+    <Modal onClose={onClose} title="Cắt ảnh đại diện">
+      <div style={{ textAlign: "center" }}>
+        <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 12px" }}>Kéo để di chuyển • Cuộn chuột để phóng to/thu nhỏ</p>
+        <div
+          ref={cropRef}
+          style={{
+            width: BOX, height: BOX, margin: "0 auto", borderRadius: "50%",
+            overflow: "hidden", cursor: "grab", border: "3px solid #3b82f6",
+            position: "relative", background: "#f3f4f6", touchAction: "none",
+          }}
+          onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+          onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+        >
+          {ready && <img src={imageSrc} alt="" draggable={false} style={{
+            position: "absolute", left: view.x, top: view.y,
+            width: imgRef.current.naturalWidth * view.scale,
+            height: imgRef.current.naturalHeight * view.scale,
+            pointerEvents: "none", userSelect: "none",
+          }} />}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", margin: "12px 0" }}>
+          <span style={{ fontSize: 14 }}>➖</span>
+          <input type="range" min="50" max="300" value={sliderVal}
+            onChange={(e) => handleZoom(Number(e.target.value))}
+            style={{ width: 160, accentColor: "#3b82f6" }} />
+          <span style={{ fontSize: 14 }}>➕</span>
+          <span style={{ fontSize: 11, color: "#6b7280", minWidth: 36 }}>{sliderVal}%</span>
+        </div>
+        <canvas ref={canvasRef} style={{ display: "none" }} />
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button onClick={handleConfirm} style={{ ...btnPrimary, flex: 1 }}>✅ Xác nhận</button>
+          <button onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProfilePage({ user, updateUser }) {
+  const isMobile = useIsMobile();
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [draft, setDraft] = useState({ avatarUrl: "", email: "", phone: "", telegramId: "" });
+  const [cropSrc, setCropSrc] = useState(null);
+  const [showLightbox, setShowLightbox] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const avatarFileRef = useRef(null);
+
+  // Password change
+  const [showPwdSection, setShowPwdSection] = useState(false);
+  const [currentPwd, setCurrentPwd] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [confirmPwd, setConfirmPwd] = useState("");
+  const [showCurrentPwd, setShowCurrentPwd] = useState(false);
+  const [showNewPwd, setShowNewPwd] = useState(false);
+  const [showConfirmPwd, setShowConfirmPwd] = useState(false);
+  const [pwdMsg, setPwdMsg] = useState("");
+  const [pwdError, setPwdError] = useState("");
+  const [changingPwd, setChangingPwd] = useState(false);
+
+  const pwdValid = {
+    length: newPwd.length >= 8,
+    upper: /[A-Z]/.test(newPwd),
+    lower: /[a-z]/.test(newPwd),
+    digit: /\d/.test(newPwd),
+    special: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPwd),
+  };
+  const allPwdValid = Object.values(pwdValid).every(Boolean);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/profile`);
+        const data = await r.json();
+        setProfile(data);
+        setDraft({ avatarUrl: data.avatarUrl || "", email: data.email || "", phone: data.phone || "", telegramId: data.telegramId || "" });
+      } catch { }
+      setLoading(false);
+    })();
+  }, []);
+
+  const handleAvatarFile = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) { alert("Ảnh tối đa 5MB"); return; }
+    const reader = new FileReader();
+    reader.onload = () => setCropSrc(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setMsg("");
+    try {
+      const r = await apiFetch(`${API}/profile`, { method: "PUT", body: JSON.stringify(draft) });
+      const data = await r.json();
+      if (r.ok) {
+        setProfile(data);
+        setMsg("✅ Đã cập nhật hồ sơ");
+        setTimeout(() => setMsg(""), 3000);
+      } else {
+        setMsg("❌ Lỗi: " + (data.error || "Không thể cập nhật"));
+      }
+    } catch (e) {
+      setMsg("❌ Lỗi kết nối: " + e.message);
+    }
+    setSaving(false);
+  };
+
+  const handleChangePwd = async () => {
+    setPwdError(""); setPwdMsg("");
+    if (!allPwdValid) { setPwdError("Mật khẩu chưa đạt yêu cầu"); return; }
+    if (newPwd !== confirmPwd) { setPwdError("Mật khẩu xác nhận không khớp"); return; }
+    setChangingPwd(true);
+    try {
+      const r = await apiFetch(`${API}/change-password`, {
+        method: "PUT",
+        body: JSON.stringify({ currentPassword: currentPwd, newPassword: newPwd }),
+      });
+      const data = await r.json();
+      if (!r.ok) { setPwdError(data.error); return; }
+      setPwdMsg("✅ Đổi mật khẩu thành công!");
+      setCurrentPwd(""); setNewPwd(""); setConfirmPwd("");
+      if (data.token && data.user) updateUser(data.user, data.token);
+      setTimeout(() => setPwdMsg(""), 3000);
+    } catch {
+      setPwdError("Lỗi kết nối server");
+    } finally {
+      setChangingPwd(false);
+    }
+  };
+
+  const PwdRule = ({ ok, text }) => (
+    <div style={{ fontSize: 12, color: ok ? "#16a34a" : "#9ca3af", display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
+      <span>{ok ? "✅" : "⬜"}</span> {text}
+    </div>
+  );
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải...</div>;
+
+  return (
+    <div style={{ maxWidth: 600, margin: "0 auto" }}>
+      {/* Avatar & Name Header */}
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: 24, marginBottom: 16,
+        boxShadow: "0 1px 3px rgba(0,0,0,.08)", textAlign: "center",
+      }}>
+        <div
+          onClick={() => draft.avatarUrl && setShowLightbox(true)}
+          style={{
+            width: 100, height: 100, borderRadius: "50%", margin: "0 auto 12px",
+            background: draft.avatarUrl ? `url(${draft.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 36, color: "#fff", border: "3px solid #e5e7eb",
+            cursor: draft.avatarUrl ? "pointer" : "default", transition: "border-color .2s",
+          }}
+          onMouseEnter={e => { if (draft.avatarUrl) e.currentTarget.style.borderColor = "#3b82f6"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = "#e5e7eb"; }}
+          title={draft.avatarUrl ? "Bấm để xem ảnh lớn" : ""}
+        >
+          {!draft.avatarUrl && (profile?.displayName || user?.displayName || "?")[0]?.toUpperCase()}
+        </div>
+        <h3 style={{ margin: "0 0 4px", fontSize: 20 }}>{profile?.displayName || user?.displayName}</h3>
+        {(() => { const r = profile?.role || user?.role; return (
+          <span style={{
+            padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600,
+            background: r === "admin" ? "#fef2f2" : "#eff6ff",
+            color: r === "admin" ? "#dc2626" : "#2563eb",
+          }}>{r === "admin" ? "Admin" : "Sale"}</span>
+        ); })()}
+        <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 8 }}>@{profile?.username || user?.username}</div>
+      </div>
+      {showLightbox && draft.avatarUrl && <ImageLightbox src={draft.avatarUrl} onClose={() => setShowLightbox(false)} />}
+
+      {/* Profile Info */}
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: isMobile ? 16 : 24, marginBottom: 16,
+        boxShadow: "0 1px 3px rgba(0,0,0,.08)",
+      }}>
+        <h4 style={{ margin: "0 0 16px", fontSize: 15, color: "#374151" }}>📋 Thông tin cá nhân</h4>
+        {msg && <div style={{ background: "#f0fdf4", color: "#16a34a", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+
+        <label style={{ ...labelStyle, marginTop: 0 }}>Ảnh đại diện</label>
+        {draft.avatarUrl ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <div
+              onClick={() => setShowLightbox(true)}
+              style={{
+                width: 64, height: 64, borderRadius: "50%", flexShrink: 0, cursor: "pointer",
+                background: `url(${draft.avatarUrl}) center/cover`, border: "3px solid #e5e7eb",
+                transition: "border-color .2s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "#3b82f6"; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = "#e5e7eb"; }}
+              title="Bấm để xem ảnh lớn"
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <label style={{
+                display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 12px",
+                background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer",
+                fontSize: 12, fontWeight: 600, border: "1px solid #bfdbfe",
+              }}>
+                📷 Đổi ảnh
+                <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
+              </label>
+              <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 12, textAlign: "left", padding: "2px 0" }}>✕ Xóa ảnh</button>
+            </div>
+          </div>
+        ) : (
+          <div
+            onClick={() => avatarFileRef.current?.click()}
+            onDrop={(e) => { e.preventDefault(); setDragOver(false); handleAvatarFile(e.dataTransfer.files?.[0]); }}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            style={{
+              border: `2px dashed ${dragOver ? "#3b82f6" : "#d1d5db"}`, borderRadius: 12,
+              padding: "20px 16px", textAlign: "center", cursor: "pointer", marginBottom: 8,
+              transition: "all .2s", background: dragOver ? "#eff6ff" : "#fafafa",
+            }}
+          >
+            <div style={{ fontSize: 32, marginBottom: 4 }}>📷</div>
+            <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>Kéo thả ảnh vào đây hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm để chọn</span></div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>PNG, JPG, WEBP • Tối đa 5MB</div>
+            <input ref={avatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
+          </div>
+        )}
+        {cropSrc && <AvatarCropModal imageSrc={cropSrc} onConfirm={(b64) => { setDraft(d => ({ ...d, avatarUrl: b64 })); setCropSrc(null); }} onClose={() => setCropSrc(null)} />}
+
+        <label style={labelStyle}>Email</label>
+        <input style={inputStyle} type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="email@example.com" />
+
+        <label style={labelStyle}>Số điện thoại</label>
+        <input style={inputStyle} value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="0909 xxx xxx" />
+
+        <label style={labelStyle}>Telegram ID</label>
+        <input style={inputStyle} value={draft.telegramId} onChange={(e) => setDraft({ ...draft, telegramId: e.target.value })} placeholder="123456789" />
+
+        <button onClick={handleSave} disabled={saving} style={{ ...btnPrimary, width: "100%", marginTop: 8 }}>
+          {saving ? "Đang lưu..." : "💾 Cập nhật thông tin"}
+        </button>
+      </div>
+
+      {/* Change Password */}
+      <div style={{
+        background: "#fff", borderRadius: 16, padding: isMobile ? 16 : 24,
+        boxShadow: "0 1px 3px rgba(0,0,0,.08)",
+      }}>
+        <div
+          onClick={() => setShowPwdSection(!showPwdSection)}
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+        >
+          <h4 style={{ margin: 0, fontSize: 15, color: "#374151" }}>🔑 Đổi mật khẩu</h4>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>{showPwdSection ? "▲ Thu gọn" : "▼ Mở rộng"}</span>
+        </div>
+        {showPwdSection && (
+          <div style={{ marginTop: 16 }}>
+            {pwdMsg && <div style={{ background: "#f0fdf4", color: "#16a34a", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{pwdMsg}</div>}
+            {pwdError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{pwdError}</div>}
+
+            <label style={{ ...labelStyle, marginTop: 0 }}>Mật khẩu hiện tại</label>
+            <div style={{ position: "relative" }}>
+              <input style={{ ...inputStyle, paddingRight: 40 }} type={showCurrentPwd ? "text" : "password"} value={currentPwd}
+                onChange={(e) => setCurrentPwd(e.target.value)} placeholder="Nhập mật khẩu hiện tại" />
+              <button type="button" onClick={() => setShowCurrentPwd(!showCurrentPwd)} style={{
+                position: "absolute", right: 8, top: 8, background: "none", border: "none",
+                cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+              }}>{showCurrentPwd ? "🙈" : "👁️"}</button>
+            </div>
+
+            <label style={labelStyle}>Mật khẩu mới</label>
+            <div style={{ position: "relative" }}>
+              <input style={{ ...inputStyle, paddingRight: 40 }} type={showNewPwd ? "text" : "password"} value={newPwd}
+                onChange={(e) => setNewPwd(e.target.value)} placeholder="Nhập mật khẩu mới" />
+              <button type="button" onClick={() => setShowNewPwd(!showNewPwd)} style={{
+                position: "absolute", right: 8, top: 8, background: "none", border: "none",
+                cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+              }}>{showNewPwd ? "🙈" : "👁️"}</button>
+            </div>
+
+            <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>Yêu cầu mật khẩu:</div>
+              <PwdRule ok={pwdValid.length} text="Ít nhất 8 ký tự" />
+              <PwdRule ok={pwdValid.upper} text="Ít nhất 1 chữ hoa (A-Z)" />
+              <PwdRule ok={pwdValid.lower} text="Ít nhất 1 chữ thường (a-z)" />
+              <PwdRule ok={pwdValid.digit} text="Ít nhất 1 số (0-9)" />
+              <PwdRule ok={pwdValid.special} text="Ít nhất 1 ký tự đặc biệt (!@#$%...)" />
+            </div>
+
+            <label style={labelStyle}>Xác nhận mật khẩu mới</label>
+            <div style={{ position: "relative" }}>
+              <input style={{ ...inputStyle, paddingRight: 40 }} type={showConfirmPwd ? "text" : "password"} value={confirmPwd}
+                onChange={(e) => setConfirmPwd(e.target.value)} placeholder="Nhập lại mật khẩu mới" />
+              <button type="button" onClick={() => setShowConfirmPwd(!showConfirmPwd)} style={{
+                position: "absolute", right: 8, top: 8, background: "none", border: "none",
+                cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+              }}>{showConfirmPwd ? "🙈" : "👁️"}</button>
+            </div>
+            {confirmPwd && newPwd !== confirmPwd && (
+              <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8 }}>❌ Mật khẩu xác nhận không khớp</div>
+            )}
+
+            <button onClick={handleChangePwd} disabled={changingPwd || !allPwdValid || newPwd !== confirmPwd || !currentPwd} style={{
+              ...btnPrimary, width: "100%", marginTop: 8,
+              opacity: (changingPwd || !allPwdValid || newPwd !== confirmPwd || !currentPwd) ? 0.6 : 1,
+            }}>
+              {changingPwd ? "Đang xử lý..." : "🔐 Đổi mật khẩu"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UsersPage({ projects, leads }) {
   const isMobile = useIsMobile();
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
-  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [] });
+  const [draft, setDraft] = useState({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [], avatarUrl: "", email: "", phone: "" });
+  const [showDraftPwd, setShowDraftPwd] = useState(false);
   const [error, setError] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
+  const [autoCreateMsg, setAutoCreateMsg] = useState("");
+  const [autoCreating, setAutoCreating] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(null);
+  const [profileDraft, setProfileDraft] = useState({ avatarUrl: "", email: "", phone: "", telegramId: "" });
+  const [userCropSrc, setUserCropSrc] = useState(null);
+  const [userCropTarget, setUserCropTarget] = useState(null); // 'draft' or 'profile'
+  const [lightboxSrc, setLightboxSrc] = useState(null);
+  const [userDragOver, setUserDragOver] = useState(false);
+  const userAvatarFileRef = useRef(null);
+  const profileAvatarFileRef = useRef(null);
 
   // Telegram Bots
   const [bots, setBots] = useState([]);
@@ -2009,17 +2912,19 @@ function UsersPage({ projects }) {
 
   const openNew = () => {
     setEditingUser(null);
-    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [] });
+    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [], avatarUrl: "", email: "", phone: "" });
     setError("");
     setProjectSearch("");
+    setShowDraftPwd(false);
     setShowForm(true);
   };
 
   const openEdit = (u) => {
     setEditingUser(u);
-    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "", projectIds: u.projectIds || [] });
+    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "", projectIds: u.projectIds || [], avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "" });
     setError("");
     setProjectSearch("");
+    setShowDraftPwd(false);
     setShowForm(true);
   };
 
@@ -2027,7 +2932,7 @@ function UsersPage({ projects }) {
     setError("");
     try {
       if (editingUser) {
-        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds };
+        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds, avatarUrl: draft.avatarUrl, email: draft.email, phone: draft.phone };
         if (draft.password) body.password = draft.password;
         const r = await apiFetch(`${API}/users/${editingUser.id}`, { method: "PUT", body: JSON.stringify(body) });
         if (!r.ok) { const d = await r.json(); setError(d.error); return; }
@@ -2053,6 +2958,50 @@ function UsersPage({ projects }) {
       const r = await apiFetch(`${API}/users/${id}`, { method: "DELETE" });
       if (!r.ok) { const d = await r.json(); alert(d.error); return; }
       setUsers(await r.json());
+    } catch (e) { console.error(e); }
+  };
+
+  const handleAutoCreate = async () => {
+    if (!confirm("Tự động tạo tài khoản cho các Sale có tên trong dữ liệu lead?\n\nMật khẩu mặc định: tên + 123 (VD: thao123)\nSale sẽ phải đổi mật khẩu khi đăng nhập lần đầu.")) return;
+    setAutoCreating(true); setAutoCreateMsg("");
+    try {
+      const r = await apiFetch(`${API}/users/auto-create-sales`, { method: "POST" });
+      const data = await r.json();
+      if (r.ok) {
+        setUsers(data.users);
+        if (data.created > 0) {
+          const list = data.createdList.map(c => `• ${c.displayName} → @${c.username} (MK: ${c.defaultPassword})`).join("\n");
+          setAutoCreateMsg(`✅ Đã tạo ${data.created} tài khoản:\n${list}`);
+        } else {
+          setAutoCreateMsg("ℹ️ Không có sale mới cần tạo tài khoản.");
+        }
+      } else {
+        setAutoCreateMsg("❌ Lỗi: " + (data.error || "Unknown"));
+      }
+    } catch (e) { setAutoCreateMsg("❌ " + e.message); }
+    setAutoCreating(false);
+  };
+
+  const openProfile = (u) => {
+    setShowProfileModal(u);
+    setProfileDraft({ avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "" });
+  };
+
+  const handleUserAvatarFile = (file, target) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (file.size > 5 * 1024 * 1024) { alert("Ảnh tối đa 5MB"); return; }
+    const reader = new FileReader();
+    reader.onload = () => { setUserCropSrc(reader.result); setUserCropTarget(target); };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!showProfileModal) return;
+    try {
+      const r = await apiFetch(`${API}/users/${showProfileModal.id}/profile`, {
+        method: "PUT", body: JSON.stringify(profileDraft),
+      });
+      if (r.ok) { setUsers(await r.json()); setShowProfileModal(null); }
     } catch (e) { console.error(e); }
   };
 
@@ -2108,31 +3057,59 @@ function UsersPage({ projects }) {
   return (
     <>
       {/* ===== TÀI KHOẢN ===== */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>👤 {users.length} tài khoản</div>
-        <button onClick={openNew} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm tài khoản</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={handleAutoCreate} disabled={autoCreating} style={{ ...btnSecondary, minHeight: 40, fontSize: 12 }}>
+            {autoCreating ? "⏳ Đang tạo..." : "🤖 Tự tạo TK Sale"}
+          </button>
+          <button onClick={openNew} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm tài khoản</button>
+        </div>
       </div>
+      {autoCreateMsg && (
+        <div style={{
+          background: autoCreateMsg.startsWith("✅") ? "#f0fdf4" : autoCreateMsg.startsWith("ℹ️") ? "#eff6ff" : "#fef2f2",
+          color: autoCreateMsg.startsWith("✅") ? "#16a34a" : autoCreateMsg.startsWith("ℹ️") ? "#2563eb" : "#dc2626",
+          padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 12, whiteSpace: "pre-line",
+        }}>
+          {autoCreateMsg}
+          <button onClick={() => setAutoCreateMsg("")} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14 }}>✕</button>
+        </div>
+      )}
 
       {isMobile ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 32 }}>
           {users.map((u) => (
             <div key={u.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{u.displayName || u.username}</span>
-                  <span style={{
-                    marginLeft: 8, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                    background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
-                    color: u.role === "admin" ? "#dc2626" : "#2563eb",
-                  }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{
+                    width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+                    background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, color: "#fff",
+                  }}>
+                    {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
+                  </div>
+                  <div>
+                    <span style={{ fontWeight: 700, fontSize: 14 }}>{u.displayName || u.username}</span>
+                    <span style={{
+                      marginLeft: 8, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
+                      background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
+                      color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                    }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>🪪</button>
                   <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>✏️</button>
                   <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>🗑️</button>
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexDirection: "column", gap: 3 }}>
                 <div>👤 @{u.username}</div>
+                {u.email && <div>📧 {u.email}</div>}
+                {u.phone && <div>📱 {u.phone}</div>}
                 {u.telegramId && <div>✈️ {u.telegramId}</div>}
                 {u.role !== "admin" && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 2 }}>
@@ -2157,6 +3134,7 @@ function UsersPage({ projects }) {
               <th style={thStyle}>#</th>
               <th style={thStyle}>Username</th>
               <th style={thStyle}>Tên hiển thị</th>
+              <th style={thStyle}>Email / SĐT</th>
               <th style={thStyle}>Dự án</th>
               <th style={thStyle}>Telegram ID</th>
               <th style={thStyle}>Quyền</th>
@@ -2169,7 +3147,24 @@ function UsersPage({ projects }) {
               <tr key={u.id} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
                 <td style={tdStyle}>{i + 1}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{u.username}</td>
-                <td style={tdStyle}>{u.displayName}</td>
+                <td style={tdStyle}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                      background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 12, color: "#fff",
+                    }}>
+                      {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
+                    </div>
+                    {u.displayName}
+                  </div>
+                </td>
+                <td style={{ ...tdStyle, fontSize: 11 }}>
+                  {u.email && <div>📧 {u.email}</div>}
+                  {u.phone && <div>📱 {u.phone}</div>}
+                  {!u.email && !u.phone && <span style={{ color: "#9ca3af" }}>—</span>}
+                </td>
                 <td style={tdStyle}>
                   {u.role === "admin" ? (
                     <span style={{ color: "#6b7280", fontSize: 11, fontStyle: "italic" }}>Tất cả</span>
@@ -2202,6 +3197,7 @@ function UsersPage({ projects }) {
                 <td style={{ ...tdStyle, fontSize: 11 }}>{u.createdAt || "-"}</td>
                 <td style={tdStyle}>
                   <div style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>🪪</button>
                     <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>✏️</button>
                     <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}>🗑️</button>
                   </div>
@@ -2301,11 +3297,56 @@ function UsersPage({ projects }) {
           <input style={inputStyle} value={draft.username} disabled={!!editingUser}
             onChange={(e) => setDraft({ ...draft, username: e.target.value })} placeholder="VD: sale01" />
           <label style={labelStyle}>Mật khẩu {editingUser && "(để trống nếu không đổi)"}</label>
-          <input style={inputStyle} type="password" value={draft.password}
-            onChange={(e) => setDraft({ ...draft, password: e.target.value })} placeholder="••••••" />
+          <div style={{ position: "relative" }}>
+            <input style={{ ...inputStyle, paddingRight: 40 }} type={showDraftPwd ? "text" : "password"} value={draft.password}
+              onChange={(e) => setDraft({ ...draft, password: e.target.value })} placeholder="••••••" />
+            <button type="button" onClick={() => setShowDraftPwd(!showDraftPwd)} style={{
+              position: "absolute", right: 8, top: 8, background: "none", border: "none",
+              cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
+            }}>{showDraftPwd ? "🙈" : "👁️"}</button>
+          </div>
+          {!editingUser && (
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: -4, marginBottom: 8 }}>
+              💡 MK mặc định: tên (không dấu) + 123. VD: <strong>thao123</strong>
+            </div>
+          )}
           <label style={labelStyle}>Tên hiển thị</label>
           <input style={inputStyle} value={draft.displayName}
             onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} placeholder="VD: Nguyễn Văn A" />
+          <label style={labelStyle}>Email</label>
+          <input style={inputStyle} type="email" value={draft.email}
+            onChange={(e) => setDraft({ ...draft, email: e.target.value })} placeholder="email@example.com" />
+          <label style={labelStyle}>Số điện thoại</label>
+          <input style={inputStyle} value={draft.phone}
+            onChange={(e) => setDraft({ ...draft, phone: e.target.value })} placeholder="0909 xxx xxx" />
+          <label style={labelStyle}>Ảnh đại diện</label>
+          {draft.avatarUrl ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+              <div onClick={() => setLightboxSrc(draft.avatarUrl)} style={{
+                width: 48, height: 48, borderRadius: "50%", flexShrink: 0, cursor: "pointer",
+                background: `url(${draft.avatarUrl}) center/cover`, border: "2px solid #e5e7eb",
+              }} title="Xem ảnh lớn" />
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+                  📷 Đổi ảnh
+                  <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
+                </label>
+                <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0 }}>✕ Xóa</button>
+              </div>
+            </div>
+          ) : (
+            <div
+              onClick={() => userAvatarFileRef.current?.click()}
+              onDrop={(e) => { e.preventDefault(); setUserDragOver(false); handleUserAvatarFile(e.dataTransfer.files?.[0], "draft"); }}
+              onDragOver={(e) => { e.preventDefault(); setUserDragOver(true); }}
+              onDragLeave={() => setUserDragOver(false)}
+              style={{ border: `2px dashed ${userDragOver ? "#3b82f6" : "#d1d5db"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: userDragOver ? "#eff6ff" : "#fafafa" }}
+            >
+              <div style={{ fontSize: 24, marginBottom: 2 }}>📷</div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm chọn ảnh</span></div>
+              <input ref={userAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
+            </div>
+          )}
           <label style={labelStyle}>Telegram ID</label>
           <input style={inputStyle} value={draft.telegramId}
             onChange={(e) => setDraft({ ...draft, telegramId: e.target.value })} placeholder="VD: 123456789" />
@@ -2391,6 +3432,139 @@ function UsersPage({ projects }) {
           </div>
         </Modal>
       )}
+
+      {/* Modal hồ sơ user - đầy đủ thông tin */}
+      {showProfileModal && (() => {
+        const u = showProfileModal;
+        const userProjects = (u.projectIds || []).map(pid => projects.find(p => p.id === pid)).filter(Boolean);
+        const isOnline = u.lastActive && (Date.now() - new Date(u.lastActive).getTime() < 5 * 60 * 1000);
+        const lastSeenText = u.lastActive ? (() => {
+          const diff = Math.floor((Date.now() - new Date(u.lastActive).getTime()) / 60000);
+          if (diff < 1) return "Vừa mới";
+          if (diff < 60) return `${diff} phút trước`;
+          if (diff < 1440) return `${Math.floor(diff / 60)} giờ trước`;
+          return `${Math.floor(diff / 1440)} ngày trước`;
+        })() : "Chưa hoạt động";
+        const infoRow = (icon, label, value) => value ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+            <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{icon}</span>
+            <span style={{ fontSize: 12, color: "#6b7280", minWidth: 80 }}>{label}</span>
+            <span style={{ fontSize: 13, color: "#111827", fontWeight: 500, flex: 1, wordBreak: "break-word" }}>{value}</span>
+          </div>
+        ) : null;
+        return (
+          <Modal onClose={() => setShowProfileModal(null)} title={`Hồ sơ - ${u.displayName}`}>
+            {/* Avatar + Header */}
+            <div style={{ textAlign: "center", marginBottom: 16, position: "relative" }}>
+              <div
+                onClick={() => profileDraft.avatarUrl && setLightboxSrc(profileDraft.avatarUrl)}
+                style={{
+                  width: 90, height: 90, borderRadius: "50%", margin: "0 auto 8px",
+                  background: profileDraft.avatarUrl ? `url(${profileDraft.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 32, color: "#fff", border: "3px solid #e5e7eb",
+                  cursor: profileDraft.avatarUrl ? "pointer" : "default", position: "relative",
+                }}
+                title={profileDraft.avatarUrl ? "Bấm để xem ảnh lớn" : ""}
+              >
+                {!profileDraft.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
+                <div style={{
+                  position: "absolute", bottom: 2, right: 2, width: 16, height: 16, borderRadius: "50%",
+                  background: isOnline ? "#22c55e" : "#9ca3af", border: "2px solid #fff",
+                }} />
+              </div>
+              <div style={{ fontWeight: 700, fontSize: 18 }}>{u.displayName}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 4 }}>
+                <span style={{
+                  padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
+                  background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
+                  color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+                <span style={{ fontSize: 11, color: isOnline ? "#22c55e" : "#9ca3af" }}>
+                  {isOnline ? "● Online" : `○ ${lastSeenText}`}
+                </span>
+              </div>
+              <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>@{u.username}</div>
+            </div>
+
+            {/* Thông tin chi tiết - Chỉ đọc */}
+            <div style={{ background: "#f9fafb", borderRadius: 12, padding: "4px 12px", marginBottom: 12 }}>
+              {infoRow("📧", "Email", u.email)}
+              {infoRow("📱", "SĐT", u.phone)}
+              {infoRow("✈️", "Telegram", u.telegramId)}
+              {infoRow("📅", "Ngày tạo", u.createdAt ? new Date(u.createdAt).toLocaleDateString("vi-VN") : "")}
+              {infoRow("🕑", "Hoạt động", lastSeenText)}
+              {!u.email && !u.phone && !u.telegramId && (
+                <div style={{ padding: "12px 0", color: "#9ca3af", fontSize: 12, textAlign: "center" }}>Chưa cập nhật thông tin liên hệ</div>
+              )}
+            </div>
+
+            {/* Dự án */}
+            {u.role !== "admin" && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>🏗️ Dự án được phân công</div>
+                {userProjects.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {userProjects.map(p => (
+                      <span key={p.id} style={{ background: "#f0fdf4", color: "#16a34a", padding: "3px 10px", borderRadius: 8, fontSize: 11, fontWeight: 600 }}>{p.name}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ color: "#9ca3af", fontSize: 12 }}>Chưa gán dự án nào</div>
+                )}
+              </div>
+            )}
+
+            {/* Chỉnh sửa nhanh */}
+            <details style={{ marginBottom: 8 }}>
+              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151", padding: "8px 0", userSelect: "none" }}>✏️ Chỉnh sửa thông tin</summary>
+              <div style={{ marginTop: 8 }}>
+                <label style={{ ...labelStyle, marginTop: 0 }}>Ảnh đại diện</label>
+                {profileDraft.avatarUrl ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                    <div onClick={() => setLightboxSrc(profileDraft.avatarUrl)} style={{
+                      width: 48, height: 48, borderRadius: "50%", flexShrink: 0, cursor: "pointer",
+                      background: `url(${profileDraft.avatarUrl}) center/cover`, border: "2px solid #e5e7eb",
+                    }} title="Xem ảnh lớn" />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+                        📷 Đổi ảnh
+                        <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
+                      </label>
+                      <button type="button" onClick={() => setProfileDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0 }}>✕ Xóa</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => profileAvatarFileRef.current?.click()}
+                    onDrop={(e) => { e.preventDefault(); handleUserAvatarFile(e.dataTransfer.files?.[0], "profile"); }}
+                    onDragOver={(e) => e.preventDefault()}
+                    style={{ border: "2px dashed #d1d5db", borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: "#fafafa" }}
+                  >
+                    <div style={{ fontSize: 20, marginBottom: 2 }}>📷</div>
+                    <div style={{ fontSize: 11, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm chọn</span></div>
+                    <input ref={profileAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
+                  </div>
+                )}
+                <label style={labelStyle}>Email</label>
+                <input style={inputStyle} type="email" value={profileDraft.email} onChange={(e) => setProfileDraft({ ...profileDraft, email: e.target.value })} placeholder="email@example.com" />
+                <label style={labelStyle}>Số điện thoại</label>
+                <input style={inputStyle} value={profileDraft.phone} onChange={(e) => setProfileDraft({ ...profileDraft, phone: e.target.value })} placeholder="0909 xxx xxx" />
+                <label style={labelStyle}>Telegram ID</label>
+                <input style={inputStyle} value={profileDraft.telegramId} onChange={(e) => setProfileDraft({ ...profileDraft, telegramId: e.target.value })} placeholder="123456789" />
+                <button onClick={handleSaveProfile} style={{ ...btnPrimary, width: "100%", marginTop: 8 }}>💾 Lưu thông tin</button>
+              </div>
+            </details>
+          </Modal>
+        );
+      })()}
+
+      {userCropSrc && <AvatarCropModal imageSrc={userCropSrc} onConfirm={(b64) => {
+        if (userCropTarget === "draft") setDraft(d => ({ ...d, avatarUrl: b64 }));
+        else setProfileDraft(d => ({ ...d, avatarUrl: b64 }));
+        setUserCropSrc(null);
+      }} onClose={() => setUserCropSrc(null)} />}
+      {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </>
   );
 }

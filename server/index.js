@@ -164,6 +164,12 @@ async function initDb() {
 
   // Migration: add telegram_id if missing
   try { await run(db, "ALTER TABLE users ADD COLUMN telegram_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
+  // Migration: add profile fields
+  try { await run(db, "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''"); } catch (_) {}
+  try { await run(db, "ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); } catch (_) {}
+  try { await run(db, "ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''"); } catch (_) {}
+  try { await run(db, "ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0"); } catch (_) {}
+  try { await run(db, "ALTER TABLE users ADD COLUMN last_active TEXT DEFAULT ''"); } catch (_) {}
 
   await run(
     db,
@@ -247,6 +253,21 @@ async function initDb() {
   // Migration: add columns that may be missing on older DBs
   try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN project_name TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
   try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN is_active INTEGER DEFAULT 1"); } catch { /* already exists */ }
+
+  /* ---------- Chat messages table ---------- */
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sender_id INTEGER NOT NULL,
+      receiver_id INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
+    )`
+  );
 
   // Migrate legacy single sheet_script_url into sheet_configs
   {
@@ -1091,7 +1112,7 @@ app.post("/api/login", async (req, res) => {
     if (!verifyPassword(String(password), user.password_hash, user.salt)) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name };
+    const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name, mustChangePassword: !!user.must_change_password };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, user: payload });
   } catch (err) {
@@ -1108,8 +1129,8 @@ app.get("/api/me", requireAuth, (req, res) => {
 });
 
 /* ---------- User management (admin only) ---------- */
-const mapUser = (u, projectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", createdAt: u.created_at, projectIds: projectIds || [] });
-const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, created_at FROM users ORDER BY id");
+const mapUser = (u, projectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", avatarUrl: u.avatar_url || "", email: u.email || "", phone: u.phone || "", mustChangePassword: !!u.must_change_password, lastActive: u.last_active || "", createdAt: u.created_at, projectIds: projectIds || [] });
+const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, avatar_url, email, phone, must_change_password, last_active, created_at FROM users ORDER BY id");
 const getUserProjectIds = async (userId) => {
   const rows = await all(db, "SELECT project_id FROM user_projects WHERE user_id = ? ORDER BY project_id", [userId]);
   return rows.map(r => r.project_id);
@@ -1164,7 +1185,7 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
 app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { password, role, displayName, telegramId } = req.body;
+    const { password, role, displayName, telegramId, avatarUrl, email, phone } = req.body;
     if (password) {
       const { hash, salt } = hashPassword(String(password));
       await run(db, "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", [hash, salt, id]);
@@ -1177,6 +1198,15 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     }
     if (telegramId !== undefined) {
       await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId).trim(), id]);
+    }
+    if (avatarUrl !== undefined) {
+      await run(db, "UPDATE users SET avatar_url = ? WHERE id = ?", [String(avatarUrl || "").trim(), id]);
+    }
+    if (email !== undefined) {
+      await run(db, "UPDATE users SET email = ? WHERE id = ?", [String(email || "").trim(), id]);
+    }
+    if (phone !== undefined) {
+      await run(db, "UPDATE users SET phone = ? WHERE id = ?", [String(phone || "").trim(), id]);
     }
     if (req.body.projectIds !== undefined && Array.isArray(req.body.projectIds)) {
       await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
@@ -1197,6 +1227,137 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (req.user.userId === id) return res.status(400).json({ error: "Cannot delete yourself" });
     await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
+    const users = await selectUsers();
+    res.json(await mapUsersWithProjects(users));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Auto-create sale accounts from lead data ---------- */
+app.post("/api/users/auto-create-sales", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const leadsRows = await all(db, "SELECT DISTINCT sale_name FROM leads WHERE sale_name IS NOT NULL AND sale_name != '' AND sale_name != 'Chưa chia'");
+    const existingUsers = await all(db, "SELECT username, display_name FROM users");
+    const existingDisplayNames = new Set(existingUsers.map(u => foldText(u.display_name)));
+    const existingUsernames = new Set(existingUsers.map(u => u.username));
+
+    let created = 0;
+    const createdList = [];
+    for (const row of leadsRows) {
+      const saleName = row.sale_name.trim();
+      if (!saleName) continue;
+      // Skip if display name already matches
+      if (existingDisplayNames.has(foldText(saleName))) continue;
+
+      // Generate username from last 2 words of the name
+      const words = saleName.split(/\s+/).filter(Boolean);
+      if (words.length < 2) continue; // Skip single-word names
+
+      const lastTwo = words.slice(-2).map(w =>
+        w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase()
+      ).join("");
+
+      // Skip if username already exists
+      let username = lastTwo;
+      if (existingUsernames.has(username)) continue;
+
+      // Default password = last word (no diacritics) + 123
+      const lastWord = words[words.length - 1]
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase();
+      const defaultPwd = lastWord + "123";
+
+      const { hash, salt } = hashPassword(defaultPwd);
+      await run(
+        db,
+        "INSERT INTO users(username, password_hash, salt, role, display_name, must_change_password) VALUES(?, ?, ?, ?, ?, ?)",
+        [username, hash, salt, "sale", saleName, 1]
+      );
+      existingUsernames.add(username);
+      existingDisplayNames.add(foldText(saleName));
+      created++;
+      createdList.push({ username, displayName: saleName, defaultPassword: defaultPwd });
+    }
+
+    const users = await selectUsers();
+    res.json({ created, createdList, users: await mapUsersWithProjects(users) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Self-profile endpoints (any authenticated user) ---------- */
+app.get("/api/profile", requireAuth, async (req, res) => {
+  try {
+    const user = await get(db, "SELECT id, username, role, display_name, telegram_id, avatar_url, email, phone, must_change_password, last_active, created_at FROM users WHERE id = ?", [req.user.userId]);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    res.json(mapUser(user, []));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/profile", requireAuth, async (req, res) => {
+  try {
+    const id = req.user.userId;
+    const { avatarUrl, email, phone, telegramId } = req.body;
+    if (avatarUrl !== undefined) await run(db, "UPDATE users SET avatar_url = ? WHERE id = ?", [String(avatarUrl || "").trim(), id]);
+    if (email !== undefined) await run(db, "UPDATE users SET email = ? WHERE id = ?", [String(email || "").trim(), id]);
+    if (phone !== undefined) await run(db, "UPDATE users SET phone = ? WHERE id = ?", [String(phone || "").trim(), id]);
+    if (telegramId !== undefined) await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId || "").trim(), id]);
+    const user = await get(db, "SELECT id, username, role, display_name, telegram_id, avatar_url, email, phone, must_change_password, last_active, created_at FROM users WHERE id = ?", [id]);
+    res.json(mapUser(user, []));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/change-password", requireAuth, async (req, res) => {
+  try {
+    const id = req.user.userId;
+    const { currentPassword, newPassword } = req.body;
+    if (!newPassword) return res.status(400).json({ error: "New password required" });
+
+    // Validate password strength
+    const pwdRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
+    if (!pwdRegex.test(newPassword)) {
+      return res.status(400).json({ error: "Mật khẩu phải có ít nhất 8 ký tự, bao gồm: chữ hoa, chữ thường, số và ký tự đặc biệt" });
+    }
+
+    const user = await get(db, "SELECT * FROM users WHERE id = ?", [id]);
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    // If not first-time change, verify current password
+    if (!user.must_change_password) {
+      if (!currentPassword) return res.status(400).json({ error: "Current password required" });
+      if (!verifyPassword(String(currentPassword), user.password_hash, user.salt)) {
+        return res.status(400).json({ error: "Mật khẩu hiện tại không đúng" });
+      }
+    }
+
+    const { hash, salt } = hashPassword(String(newPassword));
+    await run(db, "UPDATE users SET password_hash = ?, salt = ?, must_change_password = 0 WHERE id = ?", [hash, salt, id]);
+
+    // Generate new token with updated info
+    const updated = await get(db, "SELECT * FROM users WHERE id = ?", [id]);
+    const payload = { userId: updated.id, username: updated.username, role: updated.role, displayName: updated.display_name, mustChangePassword: false };
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+
+    res.json({ ok: true, token, user: payload });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Admin update user profile fields ---------- */
+app.put("/api/users/:id/profile", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { avatarUrl, email, phone, telegramId } = req.body;
+    if (avatarUrl !== undefined) await run(db, "UPDATE users SET avatar_url = ? WHERE id = ?", [String(avatarUrl || "").trim(), id]);
+    if (email !== undefined) await run(db, "UPDATE users SET email = ? WHERE id = ?", [String(email || "").trim(), id]);
+    if (phone !== undefined) await run(db, "UPDATE users SET phone = ? WHERE id = ?", [String(phone || "").trim(), id]);
+    if (telegramId !== undefined) await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [String(telegramId || "").trim(), id]);
     const users = await selectUsers();
     res.json(await mapUsersWithProjects(users));
   } catch (err) {
@@ -2173,6 +2334,89 @@ app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res
       createdAt: p.created_at, updatedAt: p.updated_at,
     })));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ========== Heartbeat / Online Status ========== */
+app.post("/api/heartbeat", requireAuth, async (req, res) => {
+  try {
+    const now = new Date().toISOString();
+    await run(db, "UPDATE users SET last_active = ? WHERE id = ?", [now, req.user.userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/chat/users", requireAuth, async (req, res) => {
+  try {
+    const users = await all(db, "SELECT id, username, display_name, role, avatar_url, last_active FROM users WHERE id != ? ORDER BY display_name", [req.user.userId]);
+    // Get unread counts per sender
+    const unread = await all(db, "SELECT sender_id, COUNT(*) as cnt FROM chat_messages WHERE receiver_id = ? AND read = 0 GROUP BY sender_id", [req.user.userId]);
+    const unreadMap = {};
+    for (const u of unread) unreadMap[u.sender_id] = u.cnt;
+    // Get last message per conversation
+    const lastMsgs = await all(db, `SELECT m.* FROM chat_messages m INNER JOIN (SELECT CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as other_id, MAX(id) as max_id FROM chat_messages WHERE sender_id = ? OR receiver_id = ? GROUP BY other_id) sub ON m.id = sub.max_id`, [req.user.userId, req.user.userId, req.user.userId]);
+    const lastMsgMap = {};
+    for (const m of lastMsgs) {
+      const otherId = m.sender_id === req.user.userId ? m.receiver_id : m.sender_id;
+      lastMsgMap[otherId] = { content: m.content, createdAt: m.created_at, senderId: m.sender_id };
+    }
+    res.json(users.map(u => ({
+      id: u.id, username: u.username, displayName: u.display_name, role: u.role, avatarUrl: u.avatar_url || "",
+      lastActive: u.last_active || "", unread: unreadMap[u.id] || 0,
+      lastMessage: lastMsgMap[u.id] || null,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/chat/messages/:userId", requireAuth, async (req, res) => {
+  try {
+    const otherId = Number(req.params.userId);
+    const myId = req.user.userId;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const before = req.query.before ? Number(req.query.before) : null;
+    let q = "SELECT * FROM chat_messages WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))";
+    const params = [myId, otherId, otherId, myId];
+    if (before) { q += " AND id < ?"; params.push(before); }
+    q += " ORDER BY id DESC LIMIT ?";
+    params.push(limit);
+    const msgs = await all(db, q, params);
+    // Mark as read
+    await run(db, "UPDATE chat_messages SET read = 1 WHERE sender_id = ? AND receiver_id = ? AND read = 0", [otherId, myId]);
+    res.json(msgs.reverse().map(m => ({ id: m.id, senderId: m.sender_id, receiverId: m.receiver_id, content: m.content, read: !!m.read, createdAt: m.created_at })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/chat/send", requireAuth, async (req, res) => {
+  try {
+    const { receiverId, content } = req.body;
+    if (!receiverId || !content || !String(content).trim()) return res.status(400).json({ error: "Missing receiverId or content" });
+    const text = String(content).trim().slice(0, 2000);
+    const now = new Date().toISOString();
+    await run(db, "INSERT INTO chat_messages (sender_id, receiver_id, content, created_at) VALUES (?, ?, ?, ?)", [req.user.userId, Number(receiverId), text, now]);
+    await run(db, "UPDATE users SET last_active = ? WHERE id = ?", [now, req.user.userId]);
+    const msg = await get(db, "SELECT * FROM chat_messages WHERE sender_id = ? AND receiver_id = ? ORDER BY id DESC LIMIT 1", [req.user.userId, Number(receiverId)]);
+    res.json({ id: msg.id, senderId: msg.sender_id, receiverId: msg.receiver_id, content: msg.content, read: false, createdAt: msg.created_at });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/chat/new/:userId", requireAuth, async (req, res) => {
+  try {
+    const otherId = Number(req.params.userId);
+    const myId = req.user.userId;
+    const after = Number(req.query.after) || 0;
+    const msgs = await all(db, "SELECT * FROM chat_messages WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) AND id > ? ORDER BY id", [myId, otherId, otherId, myId, after]);
+    if (msgs.length > 0) await run(db, "UPDATE chat_messages SET read = 1 WHERE sender_id = ? AND receiver_id = ? AND read = 0 AND id > ?", [otherId, myId, after]);
+    res.json(msgs.map(m => ({ id: m.id, senderId: m.sender_id, receiverId: m.receiver_id, content: m.content, read: !!m.read, createdAt: m.created_at })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // --- SPA fallback: serve index.html for non-API routes ---
