@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+﻿import React, { useState, useEffect, useMemo, useCallback } from "react";
 
 const API = "/api";
 
@@ -466,7 +466,14 @@ function CRMApp({ user, onLogout }) {
     { key: "campaigns", label: "📢 Chiến dịch", adminOnly: true },
     { key: "sales", label: "🏆 Sale", adminOnly: true },
     { key: "users", label: "👤 Quản lý tài khoản", adminOnly: true },
+    { key: "post_mgmt", label: "📝 Quản lý bài đăng", adminOnly: true, children: [
+      { key: "posts", label: "📋 Tất cả bài" },
+      { key: "calendar", label: "📅 Lịch đăng bài" },
+      { key: "sheet_config", label: "⚙️ Cấu hình Sheet" },
+    ]},
   ];
+
+  const [openSubmenu, setOpenSubmenu] = useState("post_mgmt");
 
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
@@ -522,24 +529,70 @@ function CRMApp({ user, onLogout }) {
           </div>
         )}
 
-        <nav style={{ flex: 1 }}>
-          {visibleNav.map((n) => (
-            <div
-              key={n.key}
-              onClick={() => { setPage(n.key); if (isMobile) setSidebarOpen(false); }}
-              style={{
-                padding: isMobile ? "14px 16px" : "12px 16px",
-                cursor: "pointer",
-                background: page === n.key ? "rgba(255,255,255,.12)" : "transparent",
-                borderLeft: page === n.key ? "3px solid #3b82f6" : "3px solid transparent",
-                whiteSpace: "nowrap",
-                fontSize: isMobile ? 15 : 14,
-                transition: "background .15s",
-              }}
-            >
-              {(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}
-            </div>
-          ))}
+        <nav style={{ flex: 1, overflowY: "auto" }}>
+          {visibleNav.map((n) => {
+            if (n.children) {
+              const isOpen = openSubmenu === n.key;
+              const isChildActive = n.children.some(c => c.key === page);
+              return (
+                <div key={n.key}>
+                  <div
+                    onClick={() => setOpenSubmenu(isOpen ? null : n.key)}
+                    style={{
+                      padding: isMobile ? "14px 16px" : "12px 16px",
+                      cursor: "pointer",
+                      background: isChildActive ? "rgba(255,255,255,.08)" : "transparent",
+                      borderLeft: isChildActive ? "3px solid #3b82f6" : "3px solid transparent",
+                      whiteSpace: "nowrap",
+                      fontSize: isMobile ? 15 : 14,
+                      transition: "background .15s",
+                      display: "flex", justifyContent: "space-between", alignItems: "center",
+                    }}
+                  >
+                    <span>{(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}</span>
+                    {(isMobile || sidebarOpen) && (
+                      <span style={{ fontSize: 10, opacity: 0.6, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
+                    )}
+                  </div>
+                  {isOpen && (isMobile || sidebarOpen) && n.children.map(c => (
+                    <div
+                      key={c.key}
+                      onClick={() => { setPage(c.key); if (isMobile) setSidebarOpen(false); }}
+                      style={{
+                        padding: isMobile ? "10px 16px 10px 36px" : "8px 16px 8px 36px",
+                        cursor: "pointer",
+                        background: page === c.key ? "rgba(255,255,255,.15)" : "transparent",
+                        borderLeft: page === c.key ? "3px solid #60a5fa" : "3px solid transparent",
+                        whiteSpace: "nowrap",
+                        fontSize: isMobile ? 13 : 12,
+                        transition: "background .15s",
+                        opacity: 0.9,
+                      }}
+                    >
+                      {c.label}
+                    </div>
+                  ))}
+                </div>
+              );
+            }
+            return (
+              <div
+                key={n.key}
+                onClick={() => { setPage(n.key); if (isMobile) setSidebarOpen(false); }}
+                style={{
+                  padding: isMobile ? "14px 16px" : "12px 16px",
+                  cursor: "pointer",
+                  background: page === n.key ? "rgba(255,255,255,.12)" : "transparent",
+                  borderLeft: page === n.key ? "3px solid #3b82f6" : "3px solid transparent",
+                  whiteSpace: "nowrap",
+                  fontSize: isMobile ? 15 : 14,
+                  transition: "background .15s",
+                }}
+              >
+                {(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}
+              </div>
+            );
+          })}
         </nav>
 
         {(isMobile || sidebarOpen) && (
@@ -711,6 +764,9 @@ function CRMApp({ user, onLogout }) {
         {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} />}
+        {page === "posts" && isAdmin && <PostsPage projects={projects} />}
+        {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
+        {page === "sheet_config" && isAdmin && <SheetConfigPage />}
       </main>
 
       {/* Project Modal */}
@@ -2339,6 +2395,824 @@ function UsersPage({ projects }) {
   );
 }
 
+/* ===== Sheet Post Status Config ===== */
+const SHEET_STATUS = {
+  STOP: { label: "STOP", color: "#ef4444", bg: "#fee2e2" },
+  READY: { label: "READY", color: "#f59e0b", bg: "#fef3c7" },
+  POSTED: { label: "POSTED", color: "#10b981", bg: "#d1fae5" },
+};
+
+/* ===== Posts Page (Sheet Integration) ===== */
+function PostsPage({ projects }) {
+  const isMobile = useIsMobile();
+  const [sheetPosts, setSheetPosts] = useState([]);
+  const [sheetHeaders, setSheetHeaders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterProject, setFilterProject] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [selectedPost, setSelectedPost] = useState(null);
+  const [togglingRow, setTogglingRow] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const loadSheetData = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const r = await apiFetch(`${API}/sheet/posts`);
+      const data = await r.json();
+      if (!r.ok) { setError(data.error || "Lỗi tải dữ liệu"); setLoading(false); return; }
+      setSheetPosts(data.data || []);
+      setSheetHeaders(data.headers || []);
+    } catch (e) { setError("Không kết nối được server"); }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadSheetData(); }, []);
+
+  const getCol = (post, ...names) => {
+    for (const n of names) {
+      if (post[n] !== undefined && post[n] !== "") return post[n];
+    }
+    return "";
+  };
+
+  const getStatus = (post) => String(getCol(post, "STATUS", "status", "Status") || "STOP").toUpperCase();
+  const getProject = (post) => getCol(post, "CONTENT_PULL", "Dự Án", "DỰ ÁN", "Du An", "content_pull") || (post._sheetProject || "");
+  const getTitle = (post) => getCol(post, "Chủ đề bài viết", "CHỦ ĐỀ BÀI VIẾT", "chu_de_bai_viet", "Title");
+  const getSchedule = (post) => getCol(post, "LỊCH VIẾT", "LICH VIET", "Lịch viết", "lich_viet", "LỊCH VIỆT");
+  const getNeed = (post) => getCol(post, "NHU CẦU", "Nhu cầu", "nhu_cau");
+  const getStage = (post) => getCol(post, "GIAI ĐOẠN HÀNH TRÌNH USER", "Giai đoạn", "giai_doan");
+  const getPurpose = (post) => getCol(post, "MỤC ĐÍCH CONCEPT", "MỤC ĐÍCH CONTENT", "Mục đích", "muc_dich");
+  const getOffice = (post) => getCol(post, "VĂN PHONG", "VĂN PHÒNG", "Van phong", "van_phong");
+  const getContent = (post) => getCol(post, "CONTENT_FULL", "content", "Content", "Nội dung", "Gợi ý hướng khai triển nội dung", "goi_y");
+  const getPage = (post) => getCol(post, "Page Kita group", "Page", "page");
+  const getId = (post) => getCol(post, "ID", "id", "STT") || post._row;
+
+  const parseScheduleDate = (post) => {
+    const val = getSchedule(post);
+    if (!val) return null;
+    const str = String(val);
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
+    // Try dd/MM/yyyy HH:mm:ss
+    const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{1,2}):(\d{1,2}):?(\d{1,2})?/);
+    if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] || 0));
+    const m2 = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m2) return new Date(Number(m2[3]), Number(m2[2]) - 1, Number(m2[1]));
+    return null;
+  };
+
+  const formatDateTime = (post) => {
+    const d = parseScheduleDate(post);
+    if (!d) return "-";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  };
+
+  const isToday = (post) => {
+    const d = parseScheduleDate(post);
+    if (!d) return false;
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  };
+
+  const filtered = useMemo(() => {
+    let list = sheetPosts;
+    // Default: show only today's posts unless "showAll" is toggled
+    if (!showAll) list = list.filter(p => isToday(p));
+    if (filterStatus !== "all") list = list.filter(p => getStatus(p) === filterStatus);
+    if (filterProject !== "all") {
+      const q = filterProject.toLowerCase();
+      list = list.filter(p => ((getProject(p) || "").toLowerCase().includes(q) || (p._sheetProject || "").toLowerCase().includes(q)));
+    }
+    if (searchText.trim()) {
+      const q = searchText.toLowerCase();
+      list = list.filter(p =>
+        (getTitle(p) || "").toLowerCase().includes(q) ||
+        (getProject(p) || "").toLowerCase().includes(q) ||
+        (getContent(p) || "").toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [sheetPosts, filterStatus, filterProject, searchText, showAll]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const uniqueProjects = useMemo(() => {
+    const set = new Set();
+    sheetPosts.forEach(p => {
+      const proj = getProject(p);
+      if (proj) set.add(proj);
+      if (p._sheetProject) set.add(p._sheetProject);
+    });
+    return [...set].sort();
+  }, [sheetPosts]);
+
+  const statStop = sheetPosts.filter(p => getStatus(p) === "STOP").length;
+  const statReady = sheetPosts.filter(p => getStatus(p) === "READY").length;
+  const statPosted = sheetPosts.filter(p => getStatus(p) === "POSTED").length;
+
+  const handleToggleStatus = async (post) => {
+    const current = getStatus(post);
+    if (current === "POSTED") return;
+    const next = current === "STOP" ? "READY" : "STOP";
+    setTogglingRow(post._row);
+    try {
+      const r = await apiFetch(`${API}/sheet/posts/status`, {
+        method: "POST",
+        body: JSON.stringify({ row: post._row, status: next, configId: post._configId }),
+      });
+      if (r.ok) {
+        setSheetPosts(prev => prev.map(p =>
+          p._row === post._row ? { ...p, STATUS: next, status: next, Status: next } : p
+        ));
+      } else {
+        const err = await r.json().catch(() => ({}));
+        alert(err.error || "Lỗi cập nhật trạng thái");
+      }
+    } catch (e) { alert("Lỗi kết nối"); }
+    setTogglingRow(null);
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải dữ liệu từ Google Sheet...</div>;
+
+  if (error) return (
+    <div style={{ textAlign: "center", padding: 40 }}>
+      <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+      <div style={{ color: "#ef4444", fontWeight: 600, marginBottom: 8 }}>{error}</div>
+      <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 16 }}>
+        Vui lòng vào <strong>⚙️ Cấu hình Sheet</strong> để thiết lập kết nối Google Sheet.
+      </p>
+      <button onClick={loadSheetData} style={{ ...btnPrimary }}>🔄 Thử lại</button>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20 }}>📋 Quản lý bài đăng</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => { setShowAll(!showAll); setCurrentPage(1); }}
+            style={{
+              ...(!showAll ? btnPrimary : btnSecondary),
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+            {showAll ? "📅 Chỉ hôm nay" : "📋 Xem tất cả"}
+          </button>
+          <button onClick={loadSheetData} style={{ ...btnSecondary, display: "flex", alignItems: "center", gap: 6 }}>
+            🔄 Tải lại từ Sheet
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
+        <Card title="STOP (chờ)" value={statStop} color="#ef4444" compact />
+        <Card title="READY (sẵn sàng)" value={statReady} color="#f59e0b" compact />
+        <Card title="POSTED (đã đăng)" value={statPosted} color="#10b981" compact />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <input
+          style={{ ...inputStyle, width: isMobile ? "100%" : 200, marginBottom: 0 }}
+          placeholder="🔍 Tìm kiếm..."
+          value={searchText} onChange={e => { setSearchText(e.target.value); setCurrentPage(1); }}
+        />
+        <select style={{ ...inputStyle, width: isMobile ? "48%" : 160, marginBottom: 0 }}
+          value={filterProject} onChange={e => { setFilterProject(e.target.value); setCurrentPage(1); }}>
+          <option value="all">Tất cả dự án</option>
+          {uniqueProjects.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <select style={{ ...inputStyle, width: isMobile ? "48%" : 130, marginBottom: 0 }}
+          value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setCurrentPage(1); }}>
+          <option value="all">Tất cả trạng thái</option>
+          {Object.entries(SHEET_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflow: "auto" }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>STT</th>
+              <th style={{ ...thStyle, minWidth: 90 }}>Trạng thái</th>
+              <th style={thStyle}>Dự án</th>
+              <th style={{ ...thStyle, minWidth: 250 }}>Nội dung đăng</th>
+              <th style={thStyle}>Nhu cầu</th>
+              <th style={thStyle}>Giai đoạn</th>
+              <th style={thStyle}>Lịch viết</th>
+              <th style={{ ...thStyle, minWidth: 60 }}>Xem</th>
+            </tr>
+          </thead>
+          <tbody>
+            {paged.length === 0 && (
+              <tr><td colSpan={8} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af", padding: 40 }}>
+                {sheetPosts.length === 0 ? "Chưa có dữ liệu từ Sheet" : (!showAll ? "Không có bài nào hôm nay. Bấm \"Xem tất cả\" để xem toàn bộ." : "Không tìm thấy bài nào")}
+              </td></tr>
+            )}
+            {paged.map((post, idx) => {
+              const status = getStatus(post);
+              const st = SHEET_STATUS[status] || SHEET_STATUS.STOP;
+              const isToggling = togglingRow === post._row;
+              return (
+                <tr key={post._row || idx} style={{ transition: "background .15s" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: "#6b7280", width: 50 }}>{getId(post)}</td>
+                  <td style={tdStyle}>
+                    {status === "POSTED" ? (
+                      <span style={{ padding: "4px 12px", borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700, fontSize: 11 }}>
+                        ✅ POSTED
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleToggleStatus(post)}
+                        disabled={isToggling}
+                        style={{
+                          padding: "4px 12px", borderRadius: 12, border: "none", cursor: isToggling ? "wait" : "pointer",
+                          background: st.bg, color: st.color, fontWeight: 700, fontSize: 11,
+                          opacity: isToggling ? 0.5 : 1, transition: "all .2s",
+                          display: "flex", alignItems: "center", gap: 4,
+                        }}
+                      >
+                        {status === "STOP" ? "⏸️" : "▶️"} {isToggling ? "..." : status}
+                      </button>
+                    )}
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ background: "#eff6ff", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, color: "#3b82f6" }}>
+                      {getProject(post) || "-"}
+                    </span>
+                  </td>
+                  <td style={{ ...tdStyle, maxWidth: 350 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340, cursor: "pointer", color: "#1e40af" }}
+                      onClick={() => setSelectedPost(post)} title="Bấm để xem chi tiết">
+                      {getContent(post) || getTitle(post) || "(Chưa có nội dung)"}
+                    </div>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>{getNeed(post) || "-"}</span>
+                  </td>
+                  <td style={tdStyle}>
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>{getStage(post) || "-"}</span>
+                  </td>
+                  <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>
+                    {formatDateTime(post)}
+                  </td>
+                  <td style={tdStyle}>
+                    <button onClick={() => setSelectedPost(post)} title="Xem chi tiết"
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 4 }}>👁️</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage <= 1}
+            style={{ ...btnSecondary, padding: "4px 10px", opacity: currentPage <= 1 ? 0.4 : 1 }}>← Trước</button>
+          {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+            const pg = currentPage <= 3 ? i + 1 : currentPage + i - 2;
+            if (pg > totalPages || pg < 1) return null;
+            return <button key={pg} onClick={() => setCurrentPage(pg)} style={{
+              ...btnSecondary, padding: "4px 10px", background: pg === currentPage ? "#3b82f6" : "#f3f4f6",
+              color: pg === currentPage ? "#fff" : "#374151",
+            }}>{pg}</button>;
+          })}
+          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages}
+            style={{ ...btnSecondary, padding: "4px 10px", opacity: currentPage >= totalPages ? 0.4 : 1 }}>Sau →</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>{filtered.length} bài</span>
+          <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+            style={{ ...inputStyle, width: 80, marginBottom: 0, fontSize: 12 }}>
+            <option value={20}>20</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+          </select>
+        </div>
+      </div>
+
+      {selectedPost && (
+        <SheetPostDetail post={selectedPost} onClose={() => setSelectedPost(null)}
+          getTitle={getTitle} getProject={getProject} getContent={getContent}
+          getStatus={getStatus} getSchedule={getSchedule} getNeed={getNeed}
+          getStage={getStage} getPurpose={getPurpose} getOffice={getOffice} getPage={getPage}
+          sheetHeaders={sheetHeaders} />
+      )}
+    </div>
+  );
+}
+
+/* ===== Sheet Post Detail Modal ===== */
+function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getStatus, getSchedule, getNeed, getStage, getPurpose, getOffice, getPage, sheetHeaders }) {
+  const isMobile = useIsMobile();
+  const status = getStatus(post);
+  const st = SHEET_STATUS[status] || SHEET_STATUS.STOP;
+
+  const allFields = sheetHeaders
+    .filter(h => h && h !== "_row" && post[h] !== undefined && post[h] !== "")
+    .map(h => ({ key: h, value: post[h] }));
+
+  return (
+    <Modal onClose={onClose} title="📄 Chi tiết bài viết">
+      <div style={{ maxHeight: "70vh", overflow: "auto" }}>
+        <div style={{ marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ padding: "4px 14px", borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700, fontSize: 12 }}>
+            {status}
+          </span>
+          {getProject(post) && (
+            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#eff6ff", color: "#3b82f6", fontWeight: 600, fontSize: 12 }}>
+              🏗️ {getProject(post)}
+            </span>
+          )}
+          {getPage(post) && (
+            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#f0fdf4", color: "#16a34a", fontWeight: 600, fontSize: 12 }}>
+              📘 {getPage(post)}
+            </span>
+          )}
+        </div>
+
+        {getTitle(post) && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ ...labelStyle, marginTop: 0 }}>Chủ đề bài viết</label>
+            <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, fontSize: 14, fontWeight: 600, lineHeight: 1.5 }}>
+              {getTitle(post)}
+            </div>
+          </div>
+        )}
+
+        {getContent(post) && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>Nội dung đăng (content full)</label>
+            <div style={{ background: "#f8fafc", padding: 12, borderRadius: 8, fontSize: 13, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto" }}>
+              {getContent(post)}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 16 }}>
+          {getSchedule(post) && (
+            <div>
+              <label style={{ ...labelStyle }}>📅 Lịch viết</label>
+              <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>
+                {(() => {
+                  const val = getSchedule(post);
+                  const str = String(val);
+                  const d = new Date(str);
+                  if (!isNaN(d.getTime())) {
+                    const pad = (n) => String(n).padStart(2, "0");
+                    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+                  }
+                  return str;
+                })()}
+              </div>
+            </div>
+          )}
+          {getNeed(post) && (
+            <div>
+              <label style={labelStyle}>🎯 Nhu cầu</label>
+              <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getNeed(post)}</div>
+            </div>
+          )}
+          {getStage(post) && (
+            <div>
+              <label style={labelStyle}>📊 Giai đoạn</label>
+              <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getStage(post)}</div>
+            </div>
+          )}
+          {getPurpose(post) && (
+            <div>
+              <label style={labelStyle}>🎯 Mục đích content</label>
+              <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getPurpose(post)}</div>
+            </div>
+          )}
+          {getOffice(post) && (
+            <div>
+              <label style={labelStyle}>🏢 Văn phòng</label>
+              <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getOffice(post)}</div>
+            </div>
+          )}
+        </div>
+
+        <details style={{ marginTop: 16 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#6b7280", padding: "8px 0" }}>
+            📋 Xem tất cả dữ liệu từ Sheet ({allFields.length} cột)
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <table style={{ ...tableStyle, fontSize: 12 }}>
+              <tbody>
+                {allFields.map(({ key, value }) => (
+                  <tr key={key}>
+                    <td style={{ ...tdStyle, fontWeight: 600, width: "30%", verticalAlign: "top", color: "#374151", background: "#f8fafc" }}>{key}</td>
+                    <td style={{ ...tdStyle, whiteSpace: "pre-wrap", wordBreak: "break-word", maxWidth: 400 }}>{String(value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+    </Modal>
+  );
+}
+
+/* ===== Sheet Config Page (Multi-sheet) ===== */
+function SheetConfigPage() {
+  const [configs, setConfigs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newProject, setNewProject] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [testingId, setTestingId] = useState(null);
+  const [testResults, setTestResults] = useState({});
+
+  const loadConfigs = async () => {
+    try {
+      const r = await apiFetch(`${API}/sheet/configs`);
+      const data = await r.json();
+      if (Array.isArray(data)) setConfigs(data);
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { loadConfigs(); }, []);
+
+  const handleAdd = async () => {
+    if (!newProject.trim() || !newUrl.trim()) return;
+    setAdding(true);
+    try {
+      const r = await apiFetch(`${API}/sheet/configs`, {
+        method: "POST",
+        body: JSON.stringify({ projectName: newProject.trim(), scriptUrl: newUrl.trim() }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setConfigs(data);
+        setNewProject("");
+        setNewUrl("");
+      } else {
+        const e = await r.json();
+        alert(e.error || "Lỗi thêm");
+      }
+    } catch { alert("Lỗi kết nối"); }
+    setAdding(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm("Xóa cấu hình Sheet này?")) return;
+    try {
+      const r = await apiFetch(`${API}/sheet/configs/${id}`, { method: "DELETE" });
+      if (r.ok) { const data = await r.json(); setConfigs(data); }
+    } catch {}
+  };
+
+  const handleTest = async (id) => {
+    setTestingId(id);
+    setTestResults(prev => ({ ...prev, [id]: null }));
+    try {
+      const r = await apiFetch(`${API}/sheet/test/${id}`);
+      const data = await r.json();
+      if (r.ok) {
+        setTestResults(prev => ({ ...prev, [id]: { ok: true, msg: `✅ Kết nối thành công! ${data.count} bài viết.` } }));
+      } else {
+        setTestResults(prev => ({ ...prev, [id]: { ok: false, msg: data.error || "Lỗi" } }));
+      }
+    } catch { setTestResults(prev => ({ ...prev, [id]: { ok: false, msg: "Lỗi kết nối server" } })); }
+    setTestingId(null);
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải...</div>;
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>⚙️ Cấu hình Google Sheet</h2>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)", maxWidth: 800 }}>
+        <div style={{ background: "#eff6ff", padding: 16, borderRadius: 8, marginBottom: 20, fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: 8, color: "#1e40af" }}>📌 Hướng dẫn kết nối Google Sheet</div>
+          <ol style={{ margin: 0, paddingLeft: 20, color: "#374151" }}>
+            <li>Mở Google Sheet của bạn</li>
+            <li>Vào menu <strong>Tiện ích mở rộng</strong> → <strong>Apps Script</strong></li>
+            <li>Xóa code cũ, dán đoạn code bên dưới vào</li>
+            <li>Bấm <strong>Triển khai</strong> → <strong>Triển khai mới</strong></li>
+            <li>Chọn loại: <strong>Ứng dụng web</strong></li>
+            <li>Thực thi với tên: <strong>Tôi</strong> (Me)</li>
+            <li>Ai có quyền: <strong>Bất kỳ ai</strong> (Anyone)</li>
+            <li>Bấm <strong>Triển khai</strong> → Copy URL</li>
+            <li>Nhập tên dự án + URL vào bên dưới → Bấm <strong>Thêm</strong></li>
+            <li><strong>Lặp lại</strong> cho mỗi Sheet dự án khác</li>
+          </ol>
+        </div>
+
+        <details style={{ marginBottom: 20 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#3b82f6", padding: "8px 0" }}>
+            📋 Xem code Apps Script (bấm để mở)
+          </summary>
+          <pre style={{
+            background: "#1e293b", color: "#e2e8f0", padding: 16, borderRadius: 8,
+            fontSize: 11, lineHeight: 1.5, overflow: "auto", maxHeight: 400, marginTop: 8,
+          }}>{`function doGet(e) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheets()[0];
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0].map(function(h) { return String(h).trim(); });
+    var rows = [];
+    for (var i = 1; i < data.length; i++) {
+      if (!data[i][0] && !data[i][1]) continue;
+      var row = { _row: i + 1 };
+      headers.forEach(function(h, j) {
+        var val = data[i][j];
+        if (val instanceof Date) {
+          val = Utilities.formatDate(val,
+            Session.getScriptTimeZone(),
+            "yyyy-MM-dd HH:mm:ss");
+        }
+        row[h] = val;
+      });
+      rows.push(row);
+    }
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: true, data: rows, headers: headers
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false, error: err.message
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    var body = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheets()[0];
+    if (body.action === 'updateStatus') {
+      var row = Number(body.row);
+      var status = String(body.status);
+      if (row < 2) throw new Error('Invalid row');
+      sheet.getRange(row, 2).setValue(status);
+      SpreadsheetApp.flush();
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          success: true, row: row, status: status
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false, error: 'Unknown action'
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        success: false, error: err.message
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`}</pre>
+        </details>
+
+        {/* Add new sheet config */}
+        <div style={{ background: "#f8fafc", padding: 16, borderRadius: 8, marginBottom: 20 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>➕ Thêm Sheet dự án mới</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input
+              style={{ ...inputStyle, width: 180, marginBottom: 0 }}
+              value={newProject}
+              onChange={e => setNewProject(e.target.value)}
+              placeholder="Tên dự án (VD: Sun Group BLC)"
+            />
+            <input
+              style={{ ...inputStyle, flex: 1, minWidth: 250, marginBottom: 0 }}
+              value={newUrl}
+              onChange={e => setNewUrl(e.target.value)}
+              placeholder="URL Apps Script (https://script.google.com/...)"
+            />
+            <button onClick={handleAdd} disabled={adding || !newProject.trim() || !newUrl.trim()}
+              style={{ ...btnPrimary, opacity: (adding || !newProject.trim() || !newUrl.trim()) ? 0.6 : 1, whiteSpace: "nowrap" }}>
+              {adding ? "Đang thêm..." : "➕ Thêm"}
+            </button>
+          </div>
+        </div>
+
+        {/* List existing configs */}
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>📊 Danh sách Sheet đã cấu hình ({configs.length})</div>
+        {configs.length === 0 && (
+          <div style={{ color: "#9ca3af", textAlign: "center", padding: 24, fontSize: 13 }}>
+            Chưa có Sheet nào. Hãy thêm Sheet dự án ở trên.
+          </div>
+        )}
+        {configs.map(cfg => (
+          <div key={cfg.id} style={{
+            background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: 12, marginBottom: 8,
+            display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
+          }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af" }}>🏗️ {cfg.name}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", wordBreak: "break-all", marginTop: 2 }}>{cfg.script_url}</div>
+              {testResults[cfg.id] && (
+                <div style={{
+                  marginTop: 6, padding: 6, borderRadius: 6, fontSize: 12, fontWeight: 600,
+                  background: testResults[cfg.id].ok ? "#d1fae5" : "#fee2e2",
+                  color: testResults[cfg.id].ok ? "#065f46" : "#991b1b",
+                }}>{testResults[cfg.id].msg}</div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => handleTest(cfg.id)} disabled={testingId === cfg.id}
+                style={{ ...btnSecondary, padding: "4px 12px", fontSize: 12, opacity: testingId === cfg.id ? 0.5 : 1 }}>
+                {testingId === cfg.id ? "..." : "🔗 Test"}
+              </button>
+              <button onClick={() => handleDelete(cfg.id)} style={{ ...btnDanger, padding: "4px 12px", fontSize: 12 }}>
+                🗑️ Xóa
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ===== Calendar Page (Sheet Integration) ===== */
+function CalendarPage({ projects }) {
+  const isMobile = useIsMobile();
+  const [sheetPosts, setSheetPosts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filterProject, setFilterProject] = useState("all");
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/sheet/posts`);
+        const data = await r.json();
+        if (r.ok && data.data) setSheetPosts(data.data);
+        else setError(data.error || "Lỗi tải dữ liệu");
+      } catch (e) { setError("Không kết nối được"); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const getScheduleDate = (post) => {
+    const val = post["LỊCH VIẾT"] || post["LICH VIET"] || post["Lịch viết"] || post["lich_viet"] || post["LỊCH VIỆT"] || "";
+    if (!val) return null;
+    const str = String(val);
+    const d = new Date(str);
+    if (!isNaN(d.getTime())) return d;
+    const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{1,2}):(\d{1,2}):?(\d{1,2})?/);
+    if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] || 0));
+    const m2 = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m2) return new Date(Number(m2[3]), Number(m2[2]) - 1, Number(m2[1]));
+    return null;
+  };
+
+  const getStatus = (post) => String(post["STATUS"] || post["status"] || post["Status"] || "STOP").toUpperCase();
+  const getTitle = (post) => post["CONTENT_FULL"] || post["content"] || post["Content"] || post["Nội dung"] || post["Chủ đề bài viết"] || post["CHỦ ĐỀ BÀI VIẾT"] || "";
+  const getProject = (post) => post["CONTENT_PULL"] || post["Dự Án"] || post["DỰ ÁN"] || (post._sheetProject || "");
+
+  const uniqueProjects = useMemo(() => {
+    const set = new Set();
+    sheetPosts.forEach(p => {
+      const proj = getProject(p);
+      if (proj) set.add(proj);
+    });
+    return [...set].sort();
+  }, [sheetPosts]);
+
+  const filteredPosts = useMemo(() => {
+    if (filterProject === "all") return sheetPosts;
+    const q = filterProject.toLowerCase();
+    return sheetPosts.filter(p => (getProject(p) || "").toLowerCase().includes(q));
+  }, [sheetPosts, filterProject]);
+
+  const prevMonth = () => setCurrentMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  const nextMonth = () => setCurrentMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+
+  const year = currentMonth.getFullYear();
+  const month = currentMonth.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const weeks = [];
+  let day = 1 - firstDay;
+  while (day <= daysInMonth) {
+    const week = [];
+    for (let i = 0; i < 7; i++) {
+      week.push(day > 0 && day <= daysInMonth ? day : null);
+      day++;
+    }
+    weeks.push(week);
+  }
+
+  const getPostsForDay = (d) => {
+    if (!d) return [];
+    return filteredPosts.filter(p => {
+      const date = getScheduleDate(p);
+      if (!date) return false;
+      return date.getFullYear() === year && date.getMonth() === month && date.getDate() === d;
+    });
+  };
+
+  const dayNames = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  const monthNames = ["Tháng 1", "Tháng 2", "Tháng 3", "Tháng 4", "Tháng 5", "Tháng 6",
+    "Tháng 7", "Tháng 8", "Tháng 9", "Tháng 10", "Tháng 11", "Tháng 12"];
+  const today = new Date();
+  const isToday = (d) => d && today.getFullYear() === year && today.getMonth() === month && today.getDate() === d;
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải...</div>;
+  if (error) return (
+    <div style={{ textAlign: "center", padding: 40 }}>
+      <div style={{ color: "#ef4444", fontWeight: 600 }}>{error}</div>
+      <p style={{ color: "#6b7280", fontSize: 13 }}>Vui lòng cấu hình kết nối Google Sheet trước.</p>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20 }}>📅 Lịch đăng bài</h2>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select style={{ ...inputStyle, width: 160, marginBottom: 0, fontSize: 12 }}
+            value={filterProject} onChange={e => setFilterProject(e.target.value)}>
+            <option value="all">Tất cả dự án</option>
+            {uniqueProjects.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button onClick={prevMonth} style={{ ...btnSecondary, padding: "6px 12px" }}>◀</button>
+          <span style={{ fontWeight: 700, fontSize: 15, minWidth: 140, textAlign: "center" }}>
+            {monthNames[month]} {year}
+          </span>
+          <button onClick={nextMonth} style={{ ...btnSecondary, padding: "6px 12px" }}>▶</button>
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
+          {dayNames.map(d => (
+            <div key={d} style={{ padding: "10px 4px", textAlign: "center", fontWeight: 700, fontSize: 12, color: "#6b7280", background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>{d}</div>
+          ))}
+          {weeks.flat().map((d, i) => {
+            const dayPosts = getPostsForDay(d);
+            return (
+              <div key={i} style={{
+                minHeight: isMobile ? 60 : 100, padding: 4, borderBottom: "1px solid #f3f4f6", borderRight: "1px solid #f3f4f6",
+                background: isToday(d) ? "#eff6ff" : (d ? "#fff" : "#fafafa"),
+              }}>
+                {d && (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: isToday(d) ? 700 : 400, color: isToday(d) ? "#3b82f6" : "#374151", marginBottom: 2 }}>{d}</div>
+                    {dayPosts.slice(0, isMobile ? 1 : 3).map((p, pi) => {
+                      const status = getStatus(p);
+                      const st = SHEET_STATUS[status] || SHEET_STATUS.STOP;
+                      return (
+                        <div key={pi} style={{
+                          background: st.bg, color: st.color, padding: "2px 4px", borderRadius: 4,
+                          fontSize: 10, marginBottom: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          fontWeight: 600, cursor: "default",
+                        }} title={`${getTitle(p)} - ${status}`}>
+                          {getTitle(p).slice(0, 25) || "..."}
+                        </div>
+                      );
+                    })}
+                    {dayPosts.length > (isMobile ? 1 : 3) && (
+                      <div style={{ fontSize: 9, color: "#6b7280" }}>+{dayPosts.length - (isMobile ? 1 : 3)} bài</div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 16, marginTop: 12, flexWrap: "wrap" }}>
+        {Object.entries(SHEET_STATUS).map(([k, v]) => (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 3, background: v.bg, border: `1px solid ${v.color}`, display: "inline-block" }} />
+            <span style={{ color: v.color, fontWeight: 600 }}>{v.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 /* ===== Shared styles ===== */
 const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const thStyle = {

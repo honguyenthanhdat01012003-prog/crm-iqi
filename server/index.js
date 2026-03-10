@@ -200,6 +200,65 @@ async function initDb() {
   // Add message_id column if missing (migration)
   try { await run(db, "ALTER TABLE telegram_pending ADD COLUMN message_id INTEGER"); } catch (_) {}
 
+  /* ---------- Facebook Pages & Posts tables ---------- */
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS fb_pages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      page_id TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT DEFAULT '',
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS fb_posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL DEFAULT '',
+      images TEXT DEFAULT '[]',
+      project_id INTEGER,
+      page_ids TEXT DEFAULT '[]',
+      status TEXT DEFAULT 'draft',
+      schedule_at TEXT DEFAULT '',
+      link TEXT DEFAULT '',
+      fb_post_id TEXT DEFAULT '',
+      error_msg TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS sheet_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      project_name TEXT NOT NULL DEFAULT '',
+      script_url TEXT NOT NULL DEFAULT '',
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+  // Migration: add columns that may be missing on older DBs
+  try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN project_name TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
+  try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN is_active INTEGER DEFAULT 1"); } catch { /* already exists */ }
+
+  // Migrate legacy single sheet_script_url into sheet_configs
+  {
+    const scCount = await get(db, "SELECT COUNT(*) as cnt FROM sheet_configs");
+    if (scCount.cnt === 0) {
+      const legacy = await get(db, "SELECT value FROM settings WHERE key='sheet_script_url'");
+      if (legacy?.value) {
+        await run(db, "INSERT INTO sheet_configs(name, script_url) VALUES(?, ?)", ["Mặc định", legacy.value]);
+      }
+    }
+  }
+
   // Create default admin if no users exist
   const userCount = await get(db, "SELECT COUNT(*) as cnt FROM users");
   if (userCount.cnt === 0) {
@@ -769,6 +828,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   const stmts = [];
 
+  // Nullify campaign_id on leads first to avoid FK violation when deleting campaigns
+  stmts.push({ sql: "UPDATE leads SET campaign_id = NULL WHERE project_id = ?", args: [projectId] });
+
   // Replace campaigns (these have no IDs we need to preserve)
   stmts.push({ sql: "DELETE FROM campaigns WHERE project_id = ?", args: [projectId] });
   for (const c of campaigns) {
@@ -850,6 +912,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
 
   console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} leads=${leads.length} existing=${existing.length} new=${leads.length - incomingKeys.size + (leads.length - [...incomingKeys].filter(k => existingMap.has(k)).length)}`);
+  // Re-enable FK checks after batch
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 }
@@ -991,7 +1054,7 @@ const app = express();
 // --- Security headers ---
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "10mb" }));
 
 // --- Serve static build ---
 const distPath = path.join(__dirname, "..", "dist");
@@ -1782,6 +1845,334 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, 
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+/* ===== Google Sheet Integration (Multi-sheet) ===== */
+
+// List all sheet configs
+app.get("/api/sheet/configs", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Add a sheet config
+app.post("/api/sheet/configs", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectName, scriptUrl } = req.body;
+    if (!projectName || !scriptUrl) return res.status(400).json({ error: "Thiếu tên dự án hoặc URL" });
+    await run(db, "INSERT INTO sheet_configs(name, script_url) VALUES(?, ?)", [String(projectName), String(scriptUrl)]);
+    const rows = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete a sheet config
+app.delete("/api/sheet/configs/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM sheet_configs WHERE id = ?", [Number(req.params.id)]);
+    const rows = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Test a single sheet config
+app.get("/api/sheet/test/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const cfg = await get(db, "SELECT * FROM sheet_configs WHERE id = ?", [Number(req.params.id)]);
+    if (!cfg) return res.status(404).json({ error: "Không tìm thấy cấu hình" });
+    const r = await fetch(cfg.script_url, { redirect: "follow" });
+    if (!r.ok) {
+      if (r.status === 403) return res.status(502).json({ error: "Google Sheet từ chối truy cập (403). Hãy mở Apps Script → chọn hàm doGet → bấm ▶ Chạy → Cấp quyền." });
+      return res.status(502).json({ error: `Google Sheet trả về lỗi ${r.status}` });
+    }
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { return res.status(502).json({ error: "Apps Script trả về dữ liệu không hợp lệ" }); }
+    if (!data.success) return res.status(502).json({ error: data.error || "Lỗi từ Google Sheet" });
+    res.json({ ok: true, count: (data.data || []).length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Fetch posts from all sheets (or a specific one via ?configId=)
+app.get("/api/sheet/posts", requireAuth, async (req, res) => {
+  try {
+    let configs;
+    if (req.query.configId) {
+      const cfg = await get(db, "SELECT * FROM sheet_configs WHERE id = ?", [Number(req.query.configId)]);
+      configs = cfg ? [cfg] : [];
+    } else {
+      configs = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
+    }
+    if (configs.length === 0) return res.status(400).json({ error: "Chưa cấu hình Google Sheet. Vào Cấu hình Sheet để thiết lập." });
+
+    let allPosts = [];
+    let allHeaders = [];
+    for (const cfg of configs) {
+      try {
+        const r = await fetch(cfg.script_url, { redirect: "follow" });
+        if (!r.ok) continue;
+        const text = await r.text();
+        let data;
+        try { data = JSON.parse(text); } catch { continue; }
+        if (!data.success) continue;
+        const posts = (data.data || []).map(p => ({ ...p, _sheetProject: cfg.name, _configId: cfg.id }));
+        allPosts = allPosts.concat(posts);
+        if (data.headers && allHeaders.length === 0) allHeaders = data.headers;
+      } catch { /* skip failed sheet */ }
+    }
+    res.json({ success: true, data: allPosts, headers: allHeaders });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update status on a specific sheet
+app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { row, status, configId } = req.body;
+    if (!row || !status) return res.status(400).json({ error: "Thiếu row hoặc status" });
+    let scriptUrl;
+    if (configId) {
+      const cfg = await get(db, "SELECT * FROM sheet_configs WHERE id = ?", [Number(configId)]);
+      scriptUrl = cfg?.script_url;
+    }
+    if (!scriptUrl) {
+      // Fallback to first config
+      const cfg = await get(db, "SELECT * FROM sheet_configs ORDER BY id ASC LIMIT 1");
+      scriptUrl = cfg?.script_url;
+    }
+    if (!scriptUrl) return res.status(400).json({ error: "Chưa cấu hình Google Sheet" });
+    // Google Apps Script 302 redirect converts POST→GET, so use redirect:"manual" and follow manually
+    const r1 = await fetch(scriptUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "updateStatus", row: Number(row), status: String(status) }),
+      redirect: "manual",
+    });
+    let r;
+    if (r1.status >= 300 && r1.status < 400) {
+      const loc = r1.headers.get("location");
+      if (!loc) return res.status(502).json({ error: "Google Apps Script redirect thiếu location" });
+      r = await fetch(loc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateStatus", row: Number(row), status: String(status) }),
+        redirect: "follow",
+      });
+    } else {
+      r = r1;
+    }
+    if (!r.ok) return res.status(502).json({ error: `Không cập nhật được Google Sheet (${r.status})` });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { return res.status(502).json({ error: "Phản hồi không hợp lệ từ Apps Script" }); }
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ===== Facebook Pages CRUD ===== */
+app.get("/api/fb-pages", requireAuth, async (_req, res) => {
+  try {
+    const pages = await all(db, "SELECT * FROM fb_pages ORDER BY id ASC");
+    res.json(pages.map(p => ({
+      id: p.id, name: p.name, pageId: p.page_id, accessToken: p.access_token,
+      avatarUrl: p.avatar_url, isActive: Boolean(p.is_active), createdAt: p.created_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/fb-pages", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, pageId, accessToken, avatarUrl } = req.body;
+    if (!name) return res.status(400).json({ error: "Tên Page là bắt buộc" });
+    await run(db, "INSERT INTO fb_pages(name, page_id, access_token, avatar_url) VALUES(?,?,?,?)",
+      [name, pageId || "", accessToken || "", avatarUrl || ""]);
+    const pages = await all(db, "SELECT * FROM fb_pages ORDER BY id ASC");
+    res.json(pages.map(p => ({
+      id: p.id, name: p.name, pageId: p.page_id, accessToken: p.access_token,
+      avatarUrl: p.avatar_url, isActive: Boolean(p.is_active), createdAt: p.created_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/fb-pages/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { name, pageId, accessToken, avatarUrl, isActive } = req.body;
+    await run(db,
+      "UPDATE fb_pages SET name=?, page_id=?, access_token=?, avatar_url=?, is_active=? WHERE id=?",
+      [name || "", pageId || "", accessToken || "", avatarUrl || "", isActive !== false ? 1 : 0, id]);
+    const pages = await all(db, "SELECT * FROM fb_pages ORDER BY id ASC");
+    res.json(pages.map(p => ({
+      id: p.id, name: p.name, pageId: p.page_id, accessToken: p.access_token,
+      avatarUrl: p.avatar_url, isActive: Boolean(p.is_active), createdAt: p.created_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/fb-pages/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await run(db, "DELETE FROM fb_pages WHERE id=?", [id]);
+    const pages = await all(db, "SELECT * FROM fb_pages ORDER BY id ASC");
+    res.json(pages.map(p => ({
+      id: p.id, name: p.name, pageId: p.page_id, accessToken: p.access_token,
+      avatarUrl: p.avatar_url, isActive: Boolean(p.is_active), createdAt: p.created_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ===== Facebook Posts CRUD ===== */
+app.get("/api/fb-posts", requireAuth, async (req, res) => {
+  try {
+    const posts = await all(db, "SELECT * FROM fb_posts ORDER BY id DESC");
+    res.json(posts.map(p => ({
+      id: p.id, title: p.title, content: p.content,
+      images: JSON.parse(p.images || "[]"),
+      projectId: p.project_id, pageIds: JSON.parse(p.page_ids || "[]"),
+      status: p.status, scheduleAt: p.schedule_at, link: p.link,
+      fbPostId: p.fb_post_id, errorMsg: p.error_msg,
+      createdAt: p.created_at, updatedAt: p.updated_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/fb-posts", requireAuth, async (req, res) => {
+  try {
+    const { title, content, images, projectId, pageIds, status, scheduleAt, link } = req.body;
+    if (!content && !title) return res.status(400).json({ error: "Tiêu đề hoặc nội dung là bắt buộc" });
+    const now = new Date().toISOString();
+    await run(db,
+      `INSERT INTO fb_posts(title, content, images, project_id, page_ids, status, schedule_at, link, created_at, updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      [title || "", content || "", JSON.stringify(images || []), projectId || null,
+       JSON.stringify(pageIds || []), status || "draft", scheduleAt || "", link || "", now, now]);
+    const posts = await all(db, "SELECT * FROM fb_posts ORDER BY id DESC");
+    res.json(posts.map(p => ({
+      id: p.id, title: p.title, content: p.content,
+      images: JSON.parse(p.images || "[]"),
+      projectId: p.project_id, pageIds: JSON.parse(p.page_ids || "[]"),
+      status: p.status, scheduleAt: p.schedule_at, link: p.link,
+      fbPostId: p.fb_post_id, errorMsg: p.error_msg,
+      createdAt: p.created_at, updatedAt: p.updated_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/fb-posts/:id", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { title, content, images, projectId, pageIds, status, scheduleAt, link } = req.body;
+    const now = new Date().toISOString();
+    await run(db,
+      `UPDATE fb_posts SET title=?, content=?, images=?, project_id=?, page_ids=?, status=?, schedule_at=?, link=?, updated_at=? WHERE id=?`,
+      [title || "", content || "", JSON.stringify(images || []), projectId || null,
+       JSON.stringify(pageIds || []), status || "draft", scheduleAt || "", link || "", now, id]);
+    const posts = await all(db, "SELECT * FROM fb_posts ORDER BY id DESC");
+    res.json(posts.map(p => ({
+      id: p.id, title: p.title, content: p.content,
+      images: JSON.parse(p.images || "[]"),
+      projectId: p.project_id, pageIds: JSON.parse(p.page_ids || "[]"),
+      status: p.status, scheduleAt: p.schedule_at, link: p.link,
+      fbPostId: p.fb_post_id, errorMsg: p.error_msg,
+      createdAt: p.created_at, updatedAt: p.updated_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/fb-posts/:id", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await run(db, "DELETE FROM fb_posts WHERE id=?", [id]);
+    const posts = await all(db, "SELECT * FROM fb_posts ORDER BY id DESC");
+    res.json(posts.map(p => ({
+      id: p.id, title: p.title, content: p.content,
+      images: JSON.parse(p.images || "[]"),
+      projectId: p.project_id, pageIds: JSON.parse(p.page_ids || "[]"),
+      status: p.status, scheduleAt: p.schedule_at, link: p.link,
+      fbPostId: p.fb_post_id, errorMsg: p.error_msg,
+      createdAt: p.created_at, updatedAt: p.updated_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ===== Publish post to Facebook ===== */
+app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const post = await get(db, "SELECT * FROM fb_posts WHERE id=?", [id]);
+    if (!post) return res.status(404).json({ error: "Bài đăng không tồn tại" });
+
+    const pageIds = JSON.parse(post.page_ids || "[]");
+    const pages = await all(db, "SELECT * FROM fb_pages WHERE id IN (" + pageIds.map(() => "?").join(",") + ")", pageIds);
+
+    const errors = [];
+    let firstFbPostId = "";
+
+    for (const page of pages) {
+      if (!page.access_token) { errors.push(`${page.name}: Thiếu Access Token`); continue; }
+      try {
+        const images = JSON.parse(post.images || "[]");
+        let fbRes;
+        if (images.length > 0) {
+          // Post with photos - upload each as unpublished then create multi-photo post
+          const photoIds = [];
+          for (const imgUrl of images) {
+            const photoRes = await fetch(`https://graph.facebook.com/${page.page_id}/photos`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ url: imgUrl, published: false, access_token: page.access_token }),
+            });
+            const photoData = await photoRes.json();
+            if (photoData.id) photoIds.push(photoData.id);
+            else errors.push(`${page.name}: Lỗi upload ảnh - ${photoData.error?.message || "Unknown"}`);
+          }
+          if (photoIds.length > 0) {
+            const body = { message: post.content || "", access_token: page.access_token };
+            photoIds.forEach((pid, i) => { body[`attached_media[${i}]`] = JSON.stringify({ media_fbid: pid }); });
+            fbRes = await fetch(`https://graph.facebook.com/${page.page_id}/feed`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+          }
+        } else {
+          // Text-only post
+          fbRes = await fetch(`https://graph.facebook.com/${page.page_id}/feed`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: post.content || "", link: post.link || undefined, access_token: page.access_token }),
+          });
+        }
+        if (fbRes) {
+          const fbData = await fbRes.json();
+          if (fbData.id) { if (!firstFbPostId) firstFbPostId = fbData.id; }
+          else errors.push(`${page.name}: ${fbData.error?.message || "Đăng thất bại"}`);
+        }
+      } catch (e) { errors.push(`${page.name}: ${e.message}`); }
+    }
+
+    const now = new Date().toISOString();
+    if (errors.length === 0) {
+      await run(db, "UPDATE fb_posts SET status='posted', fb_post_id=?, error_msg='', updated_at=? WHERE id=?", [firstFbPostId, now, id]);
+    } else if (firstFbPostId) {
+      await run(db, "UPDATE fb_posts SET status='posted', fb_post_id=?, error_msg=?, updated_at=? WHERE id=?",
+        [firstFbPostId, errors.join("; "), now, id]);
+    } else {
+      await run(db, "UPDATE fb_posts SET status='error', error_msg=?, updated_at=? WHERE id=?",
+        [errors.join("; "), now, id]);
+    }
+
+    const posts = await all(db, "SELECT * FROM fb_posts ORDER BY id DESC");
+    res.json(posts.map(p => ({
+      id: p.id, title: p.title, content: p.content,
+      images: JSON.parse(p.images || "[]"),
+      projectId: p.project_id, pageIds: JSON.parse(p.page_ids || "[]"),
+      status: p.status, scheduleAt: p.schedule_at, link: p.link,
+      fbPostId: p.fb_post_id, errorMsg: p.error_msg,
+      createdAt: p.created_at, updatedAt: p.updated_at,
+    })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- SPA fallback: serve index.html for non-API routes ---
