@@ -1237,6 +1237,8 @@ function ChatSidebar({ currentUser }) {
             {messages.map((msg, i) => {
               const isMine = msg.senderId === currentUser.id;
               const showDate = i === 0 || new Date(msg.createdAt).toDateString() !== new Date(messages[i - 1].createdAt).toDateString();
+              // Avatar chỉ hiện ở tin nhắn cuối cùng liên tiếp của người kia
+              const isLastInGroup = !isMine && (i === messages.length - 1 || messages[i + 1].senderId !== msg.senderId);
               return (
                 <React.Fragment key={msg.id}>
                   {showDate && (
@@ -1244,10 +1246,24 @@ function ChatSidebar({ currentUser }) {
                       {new Date(msg.createdAt).toLocaleDateString("vi-VN", { weekday: "short", day: "2-digit", month: "2-digit" })}
                     </div>
                   )}
-                  <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start" }}>
+                  <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start", alignItems: "flex-end", gap: 6 }}>
+                    {/* Avatar bên trái – chỉ hiện ở tin cuối cùng liên tiếp */}
+                    {!isMine && (
+                      isLastInGroup ? (
+                        <div style={{
+                          width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                          background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                          display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff",
+                        }}>
+                          {!activeChat.avatarUrl && (activeChat.displayName || "?")[0]?.toUpperCase()}
+                        </div>
+                      ) : <div style={{ width: 28, flexShrink: 0 }} />
+                    )}
                     <div style={{
-                      maxWidth: "75%", padding: "7px 11px", borderRadius: isMine ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                      background: isMine ? "#0084ff" : "#fff", color: isMine ? "#fff" : "#1c1e21",
+                      maxWidth: "70%", padding: "7px 11px",
+                      borderRadius: isMine ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                      background: isMine ? "#0084ff" : "#fff",
+                      color: isMine ? "#fff" : "#1c1e21",
                       fontSize: 13, lineHeight: 1.35, wordBreak: "break-word",
                       boxShadow: isMine ? "none" : "0 1px 2px rgba(0,0,0,.08)",
                     }}>
