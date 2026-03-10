@@ -952,25 +952,26 @@ function CRMApp({ user, updateUser, onLogout }) {
           </div>
         </Modal>
       )}
-      <ChatPopup currentUser={user} />
+      <ChatSidebar currentUser={user} />
     </div>
   );
 }
 
-/* ===== Chat Popup - Facebook Style ===== */
-function ChatPopup({ currentUser }) {
-  const [open, setOpen] = useState(false);
+/* ===== Chat Sidebar - Facebook Messenger Style ===== */
+function ChatSidebar({ currentUser }) {
+  const isMobile = useIsMobile();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatUsers, setChatUsers] = useState([]);
-  const [activeChat, setActiveChat] = useState(null); // user object
+  const [activeChat, setActiveChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState("");
   const [totalUnread, setTotalUnread] = useState(0);
   const [sending, setSending] = useState(false);
+  const [searchText, setSearchText] = useState("");
   const msgEndRef = useRef(null);
-  const pollRef = useRef(null);
   const inputRef = useRef(null);
+  const lastMsgIdRef = useRef(0);
 
-  // Load chat users list
   const loadUsers = useCallback(async () => {
     try {
       const r = await apiFetch(`${API}/chat/users`);
@@ -982,149 +983,234 @@ function ChatPopup({ currentUser }) {
     } catch (e) { /* ignore */ }
   }, []);
 
-  // Load messages for active chat
   const loadMessages = useCallback(async (userId) => {
     try {
       const r = await apiFetch(`${API}/chat/messages/${userId}`);
       if (r.ok) {
         const data = await r.json();
         setMessages(data);
+        lastMsgIdRef.current = data.length > 0 ? data[data.length - 1].id : 0;
         setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
       }
     } catch (e) { /* ignore */ }
   }, []);
 
-  // Poll for new messages in active chat
-  const pollNew = useCallback(async () => {
-    if (!activeChat) return;
-    const lastId = messages.length > 0 ? messages[messages.length - 1].id : 0;
-    try {
-      const r = await apiFetch(`${API}/chat/new/${activeChat.id}?after=${lastId}`);
-      if (r.ok) {
-        const newMsgs = await r.json();
-        if (newMsgs.length > 0) {
-          setMessages(prev => [...prev, ...newMsgs]);
-          setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-        }
-      }
-    } catch (e) { /* ignore */ }
-  }, [activeChat, messages]);
-
-  // Load users on open
+  // Auto-load users when sidebar opens
   useEffect(() => {
-    if (open) { loadUsers(); }
-  }, [open, loadUsers]);
+    if (sidebarOpen) loadUsers();
+  }, [sidebarOpen, loadUsers]);
 
-  // Poll users list every 10 seconds when open
+  // Poll users every 10s
   useEffect(() => {
-    if (!open) return;
+    if (!sidebarOpen) return;
     const iv = setInterval(loadUsers, 10000);
     return () => clearInterval(iv);
-  }, [open, loadUsers]);
+  }, [sidebarOpen, loadUsers]);
 
-  // Poll new messages every 3 seconds when chatting
+  // Poll new messages every 3s when chatting
   useEffect(() => {
     if (!activeChat) return;
-    pollRef.current = setInterval(pollNew, 3000);
-    return () => clearInterval(pollRef.current);
-  }, [activeChat, pollNew]);
+    const iv = setInterval(async () => {
+      try {
+        const r = await apiFetch(`${API}/chat/new/${activeChat.id}?after=${lastMsgIdRef.current}`);
+        if (r.ok) {
+          const newMsgs = await r.json();
+          if (newMsgs.length > 0) {
+            setMessages(prev => [...prev, ...newMsgs]);
+            lastMsgIdRef.current = newMsgs[newMsgs.length - 1].id;
+            setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+          }
+        }
+      } catch (e) { /* ignore */ }
+      loadUsers();
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [activeChat, loadUsers]);
 
-  // Open a chat
   const openChat = (chatUser) => {
     setActiveChat(chatUser);
     setMessages([]);
     setDraft("");
+    lastMsgIdRef.current = 0;
     loadMessages(chatUser.id);
   };
 
-  // Send message
   const sendMessage = async () => {
     if (!draft.trim() || !activeChat || sending) return;
+    const text = draft.trim();
     setSending(true);
+    setDraft("");
     try {
       const r = await apiFetch(`${API}/chat/send`, {
         method: "POST",
-        body: JSON.stringify({ receiverId: activeChat.id, content: draft.trim() }),
+        body: JSON.stringify({ receiverId: activeChat.id, content: text }),
       });
       if (r.ok) {
         const msg = await r.json();
         setMessages(prev => [...prev, msg]);
-        setDraft("");
+        lastMsgIdRef.current = msg.id;
         setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
         setTimeout(() => inputRef.current?.focus(), 100);
+        loadUsers();
       }
     } catch (e) { /* ignore */ }
     setSending(false);
   };
 
-  const formatTime = (ts) => {
-    if (!ts) return "";
-    const d = new Date(ts);
-    const now = new Date();
-    const diffMs = now - d;
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "Vừa xong";
-    if (diffMin < 60) return `${diffMin}p trước`;
-    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-  };
-
   const isOnline = (u) => u.lastActive && (Date.now() - new Date(u.lastActive).getTime() < 5 * 60 * 1000);
-
   const onlineStatus = (u) => {
-    if (isOnline(u)) return "Online";
+    if (isOnline(u)) return "Đang hoạt động";
     if (!u.lastActive) return "Offline";
     const diff = Math.floor((Date.now() - new Date(u.lastActive).getTime()) / 60000);
     if (diff < 60) return `${diff} phút trước`;
     if (diff < 1440) return `${Math.floor(diff / 60)} giờ trước`;
     return `${Math.floor(diff / 1440)} ngày trước`;
   };
-
-  // Fixed button style
-  const fabStyle = {
-    position: "fixed", bottom: 20, right: 20, width: 52, height: 52,
-    borderRadius: "50%", background: "linear-gradient(135deg, #0084ff, #0066cc)",
-    color: "#fff", border: "none", cursor: "pointer", fontSize: 24,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    boxShadow: "0 4px 16px rgba(0,0,0,.25)", zIndex: 9998,
-    transition: "transform .2s",
+  const formatTime = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 60000);
+    if (diff < 1) return "Vừa xong";
+    if (diff < 60) return `${diff}p`;
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
   };
 
-  // Popup container
-  const popupStyle = {
-    position: "fixed", bottom: 80, right: 20, width: 340, maxHeight: 500,
-    background: "#fff", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,.2)",
-    display: "flex", flexDirection: "column", zIndex: 9999,
-    animation: "fadeIn .2s ease", overflow: "hidden",
+  const filteredUsers = searchText
+    ? chatUsers.filter(u => u.displayName.toLowerCase().includes(searchText.toLowerCase()) || u.username.toLowerCase().includes(searchText.toLowerCase()))
+    : chatUsers;
+
+  const sidebarWidth = isMobile ? 300 : 280;
+
+  // Chat popup windows (bottom-right, Facebook-style)
+  const [chatWindows, setChatWindows] = useState([]); // [{user, minimized}]
+
+  const openChatWindow = (chatUser) => {
+    setActiveChat(chatUser);
+    setMessages([]);
+    setDraft("");
+    lastMsgIdRef.current = 0;
+    loadMessages(chatUser.id);
   };
 
-  // Chat window style
-  const chatWindowStyle = {
-    position: "fixed", bottom: 80, right: 20, width: 340, height: 460,
-    background: "#fff", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,.2)",
-    display: "flex", flexDirection: "column", zIndex: 9999,
-    animation: "fadeIn .2s ease", overflow: "hidden",
-  };
+  return (
+    <>
+      {/* Toggle button - fixed right */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        style={{
+          position: "fixed", top: "50%", right: sidebarOpen ? sidebarWidth : 0,
+          transform: "translateY(-50%)", zIndex: 1001,
+          width: 28, height: 64, border: "none", cursor: "pointer",
+          background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)",
+          color: "#fff", fontSize: 14, borderRadius: "8px 0 0 8px",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "-2px 0 8px rgba(0,0,0,.15)", transition: "right .25s ease",
+        }}
+        title={sidebarOpen ? "Đóng liên hệ" : "Mở liên hệ"}
+      >
+        {sidebarOpen ? "›" : "‹"}
+        {!sidebarOpen && totalUnread > 0 && (
+          <span style={{
+            position: "absolute", top: -6, left: -6, minWidth: 18, height: 18,
+            borderRadius: 9, background: "#dc2626", color: "#fff", fontSize: 10,
+            fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+            padding: "0 4px", border: "2px solid #fff",
+          }}>{totalUnread > 99 ? "99+" : totalUnread}</span>
+        )}
+      </button>
 
-  // Render active chat window
-  if (activeChat) {
-    return (
-      <>
-        <div style={chatWindowStyle}>
+      {/* Mobile overlay */}
+      {isMobile && sidebarOpen && (
+        <div onClick={() => setSidebarOpen(false)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 999,
+        }} />
+      )}
+
+      {/* Right sidebar */}
+      <div style={{
+        position: "fixed", top: 0, right: 0, bottom: 0, width: sidebarWidth,
+        background: "#fff", borderLeft: "1px solid #e4e6eb",
+        transform: sidebarOpen ? "translateX(0)" : `translateX(${sidebarWidth}px)`,
+        transition: "transform .25s ease", zIndex: 1000,
+        display: "flex", flexDirection: "column",
+        boxShadow: sidebarOpen ? "-4px 0 20px rgba(0,0,0,.08)" : "none",
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: "14px 12px 10px", borderBottom: "1px solid #e4e6eb",
+          background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)", color: "#fff",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <span style={{ fontWeight: 700, fontSize: 15 }}>👥 Liên hệ</span>
+            <span style={{ fontSize: 11, opacity: .7 }}>{chatUsers.filter(u => isOnline(u)).length} online</span>
+          </div>
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="🔍 Tìm người dùng..."
+            style={{
+              width: "100%", padding: "7px 10px", borderRadius: 8, border: "none",
+              fontSize: 12, outline: "none", background: "rgba(255,255,255,.15)",
+              color: "#fff", boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        {/* Users list */}
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {/* Online users first */}
+          {filteredUsers.filter(u => isOnline(u)).length > 0 && (
+            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#22c55e", textTransform: "uppercase", letterSpacing: .5 }}>
+              ● Đang online ({filteredUsers.filter(u => isOnline(u)).length})
+            </div>
+          )}
+          {filteredUsers.filter(u => isOnline(u)).map(u => (
+            <UserContactRow key={u.id} u={u} isOnline={true} onlineStatus={onlineStatus} formatTime={formatTime} onClick={() => openChatWindow(u)} />
+          ))}
+
+          {/* Offline users */}
+          {filteredUsers.filter(u => !isOnline(u)).length > 0 && (
+            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: .5 }}>
+              ○ Offline ({filteredUsers.filter(u => !isOnline(u)).length})
+            </div>
+          )}
+          {filteredUsers.filter(u => !isOnline(u)).map(u => (
+            <UserContactRow key={u.id} u={u} isOnline={false} onlineStatus={onlineStatus} formatTime={formatTime} onClick={() => openChatWindow(u)} />
+          ))}
+
+          {filteredUsers.length === 0 && (
+            <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, padding: 30 }}>
+              {searchText ? "Không tìm thấy" : "Không có người dùng"}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Chat popup window */}
+      {activeChat && (
+        <div style={{
+          position: "fixed", bottom: 0, right: sidebarOpen ? sidebarWidth + 8 : 8,
+          width: isMobile ? "calc(100vw - 16px)" : 340, height: isMobile ? "70vh" : 440,
+          background: "#fff", borderRadius: "12px 12px 0 0",
+          boxShadow: "0 -4px 24px rgba(0,0,0,.18)", zIndex: 1002,
+          display: "flex", flexDirection: "column", overflow: "hidden",
+          transition: "right .25s ease",
+        }}>
           {/* Chat header */}
           <div style={{
-            padding: "10px 12px", background: "linear-gradient(135deg, #0084ff, #0066cc)", color: "#fff",
-            display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
+            padding: "8px 12px", background: "linear-gradient(135deg, #0084ff, #0066cc)", color: "#fff",
+            display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
           }}>
-            <button onClick={() => { setActiveChat(null); loadUsers(); }} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 18, padding: 0 }}>←</button>
             <div style={{
-              width: 32, height: 32, borderRadius: "50%", flexShrink: 0, position: "relative",
-              background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "rgba(255,255,255,.2)",
-              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: "#fff",
+              width: 30, height: 30, borderRadius: "50%", flexShrink: 0, position: "relative",
+              background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "rgba(255,255,255,.25)",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: "#fff",
             }}>
               {!activeChat.avatarUrl && (activeChat.displayName || "?")[0]?.toUpperCase()}
               <div style={{
-                position: "absolute", bottom: -1, right: -1, width: 10, height: 10, borderRadius: "50%",
+                position: "absolute", bottom: -1, right: -1, width: 9, height: 9, borderRadius: "50%",
                 background: isOnline(activeChat) ? "#44b700" : "#9ca3af", border: "2px solid #0084ff",
               }} />
             </div>
@@ -1132,13 +1218,21 @@ function ChatPopup({ currentUser }) {
               <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{activeChat.displayName}</div>
               <div style={{ fontSize: 10, opacity: .85 }}>{onlineStatus(activeChat)}</div>
             </div>
-            <button onClick={() => { setActiveChat(null); setOpen(false); }} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 16, padding: 0 }}>✕</button>
+            <button onClick={() => { setActiveChat(null); loadUsers(); }} style={{
+              background: "rgba(255,255,255,.2)", border: "none", color: "#fff", cursor: "pointer",
+              fontSize: 14, padding: "2px 8px", borderRadius: 6,
+            }}>✕</button>
           </div>
 
-          {/* Messages area */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "10px 12px", background: "#f0f2f5", display: "flex", flexDirection: "column", gap: 4 }}>
+          {/* Messages */}
+          <div style={{
+            flex: 1, overflowY: "auto", padding: "8px 10px", background: "#f0f2f5",
+            display: "flex", flexDirection: "column", gap: 3,
+          }}>
             {messages.length === 0 && (
-              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, marginTop: 40 }}>Bắt đầu cuộc trò chuyện 👋</div>
+              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, marginTop: 40 }}>
+                Bắt đầu trò chuyện với {activeChat.displayName} 👋
+              </div>
             )}
             {messages.map((msg, i) => {
               const isMine = msg.senderId === currentUser.id;
@@ -1146,19 +1240,19 @@ function ChatPopup({ currentUser }) {
               return (
                 <React.Fragment key={msg.id}>
                   {showDate && (
-                    <div style={{ textAlign: "center", fontSize: 10, color: "#9ca3af", margin: "8px 0 4px" }}>
-                      {new Date(msg.createdAt).toLocaleDateString("vi-VN", { weekday: "long", day: "2-digit", month: "2-digit" })}
+                    <div style={{ textAlign: "center", fontSize: 10, color: "#9ca3af", margin: "6px 0 3px" }}>
+                      {new Date(msg.createdAt).toLocaleDateString("vi-VN", { weekday: "short", day: "2-digit", month: "2-digit" })}
                     </div>
                   )}
                   <div style={{ display: "flex", justifyContent: isMine ? "flex-end" : "flex-start" }}>
                     <div style={{
-                      maxWidth: "75%", padding: "8px 12px", borderRadius: isMine ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                      maxWidth: "75%", padding: "7px 11px", borderRadius: isMine ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
                       background: isMine ? "#0084ff" : "#fff", color: isMine ? "#fff" : "#1c1e21",
-                      fontSize: 13, lineHeight: 1.4, wordBreak: "break-word",
-                      boxShadow: isMine ? "none" : "0 1px 2px rgba(0,0,0,.1)",
+                      fontSize: 13, lineHeight: 1.35, wordBreak: "break-word",
+                      boxShadow: isMine ? "none" : "0 1px 2px rgba(0,0,0,.08)",
                     }}>
                       {msg.content}
-                      <div style={{ fontSize: 9, opacity: .6, textAlign: "right", marginTop: 2 }}>
+                      <div style={{ fontSize: 9, opacity: .55, textAlign: "right", marginTop: 1 }}>
                         {new Date(msg.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
@@ -1169,16 +1263,19 @@ function ChatPopup({ currentUser }) {
             <div ref={msgEndRef} />
           </div>
 
-          {/* Input area */}
-          <div style={{ padding: "8px 10px", borderTop: "1px solid #e4e6eb", display: "flex", gap: 8, alignItems: "center", background: "#fff", flexShrink: 0 }}>
+          {/* Input */}
+          <div style={{
+            padding: "7px 10px", borderTop: "1px solid #e4e6eb",
+            display: "flex", gap: 6, alignItems: "center", background: "#fff", flexShrink: 0,
+          }}>
             <input
               ref={inputRef}
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-              placeholder="Aa..."
+              placeholder="Nhập tin nhắn..."
               style={{
-                flex: 1, border: "1px solid #e4e6eb", borderRadius: 20, padding: "8px 14px",
+                flex: 1, border: "1px solid #e4e6eb", borderRadius: 20, padding: "7px 12px",
                 fontSize: 13, outline: "none", background: "#f0f2f5",
               }}
               autoFocus
@@ -1187,103 +1284,77 @@ function ChatPopup({ currentUser }) {
               onClick={sendMessage}
               disabled={!draft.trim() || sending}
               style={{
-                width: 34, height: 34, borderRadius: "50%", border: "none",
+                width: 32, height: 32, borderRadius: "50%", border: "none",
                 background: draft.trim() ? "#0084ff" : "#e4e6eb", color: draft.trim() ? "#fff" : "#bcc0c4",
-                cursor: draft.trim() ? "pointer" : "default", fontSize: 16,
+                cursor: draft.trim() ? "pointer" : "default", fontSize: 15,
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}
             >➤</button>
           </div>
         </div>
-        {/* FAB hidden when chat is open */}
-      </>
-    );
-  }
-
-  return (
-    <>
-      {/* Floating Action Button */}
-      <button onClick={() => setOpen(!open)} style={fabStyle} title="Chat">
-        💬
-        {totalUnread > 0 && (
-          <span style={{
-            position: "absolute", top: -4, right: -4, minWidth: 20, height: 20,
-            borderRadius: 10, background: "#dc2626", color: "#fff", fontSize: 11,
-            fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
-            padding: "0 5px", border: "2px solid #fff",
-          }}>{totalUnread > 99 ? "99+" : totalUnread}</span>
-        )}
-      </button>
-
-      {/* Users list popup */}
-      {open && (
-        <div style={popupStyle}>
-          <div style={{
-            padding: "14px 16px 10px", borderBottom: "1px solid #e4e6eb",
-            display: "flex", alignItems: "center", justifyContent: "space-between",
-          }}>
-            <span style={{ fontWeight: 700, fontSize: 18 }}>Chat</span>
-            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#65676b" }}>✕</button>
-          </div>
-          <div style={{ overflowY: "auto", maxHeight: 400 }}>
-            {chatUsers.length === 0 && (
-              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: 30 }}>Không có người dùng nào</div>
-            )}
-            {chatUsers.map(u => (
-              <div
-                key={u.id}
-                onClick={() => { openChat(u); }}
-                style={{
-                  display: "flex", alignItems: "center", gap: 10, padding: "10px 14px",
-                  cursor: "pointer", transition: "background .15s",
-                  background: u.unread > 0 ? "#eff6ff" : "transparent",
-                }}
-                onMouseEnter={(e) => e.currentTarget.style.background = "#f0f2f5"}
-                onMouseLeave={(e) => e.currentTarget.style.background = u.unread > 0 ? "#eff6ff" : "transparent"}
-              >
-                {/* Avatar with online dot */}
-                <div style={{
-                  width: 44, height: 44, borderRadius: "50%", flexShrink: 0, position: "relative",
-                  background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
-                  display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, color: "#fff",
-                }}>
-                  {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
-                  <div style={{
-                    position: "absolute", bottom: 1, right: 1, width: 12, height: 12, borderRadius: "50%",
-                    background: isOnline(u) ? "#44b700" : "#9ca3af", border: "2px solid #fff",
-                  }} />
-                </div>
-                {/* Name + last message */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontWeight: u.unread > 0 ? 700 : 500, fontSize: 14,
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                    color: "#1c1e21",
-                  }}>{u.displayName} <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400 }}>• {u.role === "admin" ? "Admin" : "Sale"}</span></div>
-                  <div style={{
-                    fontSize: 12, color: u.unread > 0 ? "#1c1e21" : "#65676b",
-                    fontWeight: u.unread > 0 ? 600 : 400,
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                  }}>
-                    {u.lastMessage ? (u.lastMessage.length > 30 ? u.lastMessage.slice(0, 30) + "..." : u.lastMessage) : <span style={{ fontStyle: "italic", color: "#bcc0c4" }}>Chưa có tin nhắn</span>}
-                  </div>
-                </div>
-                {/* Unread badge + time */}
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-                  {u.lastMessageTime && <span style={{ fontSize: 10, color: "#65676b" }}>{formatTime(u.lastMessageTime)}</span>}
-                  {u.unread > 0 && (
-                    <span style={{
-                      minWidth: 18, height: 18, borderRadius: 9, background: "#0084ff", color: "#fff",
-                      fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
-                    }}>{u.unread}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       )}
     </>
+  );
+}
+
+function UserContactRow({ u, isOnline: online, onlineStatus, formatTime, onClick }) {
+  const lastMsg = u.lastMessage;
+  const lastMsgText = lastMsg ? (typeof lastMsg === "string" ? lastMsg : lastMsg.content || "") : "";
+  const lastMsgTime = lastMsg ? (typeof lastMsg === "string" ? null : lastMsg.createdAt) : null;
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+        cursor: "pointer", transition: "background .15s",
+        background: u.unread > 0 ? "#eff6ff" : "transparent",
+      }}
+      onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+      onMouseLeave={(e) => e.currentTarget.style.background = u.unread > 0 ? "#eff6ff" : "transparent"}
+    >
+      <div style={{
+        width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative",
+        background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, color: "#fff",
+      }}>
+        {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
+        <div style={{
+          position: "absolute", bottom: 0, right: 0, width: 10, height: 10, borderRadius: "50%",
+          background: online ? "#44b700" : "#9ca3af", border: "2px solid #fff",
+        }} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{
+            fontWeight: u.unread > 0 ? 700 : 500, fontSize: 13,
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#1c1e21",
+          }}>{u.displayName}</span>
+          <span style={{
+            fontSize: 9, padding: "1px 5px", borderRadius: 6, flexShrink: 0,
+            background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
+            color: u.role === "admin" ? "#dc2626" : "#2563eb", fontWeight: 600,
+          }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{
+            fontSize: 11, color: online ? "#22c55e" : "#9ca3af",
+            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1,
+          }}>
+            {lastMsgText
+              ? (lastMsgText.length > 20 ? lastMsgText.slice(0, 20) + "..." : lastMsgText)
+              : onlineStatus(u)}
+          </span>
+          {lastMsgTime && <span style={{ fontSize: 9, color: "#9ca3af", flexShrink: 0 }}>{formatTime(lastMsgTime)}</span>}
+        </div>
+      </div>
+      {u.unread > 0 && (
+        <span style={{
+          minWidth: 18, height: 18, borderRadius: 9, background: "#0084ff", color: "#fff",
+          fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+          padding: "0 4px", flexShrink: 0,
+        }}>{u.unread}</span>
+      )}
+    </div>
   );
 }
 
