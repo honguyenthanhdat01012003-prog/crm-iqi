@@ -959,6 +959,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
 /* ===== Chat Sidebar - Facebook Messenger Style ===== */
 function ChatSidebar({ currentUser }) {
+  const myId = currentUser.userId || currentUser.id;
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatUsers, setChatUsers] = useState([]);
@@ -968,9 +969,25 @@ function ChatSidebar({ currentUser }) {
   const [totalUnread, setTotalUnread] = useState(0);
   const [sending, setSending] = useState(false);
   const [searchText, setSearchText] = useState("");
+  const [notifFlash, setNotifFlash] = useState(false);
   const msgEndRef = useRef(null);
   const inputRef = useRef(null);
   const lastMsgIdRef = useRef(0);
+  const prevUnreadRef = useRef(0);
+
+  // Notification sound
+  const playNotifSound = useCallback(() => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880; osc.type = "sine";
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
+    } catch (e) { /* ignore */ }
+  }, []);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -978,10 +995,17 @@ function ChatSidebar({ currentUser }) {
       if (r.ok) {
         const data = await r.json();
         setChatUsers(data);
-        setTotalUnread(data.reduce((s, u) => s + (u.unread || 0), 0));
+        const newTotal = data.reduce((s, u) => s + (u.unread || 0), 0);
+        if (newTotal > prevUnreadRef.current) {
+          playNotifSound();
+          setNotifFlash(true);
+          setTimeout(() => setNotifFlash(false), 2000);
+        }
+        prevUnreadRef.current = newTotal;
+        setTotalUnread(newTotal);
       }
     } catch (e) { /* ignore */ }
-  }, []);
+  }, [playNotifSound]);
 
   const loadMessages = useCallback(async (userId) => {
     try {
@@ -995,17 +1019,12 @@ function ChatSidebar({ currentUser }) {
     } catch (e) { /* ignore */ }
   }, []);
 
-  // Auto-load users when sidebar opens
+  // Auto-load users on mount + poll every 10s (always, for notifications)
   useEffect(() => {
-    if (sidebarOpen) loadUsers();
-  }, [sidebarOpen, loadUsers]);
-
-  // Poll users every 10s
-  useEffect(() => {
-    if (!sidebarOpen) return;
+    loadUsers();
     const iv = setInterval(loadUsers, 10000);
     return () => clearInterval(iv);
-  }, [sidebarOpen, loadUsers]);
+  }, [loadUsers]);
 
   // Poll new messages every 3s when chatting
   useEffect(() => {
@@ -1018,6 +1037,8 @@ function ChatSidebar({ currentUser }) {
           if (newMsgs.length > 0) {
             setMessages(prev => [...prev, ...newMsgs]);
             lastMsgIdRef.current = newMsgs[newMsgs.length - 1].id;
+            // Sound if incoming message from the other person
+            if (newMsgs.some(m => m.senderId !== myId)) playNotifSound();
             setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
           }
         }
@@ -1117,6 +1138,7 @@ function ChatSidebar({ currentUser }) {
             borderRadius: 9, background: "#dc2626", color: "#fff", fontSize: 10,
             fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
             padding: "0 4px", border: "2px solid #fff",
+            animation: notifFlash ? "pulse 0.5s ease 3" : "none",
           }}>{totalUnread > 99 ? "99+" : totalUnread}</span>
         )}
       </button>
@@ -1235,7 +1257,7 @@ function ChatSidebar({ currentUser }) {
               </div>
             )}
             {messages.map((msg, i) => {
-              const isMine = msg.senderId === currentUser.id;
+              const isMine = msg.senderId === myId;
               const showDate = i === 0 || new Date(msg.createdAt).toDateString() !== new Date(messages[i - 1].createdAt).toDateString();
               // Avatar chỉ hiện ở tin nhắn cuối cùng liên tiếp của người kia
               const isLastInGroup = !isMine && (i === messages.length - 1 || messages[i + 1].senderId !== msg.senderId);
