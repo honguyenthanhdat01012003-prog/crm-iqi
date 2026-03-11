@@ -1,4 +1,16 @@
 ﻿import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  LayoutDashboard, Users, Building2, Megaphone, Trophy, UserCog, IdCard, FileEdit,
+  FileText, Calendar, Settings, LogOut, Search, Save, RefreshCw, Pencil, Trash2,
+  Plus, Eye, EyeOff, Bell, Menu, Smartphone, Mail, User, Send, Clock, Check, X,
+  Ban, Hourglass, Lock, Key, Lightbulb, Star, Sparkles, ArrowLeftRight, CalendarCheck,
+  CheckCircle, ThumbsDown, Banknote, PhoneOff, PhoneIncoming, XCircle, ShieldOff,
+  Phone, Skull, Snowflake, CloudSun, Flame, BarChart3, Target, Timer, Building,
+  BookOpen, Pin, Folder, CircleDot, Bot, Hand, Minus, ChevronLeft, ChevronRight,
+  Camera, Share2, Shuffle, Link, ClipboardList, Pause, Play, ChevronDown, Info,
+  AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
+  ExternalLink, Shield, Globe, Layers, TrendingUp, Activity
+} from "lucide-react";
 
 const API = "/api";
 
@@ -25,7 +37,7 @@ function ToastContainer() {
       {toasts.map(t => {
         const c = colors[t.type] || colors.info;
         return (
-          <div key={t.id} style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.color, padding: "12px 20px", borderRadius: 10, fontSize: 14, fontWeight: 500, boxShadow: "0 4px 12px rgba(0,0,0,.12)", animation: "slideIn .3s ease" }}>
+          <div key={t.id} style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.color, padding: "14px 22px", borderRadius: 12, fontSize: 14, fontWeight: 500, boxShadow: "0 4px 16px rgba(0,0,0,.12), 0 0 0 1px rgba(0,0,0,.04)", animation: "slideIn .3s ease", backdropFilter: "blur(8px)" }}>
             {t.msg}
           </div>
         );
@@ -43,8 +55,8 @@ function ConfirmModal_() {
   if (!state) return null;
   const answer = (v) => { state.resolve(v); setState(null); };
   return (
-    <div onClick={() => answer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 100001, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadeIn .2s ease" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 420, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
+    <div onClick={() => answer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", zIndex: 100001, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadeIn .2s ease" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, padding: "30px 34px", maxWidth: 420, width: "90%", boxShadow: "0 25px 50px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.05)" }}>
         <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#1f2937", marginBottom: 24 }}>{state.msg}</div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
           <button onClick={() => answer(false)} style={{ padding: "10px 24px", border: "1px solid #d1d5db", borderRadius: 10, background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#374151" }}>Huỷ</button>
@@ -113,12 +125,12 @@ function formatVND(n) {
 
 function getLeadTemp(createdAt) {
   const d = parseLeadDate(createdAt);
-  if (!d) return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "❄️" };
+  if (!d) return { label: "Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "cold" };
   const hours = (Date.now() - d.getTime()) / (1000 * 60 * 60);
-  if (hours <= 24) return { label: "🔥🔥 Cực nóng", bg: "#fef2f2", color: "#dc2626", icon: "🔥🔥" };
-  if (hours <= 72) return { label: "🔥 Nóng", bg: "#fff7ed", color: "#ea580c", icon: "🔥" };
-  if (hours <= 168) return { label: "🌤️ Ấm", bg: "#fffbeb", color: "#d97706", icon: "🌤️" };
-  return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "❄️" };
+  if (hours <= 24) return { label: "Cực nóng", bg: "#fef2f2", color: "#dc2626", icon: "very_hot" };
+  if (hours <= 72) return { label: "Nóng", bg: "#fff7ed", color: "#ea580c", icon: "hot" };
+  if (hours <= 168) return { label: "Ấm", bg: "#fffbeb", color: "#d97706", icon: "warm" };
+  return { label: "Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "cold" };
 }
 
 function authHeaders() {
@@ -233,7 +245,7 @@ function LoginPage({ onLogin }) {
           <button type="button" onClick={() => setShowPwd(!showPwd)} style={{
             position: "absolute", right: 8, top: 8, background: "none", border: "none",
             cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-          }}>{showPwd ? "🙈" : "👁️"}</button>
+          }}>{showPwd ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </div>
         <button type="submit" disabled={loading} style={{
           ...btnPrimary, width: "100%", marginTop: 16, padding: "10px 20px", fontSize: 15,
@@ -286,7 +298,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
 
   const PwdRule = ({ ok, text }) => (
     <div style={{ fontSize: 12, color: ok ? "#16a34a" : "#dc2626", display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
-      <span>{ok ? "✅" : "❌"}</span> {text}
+      <span>{ok ? <Check size={14} style={{ color: "#16a34a" }} /> : <X size={14} style={{ color: "#dc2626" }} />}</span> {text}
     </div>
   );
 
@@ -302,7 +314,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
         boxShadow: "0 20px 60px rgba(0,0,0,.3)",
       }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>🔐</div>
+          <div style={{ fontSize: 40, marginBottom: 8, display: "flex", justifyContent: "center" }}><Lock size={40} /></div>
           <h2 style={{ margin: 0, color: "#1a3c20" }}>Đổi mật khẩu</h2>
           <p style={{ color: "#6b7280", fontSize: 13, margin: "4px 0 0" }}>
             Xin chào <strong>{user.displayName}</strong>, đây là lần đăng nhập đầu tiên.<br />
@@ -318,7 +330,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
           <button type="button" onClick={() => setShowNew(!showNew)} style={{
             position: "absolute", right: 8, top: 8, background: "none", border: "none",
             cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-          }}>{showNew ? "🙈" : "👁️"}</button>
+          }}>{showNew ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </div>
 
         <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
@@ -337,10 +349,10 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
           <button type="button" onClick={() => setShowConfirm(!showConfirm)} style={{
             position: "absolute", right: 8, top: 8, background: "none", border: "none",
             cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-          }}>{showConfirm ? "🙈" : "👁️"}</button>
+          }}>{showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}</button>
         </div>
         {confirmPwd && newPwd !== confirmPwd && (
-          <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8 }}>❌ Mật khẩu xác nhận không khớp</div>
+          <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}><X size={14} /> Mật khẩu xác nhận không khớp</div>
         )}
 
         <button type="submit" disabled={loading || !allValid || newPwd !== confirmPwd} style={{
@@ -657,17 +669,17 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   // --- Pages ---
   const NAV = [
-    { key: "dashboard", label: "📊 Dashboard", adminOnly: true },
-    { key: "leads", label: "👥 Khách hàng", adminOnly: false },
-    { key: "projects", label: "🏗️ Dự án", adminOnly: true },
-    { key: "campaigns", label: "📢 Chiến dịch", adminOnly: true },
-    { key: "sales", label: "🏆 Sale", adminOnly: true },
-    { key: "users", label: "👤 Quản lý tài khoản", adminOnly: true },
-    { key: "profile", label: "🪪 Hồ sơ cá nhân", adminOnly: false },
-    { key: "post_mgmt", label: "📝 Quản lý bài đăng", adminOnly: true, children: [
-      { key: "posts", label: "📋 Tất cả bài" },
-      { key: "calendar", label: "📅 Lịch đăng bài" },
-      { key: "sheet_config", label: "⚙️ Cấu hình Sheet" },
+    { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
+    { key: "leads", label: "Khách hàng", icon: Users, adminOnly: false },
+    { key: "projects", label: "Dự án", icon: Building2, adminOnly: true },
+    { key: "campaigns", label: "Chiến dịch", icon: Megaphone, adminOnly: true },
+    { key: "sales", label: "Sale", icon: Trophy, adminOnly: true },
+    { key: "users", label: "Quản lý tài khoản", icon: UserCog, adminOnly: true },
+    { key: "profile", label: "Hồ sơ cá nhân", icon: IdCard, adminOnly: false },
+    { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: [
+      { key: "posts", label: "Tất cả bài", icon: FileText },
+      { key: "calendar", label: "Lịch đăng bài", icon: Calendar },
+      { key: "sheet_config", label: "Cấu hình Sheet", icon: Settings },
     ]},
   ];
 
@@ -688,10 +700,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       {/* Sidebar */}
       <aside
         style={{
-          width: isMobile ? 280 : (sidebarOpen ? 220 : 56),
-          background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)",
+          width: isMobile ? 280 : (sidebarOpen ? 230 : 60),
+          background: "linear-gradient(180deg, #1a3c20 0%, #0f2d15 50%, #0a1f0e 100%)",
           color: "#fff",
-          transition: isMobile ? "transform .25s ease" : "width .2s",
+          transition: isMobile ? "transform .25s ease" : "width .2s ease",
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
@@ -699,7 +711,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           ...(isMobile ? {
             position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 999,
             transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-            boxShadow: sidebarOpen ? "4px 0 20px rgba(0,0,0,.3)" : "none",
+            boxShadow: sidebarOpen ? "4px 0 24px rgba(0,0,0,.35)" : "none",
           } : {}),
         }}
       >
@@ -711,7 +723,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             <img src="/logo-iqi.svg" alt="LUX IQI" style={{ width: 32, height: 32, objectFit: "contain" }} />
             {(isMobile || sidebarOpen) && <span style={{ fontSize: 16, letterSpacing: 1 }}>LUX IQI</span>}
           </div>
-          {isMobile && sidebarOpen && <span style={{ fontSize: 20, padding: 4 }}>✕</span>}
+          {isMobile && sidebarOpen && <span style={{ padding: 4, display: "flex", alignItems: "center" }}><X size={20} /></span>}
         </div>
 
         {/* Project selector */}
@@ -750,9 +762,12 @@ function CRMApp({ user, updateUser, onLogout }) {
                       display: "flex", justifyContent: "space-between", alignItems: "center",
                     }}
                   >
-                    <span>{(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {React.createElement(n.icon, { size: 18 })}
+                      {(isMobile || sidebarOpen) && <span>{n.label}</span>}
+                    </span>
                     {(isMobile || sidebarOpen) && (
-                      <span style={{ fontSize: 10, opacity: 0.6, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }}>▼</span>
+                      <ChevronDown size={14} style={{ opacity: 0.6, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }} />
                     )}
                   </div>
                   {isOpen && (isMobile || sidebarOpen) && n.children.map(c => (
@@ -770,7 +785,10 @@ function CRMApp({ user, updateUser, onLogout }) {
                         opacity: 0.9,
                       }}
                     >
-                      {c.label}
+                      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {c.icon && React.createElement(c.icon, { size: 14 })}
+                        {c.label}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -790,7 +808,10 @@ function CRMApp({ user, updateUser, onLogout }) {
                   transition: "background .15s",
                 }}
               >
-                {(isMobile || sidebarOpen) ? n.label : n.label.slice(0, 2)}
+                <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {React.createElement(n.icon, { size: 18 })}
+                  {(isMobile || sidebarOpen) && <span>{n.label}</span>}
+                </span>
               </div>
             );
           })}
@@ -812,7 +833,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                 color: "#fff", cursor: "pointer", fontSize: 13,
               }}
             >
-              🚪 Đăng xuất
+              <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><LogOut size={16} /> Đăng xuất</span>
             </button>
             <div style={{ fontSize: 10, opacity: 0.5, marginTop: 6 }}>
               {lastSync ? `Sync: ${new Date(lastSync).toLocaleString("vi-VN")}` : "Chưa sync"}
@@ -822,19 +843,22 @@ function CRMApp({ user, updateUser, onLogout }) {
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, padding: isMobile ? 12 : 24, overflow: "auto", minWidth: 0 }}>
+      <main style={{ flex: 1, padding: isMobile ? 14 : 28, overflow: "auto", minWidth: 0, background: "#f8fafb" }}>
         {/* Top bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMobile ? 12 : 20, gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMobile ? 14 : 24, gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             {isMobile && (
               <button onClick={() => setSidebarOpen(true)} style={{
                 background: "#1a3c20", color: "#fff", border: "none", borderRadius: 8,
                 width: 40, height: 40, fontSize: 18, cursor: "pointer", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
-              }}>☰</button>
+                }}
+              >
+                <Menu size={20} />
+              </button>
             )}
-            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 16 : 20, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {visibleNav.find((n) => n.key === page)?.label || "Dashboard"}
+            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 17 : 22, fontWeight: 700, letterSpacing: "-0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 10 }}>
+              {(() => { const nav = visibleNav.find((n) => n.key === page) || (visibleNav.find(n => n.children)?.children || []).find(c => c.key === page); return nav ? <><span style={{ display: "flex", alignItems: "center" }}>{nav.icon && React.createElement(nav.icon, { size: 20 })}</span> {nav.label}</> : "Dashboard"; })()}
             </h2>
           </div>
           {isAdmin && (
@@ -842,16 +866,18 @@ function CRMApp({ user, updateUser, onLogout }) {
               {/* Notification bell + countdown */}
               <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
                 <button onClick={() => setShowNotif(!showNotif)} style={{
-                  background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #d1d5db",
-                  borderRadius: 8, width: 40, height: 40, fontSize: 18, cursor: "pointer",
+                  background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #e5e7eb",
+                  borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
+                  transition: "background .2s, border-color .2s",
                 }}>
-                  🔔
+                  <Bell size={18} style={{ color: notifications.length > 0 ? "#d97706" : "#6b7280" }} />
                   {notifications.length > 0 && (
                     <span style={{
-                      position: "absolute", top: -4, right: -4, background: "#ef4444", color: "#fff",
+                      position: "absolute", top: -5, right: -5, background: "linear-gradient(135deg, #ef4444, #dc2626)", color: "#fff",
                       borderRadius: 10, padding: "0 5px", fontSize: 10, fontWeight: 700, minWidth: 18,
-                      textAlign: "center", lineHeight: "18px", animation: "fadeIn .3s ease",
+                      textAlign: "center", lineHeight: "18px", animation: "pulse 2s ease infinite",
+                      boxShadow: "0 2px 6px rgba(239,68,68,.4)",
                     }}>{notifications.length}</span>
                   )}
                 </button>
@@ -867,7 +893,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                       boxShadow: "0 8px 30px rgba(0,0,0,.18)", border: "1px solid #e5e7eb", zIndex: 999,
                     }}>
                       <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <b style={{ fontSize: 14 }}>🔔 Thông báo</b>
+                        <b style={{ fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Bell size={16} /> Thông báo</b>
                         {notifications.length > 0 && (
                           <button onClick={markAllSeen} style={{ background: "none", border: "none", color: "#e88a2e", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                             Đánh dấu đã đọc
@@ -889,10 +915,10 @@ function CRMApp({ user, updateUser, onLogout }) {
                                   <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
                                   <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
                                 </div>
-                                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                  <span>📱 {n.phone || "-"}</span>
-                                  {proj && <span>🏗️ {proj.name}</span>}
-                                  <span>📅 {n.createdAt || "-"}</span>
+                                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {n.phone || "-"}</span>
+                                  {proj && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Building2 size={12} /> {proj.name}</span>}
+                                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {n.createdAt || "-"}</span>
                                 </div>
                               </div>
                             );
@@ -919,7 +945,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                   fontSize: 22, lineHeight: 1,
                   display: "inline-block",
                   animation: syncing ? "spin 1s linear infinite" : (syncCountdown <= 5 ? "pulse 1s ease-in-out infinite" : "none"),
-                }}>⏳</span>
+                }}><RefreshCw size={22} /></span>
                 <span style={{
                   fontSize: 10, fontWeight: 700, marginTop: 1,
                   color: syncing ? "#e88a2e" : (syncCountdown <= 5 ? "#ef4444" : "#6b7280"),
@@ -1223,13 +1249,13 @@ function ChatSidebar({ currentUser }) {
           background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)", color: "#fff",
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <span style={{ fontWeight: 700, fontSize: 15 }}>👥 Liên hệ</span>
+            <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Users size={16} /> Liên hệ</span>
             <span style={{ fontSize: 11, opacity: .7 }}>{chatUsers.filter(u => isOnline(u)).length} online</span>
           </div>
           <input
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
-            placeholder="🔍 Tìm người dùng..."
+            placeholder="Tìm người dùng..."
             style={{
               width: "100%", padding: "7px 10px", borderRadius: 8, border: "none",
               fontSize: 12, outline: "none", background: "rgba(255,255,255,.15)",
@@ -1242,8 +1268,8 @@ function ChatSidebar({ currentUser }) {
         <div style={{ flex: 1, overflowY: "auto" }}>
           {/* Online users first */}
           {filteredUsers.filter(u => isOnline(u)).length > 0 && (
-            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#22c55e", textTransform: "uppercase", letterSpacing: .5 }}>
-              ● Đang online ({filteredUsers.filter(u => isOnline(u)).length})
+            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#22c55e", textTransform: "uppercase", letterSpacing: .5, display: "flex", alignItems: "center", gap: 4 }}>
+              <CircleDot size={10} /> Đang online ({filteredUsers.filter(u => isOnline(u)).length})
             </div>
           )}
           {filteredUsers.filter(u => isOnline(u)).map(u => (
@@ -1252,8 +1278,8 @@ function ChatSidebar({ currentUser }) {
 
           {/* Offline users */}
           {filteredUsers.filter(u => !isOnline(u)).length > 0 && (
-            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: .5 }}>
-              ○ Offline ({filteredUsers.filter(u => !isOnline(u)).length})
+            <div style={{ padding: "8px 12px 4px", fontSize: 11, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: .5, display: "flex", alignItems: "center", gap: 4 }}>
+              <CircleOff size={10} /> Offline ({filteredUsers.filter(u => !isOnline(u)).length})
             </div>
           )}
           {filteredUsers.filter(u => !isOnline(u)).map(u => (
@@ -1301,7 +1327,7 @@ function ChatSidebar({ currentUser }) {
             <button onClick={() => { setActiveChat(null); loadUsers(); }} style={{
               background: "rgba(255,255,255,.2)", border: "none", color: "#fff", cursor: "pointer",
               fontSize: 14, padding: "2px 8px", borderRadius: 6,
-            }}>✕</button>
+            }}><X size={14} /></button>
           </div>
 
           {/* Messages */}
@@ -1311,7 +1337,7 @@ function ChatSidebar({ currentUser }) {
           }}>
             {messages.length === 0 && (
               <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 12, marginTop: 40 }}>
-                Bắt đầu trò chuyện với {activeChat.displayName} 👋
+                Bắt đầu trò chuyện với {activeChat.displayName} <Hand size={14} style={{ display: "inline" }} />
               </div>
             )}
             {messages.map((msg, i) => {
@@ -1385,7 +1411,7 @@ function ChatSidebar({ currentUser }) {
                 cursor: draft.trim() ? "pointer" : "default", fontSize: 15,
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}
-            >➤</button>
+            ><Send size={16} /></button>
           </div>
         </div>
       )}
@@ -1462,7 +1488,8 @@ function Modal({ onClose, title, children }) {
     <div
       onClick={onClose}
       style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,.45)",
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.5)",
+        backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)",
         display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999,
         animation: "fadeIn .2s ease",
       }}
@@ -1471,19 +1498,19 @@ function Modal({ onClose, title, children }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "#fff",
-          borderRadius: isMobile ? "16px 16px 0 0" : 12,
-          padding: isMobile ? "20px 16px 32px" : 24,
-          width: isMobile ? "100%" : 460,
+          borderRadius: isMobile ? "20px 20px 0 0" : 16,
+          padding: isMobile ? "24px 18px 36px" : 28,
+          width: isMobile ? "100%" : 480,
           maxWidth: "100%",
           maxHeight: isMobile ? "90vh" : "85vh",
           overflowY: "auto",
-          boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+          boxShadow: "0 25px 50px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.05)",
           animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease",
         }}
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-          <h3 style={{ margin: 0, fontSize: isMobile ? 17 : 16 }}>{title}</h3>
-          {isMobile && <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: "#6b7280", cursor: "pointer", padding: 4 }}>✕</button>}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 18 : 17, fontWeight: 700, letterSpacing: "-0.01em" }}>{title}</h3>
+          {isMobile && <button onClick={onClose} style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}><X size={18} /></button>}
         </div>
         {children}
       </div>
@@ -1495,13 +1522,14 @@ function Card({ title, value, sub, color = "#e88a2e", percent, compact }) {
   return (
     <div
       style={{
-        background: "#fff", borderRadius: compact ? 10 : 12, padding: compact ? 12 : 20,
-        boxShadow: "0 1px 3px rgba(0,0,0,.08)",
+        background: "#fff", borderRadius: compact ? 12 : 14, padding: compact ? 14 : 22,
+        boxShadow: "0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)",
         borderTop: `3px solid ${color}`,
+        transition: "transform .2s, box-shadow .2s",
       }}
     >
-      <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 2 }}>{title}</div>
-      <div style={{ fontSize: compact ? 18 : 24, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 4, fontWeight: 500, letterSpacing: "0.02em", textTransform: "uppercase" }}>{title}</div>
+      <div style={{ fontSize: compact ? 20 : 28, fontWeight: 700, color, letterSpacing: "-0.02em" }}>{value}</div>
       {percent !== undefined && <div style={{ fontSize: compact ? 10 : 12, color: "#9ca3af", marginTop: 1 }}>{percent}%</div>}
       {sub && <div style={{ fontSize: compact ? 10 : 11, color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
@@ -1579,18 +1607,18 @@ function DashboardPage({ stats, cost, saleRanking }) {
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 24, marginBottom: isMobile ? 16 : 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        <h4 style={{ margin: "0 0 16px", fontSize: isMobile ? 14 : 16, color: "#1f2937" }}>📊 Biểu đồ phân bổ trạng thái</h4>
+        <h4 style={{ margin: "0 0 16px", fontSize: isMobile ? 14 : 16, color: "#1f2937", display: "flex", alignItems: "center", gap: 6 }}><BarChart3 size={18} /> Biểu đồ phân bổ trạng thái</h4>
         <DonutChart segments={donutSegments} size={isMobile ? 160 : 220} />
       </div>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 12 : 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflowX: "auto" }}>
-        <h4 style={{ margin: "0 0 12px", fontSize: isMobile ? 14 : 16 }}>🏆 Bảng xếp hạng Sale</h4>
+        <h4 style={{ margin: "0 0 12px", fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Trophy size={18} /> Bảng xếp hạng Sale</h4>
         {isMobile ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {saleRanking.map((s, i) => (
               <div key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 10, padding: 12, border: "1px solid #e5e7eb" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{i === 0 ? <Trophy size={16} style={{ color: "#FFD700", display: "inline", verticalAlign: "middle" }} /> : i === 1 ? <Trophy size={16} style={{ color: "#C0C0C0", display: "inline", verticalAlign: "middle" }} /> : i === 2 ? <Trophy size={16} style={{ color: "#CD7F32", display: "inline", verticalAlign: "middle" }} /> : `#${i+1}`} {s.name}</span>
                   <span style={{ fontWeight: 700, fontSize: 16, color: "#1a3c20" }}>{s.total} lead</span>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -1619,7 +1647,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
           <tbody>
             {saleRanking.map((s, i) => (
               <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
-                <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
+                <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
                 <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{s.name}</td>
                 <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
                 <td style={{ ...tdStyle, color: s.new ? "#6b7280" : "#d1d5db" }}>{s.new || 0}</td>
@@ -1677,24 +1705,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   // Bitrix-style lead categories
   const LEAD_TABS = useMemo(() => [
-    { key: "all", label: "Tất cả", icon: "📋", filter: () => true },
-    { key: "new", label: "Chưa feedback", icon: "🆕", filter: (l) => l.status === "new" || !l.status },
-    { key: "interested", label: "Quan tâm", icon: "⭐", filter: (l) => l.status === "interested" },
-    { key: "low_interest", label: "QT hời hợt", icon: "💫", filter: (l) => l.status === "low_interest" },
-    { key: "other_project", label: "QT DA khác", icon: "🔄", filter: (l) => l.status === "other_project" },
-    { key: "appointment", label: "Hẹn xem", icon: "📅", filter: (l) => l.status === "appointment" },
-    { key: "booked", label: "Giữ chỗ", icon: "✅", filter: (l) => l.status === "booked" },
-    { key: "closed", label: "Chốt", icon: "🏆", filter: (l) => l.status === "closed" },
-    { key: "not_interested", label: "Không quan tâm", icon: "👎", filter: (l) => l.status === "not_interested" },
-    { key: "spam", label: "Phá/rác", icon: "🚫", filter: (l) => l.status === "spam" },
-    { key: "weak_finance", label: "Tài chính yếu", icon: "💸", filter: (l) => l.status === "weak_finance" },
-    { key: "unreachable", label: "Chưa liên lạc được", icon: "📵", filter: (l) => l.status === "unreachable" },
-    { key: "callback", label: "Liên lạc lại sau", icon: "📲", filter: (l) => l.status === "callback" },
-    { key: "wrong_number", label: "Thuê bao/Sai số", icon: "❌", filter: (l) => l.status === "wrong_number" },
-    { key: "blocked", label: "Chặn", icon: "🚷", filter: (l) => l.status === "blocked" },
-    { key: "has_sale", label: "Có sale khác", icon: "👥", filter: (l) => l.status === "has_sale" },
-    { key: "called", label: "Đã gọi", icon: "📞", filter: (l) => l.status === "called" },
-    { key: "lost", label: "Mất", icon: "💀", filter: (l) => l.status === "lost" },
+    { key: "all", label: "Tất cả", Icon: ClipboardList, filter: () => true },
+    { key: "new", label: "Chưa feedback", Icon: BadgePlus, filter: (l) => l.status === "new" || !l.status },
+    { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => l.status === "interested" },
+    { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => l.status === "low_interest" },
+    { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => l.status === "other_project" },
+    { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => l.status === "appointment" },
+    { key: "booked", label: "Giữ chỗ", Icon: CheckCircle, filter: (l) => l.status === "booked" },
+    { key: "closed", label: "Chốt", Icon: Trophy, filter: (l) => l.status === "closed" },
+    { key: "not_interested", label: "Không quan tâm", Icon: ThumbsDown, filter: (l) => l.status === "not_interested" },
+    { key: "spam", label: "Phá/rác", Icon: Ban, filter: (l) => l.status === "spam" },
+    { key: "weak_finance", label: "Tài chính yếu", Icon: Banknote, filter: (l) => l.status === "weak_finance" },
+    { key: "unreachable", label: "Chưa liên lạc được", Icon: PhoneOff, filter: (l) => l.status === "unreachable" },
+    { key: "callback", label: "Liên lạc lại sau", Icon: PhoneIncoming, filter: (l) => l.status === "callback" },
+    { key: "wrong_number", label: "Thuê bao/Sai số", Icon: XCircle, filter: (l) => l.status === "wrong_number" },
+    { key: "blocked", label: "Chặn", Icon: ShieldOff, filter: (l) => l.status === "blocked" },
+    { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => l.status === "has_sale" },
+    { key: "called", label: "Đã gọi", Icon: Phone, filter: (l) => l.status === "called" },
+    { key: "lost", label: "Mất", Icon: Skull, filter: (l) => l.status === "lost" },
   ], []);
 
   const tabCounts = useMemo(() => {
@@ -1793,10 +1821,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         body: JSON.stringify({ saleName: shuffleSale, leadIds: ids }),
       });
       const data = await r.json();
-      if (data.error) { setShuffleMsg("❌ " + data.error); }
-      else { setShuffleMsg("✅ " + data.msg); applyApiData(data); setShuffleSelected(new Set()); }
+      if (data.error) { setShuffleMsg("[ERR] " + data.error); }
+      else { setShuffleMsg("[OK] " + data.msg); applyApiData(data); setShuffleSelected(new Set()); }
     } catch (e) {
-      setShuffleMsg("❌ Lỗi: " + e.message);
+      setShuffleMsg("[ERR] Lỗi: " + e.message);
     } finally {
       setShuffling(false);
     }
@@ -1807,9 +1835,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {/* Sale header */}
       {!isAdmin && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>👋 Xin chào, {user.displayName}</div>
-          <button onClick={onLogout} style={{ padding: "6px 16px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-            🚪 Đăng xuất
+          <div style={{ fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><Hand size={16} /> Xin chào, {user.displayName}</div>
+          <button onClick={onLogout} style={{ padding: "6px 16px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+            <LogOut size={14} /> Đăng xuất
           </button>
         </div>
       )}
@@ -1818,12 +1846,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {isAdmin && (
         <div style={{ marginBottom: 12 }}>
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
-            style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13 }}>
-            🔀 Chia Lead cho Sale
+            style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+            <Shuffle size={14} /> Chia Lead cho Sale
           </button>
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13 }}>
-              <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15 }}>🔀 Chia Lead cho Sale</div>
+              <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale</div>
 
               {/* Row 1: Chọn dự án + Chọn sale */}
               <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
@@ -1840,7 +1868,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <input value={shuffleSaleSearch} onChange={(e) => { setShuffleSaleSearch(e.target.value); setShuffleSale(""); }}
                     onFocus={() => setShuffleSaleFocused(true)}
                     onBlur={() => setTimeout(() => setShuffleSaleFocused(false), 200)}
-                    placeholder="🔍 Tìm sale..."
+                    placeholder="Tìm sale..."
                     style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%", fontSize: 13 }} />
                   {(() => {
                     const q = shuffleSaleSearch.toLowerCase();
@@ -1854,7 +1882,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                             style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", transition: "background .1s" }}
                             onMouseEnter={e => e.currentTarget.style.background = "#f0faf1"}
                             onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
-                            👤 {s}
+                            <User size={12} /> {s}
                           </div>
                         )) : <div style={{ padding: "8px 12px", color: "#9ca3af", fontSize: 12 }}>Không tìm thấy sale nào</div>}
                       </div>
@@ -1863,9 +1891,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   })()}
                   {shuffleSale && (
                     <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ background: "#e8f5e9", color: "#1a3c20", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600 }}>✅ {shuffleSale}</span>
+                      <span style={{ background: "#e8f5e9", color: "#1a3c20", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Check size={12} /> {shuffleSale}</span>
                       <button onClick={() => { setShuffleSale(""); setShuffleSaleSearch(""); }}
-                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }}>✕</button>
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }}><X size={14} /></button>
                     </div>
                   )}
                 </div>
@@ -1880,7 +1908,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <select value={shuffleStatus} onChange={(e) => setShuffleStatus(e.target.value)}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
                         <option value="all">Tất cả trạng thái</option>
-                        <option value="unassigned">📌 Chưa chia (chưa có sale)</option>
+                        <option value="unassigned">Chưa chia (chưa có sale)</option>
                         {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
                     </div>
@@ -1942,13 +1970,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <button onClick={handleShuffleAssign} disabled={shuffling || !shuffleSelected.size}
                       style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling) ? 0.5 : 1 }}>
-                      {shuffling ? "Đang chia..." : `📤 Chia ${shuffleSelected.size} lead cho ${shuffleSale}`}
+                      {shuffling ? "Đang chia..." : <><Share2 size={14} /> Chia {shuffleSelected.size} lead cho {shuffleSale}</>}
                     </button>
                   </div>
                 </>
               )}
 
-              {shuffleMsg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: shuffleMsg.startsWith("✅") ? "#059669" : "#dc2626" }}>{shuffleMsg}</div>}
+              {shuffleMsg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: shuffleMsg.startsWith("[OK]") || shuffleMsg.includes("thành công") ? "#059669" : "#dc2626" }}>{shuffleMsg.replace(/^\[(OK|ERR)\] /, "")}</div>}
             </div>
           )}
         </div>
@@ -1976,7 +2004,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 display: "flex", alignItems: "center", gap: 4, transition: "all .15s",
                 whiteSpace: "nowrap", flexShrink: 0,
               }}>
-              <span>{t.icon}</span>
+              <span>{t.Icon && <t.Icon size={14} />}</span>
               <span>{t.label}</span>
               <span style={{
                 background: isActive ? "#e88a2e" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
@@ -1991,7 +2019,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       <div style={{ display: "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
         <input
           style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
-          placeholder="🔍 Tìm tên, SĐT, chiến dịch, sale..."
+          placeholder="Tìm tên, SĐT, chiến dịch, sale..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
         />
@@ -2004,7 +2032,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, flex: isMobile ? 1 : "none" }} />
           {(dateFrom || dateTo) && (
             <button onClick={() => { setDateFrom(""); setDateTo(""); }}
-              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày">✕</button>
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày"><X size={14} /></button>
           )}
         </div>
       </div>
@@ -2044,17 +2072,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       }}>
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
-                      {l.isHot && <span style={{ fontSize: 11 }}>{getLeadTemp(l.createdAt).icon}</span>}
+                      {l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
                     </div>
-                    <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap" }}>
-                      <span>📱 {l.phone || "-"}</span>
-                      <span>📅 {l.createdAt || "-"}</span>
-                      {histCount > 0 && <span>📋 {histCount}</span>}
-                      {isAdmin && l.saleName && <span>👤 {l.saleName}</span>}
+                    <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone || "-"}</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.createdAt || "-"}</span>
+                      {histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
+                      {isAdmin && l.saleName && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><User size={12} /> {l.saleName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
                     </div>
                   </div>
-                  <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? "▼" : "▶"}</span>
+                  <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
@@ -2092,7 +2120,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
                     <td style={tdStyle}>
@@ -2253,7 +2281,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {isAdmin && (
         <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <b style={{ fontSize: 12, color: "#9a3412" }}>🔧 Trạng thái:</b>
+            <b style={{ fontSize: 12, color: "#9a3412", display: "flex", alignItems: "center", gap: 4 }}><Settings size={14} /> Trạng thái:</b>
             <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: (STATUS_COLORS[lead.status] || STATUS_COLORS.new) + "20", color: STATUS_COLORS[lead.status] || STATUS_COLORS.new }}>
               {STATUS_LABELS[lead.status] || STATUS_LABELS.new}
             </span>
@@ -2265,7 +2293,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             </select>
             <button onClick={handleStatusUpdate} disabled={savingStatus}
               style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
-              {savingStatus ? "Đang cập nhật..." : "✅ Cập nhật"}
+              {savingStatus ? "Đang cập nhật..." : <><Check size={14} /> Cập nhật</>}
             </button>
           </div>
         </div>
@@ -2275,7 +2303,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {isAdmin && (
         <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <b style={{ fontSize: 12, color: "#1a3c20" }}>📤 Sale phụ trách:</b>
+            <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
             {lead.saleName
               ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
               : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
@@ -2289,14 +2317,14 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
               style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
-              {savingSale ? "Đang chia..." : "📤 Chia lead"}
+              {savingSale ? "Đang chia..." : <><Share2 size={14} /> Chia lead</>}
             </button>
           </div>
         </div>
       )}
 
       <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <span>📋 Lịch sử ({history.length})</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><ClipboardList size={16} /> Lịch sử ({history.length})</span>
         <button onClick={() => setShowForm(!showForm)}
           style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
           {showForm ? "Hủy" : "+ Thêm"}
@@ -2321,7 +2349,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             </div>
             <button onClick={handleAddHistory} disabled={saving}
               style={{ ...btnPrimary, padding: "10px 16px", whiteSpace: "nowrap", width: isMobile ? "100%" : "auto", minHeight: 44 }}>
-              {saving ? "Đang lưu..." : "💾 Lưu"}
+              {saving ? "Đang lưu..." : <><Save size={14} /> Lưu</>}
             </button>
           </div>
         </div>
@@ -2358,7 +2386,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       {isAdmin && h.id && (
                         <button onClick={() => handleDeleteHistory(h.id)}
                           style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                          title="Xóa lịch sử này">🗑️</button>
+                          title="Xóa lịch sử này"><Trash2 size={12} /></button>
                       )}
                     </div>
                   </div>
@@ -2427,10 +2455,10 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
                   style={{ ...btnPrimary, flex: 1, fontSize: 12, opacity: syncingId ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
                 >
                   {isSyncing && <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
-                  {isSyncing ? "Đồng bộ..." : "🔄 Sync"}
+                  {isSyncing ? "Đồng bộ..." : <><RefreshCw size={14} /> Sync</>}
                 </button>
-                <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12 }}>✏️ Sửa</button>
-                <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12 }}>🗑️ Xóa</button>
+                <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
+                <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>
               </div>
             </div>
           );
@@ -2501,7 +2529,7 @@ function CampaignsPage({ leads, projects }) {
     return (
       <div>
         <div style={{ padding: isMobile ? "12px" : "16px 0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>🏗️ Chọn dự án để xem chiến dịch</h3>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> Chọn dự án để xem chiến dịch</h3>
           <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{leads.length} lead · {projectIds.length} dự án</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
@@ -2516,7 +2544,7 @@ function CampaignsPage({ leads, projects }) {
                   transition: "all .2s", hover: { transform: "translateY(-2px)" },
                 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <span style={{ fontWeight: 700, fontSize: 15 }}>🏗️ {p.name}</span>
+                  <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={16} /> {p.name}</span>
                   <span style={{ background: "#e88a2e22", color: "#e88a2e", padding: "4px 12px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}>{stats.total} lead</span>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12 }}>
@@ -2549,7 +2577,7 @@ function CampaignsPage({ leads, projects }) {
             background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 12px",
             cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151",
           }}>← Dự án</button>
-          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>🏗️ {projData.name}</h3>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> {projData.name}</h3>
         </div>
         <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{projData.leads.length} lead · {campaignNames.length} chiến dịch</span>
       </div>
@@ -2577,8 +2605,8 @@ function CampaignsPage({ leads, projects }) {
             return (
               <React.Fragment key={cName}>
                 <tr style={{ background: headerBg, cursor: "pointer" }} onClick={() => toggleCampaign(cName)}>
-                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 14 }}>{isExpanded ? "▼" : "▶"}</td>
-                  <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>📢 {cName}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 14 }}>{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
+                  <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}><Megaphone size={14} /> {cName}</td>
                   <td style={statCellStyle}><strong>{cStats.total}</strong></td>
                   <td style={statCellStyle}>{cStats.newLead} <span style={pctStyle()}>({cStats.pNewLead}%)</span></td>
                   <td style={statCellStyle}>{cStats.interested} <span style={pctStyle()}>({cStats.pInterested}%)</span></td>
@@ -2597,8 +2625,8 @@ function CampaignsPage({ leads, projects }) {
                   return (
                     <React.Fragment key={asKey}>
                       <tr style={{ background: adsetBg, cursor: "pointer" }} onClick={() => toggleAdset(asKey)}>
-                        <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, paddingLeft: 20 }}>{asExpanded ? "▽" : "▷"}</td>
-                        <td style={{ ...tdStyle, paddingLeft: 28, fontWeight: 600, fontSize: 12, color: "#4b5563" }}>📁 {asName}</td>
+                        <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, paddingLeft: 20 }}>{asExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</td>
+                        <td style={{ ...tdStyle, paddingLeft: 28, fontWeight: 600, fontSize: 12, color: "#4b5563", display: "flex", alignItems: "center", gap: 4 }}><Folder size={12} /> {asName}</td>
                         <td style={statCellStyle}>{asStats.total}</td>
                         <td style={statCellStyle}>{asStats.newLead}</td>
                         <td style={statCellStyle}>{asStats.interested}</td>
@@ -2614,7 +2642,7 @@ function CampaignsPage({ leads, projects }) {
                         return (
                           <tr key={adN} style={{ background: adBg }}>
                             <td style={{ ...tdStyle, textAlign: "center" }}></td>
-                            <td style={{ ...tdStyle, paddingLeft: 52, fontSize: 12, color: "#6b7280" }}>🔹 {adN}</td>
+                            <td style={{ ...tdStyle, paddingLeft: 52, fontSize: 12, color: "#6b7280", display: "flex", alignItems: "center", gap: 4 }}><CircleDot size={10} /> {adN}</td>
                             <td style={statCellStyle}>{adStats.total}</td>
                             <td style={statCellStyle}>{adStats.newLead}</td>
                             <td style={statCellStyle}>{adStats.interested}</td>
@@ -2774,7 +2802,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         {/* Pipeline funnel */}
         <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>📊 Pipeline Funnel</h3>
+          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><BarChart3 size={18} /> Pipeline Funnel</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {PIPELINE_STAGES.map(stage => {
               const count = stageLeads[stage.key]?.length || 0;
@@ -2795,7 +2823,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
 
         {/* Conversion rates table */}
         <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>🎯 Tỷ lệ chuyển đổi theo Sale</h3>
+          <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Target size={18} /> Tỷ lệ chuyển đổi theo Sale</h3>
           <div style={{ overflowX: "auto" }}>
             <table style={tableStyle}>
               <thead>
@@ -2832,7 +2860,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
         {/* Avg time in stage */}
         {analytics.avgStageTime && Object.keys(analytics.avgStageTime).length > 0 && (
           <div style={{ background: "#fff", borderRadius: 12, padding: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>⏱️ Thời gian trung bình mỗi giai đoạn</h3>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}><Timer size={18} /> Thời gian trung bình mỗi giai đoạn</h3>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
               {Object.entries(analytics.avgStageTime).map(([status, ms]) => (
                 <div key={status} style={{
@@ -2861,14 +2889,14 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
             borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb",
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
+              <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? <Trophy size={16} style={{ color: "#FFD700", display: "inline", verticalAlign: "middle" }} /> : i === 1 ? <Trophy size={16} style={{ color: "#C0C0C0", display: "inline", verticalAlign: "middle" }} /> : i === 2 ? <Trophy size={16} style={{ color: "#CD7F32", display: "inline", verticalAlign: "middle" }} /> : `#${i+1}`} {s.name}</span>
               <span style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>{s.closed || 0} chốt</span>
             </div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
-              <span>📋 {s.total} lead</span>
-              <span>⭐ {s.interested || 0}</span>
-              <span>✅ {s.booked || 0}</span>
-              <span>📊 {s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0}%</span>
+            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280", alignItems: "center" }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {s.total} lead</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Star size={12} /> {s.interested || 0}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><CheckCircle size={12} /> {s.booked || 0}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><BarChart3 size={12} /> {s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0}%</span>
             </div>
           </div>
         ))}
@@ -2895,7 +2923,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
                 <tr key={s.name} style={{
                   background: i === 0 ? "#fef9c3" : i === 1 ? "#f5f5f5" : i === 2 ? "#fef3e2" : i % 2 ? "#f9fafb" : "#fff",
                 }}>
-                  <td style={tdStyle}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
+                  <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
                   <td style={{ ...tdStyle, fontWeight: 700 }}>{s.name}</td>
                   <td style={tdStyle}>{s.total}</td>
                   <td style={tdStyle}>{s.interested || 0}</td>
@@ -2921,9 +2949,9 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb", marginBottom: 16, background: "#fff", borderRadius: "12px 12px 0 0", paddingLeft: 8 }}>
-        <button onClick={() => setTab("kanban")} style={tabBtnStyle(tab === "kanban")}>📋 Pipeline</button>
-        <button onClick={() => setTab("analytics")} style={tabBtnStyle(tab === "analytics")}>📊 Phân tích</button>
-        <button onClick={() => setTab("leaderboard")} style={tabBtnStyle(tab === "leaderboard")}>🏆 Bảng xếp hạng</button>
+        <button onClick={() => setTab("kanban")} style={tabBtnStyle(tab === "kanban")}><ClipboardList size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Pipeline</button>
+        <button onClick={() => setTab("analytics")} style={tabBtnStyle(tab === "analytics")}><BarChart3 size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Phân tích</button>
+        <button onClick={() => setTab("leaderboard")} style={tabBtnStyle(tab === "leaderboard")}><Trophy size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Bảng xếp hạng</button>
       </div>
       {tab === "kanban" && renderKanban()}
       {tab === "analytics" && renderAnalytics()}
@@ -2946,7 +2974,7 @@ function ImageLightbox({ src, onClose }) {
         position: "absolute", top: 20, right: 20, background: "rgba(255,255,255,.2)",
         border: "none", color: "#fff", fontSize: 24, cursor: "pointer", borderRadius: "50%",
         width: 40, height: 40, display: "flex", alignItems: "center", justifyContent: "center",
-      }}>✕</button>
+      }}><X size={24} /></button>
     </div>
   );
 }
@@ -3048,16 +3076,16 @@ function AvatarCropModal({ imageSrc, onConfirm, onClose }) {
           }} />}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", margin: "12px 0" }}>
-          <span style={{ fontSize: 14 }}>➖</span>
+          <span style={{ fontSize: 14, display: "flex", alignItems: "center" }}><Minus size={16} /></span>
           <input type="range" min="50" max="300" value={sliderVal}
             onChange={(e) => handleZoom(Number(e.target.value))}
             style={{ width: 160, accentColor: "#e88a2e" }} />
-          <span style={{ fontSize: 14 }}>➕</span>
+          <span style={{ fontSize: 14, display: "flex", alignItems: "center" }}><Plus size={16} /></span>
           <span style={{ fontSize: 11, color: "#6b7280", minWidth: 36 }}>{sliderVal}%</span>
         </div>
         <canvas ref={canvasRef} style={{ display: "none" }} />
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button onClick={handleConfirm} style={{ ...btnPrimary, flex: 1 }}>✅ Xác nhận</button>
+          <button onClick={handleConfirm} style={{ ...btnPrimary, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Check size={14} /> Xác nhận</button>
           <button onClick={onClose} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
         </div>
       </div>
@@ -3125,13 +3153,13 @@ function ProfilePage({ user, updateUser }) {
       const data = await r.json();
       if (r.ok) {
         setProfile(data);
-        setMsg("✅ Đã cập nhật hồ sơ");
+        setMsg("[OK] Đã cập nhật hồ sơ");
         setTimeout(() => setMsg(""), 3000);
       } else {
-        setMsg("❌ Lỗi: " + (data.error || "Không thể cập nhật"));
+        setMsg("[ERR] Lỗi: " + (data.error || "Không thể cập nhật"));
       }
     } catch (e) {
-      setMsg("❌ Lỗi kết nối: " + e.message);
+      setMsg("[ERR] Lỗi kết nối: " + e.message);
     }
     setSaving(false);
   };
@@ -3148,7 +3176,7 @@ function ProfilePage({ user, updateUser }) {
       });
       const data = await r.json();
       if (!r.ok) { setPwdError(data.error); return; }
-      setPwdMsg("✅ Đổi mật khẩu thành công!");
+      setPwdMsg("[OK] Đổi mật khẩu thành công!");
       setCurrentPwd(""); setNewPwd(""); setConfirmPwd("");
       if (data.token && data.user) updateUser(data.user, data.token);
       setTimeout(() => setPwdMsg(""), 3000);
@@ -3161,7 +3189,7 @@ function ProfilePage({ user, updateUser }) {
 
   const PwdRule = ({ ok, text }) => (
     <div style={{ fontSize: 12, color: ok ? "#16a34a" : "#9ca3af", display: "flex", alignItems: "center", gap: 4, marginBottom: 2 }}>
-      <span>{ok ? "✅" : "⬜"}</span> {text}
+      <span>{ok ? <Check size={14} style={{ color: "#16a34a" }} /> : <span style={{ width: 14, height: 14, display: "inline-block", borderRadius: 3, border: "1px solid #d1d5db" }} />}</span> {text}
     </div>
   );
 
@@ -3206,8 +3234,8 @@ function ProfilePage({ user, updateUser }) {
         background: "#fff", borderRadius: 16, padding: isMobile ? 16 : 24, marginBottom: 16,
         boxShadow: "0 1px 3px rgba(0,0,0,.08)",
       }}>
-        <h4 style={{ margin: "0 0 16px", fontSize: 15, color: "#374151" }}>📋 Thông tin cá nhân</h4>
-        {msg && <div style={{ background: "#f0fdf4", color: "#16a34a", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{msg}</div>}
+        <h4 style={{ margin: "0 0 16px", fontSize: 15, color: "#374151", display: "flex", alignItems: "center", gap: 6 }}><ClipboardList size={16} /> Thông tin cá nhân</h4>
+        {msg && <div style={{ background: msg.startsWith("[OK]") ? "#f0fdf4" : "#fef2f2", color: msg.startsWith("[OK]") ? "#16a34a" : "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>{msg.startsWith("[OK]") ? <Check size={14} /> : <X size={14} />}{msg.replace(/^\[(OK|ERR)\] /, "")}</div>}
 
         <label style={{ ...labelStyle, marginTop: 0 }}>Ảnh đại diện</label>
         {draft.avatarUrl ? (
@@ -3229,10 +3257,10 @@ function ProfilePage({ user, updateUser }) {
                 background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer",
                 fontSize: 12, fontWeight: 600, border: "1px solid #c5d9c8",
               }}>
-                📷 Đổi ảnh
+                <Camera size={14} /> Đổi ảnh
                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
               </label>
-              <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 12, textAlign: "left", padding: "2px 0" }}>✕ Xóa ảnh</button>
+              <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 12, textAlign: "left", padding: "2px 0", display: "flex", alignItems: "center", gap: 2 }}><X size={12} /> Xóa ảnh</button>
             </div>
           </div>
         ) : (
@@ -3247,7 +3275,7 @@ function ProfilePage({ user, updateUser }) {
               transition: "all .2s", background: dragOver ? "#fef6ee" : "#fafafa",
             }}
           >
-            <div style={{ fontSize: 32, marginBottom: 4 }}>📷</div>
+            <div style={{ fontSize: 32, marginBottom: 4, display: "flex", justifyContent: "center" }}><Camera size={32} color="#9ca3af" /></div>
             <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>Kéo thả ảnh vào đây hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm để chọn</span></div>
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>PNG, JPG, WEBP • Tối đa 5MB</div>
             <input ref={avatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
@@ -3265,7 +3293,7 @@ function ProfilePage({ user, updateUser }) {
         <input style={inputStyle} value={draft.telegramId} onChange={(e) => setDraft({ ...draft, telegramId: e.target.value })} placeholder="123456789" />
 
         <button onClick={handleSave} disabled={saving} style={{ ...btnPrimary, width: "100%", marginTop: 8 }}>
-          {saving ? "Đang lưu..." : "💾 Cập nhật thông tin"}
+          {saving ? "Đang lưu..." : <><Save size={14} /> Cập nhật thông tin</>}
         </button>
       </div>
 
@@ -3278,12 +3306,12 @@ function ProfilePage({ user, updateUser }) {
           onClick={() => setShowPwdSection(!showPwdSection)}
           style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
         >
-          <h4 style={{ margin: 0, fontSize: 15, color: "#374151" }}>🔑 Đổi mật khẩu</h4>
-          <span style={{ fontSize: 12, color: "#6b7280" }}>{showPwdSection ? "▲ Thu gọn" : "▼ Mở rộng"}</span>
+          <h4 style={{ margin: 0, fontSize: 15, color: "#374151", display: "flex", alignItems: "center", gap: 6 }}><Key size={16} /> Đổi mật khẩu</h4>
+          <span style={{ fontSize: 12, color: "#6b7280", display: "flex", alignItems: "center", gap: 2 }}>{showPwdSection ? <><ChevronDown size={14} /> Thu gọn</> : <><ChevronRight size={14} /> Mở rộng</>}</span>
         </div>
         {showPwdSection && (
           <div style={{ marginTop: 16 }}>
-            {pwdMsg && <div style={{ background: "#f0fdf4", color: "#16a34a", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{pwdMsg}</div>}
+            {pwdMsg && <div style={{ background: pwdMsg.startsWith("[OK]") ? "#f0fdf4" : "#fef2f2", color: pwdMsg.startsWith("[OK]") ? "#16a34a" : "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>{pwdMsg.startsWith("[OK]") ? <Check size={14} /> : <X size={14} />}{pwdMsg.replace(/^\[(OK|ERR)\] /, "")}</div>}
             {pwdError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{pwdError}</div>}
 
             <label style={{ ...labelStyle, marginTop: 0 }}>Mật khẩu hiện tại</label>
@@ -3293,7 +3321,7 @@ function ProfilePage({ user, updateUser }) {
               <button type="button" onClick={() => setShowCurrentPwd(!showCurrentPwd)} style={{
                 position: "absolute", right: 8, top: 8, background: "none", border: "none",
                 cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-              }}>{showCurrentPwd ? "🙈" : "👁️"}</button>
+              }}>{showCurrentPwd ? <EyeOff size={16} /> : <Eye size={16} />}</button>
             </div>
 
             <label style={labelStyle}>Mật khẩu mới</label>
@@ -3303,7 +3331,7 @@ function ProfilePage({ user, updateUser }) {
               <button type="button" onClick={() => setShowNewPwd(!showNewPwd)} style={{
                 position: "absolute", right: 8, top: 8, background: "none", border: "none",
                 cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-              }}>{showNewPwd ? "🙈" : "👁️"}</button>
+              }}>{showNewPwd ? <EyeOff size={16} /> : <Eye size={16} />}</button>
             </div>
 
             <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
@@ -3322,17 +3350,17 @@ function ProfilePage({ user, updateUser }) {
               <button type="button" onClick={() => setShowConfirmPwd(!showConfirmPwd)} style={{
                 position: "absolute", right: 8, top: 8, background: "none", border: "none",
                 cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-              }}>{showConfirmPwd ? "🙈" : "👁️"}</button>
+              }}>{showConfirmPwd ? <EyeOff size={16} /> : <Eye size={16} />}</button>
             </div>
             {confirmPwd && newPwd !== confirmPwd && (
-              <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8 }}>❌ Mật khẩu xác nhận không khớp</div>
+              <div style={{ fontSize: 12, color: "#dc2626", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}><X size={14} /> Mật khẩu xác nhận không khớp</div>
             )}
 
             <button onClick={handleChangePwd} disabled={changingPwd || !allPwdValid || newPwd !== confirmPwd || !currentPwd} style={{
               ...btnPrimary, width: "100%", marginTop: 8,
               opacity: (changingPwd || !allPwdValid || newPwd !== confirmPwd || !currentPwd) ? 0.6 : 1,
             }}>
-              {changingPwd ? "Đang xử lý..." : "🔐 Đổi mật khẩu"}
+              {changingPwd ? "Đang xử lý..." : <><Lock size={14} /> Đổi mật khẩu</>}
             </button>
           </div>
         )}
@@ -3352,6 +3380,9 @@ function UsersPage({ projects, leads }) {
   const [projectSearch, setProjectSearch] = useState("");
   const [autoCreateMsg, setAutoCreateMsg] = useState("");
   const [autoCreating, setAutoCreating] = useState(false);
+  const [savingUser, setSavingUser] = useState(false);
+  const [savingBot, setSavingBot] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(null);
   const [profileDraft, setProfileDraft] = useState({ avatarUrl: "", email: "", phone: "", telegramId: "" });
   const [userCropSrc, setUserCropSrc] = useState(null);
@@ -3403,7 +3434,9 @@ function UsersPage({ projects, leads }) {
   };
 
   const handleSave = async () => {
+    if (savingUser) return;
     setError("");
+    setSavingUser(true);
     try {
       if (editingUser) {
         const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds, avatarUrl: draft.avatarUrl, email: draft.email, phone: draft.phone };
@@ -3424,6 +3457,7 @@ function UsersPage({ projects, leads }) {
     } catch (e) {
       setError(e.message);
     }
+    setSavingUser(false);
   };
 
   const handleDelete = async (id) => {
@@ -3445,14 +3479,14 @@ function UsersPage({ projects, leads }) {
         setUsers(data.users);
         if (data.created > 0) {
           const list = data.createdList.map(c => `• ${c.displayName} → @${c.username} (MK: ${c.defaultPassword})`).join("\n");
-          setAutoCreateMsg(`✅ Đã tạo ${data.created} tài khoản:\n${list}`);
+          setAutoCreateMsg(`[OK] Đã tạo ${data.created} tài khoản:\n${list}`);
         } else {
-          setAutoCreateMsg("ℹ️ Không có sale mới cần tạo tài khoản.");
+          setAutoCreateMsg("[INFO] Không có sale mới cần tạo tài khoản.");
         }
       } else {
-        setAutoCreateMsg("❌ Lỗi: " + (data.error || "Unknown"));
+        setAutoCreateMsg("[ERR] Lỗi: " + (data.error || "Unknown"));
       }
-    } catch (e) { setAutoCreateMsg("❌ " + e.message); }
+    } catch (e) { setAutoCreateMsg("[ERR] " + e.message); }
     setAutoCreating(false);
   };
 
@@ -3470,13 +3504,15 @@ function UsersPage({ projects, leads }) {
   };
 
   const handleSaveProfile = async () => {
-    if (!showProfileModal) return;
+    if (!showProfileModal || savingProfile) return;
+    setSavingProfile(true);
     try {
       const r = await apiFetch(`${API}/users/${showProfileModal.id}/profile`, {
         method: "PUT", body: JSON.stringify(profileDraft),
       });
       if (r.ok) { setUsers(await r.json()); setShowProfileModal(null); }
     } catch (e) { console.error(e); }
+    setSavingProfile(false);
   };
 
   // Bot handlers
@@ -3495,18 +3531,21 @@ function UsersPage({ projects, leads }) {
   };
 
   const handleSaveBot = async () => {
+    if (savingBot) return;
     setBotError("");
     if (!botDraft.name || !botDraft.token) { setBotError("Tên bot và token bắt buộc"); return; }
+    setSavingBot(true);
     try {
       const url = editingBot ? `${API}/telegram-bots/${editingBot.id}` : `${API}/telegram-bots`;
       const r = await apiFetch(url, {
         method: editingBot ? "PUT" : "POST",
         body: JSON.stringify(botDraft),
       });
-      if (!r.ok) { const d = await r.json(); setBotError(d.error); return; }
+      if (!r.ok) { const d = await r.json(); setBotError(d.error); setSavingBot(false); return; }
       setBots(await r.json());
       setShowBotForm(false);
     } catch (e) { setBotError(e.message); }
+    setSavingBot(false);
   };
 
   const handleDeleteBot = async (id) => {
@@ -3532,22 +3571,25 @@ function UsersPage({ projects, leads }) {
     <>
       {/* ===== TÀI KHOẢN ===== */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 14, color: "#6b7280" }}>👤 {users.length} tài khoản</div>
+        <div style={{ fontSize: 14, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}><Users size={14} /> {users.length} tài khoản</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={handleAutoCreate} disabled={autoCreating} style={{ ...btnSecondary, minHeight: 40, fontSize: 12 }}>
-            {autoCreating ? "⏳ Đang tạo..." : "🤖 Tự tạo TK Sale"}
+            {autoCreating ? <><Hourglass size={14} className="spin" /> Đang tạo...</> : <><Bot size={14} /> Tự tạo TK Sale</>}
           </button>
           <button onClick={openNew} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm tài khoản</button>
         </div>
       </div>
       {autoCreateMsg && (
         <div style={{
-          background: autoCreateMsg.startsWith("✅") ? "#f0fdf4" : autoCreateMsg.startsWith("ℹ️") ? "#f0faf1" : "#fef2f2",
-          color: autoCreateMsg.startsWith("✅") ? "#16a34a" : autoCreateMsg.startsWith("ℹ️") ? "#1a3c20" : "#dc2626",
+          background: autoCreateMsg.startsWith("[OK]") ? "#f0fdf4" : autoCreateMsg.startsWith("[INFO]") ? "#f0faf1" : "#fef2f2",
+          color: autoCreateMsg.startsWith("[OK]") ? "#16a34a" : autoCreateMsg.startsWith("[INFO]") ? "#1a3c20" : "#dc2626",
           padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 12, whiteSpace: "pre-line",
         }}>
-          {autoCreateMsg}
-          <button onClick={() => setAutoCreateMsg("")} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14 }}>✕</button>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {autoCreateMsg.startsWith("[OK]") ? <Check size={14} /> : autoCreateMsg.startsWith("[INFO]") ? <Info size={14} /> : <X size={14} />}
+            {autoCreateMsg.replace(/^\[(OK|ERR|INFO)\] /, "")}
+          </span>
+          <button onClick={() => setAutoCreateMsg("")} style={{ marginLeft: 8, background: "none", border: "none", cursor: "pointer", fontSize: 14 }}><X size={14} /></button>
         </div>
       )}
 
@@ -3575,16 +3617,16 @@ function UsersPage({ projects, leads }) {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>🪪</button>
-                  <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>✏️</button>
-                  <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}>🗑️</button>
+                  <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><IdCard size={14} /></button>
+                  <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Pencil size={14} /></button>
+                  <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Trash2 size={14} /></button>
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexDirection: "column", gap: 3 }}>
-                <div>👤 @{u.username}</div>
-                {u.email && <div>📧 {u.email}</div>}
-                {u.phone && <div>📱 {u.phone}</div>}
-                {u.telegramId && <div>✈️ {u.telegramId}</div>}
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}><User size={12} /> @{u.username}</div>
+                {u.email && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={12} /> {u.email}</div>}
+                {u.phone && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Smartphone size={12} /> {u.phone}</div>}
+                {u.telegramId && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Send size={12} /> {u.telegramId}</div>}
                 {u.role !== "admin" && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 2 }}>
                     {(u.projectIds && u.projectIds.length > 0)
@@ -3635,8 +3677,8 @@ function UsersPage({ projects, leads }) {
                   </div>
                 </td>
                 <td style={{ ...tdStyle, fontSize: 11 }}>
-                  {u.email && <div>📧 {u.email}</div>}
-                  {u.phone && <div>📱 {u.phone}</div>}
+                  {u.email && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={11} /> {u.email}</div>}
+                  {u.phone && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Smartphone size={11} /> {u.phone}</div>}
                   {!u.email && !u.phone && <span style={{ color: "#9ca3af" }}>—</span>}
                 </td>
                 <td style={tdStyle}>
@@ -3655,7 +3697,7 @@ function UsersPage({ projects, leads }) {
                 </td>
                 <td style={tdStyle}>
                   {u.telegramId
-                    ? <span style={{ background: "#f0faf1", color: "#1a3c20", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>✈️ {u.telegramId}</span>
+                    ? <span style={{ background: "#f0faf1", color: "#1a3c20", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}><Send size={11} /> {u.telegramId}</span>
                     : <span style={{ color: "#9ca3af", fontSize: 11 }}>Chưa cập nhật</span>
                   }
                 </td>
@@ -3671,9 +3713,9 @@ function UsersPage({ projects, leads }) {
                 <td style={{ ...tdStyle, fontSize: 11 }}>{u.createdAt || "-"}</td>
                 <td style={tdStyle}>
                   <div style={{ display: "flex", gap: 4 }}>
-                    <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>🪪</button>
-                    <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>✏️</button>
-                    <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}>🗑️</button>
+                    <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><IdCard size={12} /></button>
+                    <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Pencil size={12} /></button>
+                    <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}><Trash2 size={12} /></button>
                   </div>
                 </td>
               </tr>
@@ -3685,7 +3727,7 @@ function UsersPage({ projects, leads }) {
 
       {/* ===== TELEGRAM BOT ===== */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 14, color: "#6b7280" }}>🤖 Telegram Bot ({bots.length})</div>
+        <div style={{ fontSize: 14, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}><Bot size={14} /> Telegram Bot ({bots.length})</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={async () => {
             try {
@@ -3693,7 +3735,7 @@ function UsersPage({ projects, leads }) {
               const d = await r.json();
               showToast(d.ok ? d.msg : d.error, d.ok ? "success" : "error");
             } catch (e) { showToast(e.message, "error"); }
-          }} style={{ ...btnSecondary, fontSize: 12, padding: "8px 12px", minHeight: 40 }}>🔗 Webhook</button>
+          }} style={{ ...btnSecondary, fontSize: 12, padding: "8px 12px", minHeight: 40, display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Webhook</button>
           <button onClick={openNewBot} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm Bot</button>
         </div>
       </div>
@@ -3705,16 +3747,16 @@ function UsersPage({ projects, leads }) {
           {bots.map((b) => (
             <div key={b.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>🤖 {b.name}</span>
+                <span style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 4 }}><Bot size={14} /> {b.name}</span>
                 <button onClick={() => toggleBot(b)} style={{
                   padding: "4px 12px", borderRadius: 12, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", minHeight: 32,
                   background: b.isActive ? "#f0fdf4" : "#fef2f2", color: b.isActive ? "#16a34a" : "#dc2626",
-                }}>{b.isActive ? "✅ On" : "⛔ Off"}</button>
+                }}>{b.isActive ? <><Check size={12} /> On</> : <><Ban size={12} /> Off</>}</button>
               </div>
               <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", marginBottom: 8, wordBreak: "break-all" }}>{b.token.slice(0, 12)}...{b.token.slice(-6)}</div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36 }}>✏️ Sửa</button>
-                <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, flex: 1, padding: "8px", fontSize: 12, minHeight: 36 }}>🗑️ Xóa</button>
+                <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
+                <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>
               </div>
             </div>
           ))}
@@ -3736,7 +3778,7 @@ function UsersPage({ projects, leads }) {
               {bots.map((b, i) => (
                 <tr key={b.id} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
                   <td style={tdStyle}>{i + 1}</td>
-                  <td style={{ ...tdStyle, fontWeight: 600 }}>🤖 {b.name}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Bot size={12} /> {b.name}</td>
                   <td style={{ ...tdStyle, fontSize: 11, fontFamily: "monospace", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {b.token.slice(0, 12)}...{b.token.slice(-6)}
                   </td>
@@ -3746,14 +3788,14 @@ function UsersPage({ projects, leads }) {
                       background: b.isActive ? "#f0fdf4" : "#fef2f2",
                       color: b.isActive ? "#16a34a" : "#dc2626",
                     }}>
-                      {b.isActive ? "✅ Hoạt động" : "⛔ Tắt"}
+                      {b.isActive ? <><Check size={11} /> Hoạt động</> : <><Ban size={11} /> Tắt</>}
                     </button>
                   </td>
                   <td style={{ ...tdStyle, fontSize: 11 }}>{b.createdAt || "-"}</td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 4 }}>
-                      <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}>✏️</button>
-                      <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}>🗑️</button>
+                      <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Pencil size={11} /></button>
+                      <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}><Trash2 size={11} /></button>
                     </div>
                   </td>
                 </tr>
@@ -3777,11 +3819,11 @@ function UsersPage({ projects, leads }) {
             <button type="button" onClick={() => setShowDraftPwd(!showDraftPwd)} style={{
               position: "absolute", right: 8, top: 8, background: "none", border: "none",
               cursor: "pointer", fontSize: 16, color: "#6b7280", padding: 2,
-            }}>{showDraftPwd ? "🙈" : "👁️"}</button>
+            }}>{showDraftPwd ? <EyeOff size={16} /> : <Eye size={16} />}</button>
           </div>
           {!editingUser && (
             <div style={{ fontSize: 11, color: "#6b7280", marginTop: -4, marginBottom: 8 }}>
-              💡 MK mặc định: tên (không dấu) + 123. VD: <strong>thao123</strong>
+              <Lightbulb size={12} style={{ display: "inline", verticalAlign: "middle" }} /> MK mặc định: tên (không dấu) + 123. VD: <strong>thao123</strong>
             </div>
           )}
           <label style={labelStyle}>Tên hiển thị</label>
@@ -3802,10 +3844,10 @@ function UsersPage({ projects, leads }) {
               }} title="Xem ảnh lớn" />
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #c5d9c8" }}>
-                  📷 Đổi ảnh
+                  <Camera size={12} /> Đổi ảnh
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
                 </label>
-                <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0 }}>✕ Xóa</button>
+                <button type="button" onClick={() => setDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 2 }}><X size={11} /> Xóa</button>
               </div>
             </div>
           ) : (
@@ -3816,7 +3858,7 @@ function UsersPage({ projects, leads }) {
               onDragLeave={() => setUserDragOver(false)}
               style={{ border: `2px dashed ${userDragOver ? "#e88a2e" : "#d1d5db"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: userDragOver ? "#fef6ee" : "#fafafa" }}
             >
-              <div style={{ fontSize: 24, marginBottom: 2 }}>📷</div>
+              <div style={{ fontSize: 24, marginBottom: 2 }}><Camera size={24} style={{ color: "#9ca3af" }} /></div>
               <div style={{ fontSize: 12, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm chọn ảnh</span></div>
               <input ref={userAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
             </div>
@@ -3832,11 +3874,11 @@ function UsersPage({ projects, leads }) {
           </select>
           {draft.role === "sale" && (
             <>
-              <label style={labelStyle}>🏗️ Dự án được phép truy cập</label>
+              <label style={labelStyle}><Building size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Dự án được phép truy cập</label>
               {projects.length > 5 && (
                 <input
                   style={{ ...inputStyle, marginBottom: 6 }}
-                  placeholder="🔍 Tìm dự án..."
+                  placeholder="Tìm dự án..."
                   value={projectSearch}
                   onChange={(e) => setProjectSearch(e.target.value)}
                 />
@@ -3884,8 +3926,8 @@ function UsersPage({ projects, leads }) {
             </>
           )}
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button onClick={handleSave} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
-            <button onClick={() => setShowForm(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+            <button onClick={handleSave} disabled={savingUser} style={{ ...btnPrimary, flex: 1, opacity: savingUser ? 0.6 : 1 }}>{savingUser ? "Đang lưu..." : "Lưu"}</button>
+            <button onClick={() => setShowForm(false)} disabled={savingUser} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
           </div>
         </Modal>
       )}
@@ -3901,8 +3943,8 @@ function UsersPage({ projects, leads }) {
           <input style={inputStyle} value={botDraft.token}
             onChange={(e) => setBotDraft({ ...botDraft, token: e.target.value })} placeholder="VD: 7123456789:AAH..." />
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button onClick={handleSaveBot} style={{ ...btnPrimary, flex: 1 }}>Lưu</button>
-            <button onClick={() => setShowBotForm(false)} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+            <button onClick={handleSaveBot} disabled={savingBot} style={{ ...btnPrimary, flex: 1, opacity: savingBot ? 0.6 : 1 }}>{savingBot ? "Đang lưu..." : "Lưu"}</button>
+            <button onClick={() => setShowBotForm(false)} disabled={savingBot} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
           </div>
         </Modal>
       )}
@@ -3919,9 +3961,9 @@ function UsersPage({ projects, leads }) {
           if (diff < 1440) return `${Math.floor(diff / 60)} giờ trước`;
           return `${Math.floor(diff / 1440)} ngày trước`;
         })() : "Chưa hoạt động";
-        const infoRow = (icon, label, value) => value ? (
+        const infoRow = (IconComp, label, value) => value ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-            <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{icon}</span>
+            <span style={{ width: 24, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}>{typeof IconComp === "function" ? <IconComp size={16} /> : IconComp}</span>
             <span style={{ fontSize: 12, color: "#6b7280", minWidth: 80 }}>{label}</span>
             <span style={{ fontSize: 13, color: "#111827", fontWeight: 500, flex: 1, wordBreak: "break-word" }}>{value}</span>
           </div>
@@ -3955,7 +3997,7 @@ function UsersPage({ projects, leads }) {
                   color: u.role === "admin" ? "#dc2626" : "#1a3c20",
                 }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
                 <span style={{ fontSize: 11, color: isOnline ? "#22c55e" : "#9ca3af" }}>
-                  {isOnline ? "● Online" : `○ ${lastSeenText}`}
+                  {isOnline ? <><CircleDot size={10} style={{ color: "#22c55e" }} /> Online</> : <><CircleOff size={10} /> {lastSeenText}</>}
                 </span>
               </div>
               <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>@{u.username}</div>
@@ -3963,11 +4005,11 @@ function UsersPage({ projects, leads }) {
 
             {/* Thông tin chi tiết - Chỉ đọc */}
             <div style={{ background: "#f9fafb", borderRadius: 12, padding: "4px 12px", marginBottom: 12 }}>
-              {infoRow("📧", "Email", u.email)}
-              {infoRow("📱", "SĐT", u.phone)}
-              {infoRow("✈️", "Telegram", u.telegramId)}
-              {infoRow("📅", "Ngày tạo", u.createdAt ? new Date(u.createdAt).toLocaleDateString("vi-VN") : "")}
-              {infoRow("🕑", "Hoạt động", lastSeenText)}
+              {infoRow(Mail, "Email", u.email)}
+              {infoRow(Smartphone, "SĐT", u.phone)}
+              {infoRow(Send, "Telegram", u.telegramId)}
+              {infoRow(Calendar, "Ngày tạo", u.createdAt ? new Date(u.createdAt).toLocaleDateString("vi-VN") : "")}
+              {infoRow(Clock, "Hoạt động", lastSeenText)}
               {!u.email && !u.phone && !u.telegramId && (
                 <div style={{ padding: "12px 0", color: "#9ca3af", fontSize: 12, textAlign: "center" }}>Chưa cập nhật thông tin liên hệ</div>
               )}
@@ -3976,7 +4018,7 @@ function UsersPage({ projects, leads }) {
             {/* Dự án */}
             {u.role !== "admin" && (
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>🏗️ Dự án được phân công</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}><Building size={14} /> Dự án được phân công</div>
                 {userProjects.length > 0 ? (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                     {userProjects.map(p => (
@@ -3991,7 +4033,7 @@ function UsersPage({ projects, leads }) {
 
             {/* Chỉnh sửa nhanh */}
             <details style={{ marginBottom: 8 }}>
-              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151", padding: "8px 0", userSelect: "none" }}>✏️ Chỉnh sửa thông tin</summary>
+              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151", padding: "8px 0", userSelect: "none", display: "flex", alignItems: "center", gap: 4 }}><Pencil size={14} /> Chỉnh sửa thông tin</summary>
               <div style={{ marginTop: 8 }}>
                 <label style={{ ...labelStyle, marginTop: 0 }}>Ảnh đại diện</label>
                 {profileDraft.avatarUrl ? (
@@ -4002,10 +4044,10 @@ function UsersPage({ projects, leads }) {
                     }} title="Xem ảnh lớn" />
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #c5d9c8" }}>
-                        📷 Đổi ảnh
+                        <Camera size={12} /> Đổi ảnh
                         <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
                       </label>
-                      <button type="button" onClick={() => setProfileDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0 }}>✕ Xóa</button>
+                      <button type="button" onClick={() => setProfileDraft(d => ({ ...d, avatarUrl: "" }))} style={{ background: "none", border: "none", color: "#dc2626", cursor: "pointer", fontSize: 11, textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 2 }}><X size={11} /> Xóa</button>
                     </div>
                   </div>
                 ) : (
@@ -4015,7 +4057,7 @@ function UsersPage({ projects, leads }) {
                     onDragOver={(e) => e.preventDefault()}
                     style={{ border: "2px dashed #d1d5db", borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: "#fafafa" }}
                   >
-                    <div style={{ fontSize: 20, marginBottom: 2 }}>📷</div>
+                    <div style={{ fontSize: 20, marginBottom: 2 }}><Camera size={20} style={{ color: "#9ca3af" }} /></div>
                     <div style={{ fontSize: 11, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm chọn</span></div>
                     <input ref={profileAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
                   </div>
@@ -4026,7 +4068,7 @@ function UsersPage({ projects, leads }) {
                 <input style={inputStyle} value={profileDraft.phone} onChange={(e) => setProfileDraft({ ...profileDraft, phone: e.target.value })} placeholder="0909 xxx xxx" />
                 <label style={labelStyle}>Telegram ID</label>
                 <input style={inputStyle} value={profileDraft.telegramId} onChange={(e) => setProfileDraft({ ...profileDraft, telegramId: e.target.value })} placeholder="123456789" />
-                <button onClick={handleSaveProfile} style={{ ...btnPrimary, width: "100%", marginTop: 8 }}>💾 Lưu thông tin</button>
+                <button onClick={handleSaveProfile} disabled={savingProfile} style={{ ...btnPrimary, width: "100%", marginTop: 8, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: savingProfile ? 0.6 : 1 }}><Save size={14} /> {savingProfile ? "Đang lưu..." : "Lưu thông tin"}</button>
               </div>
             </details>
           </Modal>
@@ -4134,8 +4176,7 @@ function PostsPage({ projects }) {
     if (!showAll) list = list.filter(p => isToday(p));
     if (filterStatus !== "all") list = list.filter(p => getStatus(p) === filterStatus);
     if (filterProject !== "all") {
-      const q = filterProject.toLowerCase();
-      list = list.filter(p => ((getProject(p) || "").toLowerCase().includes(q) || (p._sheetProject || "").toLowerCase().includes(q)));
+      list = list.filter(p => (p._sheetProject || "") === filterProject);
     }
     if (searchText.trim()) {
       const q = searchText.toLowerCase();
@@ -4154,8 +4195,6 @@ function PostsPage({ projects }) {
   const uniqueProjects = useMemo(() => {
     const set = new Set();
     sheetPosts.forEach(p => {
-      const proj = getProject(p);
-      if (proj) set.add(proj);
       if (p._sheetProject) set.add(p._sheetProject);
     });
     return [...set].sort();
@@ -4191,29 +4230,29 @@ function PostsPage({ projects }) {
 
   if (error) return (
     <div style={{ textAlign: "center", padding: 40 }}>
-      <div style={{ fontSize: 48, marginBottom: 12 }}>📊</div>
+      <div style={{ fontSize: 48, marginBottom: 12 }}><BarChart3 size={48} style={{ color: "#9ca3af" }} /></div>
       <div style={{ color: "#ef4444", fontWeight: 600, marginBottom: 8 }}>{error}</div>
       <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 16 }}>
-        Vui lòng vào <strong>⚙️ Cấu hình Sheet</strong> để thiết lập kết nối Google Sheet.
+        Vui lòng vào <strong><Settings size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Cấu hình Sheet</strong> để thiết lập kết nối Google Sheet.
       </p>
-      <button onClick={loadSheetData} style={{ ...btnPrimary }}>🔄 Thử lại</button>
+      <button onClick={loadSheetData} style={{ ...btnPrimary, display: "inline-flex", alignItems: "center", gap: 6 }}><RefreshCw size={14} /> Thử lại</button>
     </div>
   );
 
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20 }}>📋 Quản lý bài đăng</h2>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20, display: "flex", alignItems: "center", gap: 8 }}><ClipboardList size={20} /> Quản lý bài đăng</h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => { setShowAll(!showAll); setCurrentPage(1); }}
             style={{
               ...(!showAll ? btnPrimary : btnSecondary),
               display: "flex", alignItems: "center", gap: 6,
             }}>
-            {showAll ? "📅 Chỉ hôm nay" : "📋 Xem tất cả"}
+            {showAll ? <><Calendar size={14} /> Chỉ hôm nay</> : <><ClipboardList size={14} /> Xem tất cả</>}
           </button>
           <button onClick={loadSheetData} style={{ ...btnSecondary, display: "flex", alignItems: "center", gap: 6 }}>
-            🔄 Tải lại từ Sheet
+            <RefreshCw size={14} /> Tải lại từ Sheet
           </button>
         </div>
       </div>
@@ -4227,7 +4266,7 @@ function PostsPage({ projects }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
         <input
           style={{ ...inputStyle, width: isMobile ? "100%" : 200, marginBottom: 0 }}
-          placeholder="🔍 Tìm kiếm..."
+          placeholder="Tìm kiếm..."
           value={searchText} onChange={e => { setSearchText(e.target.value); setCurrentPage(1); }}
         />
         <select style={{ ...inputStyle, width: isMobile ? "48%" : 160, marginBottom: 0 }}
@@ -4273,8 +4312,8 @@ function PostsPage({ projects }) {
                   <td style={{ ...tdStyle, fontWeight: 600, color: "#6b7280", width: 50 }}>{getId(post)}</td>
                   <td style={tdStyle}>
                     {status === "POSTED" ? (
-                      <span style={{ padding: "4px 12px", borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700, fontSize: 11 }}>
-                        ✅ POSTED
+                      <span style={{ padding: "4px 12px", borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700, fontSize: 11, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <Check size={11} /> POSTED
                       </span>
                     ) : (
                       <button
@@ -4287,7 +4326,7 @@ function PostsPage({ projects }) {
                           display: "flex", alignItems: "center", gap: 4,
                         }}
                       >
-                        {status === "STOP" ? "⏸️" : "▶️"} {isToggling ? "..." : status}
+                        {status === "STOP" ? <Pause size={11} /> : <Play size={11} />} {isToggling ? "..." : status}
                       </button>
                     )}
                   </td>
@@ -4313,7 +4352,7 @@ function PostsPage({ projects }) {
                   </td>
                   <td style={tdStyle}>
                     <button onClick={() => setSelectedPost(post)} title="Xem chi tiết"
-                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 4 }}>👁️</button>
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, padding: 4 }}><Eye size={16} /></button>
                   </td>
                 </tr>
               );
@@ -4370,20 +4409,20 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
     .map(h => ({ key: h, value: post[h] }));
 
   return (
-    <Modal onClose={onClose} title="📄 Chi tiết bài viết">
+    <Modal onClose={onClose} title={<span style={{ display: "flex", alignItems: "center", gap: 6 }}><FileText size={16} /> Chi tiết bài viết</span>}>
       <div style={{ maxHeight: "70vh", overflow: "auto" }}>
         <div style={{ marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ padding: "4px 14px", borderRadius: 12, background: st.bg, color: st.color, fontWeight: 700, fontSize: 12 }}>
             {status}
           </span>
           {getProject(post) && (
-            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#fef6ee", color: "#e88a2e", fontWeight: 600, fontSize: 12 }}>
-              🏗️ {getProject(post)}
+            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#fef6ee", color: "#e88a2e", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Building size={12} /> {getProject(post)}
             </span>
           )}
           {getPage(post) && (
-            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#f0fdf4", color: "#16a34a", fontWeight: 600, fontSize: 12 }}>
-              📘 {getPage(post)}
+            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#f0fdf4", color: "#16a34a", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <BookOpen size={12} /> {getPage(post)}
             </span>
           )}
         </div>
@@ -4409,7 +4448,7 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 16 }}>
           {getSchedule(post) && (
             <div>
-              <label style={{ ...labelStyle }}>📅 Lịch viết</label>
+              <label style={{ ...labelStyle }}><Calendar size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Lịch viết</label>
               <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>
                 {(() => {
                   const val = getSchedule(post);
@@ -4426,25 +4465,25 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
           )}
           {getNeed(post) && (
             <div>
-              <label style={labelStyle}>🎯 Nhu cầu</label>
+              <label style={labelStyle}><Target size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Nhu cầu</label>
               <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getNeed(post)}</div>
             </div>
           )}
           {getStage(post) && (
             <div>
-              <label style={labelStyle}>📊 Giai đoạn</label>
+              <label style={labelStyle}><BarChart3 size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Giai đoạn</label>
               <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getStage(post)}</div>
             </div>
           )}
           {getPurpose(post) && (
             <div>
-              <label style={labelStyle}>🎯 Mục đích content</label>
+              <label style={labelStyle}><Target size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Mục đích content</label>
               <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getPurpose(post)}</div>
             </div>
           )}
           {getOffice(post) && (
             <div>
-              <label style={labelStyle}>🏢 Văn phòng</label>
+              <label style={labelStyle}><Building size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Văn phòng</label>
               <div style={{ background: "#f8fafc", padding: 8, borderRadius: 6, fontSize: 13 }}>{getOffice(post)}</div>
             </div>
           )}
@@ -4452,7 +4491,7 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
 
         <details style={{ marginTop: 16 }}>
           <summary style={{ cursor: "pointer", fontWeight: 600, fontSize: 13, color: "#6b7280", padding: "8px 0" }}>
-            📋 Xem tất cả dữ liệu từ Sheet ({allFields.length} cột)
+            <ClipboardList size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Xem tất cả dữ liệu từ Sheet ({allFields.length} cột)
           </summary>
           <div style={{ marginTop: 8 }}>
             <table style={{ ...tableStyle, fontSize: 12 }}>
@@ -4529,7 +4568,7 @@ function SheetConfigPage() {
       const r = await apiFetch(`${API}/sheet/test/${id}`);
       const data = await r.json();
       if (r.ok) {
-        setTestResults(prev => ({ ...prev, [id]: { ok: true, msg: `✅ Kết nối thành công! ${data.count} bài viết.` } }));
+        setTestResults(prev => ({ ...prev, [id]: { ok: true, msg: `Kết nối thành công! ${data.count} bài viết.` } }));
       } else {
         setTestResults(prev => ({ ...prev, [id]: { ok: false, msg: data.error || "Lỗi" } }));
       }
@@ -4541,11 +4580,11 @@ function SheetConfigPage() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>⚙️ Cấu hình Google Sheet</h2>
+      <h2 style={{ margin: "0 0 16px", fontSize: 20, display: "flex", alignItems: "center", gap: 8 }}><Settings size={20} /> Cấu hình Google Sheet</h2>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)", maxWidth: 800 }}>
         <div style={{ background: "#f0faf1", padding: 16, borderRadius: 8, marginBottom: 20, fontSize: 13, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8, color: "#1a3c20" }}>📌 Hướng dẫn kết nối Google Sheet</div>
+          <div style={{ fontWeight: 700, marginBottom: 8, color: "#1a3c20", display: "flex", alignItems: "center", gap: 6 }}><Pin size={14} /> Hướng dẫn kết nối Google Sheet</div>
           <ol style={{ margin: 0, paddingLeft: 20, color: "#374151" }}>
             <li>Mở Google Sheet của bạn</li>
             <li>Vào menu <strong>Tiện ích mở rộng</strong> → <strong>Apps Script</strong></li>
@@ -4562,7 +4601,7 @@ function SheetConfigPage() {
 
         <details style={{ marginBottom: 20 }}>
           <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#e88a2e", padding: "8px 0" }}>
-            📋 Xem code Apps Script (bấm để mở)
+            <ClipboardList size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Xem code Apps Script (bấm để mở)
           </summary>
           <pre style={{
             background: "#1e293b", color: "#e2e8f0", padding: 16, borderRadius: 8,
@@ -4636,7 +4675,7 @@ function doPost(e) {
 
         {/* Add new sheet config */}
         <div style={{ background: "#f8fafc", padding: 16, borderRadius: 8, marginBottom: 20 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>➕ Thêm Sheet dự án mới</div>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><Plus size={14} /> Thêm Sheet dự án mới</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <input
               style={{ ...inputStyle, width: 180, marginBottom: 0 }}
@@ -4652,13 +4691,13 @@ function doPost(e) {
             />
             <button onClick={handleAdd} disabled={adding || !newProject.trim() || !newUrl.trim()}
               style={{ ...btnPrimary, opacity: (adding || !newProject.trim() || !newUrl.trim()) ? 0.6 : 1, whiteSpace: "nowrap" }}>
-              {adding ? "Đang thêm..." : "➕ Thêm"}
+              {adding ? "\u0110ang th\u00eam..." : <><Plus size={14} /> Th\u00eam</>}
             </button>
           </div>
         </div>
 
         {/* List existing configs */}
-        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10 }}>📊 Danh sách Sheet đã cấu hình ({configs.length})</div>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><BarChart3 size={14} /> Danh sách Sheet đã cấu hình ({configs.length})</div>
         {configs.length === 0 && (
           <div style={{ color: "#9ca3af", textAlign: "center", padding: 24, fontSize: 13 }}>
             Chưa có Sheet nào. Hãy thêm Sheet dự án ở trên.
@@ -4670,7 +4709,7 @@ function doPost(e) {
             display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
           }}>
             <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20" }}>🏗️ {cfg.name}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Building size={14} /> {cfg.name}</div>
               <div style={{ fontSize: 11, color: "#6b7280", wordBreak: "break-all", marginTop: 2 }}>{cfg.script_url}</div>
               {testResults[cfg.id] && (
                 <div style={{
@@ -4683,10 +4722,10 @@ function doPost(e) {
             <div style={{ display: "flex", gap: 6 }}>
               <button onClick={() => handleTest(cfg.id)} disabled={testingId === cfg.id}
                 style={{ ...btnSecondary, padding: "4px 12px", fontSize: 12, opacity: testingId === cfg.id ? 0.5 : 1 }}>
-                {testingId === cfg.id ? "..." : "🔗 Test"}
+                {testingId === cfg.id ? "..." : <><Link size={12} /> Test</>}
               </button>
               <button onClick={() => handleDelete(cfg.id)} style={{ ...btnDanger, padding: "4px 12px", fontSize: 12 }}>
-                🗑️ Xóa
+                <Trash2 size={12} /> Xóa
               </button>
             </div>
           </div>
@@ -4740,16 +4779,14 @@ function CalendarPage({ projects }) {
   const uniqueProjects = useMemo(() => {
     const set = new Set();
     sheetPosts.forEach(p => {
-      const proj = getProject(p);
-      if (proj) set.add(proj);
+      if (p._sheetProject) set.add(p._sheetProject);
     });
     return [...set].sort();
   }, [sheetPosts]);
 
   const filteredPosts = useMemo(() => {
     if (filterProject === "all") return sheetPosts;
-    const q = filterProject.toLowerCase();
-    return sheetPosts.filter(p => (getProject(p) || "").toLowerCase().includes(q));
+    return sheetPosts.filter(p => (p._sheetProject || "") === filterProject);
   }, [sheetPosts, filterProject]);
 
   const prevMonth = () => setCurrentMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1));
@@ -4796,18 +4833,18 @@ function CalendarPage({ projects }) {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20 }}>📅 Lịch đăng bài</h2>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20, display: "flex", alignItems: "center", gap: 8 }}><Calendar size={20} /> Lịch đăng bài</h2>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <select style={{ ...inputStyle, width: 160, marginBottom: 0, fontSize: 12 }}
             value={filterProject} onChange={e => setFilterProject(e.target.value)}>
             <option value="all">Tất cả dự án</option>
             {uniqueProjects.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
-          <button onClick={prevMonth} style={{ ...btnSecondary, padding: "6px 12px" }}>◀</button>
+          <button onClick={prevMonth} style={{ ...btnSecondary, padding: "6px 12px" }}><ChevronLeft size={14} /></button>
           <span style={{ fontWeight: 700, fontSize: 15, minWidth: 140, textAlign: "center" }}>
             {monthNames[month]} {year}
           </span>
-          <button onClick={nextMonth} style={{ ...btnSecondary, padding: "6px 12px" }}>▶</button>
+          <button onClick={nextMonth} style={{ ...btnSecondary, padding: "6px 12px" }}><ChevronRight size={14} /></button>
         </div>
       </div>
 
@@ -4862,29 +4899,36 @@ function CalendarPage({ projects }) {
   );
 }
 /* ===== Shared styles ===== */
-const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
+const tableStyle = { width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 };
 const thStyle = {
-  padding: "10px 12px", textAlign: "left", background: "#f0f4f1",
+  padding: "12px 14px", textAlign: "left", background: "linear-gradient(135deg, #f0f4f1, #e8ede9)",
   borderBottom: "2px solid #c5d9c8", fontSize: 12, fontWeight: 700, color: "#1a3c20",
-  whiteSpace: "nowrap", letterSpacing: "0.01em",
+  whiteSpace: "nowrap", letterSpacing: "0.02em", textTransform: "uppercase",
 };
-const tdStyle = { padding: "10px 12px", borderBottom: "1px solid #f0f2f5", verticalAlign: "middle" };
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#1a3c20", marginBottom: 4, marginTop: 12 };
+const tdStyle = { padding: "12px 14px", borderBottom: "1px solid #f0f2f5", verticalAlign: "middle" };
+const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#1a3c20", marginBottom: 6, marginTop: 14, letterSpacing: "0.01em" };
 const inputStyle = {
-  width: "100%", padding: "10px 12px", borderRadius: 8,
+  width: "100%", padding: "10px 14px", borderRadius: 10,
   border: "1px solid #d1d5db", fontSize: 13, marginBottom: 8, boxSizing: "border-box",
-  transition: "border-color .2s, box-shadow .2s",
+  transition: "border-color .2s, box-shadow .2s, background .2s",
+  background: "#fafbfc",
 };
 const btnPrimary = {
-  padding: "8px 20px", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff",
-  border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13,
-  boxShadow: "0 2px 6px rgba(232,138,46,.25)",
+  padding: "10px 22px", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff",
+  border: "none", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  boxShadow: "0 2px 8px rgba(232,138,46,.3)",
+  transition: "transform .15s, box-shadow .15s, opacity .15s",
+  display: "inline-flex", alignItems: "center", gap: 6,
 };
 const btnSecondary = {
-  padding: "8px 16px", background: "#f3f4f6", color: "#374151",
-  border: "1px solid #d1d5db", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  padding: "10px 18px", background: "#f8f9fa", color: "#374151",
+  border: "1px solid #e5e7eb", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  transition: "transform .15s, box-shadow .15s, background .15s",
+  display: "inline-flex", alignItems: "center", gap: 6,
 };
 const btnDanger = {
-  padding: "8px 16px", background: "#fee2e2", color: "#dc2626",
-  border: "1px solid #fca5a5", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  padding: "10px 18px", background: "#fff5f5", color: "#dc2626",
+  border: "1px solid #fca5a5", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  transition: "transform .15s, box-shadow .15s, background .15s",
+  display: "inline-flex", alignItems: "center", gap: 6,
 };
