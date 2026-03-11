@@ -1132,6 +1132,11 @@ function requireAuth(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
+  if (req.user?.role !== "admin" && req.user?.role !== "manager") return res.status(403).json({ error: "Forbidden" });
+  next();
+}
+
+function requireAdminOnly(req, res, next) {
   if (req.user?.role !== "admin") return res.status(403).json({ error: "Forbidden" });
   next();
 }
@@ -1146,7 +1151,8 @@ app.post("/api/login", async (req, res) => {
     if (!verifyPassword(String(password), user.password_hash, user.salt)) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
-    const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name, mustChangePassword: !!user.must_change_password };
+    const projectIds = await getUserProjectIds(user.id);
+    const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name, mustChangePassword: !!user.must_change_password, projectIds };
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
     res.json({ token, user: payload });
   } catch (err) {
@@ -1196,7 +1202,11 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { username, password, role, displayName, telegramId } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-    const validRole = ["admin", "sale"].includes(role) ? role : "sale";
+    const validRole = ["admin", "manager", "sale"].includes(role) ? role : "sale";
+    // Manager can only create sale accounts
+    if (req.user.role === "manager" && validRole !== "sale") {
+      return res.status(403).json({ error: "Quản lý chỉ được tạo tài khoản Sale" });
+    }
     const { hash, salt } = hashPassword(String(password));
     const result = await run(
       db,
@@ -1224,7 +1234,11 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
       const { hash, salt } = hashPassword(String(password));
       await run(db, "UPDATE users SET password_hash = ?, salt = ? WHERE id = ?", [hash, salt, id]);
     }
-    if (role && ["admin", "sale"].includes(role)) {
+    if (role && ["admin", "manager", "sale"].includes(role)) {
+      // Manager cannot set role to admin or manager
+      if (req.user.role === "manager" && (role === "admin" || role === "manager")) {
+        return res.status(403).json({ error: "Quản lý chỉ được đặt quyền Sale" });
+      }
       await run(db, "UPDATE users SET role = ? WHERE id = ?", [role, id]);
     }
     if (displayName !== undefined) {
@@ -1259,6 +1273,13 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (req.user.userId === id) return res.status(400).json({ error: "Cannot delete yourself" });
+    // Manager cannot delete admin or manager accounts
+    if (req.user.role === "manager") {
+      const target = await get(db, "SELECT role FROM users WHERE id = ?", [id]);
+      if (target && (target.role === "admin" || target.role === "manager")) {
+        return res.status(403).json({ error: "Quản lý chỉ được xóa tài khoản Sale" });
+      }
+    }
     await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
     const users = await selectUsers();
@@ -1409,7 +1430,7 @@ app.get("/api/telegram-bots", requireAuth, requireAdmin, async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post("/api/telegram-bots", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/telegram-bots", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, token } = req.body;
     if (!name || !token) return res.status(400).json({ error: "Tên bot và token bắt buộc" });
@@ -1419,7 +1440,7 @@ app.post("/api/telegram-bots", requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res) => {
+app.put("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { name, token, isActive } = req.body;
@@ -1431,7 +1452,7 @@ app.put("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res) =>
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete("/api/telegram-bots/:id", requireAuth, requireAdmin, async (req, res) => {
+app.delete("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     await run(db, "DELETE FROM telegram_bots WHERE id = ?", [Number(req.params.id)]);
     const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
@@ -1547,7 +1568,7 @@ app.get("/api/projects", requireAuth, async (_req, res) => {
   }
 });
 
-app.post("/api/projects", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, leadUrl, costUrl, fbCode, fbPerson } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "Name required" });
@@ -1579,7 +1600,7 @@ app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) =
   }
 });
 
-app.put("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
+app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { name, leadUrl, costUrl, fbCode, fbPerson } = req.body;
@@ -1597,7 +1618,7 @@ app.put("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-app.delete("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
+app.delete("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
     await run(db, "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", [id]);
@@ -2125,7 +2146,7 @@ app.get("/api/sheet/configs", requireAuth, requireAdmin, async (_req, res) => {
 });
 
 // Add a sheet config
-app.post("/api/sheet/configs", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/sheet/configs", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { projectName, scriptUrl } = req.body;
     if (!projectName || !scriptUrl) return res.status(400).json({ error: "Thiếu tên dự án hoặc URL" });
@@ -2136,7 +2157,7 @@ app.post("/api/sheet/configs", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // Delete a sheet config
-app.delete("/api/sheet/configs/:id", requireAuth, requireAdmin, async (req, res) => {
+app.delete("/api/sheet/configs/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     await run(db, "DELETE FROM sheet_configs WHERE id = ?", [Number(req.params.id)]);
     const rows = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
@@ -2533,7 +2554,7 @@ app.get("/api/fb-ad-accounts", requireAuth, requireAdmin, async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post("/api/fb-ad-accounts", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/fb-ad-accounts", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, accountId, accessToken } = req.body;
     if (!accountId) return res.status(400).json({ error: "Account ID is required" });
@@ -2543,7 +2564,7 @@ app.post("/api/fb-ad-accounts", requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put("/api/fb-ad-accounts/:id", requireAuth, requireAdmin, async (req, res) => {
+app.put("/api/fb-ad-accounts/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, accountId, accessToken, isActive } = req.body;
     const existing = await get(db, "SELECT * FROM fb_ad_accounts WHERE id=?", [req.params.id]);
@@ -2556,7 +2577,7 @@ app.put("/api/fb-ad-accounts/:id", requireAuth, requireAdmin, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete("/api/fb-ad-accounts/:id", requireAuth, requireAdmin, async (req, res) => {
+app.delete("/api/fb-ad-accounts/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     await run(db, "DELETE FROM fb_ad_accounts WHERE id=?", [req.params.id]);
     res.json({ ok: true });

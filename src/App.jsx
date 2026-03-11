@@ -395,14 +395,17 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
 }
 
 function CRMApp({ user, updateUser, onLogout }) {
-  const isAdmin = user.role === "admin";
+  const isAdmin = user.role === "admin" || user.role === "manager";
+  const isAdminOnly = user.role === "admin";
+  const isManager = user.role === "manager";
   const isMobile = useIsMobile();
   const adminPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
+  const managerPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "profile"];
   const salePages = ["leads", "profile"];
   const [page, setPage] = useState(() => {
     try {
       const saved = localStorage.getItem("crm_page");
-      const allowed = isAdmin ? adminPages : salePages;
+      const allowed = isAdminOnly ? adminPages : isManager ? managerPages : salePages;
       if (saved && allowed.includes(saved)) return saved;
     } catch {}
     return isAdmin ? "dashboard" : "leads";
@@ -700,6 +703,11 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [campaigns, selectedProject]);
 
   // --- Pages ---
+  const postChildren = [
+    { key: "posts", label: "Tất cả bài", icon: FileText },
+    { key: "calendar", label: "Lịch đăng bài", icon: Calendar },
+  ];
+  if (isAdminOnly) postChildren.push({ key: "sheet_config", label: "Cấu hình Sheet", icon: Settings });
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
     { key: "leads", label: "Khách hàng", icon: Users, adminOnly: false },
@@ -708,11 +716,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "sales", label: "Sale", icon: Trophy, adminOnly: true },
     { key: "users", label: "Quản lý tài khoản", icon: UserCog, adminOnly: true },
     { key: "profile", label: "Hồ sơ cá nhân", icon: IdCard, adminOnly: false },
-    { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: [
-      { key: "posts", label: "Tất cả bài", icon: FileText },
-      { key: "calendar", label: "Lịch đăng bài", icon: Calendar },
-      { key: "sheet_config", label: "Cấu hình Sheet", icon: Settings },
-    ]},
+    { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: postChildren },
   ];
 
   const [openSubmenu, setOpenSubmenu] = useState("post_mgmt");
@@ -760,21 +764,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           {isMobile && sidebarOpen && <span style={{ padding: 4, display: "flex", alignItems: "center" }}><X size={20} /></span>}
         </div>
 
-        {/* Project selector */}
-        {(isMobile || sidebarOpen) && (
-          <div style={{ padding: "0 12px 12px" }}>
-            <select
-              value={selectedProject}
-              onChange={(e) => setSelectedProject(e.target.value)}
-              style={{ width: "100%", padding: "8px", borderRadius: 6, border: "none", fontSize: 14 }}
-            >
-              <option value="all">Tất cả dự án</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* Project selector removed from sidebar - now in leads filter area */}
 
         <nav style={{ flex: 1, overflowY: "auto" }}>
           {visibleNav.map((n) => {
@@ -902,8 +892,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.9 }}>
               {user.displayName} <span style={{
                 fontSize: 10, padding: "1px 6px", borderRadius: 8,
-                background: user.role === "admin" ? "#e88a2e" : "#7ab648", color: "#fff",
-              }}>{user.role === "admin" ? "Admin" : "Sale"}</span>
+                background: user.role === "admin" ? "#e88a2e" : user.role === "manager" ? "#3b82f6" : "#7ab648", color: "#fff",
+              }}>{user.role === "admin" ? "Admin" : user.role === "manager" ? "Quản lý" : "Sale"}</span>
             </div>
             <button
               onClick={onLogout}
@@ -1063,6 +1053,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             onLogout={onLogout}
             highlightLeadId={highlightLeadId}
             setHighlightLeadId={setHighlightLeadId}
+            selectedProject={selectedProject}
+            setSelectedProject={setSelectedProject}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -1073,15 +1065,16 @@ function CRMApp({ user, updateUser, onLogout }) {
             deleteProject={deleteProject}
             apiFetch={apiFetch}
             applyApiData={applyApiData}
+            isAdminOnly={isAdminOnly}
           />
         )}
-        {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} />}
+        {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} apiFetch={apiFetch} applyApiData={applyApiData} />}
-        {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} />}
+        {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
-        {page === "sheet_config" && isAdmin && <SheetConfigPage />}
+        {page === "sheet_config" && isAdminOnly && <SheetConfigPage />}
         </div>
       </main>
 
@@ -1795,7 +1788,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject }) {
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
   const [activeTab, setActiveTab] = useState("all");
@@ -1820,12 +1813,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     }
   }, [isAdmin]);
 
-  // Show MỚI tag: only for leads not assigned to sale AND within 7 days
+  // Show NEW tag: only for leads received TODAY (same date)
   const isRecentLead = useCallback((l) => {
-    if (l.saleName) return false;
     const d = parseLeadDate(l.createdAt);
     if (!d) return false;
-    return (Date.now() - d.getTime()) < 7 * 24 * 60 * 60 * 1000;
+    const today = new Date();
+    return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
   }, []);
 
   const projectMap = useMemo(() => {
@@ -2146,7 +2139,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         })}
       </div>
 
-      {/* Search / Date filters */}
+      {/* Search / Date / Project filters */}
       <div style={{ display: "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
         <input
           style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
@@ -2166,6 +2159,18 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày"><X size={14} /></button>
           )}
         </div>
+        {setSelectedProject && (
+          <select
+            value={selectedProject}
+            onChange={(e) => setSelectedProject(e.target.value)}
+            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? "100%" : 180 }}
+          >
+            <option value="all">Tất cả dự án</option>
+            {(user.role === "sale" ? projects.filter(p => user.projectIds && user.projectIds.includes(p.id)) : projects).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
@@ -2194,7 +2199,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
-                      {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>MỚI</span>}
+                      {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>NEW</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
@@ -2251,7 +2256,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
                     <td style={tdStyle}>
@@ -2458,7 +2463,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <span style={{ display: "flex", alignItems: "center", gap: 4 }}><ClipboardList size={16} /> Lịch sử ({history.length})</span>
         <button onClick={() => setShowForm(!showForm)}
           style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
-          {showForm ? "Hủy" : "+ Thêm"}
+          {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật trạng thái</>}
         </button>
       </h4>
 
@@ -2468,9 +2473,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", flexDirection: isMobile ? "column" : "row" }}>
             <div style={{ flex: "1 1 200px", width: isMobile ? "100%" : "auto" }}>
               <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Trạng thái</label>
-              <input value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
-                placeholder="VD: Quan tâm, Hẹn xem..."
-                style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }} />
+              <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
+                style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }}>
+                <option value="">-- Chọn trạng thái --</option>
+                {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
             </div>
             <div style={{ flex: "2 1 300px", width: isMobile ? "100%" : "auto" }}>
               <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Feedback</label>
@@ -2533,7 +2540,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   );
 }
 
-function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData }) {
+function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData, isAdminOnly }) {
   const isMobile = useIsMobile();
   const [syncingId, setSyncingId] = React.useState(null);
 
@@ -2560,7 +2567,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>{projects.length} dự án</div>
-        <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>
+        {isAdminOnly && <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
@@ -2588,8 +2595,8 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
                   {isSyncing && <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
                   {isSyncing ? "Đồng bộ..." : <><RefreshCw size={14} /> Sync</>}
                 </button>
-                <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
-                <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>
+                {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>}
+                {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>}
               </div>
             </div>
           );
@@ -2599,7 +2606,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
   );
 }
 
-function CampaignsPage({ leads, projects }) {
+function CampaignsPage({ leads, projects, isManager = false }) {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("leads"); // "leads" | "fb_ads" | "settings"
   const [selectedProjectId, setSelectedProjectId] = useState(null);
@@ -2868,7 +2875,7 @@ function CampaignsPage({ leads, projects }) {
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16, flexWrap: "wrap" }}>
       {tabBtn("leads", "Lead theo chiến dịch", <Target size={15} />)}
       {tabBtn("fb_ads", "Hiệu quả quảng cáo FB", <Activity size={15} />)}
-      {tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
+      {!isManager && tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
     </div>
   );
 
@@ -3309,7 +3316,7 @@ function CampaignsPage({ leads, projects }) {
           <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
             <Activity size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
             <div style={{ fontSize: 14 }}>Chọn tài khoản quảng cáo và bấm "Xem báo cáo" để xem hiệu quả</div>
-            <div style={{ fontSize: 12, marginTop: 4 }}>Chưa có tài khoản? Vào tab <b>"Cài đặt tài khoản"</b> để thêm</div>
+            {!isManager && <div style={{ fontSize: 12, marginTop: 4 }}>Chưa có tài khoản? Vào tab <b>"Cài đặt tài khoản"</b> để thêm</div>}
           </div>
         )}
 
@@ -3517,7 +3524,7 @@ function CampaignsPage({ leads, projects }) {
   }
 
   // === Settings Tab ===
-  if (tab === "settings") {
+  if (tab === "settings" && !isManager) {
     return (
       <div>
         {tabBar}
@@ -4601,7 +4608,7 @@ function ProfilePage({ user, updateUser }) {
   );
 }
 
-function UsersPage({ projects, leads }) {
+function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) {
   const isMobile = useIsMobile();
   const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
@@ -4843,15 +4850,15 @@ function UsersPage({ projects, leads }) {
                     <span style={{ fontWeight: 700, fontSize: 14 }}>{u.displayName || u.username}</span>
                     <span style={{
                       marginLeft: 8, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                      background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
-                      color: u.role === "admin" ? "#dc2626" : "#1a3c20",
-                    }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
+                      background: u.role === "admin" ? "#fef2f2" : u.role === "manager" ? "#eff6ff" : "#f0faf1",
+                      color: u.role === "admin" ? "#dc2626" : u.role === "manager" ? "#2563eb" : "#1a3c20",
+                    }}>{u.role === "admin" ? "Admin" : u.role === "manager" ? "Quản lý" : "Sale"}</span>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><IdCard size={14} /></button>
-                  <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Pencil size={14} /></button>
-                  <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Trash2 size={14} /></button>
+                  {(!isManager || u.role === "sale") && <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Pencil size={14} /></button>}
+                  {(!isManager || u.role === "sale") && <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "6px 12px", fontSize: 12, minHeight: 36 }}><Trash2 size={14} /></button>}
                 </div>
               </div>
               <div style={{ fontSize: 12, color: "#6b7280", display: "flex", flexDirection: "column", gap: 3 }}>
@@ -4859,7 +4866,7 @@ function UsersPage({ projects, leads }) {
                 {u.email && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={12} /> {u.email}</div>}
                 {u.phone && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Smartphone size={12} /> {u.phone}</div>}
                 {u.telegramId && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Send size={12} /> {u.telegramId}</div>}
-                {u.role !== "admin" && (
+                {u.role !== "admin" && u.role !== "manager" && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 2 }}>
                     {(u.projectIds && u.projectIds.length > 0)
                       ? u.projectIds.map(pid => {
@@ -4914,7 +4921,7 @@ function UsersPage({ projects, leads }) {
                   {!u.email && !u.phone && <span style={{ color: "#9ca3af" }}>—</span>}
                 </td>
                 <td style={tdStyle}>
-                  {u.role === "admin" ? (
+                  {(u.role === "admin" || u.role === "manager") ? (
                     <span style={{ color: "#6b7280", fontSize: 11, fontStyle: "italic" }}>Tất cả</span>
                   ) : (u.projectIds && u.projectIds.length > 0) ? (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
@@ -4936,18 +4943,18 @@ function UsersPage({ projects, leads }) {
                 <td style={tdStyle}>
                   <span style={{
                     padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                    background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
-                    color: u.role === "admin" ? "#dc2626" : "#1a3c20",
+                    background: u.role === "admin" ? "#fef2f2" : u.role === "manager" ? "#eff6ff" : "#f0faf1",
+                    color: u.role === "admin" ? "#dc2626" : u.role === "manager" ? "#2563eb" : "#1a3c20",
                   }}>
-                    {u.role === "admin" ? "Admin" : "Sale"}
+                    {u.role === "admin" ? "Admin" : u.role === "manager" ? "Quản lý" : "Sale"}
                   </span>
                 </td>
                 <td style={{ ...tdStyle, fontSize: 11 }}>{u.createdAt || "-"}</td>
                 <td style={tdStyle}>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button onClick={() => openProfile(u)} title="Hồ sơ" style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><IdCard size={12} /></button>
-                    <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Pencil size={12} /></button>
-                    <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}><Trash2 size={12} /></button>
+                    {(!isManager || u.role === "sale") && <button onClick={() => openEdit(u)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Pencil size={12} /></button>}
+                    {(!isManager || u.role === "sale") && <button onClick={() => handleDelete(u.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}><Trash2 size={12} /></button>}
                   </div>
                 </td>
               </tr>
@@ -4957,7 +4964,8 @@ function UsersPage({ projects, leads }) {
       </div>
       )}
 
-      {/* ===== TELEGRAM BOT ===== */}
+      {/* ===== TELEGRAM BOT (Admin only) ===== */}
+      {isAdminOnly && <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 14, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}><Bot size={14} /> Telegram Bot ({bots.length})</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -5036,6 +5044,7 @@ function UsersPage({ projects, leads }) {
           </table>
       </div>
       )}
+      </>}
 
       {/* Modal thêm/sửa tài khoản */}
       {showForm && (
@@ -5102,9 +5111,10 @@ function UsersPage({ projects, leads }) {
           <select value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })}
             style={{ ...inputStyle }}>
             <option value="sale">Sale</option>
-            <option value="admin">Admin</option>
+            {isAdminOnly && <option value="manager">Quản lý</option>}
+            {isAdminOnly && <option value="admin">Admin</option>}
           </select>
-          {draft.role === "sale" && (
+          {(draft.role === "sale" || draft.role === "manager") && (
             <>
               <label style={labelStyle}><Building size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Dự án được phép truy cập</label>
               {projects.length > 5 && (
