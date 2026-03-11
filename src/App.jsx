@@ -2586,7 +2586,9 @@ function CampaignsPage({ leads, projects }) {
 
   // FB Ads state
   const [adAccounts, setAdAccounts] = useState([]);
-  const [selectedAccount, setSelectedAccount] = useState("");
+  const [selectedAccounts, setSelectedAccounts] = useState([]);
+  const [showAcctDropdown, setShowAcctDropdown] = useState(false);
+  const acctDropdownRef = useRef(null);
   const [fbInsights, setFbInsights] = useState([]);
   const [fbLoading, setFbLoading] = useState(false);
   const [fbError, setFbError] = useState("");
@@ -2611,27 +2613,51 @@ function CampaignsPage({ leads, projects }) {
   };
   useEffect(() => { loadAdAccounts(); }, []);
 
+  // Click-outside for account dropdown
+  useEffect(() => {
+    if (!showAcctDropdown) return;
+    const handler = (e) => { if (acctDropdownRef.current && !acctDropdownRef.current.contains(e.target)) setShowAcctDropdown(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showAcctDropdown]);
+
+  const toggleAccountSelection = (accountId) => {
+    setSelectedAccounts(prev => prev.includes(accountId) ? prev.filter(id => id !== accountId) : [...prev, accountId]);
+  };
+
   const loadInsights = async () => {
-    if (!selectedAccount) return;
+    if (!selectedAccounts.length) return;
     setFbLoading(true); setFbError(""); setSelectedFbProject(null); setCampSearch(""); setCampPage(1); setCampSort({ col: null, asc: true });
     try {
-      const [insightsRes, campaignsRes] = await Promise.all([
-        apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
-        apiFetch(`${API}/fb-ads/campaigns/${selectedAccount}`)
-      ]);
-      const insightsData = await insightsRes.json();
-      if (!insightsRes.ok) { setFbError(insightsData.error || "Lỗi tải dữ liệu"); setFbInsights([]); }
+      const allInsights = [];
+      const errors = [];
+      await Promise.all(selectedAccounts.map(async (acctId) => {
+        try {
+          const [insightsRes, campaignsRes] = await Promise.all([
+            apiFetch(`${API}/fb-ads/insights/${acctId}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
+            apiFetch(`${API}/fb-ads/campaigns/${acctId}`)
+          ]);
+          const insightsData = await insightsRes.json();
+          if (!insightsRes.ok) { errors.push(insightsData.error || `Lỗi tài khoản ${acctId}`); }
+          else {
+            let statusMap = {};
+            if (campaignsRes.ok) {
+              const camps = await campaignsRes.json();
+              camps.forEach(c => { statusMap[c.id] = { status: c.status, objective: c.objective }; });
+            }
+            allInsights.push(...insightsData.map(row => ({
+              ...row,
+              _accountId: acctId,
+              status: statusMap[row.campaign_id]?.status || "",
+              objective: statusMap[row.campaign_id]?.objective || ""
+            })));
+          }
+        } catch (e) { errors.push(`Lỗi tài khoản ${acctId}: ${e.message}`); }
+      }));
+      if (errors.length && !allInsights.length) { setFbError(errors.join("; ")); setFbInsights([]); }
       else {
-        let statusMap = {};
-        if (campaignsRes.ok) {
-          const camps = await campaignsRes.json();
-          camps.forEach(c => { statusMap[c.id] = { status: c.status, objective: c.objective }; });
-        }
-        setFbInsights(insightsData.map(row => ({
-          ...row,
-          status: statusMap[row.campaign_id]?.status || "",
-          objective: statusMap[row.campaign_id]?.objective || ""
-        })));
+        if (errors.length) setFbError(errors.join("; "));
+        setFbInsights(allInsights);
       }
     } catch (e) { setFbError("Lỗi kết nối: " + e.message); setFbInsights([]); }
     setFbLoading(false);
@@ -2828,14 +2854,46 @@ function CampaignsPage({ leads, projects }) {
   if (tab === "fb_ads") {
     // Controls bar (shared between views)
     const currentPresetLabel = datePresets.find(p => p.key === fbDatePreset)?.label || "Tùy chọn";
+    const activeAccounts = adAccounts.filter(a => a.isActive);
+    const selectedAcctNames = activeAccounts.filter(a => selectedAccounts.includes(a.accountId)).map(a => a.name || `act_${a.accountId}`);
     const fbControls = (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "flex-end" }}>
-        <div style={{ flex: "1 1 180px", minWidth: 150 }}>
+        <div style={{ flex: "1 1 220px", minWidth: 180, position: "relative" }} ref={acctDropdownRef}>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Tài khoản QC</label>
-          <select value={selectedAccount} onChange={(e) => { setSelectedAccount(e.target.value); setSelectedFbProject(null); }} style={{ ...inputStyle, marginBottom: 0 }}>
-            <option value="">-- Chọn tài khoản --</option>
-            {adAccounts.filter(a => a.isActive).map(a => <option key={a.id} value={a.accountId}>{a.name || `act_${a.accountId}`}</option>)}
-          </select>
+          <button onClick={() => setShowAcctDropdown(!showAcctDropdown)} style={{ ...inputStyle, marginBottom: 0, background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, width: "100%", justifyContent: "space-between", textAlign: "left", minHeight: 42 }}>
+            <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+              {selectedAccounts.length === 0 ? "-- Chọn tài khoản --" : selectedAccounts.length === 1 ? selectedAcctNames[0] : `${selectedAccounts.length} tài khoản`}
+            </span>
+            <ChevronDown size={14} style={{ opacity: 0.5, flexShrink: 0, transform: showAcctDropdown ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+          </button>
+          {showAcctDropdown && (
+            <div style={{ position: "absolute", top: "100%", left: 0, right: 0, zIndex: 120, background: "#fff", borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,.15)", border: "1px solid #e5e7eb", marginTop: 4, maxHeight: 240, overflowY: "auto" }}>
+              {activeAccounts.length === 0 && <div style={{ padding: "12px 14px", color: "#9ca3af", fontSize: 13 }}>Chưa có tài khoản nào</div>}
+              {activeAccounts.length > 1 && (
+                <div onClick={() => { selectedAccounts.length === activeAccounts.length ? setSelectedAccounts([]) : setSelectedAccounts(activeAccounts.map(a => a.accountId)); }}
+                  style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8, fontWeight: 600, color: "#1a3c20" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#f0fdf4"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  <span style={{ width: 18, height: 18, borderRadius: 4, border: selectedAccounts.length === activeAccounts.length ? "none" : "2px solid #d1d5db", background: selectedAccounts.length === activeAccounts.length ? "#1a3c20" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", flexShrink: 0 }}>
+                    {selectedAccounts.length === activeAccounts.length ? "✓" : ""}
+                  </span>
+                  Chọn tất cả
+                </div>
+              )}
+              {activeAccounts.map(a => {
+                const checked = selectedAccounts.includes(a.accountId);
+                return (
+                  <div key={a.id} onClick={() => toggleAccountSelection(a.accountId)}
+                    style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", gap: 8, color: "#374151", transition: "background .15s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "#f9fafb"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                    <span style={{ width: 18, height: 18, borderRadius: 4, border: checked ? "none" : "2px solid #d1d5db", background: checked ? "#1a3c20" : "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff", flexShrink: 0 }}>
+                      {checked ? "✓" : ""}
+                    </span>
+                    {a.name || `act_${a.accountId}`}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div style={{ flex: "0 1 auto", position: "relative" }} ref={datePickerRef}>
           <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Khoảng thời gian</label>
@@ -2873,7 +2931,7 @@ function CampaignsPage({ leads, projects }) {
             </div>
           )}
         </div>
-        <button onClick={loadInsights} disabled={!selectedAccount || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={loadInsights} disabled={!selectedAccounts.length || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
           {fbLoading ? <><RefreshCw size={14} className="spin" /> Đang tải...</> : <><RefreshCw size={14} /> Xem báo cáo</>}
         </button>
       </div>
@@ -3225,7 +3283,7 @@ function CampaignsPage({ leads, projects }) {
         {tabBar}
         {fbControls}
 
-        {!selectedAccount && (
+        {!selectedAccounts.length && (
           <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
             <Activity size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
             <div style={{ fontSize: 14 }}>Chọn tài khoản quảng cáo và bấm "Xem báo cáo" để xem hiệu quả</div>
@@ -3429,7 +3487,7 @@ function CampaignsPage({ leads, projects }) {
           </>
         )}
 
-        {selectedAccount && !fbLoading && fbInsights.length === 0 && !fbError && (
+        {selectedAccounts.length > 0 && !fbLoading && fbInsights.length === 0 && !fbError && (
           <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 13 }}>Bấm "Xem báo cáo" để tải dữ liệu từ Facebook</div>
         )}
       </div>
