@@ -5204,7 +5204,7 @@ function UsersPage({ projects, leads }) {
         } catch {}
         const infoRow = (IconComp, label, value) => value ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-            <span style={{ width: 24, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}>{typeof IconComp === "function" ? <IconComp size={16} /> : IconComp}</span>
+            <span style={{ width: 24, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}>{React.isValidElement(IconComp) ? IconComp : <IconComp size={16} />}</span>
             <span style={{ fontSize: 12, color: "#6b7280", minWidth: 80 }}>{label}</span>
             <span style={{ fontSize: 13, color: "#111827", fontWeight: 500, flex: 1, wordBreak: "break-word" }}>{value}</span>
           </div>
