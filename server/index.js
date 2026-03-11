@@ -1164,8 +1164,9 @@ app.post("/api/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
-app.get("/api/me", requireAuth, (req, res) => {
-  res.json({ user: req.user });
+app.get("/api/me", requireAuth, async (req, res) => {
+  const projectIds = await getUserProjectIds(req.user.userId);
+  res.json({ user: { ...req.user, projectIds } });
 });
 
 /* ---------- User management (admin only) ---------- */

@@ -412,6 +412,14 @@ function CRMApp({ user, updateUser, onLogout }) {
     return isAdmin ? "dashboard" : "leads";
   });
   useEffect(() => { localStorage.setItem("crm_page", page); }, [page]);
+
+  // Refresh user data (projectIds etc.) from server on mount
+  useEffect(() => {
+    apiFetch(`${API}/me`).then(r => r.json()).then(data => {
+      if (data.user) updateUser(data.user);
+    }).catch(() => {});
+  }, []);
+
   const [leads, setLeads] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
