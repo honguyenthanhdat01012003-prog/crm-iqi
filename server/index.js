@@ -1462,12 +1462,18 @@ app.delete("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, 
 });
 
 /* ---------- Sales analytics ---------- */
-app.get("/api/sales/analytics", requireAuth, requireAdmin, async (_req, res) => {
+app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
   try {
     const logs = await all(db, "SELECT * FROM lead_status_log ORDER BY changed_at ASC");
     const hRows = await all(db, "SELECT * FROM lead_history ORDER BY id ASC");
-    const leadRows = await all(db, "SELECT * FROM leads");
+    let leadRows = await all(db, "SELECT * FROM leads");
     const users = await all(db, "SELECT display_name FROM users WHERE role = 'sale'");
+
+    // Manager: filter leads by assigned projects
+    if (req.user.role === "manager") {
+      const projectIds = await getUserProjectIds(req.user.userId);
+      leadRows = leadRows.filter(l => projectIds.includes(l.project_id));
+    }
 
     // Per-agent stats
     const agents = {};
@@ -1558,10 +1564,15 @@ app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
 });
 
 /* ===== Project CRUD ===== */
-app.get("/api/projects", requireAuth, async (_req, res) => {
+app.get("/api/projects", requireAuth, async (req, res) => {
   try {
     const data = await readData(db);
-    res.json(data.projects);
+    if (req.user.role === "manager") {
+      const projectIds = await getUserProjectIds(req.user.userId);
+      res.json(data.projects.filter(p => projectIds.includes(p.id)));
+    } else {
+      res.json(data.projects);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1752,9 +1763,13 @@ function filterLeadsForSale(data, displayName) {
 function filterLeadsForManager(data, projectIds) {
   if (!projectIds || projectIds.length === 0) {
     data.leads = [];
+    data.projects = [];
+    data.campaigns = [];
     return data;
   }
   data.leads = data.leads.filter(l => projectIds.includes(l.projectId));
+  data.projects = data.projects.filter(p => projectIds.includes(p.id));
+  data.campaigns = data.campaigns.filter(c => projectIds.includes(c.projectId));
   return data;
 }
 
