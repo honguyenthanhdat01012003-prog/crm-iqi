@@ -2585,10 +2585,24 @@ function CampaignsPage({ leads, projects }) {
     if (!selectedAccount) return;
     setFbLoading(true); setFbError("");
     try {
-      const r = await apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=${fbLevel}`);
-      const data = await r.json();
-      if (!r.ok) { setFbError(data.error || "Lỗi tải dữ liệu"); setFbInsights([]); }
-      else setFbInsights(data);
+      const [insightsRes, campaignsRes] = await Promise.all([
+        apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=${fbLevel}`),
+        apiFetch(`${API}/fb-ads/campaigns/${selectedAccount}`)
+      ]);
+      const insightsData = await insightsRes.json();
+      if (!insightsRes.ok) { setFbError(insightsData.error || "Lỗi tải dữ liệu"); setFbInsights([]); }
+      else {
+        let statusMap = {};
+        if (campaignsRes.ok) {
+          const camps = await campaignsRes.json();
+          camps.forEach(c => { statusMap[c.id] = { status: c.status, objective: c.objective }; });
+        }
+        setFbInsights(insightsData.map(row => ({
+          ...row,
+          status: statusMap[row.campaign_id]?.status || "",
+          objective: statusMap[row.campaign_id]?.objective || ""
+        })));
+      }
     } catch (e) { setFbError("Lỗi kết nối: " + e.message); setFbInsights([]); }
     setFbLoading(false);
   };
