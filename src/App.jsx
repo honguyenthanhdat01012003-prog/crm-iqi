@@ -2852,12 +2852,118 @@ function CampaignsPage({ leads, projects }) {
           </button>
         </div>
 
-        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#92400e", display: "flex", alignItems: "flex-start", gap: 8 }}>
-          <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} />
-          <div>
-            <b>Hướng dẫn:</b> Để lấy Ad Account ID, vào <b>Facebook Ads Manager</b> → Xem URL có dạng <code>act_XXXXXXX</code> → Copy phần số. Access Token cần quyền <code>ads_read</code>, lấy từ Graph API Explorer.
+        <details style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#92400e" }}>
+          <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 13, userSelect: "none", listStyle: "none" }}>
+            <Info size={16} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>📖 Hướng dẫn cài đặt tài khoản FB Ads (bấm để xem chi tiết)</span>
+            <ChevronDown size={14} style={{ flexShrink: 0, opacity: 0.6 }} />
+          </summary>
+          <div style={{ marginTop: 12, lineHeight: 1.8, fontSize: 12.5 }}>
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 1: TẠO ỨNG DỤNG FACEBOOK (Chỉ làm 1 lần)</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div><b>1.</b> Mở trình duyệt → Vào: <b>developers.facebook.com</b></div>
+                <div><b>2.</b> Đăng nhập bằng tài khoản Facebook <b>đang quản lý Fanpage/Tài khoản quảng cáo</b></div>
+                <div><b>3.</b> Bấm <b>"Ứng dụng của tôi"</b> (My Apps) → <b>"Tạo ứng dụng"</b> (Create App)</div>
+                <div><b>4.</b> Chọn loại: <b>"Doanh nghiệp"</b> (Business) hoặc <b>"Không"</b> (None) → Bấm <b>Tiếp</b></div>
+                <div><b>5.</b> Đặt tên ứng dụng (VD: <code>CRM Ads Reader</code>) + Email → Bấm <b>"Tạo ứng dụng"</b></div>
+                <div style={{ background: "#fef3c7", padding: "4px 8px", borderRadius: 6, marginTop: 4, fontSize: 11 }}>⚠️ Nếu đã tạo ứng dụng rồi thì bỏ qua bước này</div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 2: CẤU HÌNH QUYỀN CHO ỨNG DỤNG</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div><b>1.</b> Từ Dashboard ứng dụng → Bấm <b>"Tùy chỉnh trường hợp sử dụng"</b></div>
+                <div><b>2.</b> Tìm và bấm <b>"Thêm"</b> (Add) cho các quyền sau:</div>
+                <div style={{ background: "#f0fdf4", padding: "6px 10px", borderRadius: 6, margin: "6px 0", fontSize: 11.5 }}>
+                  ✅ <code>ads_read</code> — Đọc dữ liệu quảng cáo (chi phí, hiệu quả)<br/>
+                  ✅ <code>ads_management</code> — Quản lý quảng cáo (tuỳ chọn)<br/>
+                  ✅ <code>pages_show_list</code> — Xem danh sách Page<br/>
+                  ✅ <code>business_management</code> — Quản lý tài khoản doanh nghiệp
+                </div>
+                <div style={{ fontSize: 11, color: "#b45309" }}>💡 Nếu bạn là Admin/Developer của ứng dụng → dùng được ngay mà KHÔNG cần xét duyệt</div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 3: LẤY AD ACCOUNT ID</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div><b>1.</b> Mở <b>Facebook Ads Manager</b>: <b>facebook.com/adsmanager</b></div>
+                <div><b>2.</b> Nhìn thanh URL trên trình duyệt, tìm dạng: <code>act_<b style={{color:"#dc2626"}}>123456789</b></code></div>
+                <div><b>3.</b> Copy <b>phần số</b> phía sau <code>act_</code> (VD: <code>123456789</code>)</div>
+                <div><b>4.</b> Hoặc vào <b>Cài đặt tài khoản quảng cáo</b> → Dòng <b>"ID tài khoản quảng cáo"</b></div>
+                <div style={{ background: "#fef3c7", padding: "4px 8px", borderRadius: 6, marginTop: 4, fontSize: 11 }}>💡 Mỗi tài khoản quảng cáo có 1 ID riêng. Nhập chỉ phần số, hệ thống tự thêm <code>act_</code></div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 4: LẤY ACCESS TOKEN (QUAN TRỌNG NHẤT!)</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div><b>1.</b> Vào <b>Graph API Explorer</b>: <b>developers.facebook.com/tools/explorer/</b></div>
+                <div><b>2.</b> Ở dropdown <b>"Facebook App"</b> → <b>Chọn ứng dụng bạn vừa tạo</b></div>
+                <div><b>3.</b> Bấm <b>"Add a Permission"</b> → Mở mục <b>"Other"</b> → Tick chọn:</div>
+                <div style={{ background: "#f0fdf4", padding: "4px 10px", borderRadius: 6, margin: "4px 0", fontSize: 11.5 }}>
+                  ✅ <code>ads_read</code> · ✅ <code>business_management</code>
+                </div>
+                <div><b>4.</b> Bấm <b>"Generate Access Token"</b> → Đăng nhập → <b>Cho phép tất cả</b></div>
+                <div><b>5.</b> Copy chuỗi token dài trong ô Access Token</div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 5: GIA HẠN TOKEN (TOKEN VĨNH VIỄN)</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div style={{ fontWeight: 600, color: "#b45309", marginBottom: 4 }}>⚠️ Token mặc định chỉ có hạn 1-2 giờ! Phải gia hạn:</div>
+                <div style={{ background: "#fef3c7", padding: "8px 10px", borderRadius: 6, marginBottom: 6 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>🅰️ Cách nhanh (60 ngày):</div>
+                  <div style={{ paddingLeft: 8, fontSize: 11.5 }}>
+                    <div>1. Quay lại Graph API Explorer → Giữ dropdown ở <b>"User Token"</b></div>
+                    <div>2. Vào Debug Tool: <b>developers.facebook.com/tools/debug/accesstoken/</b></div>
+                    <div>3. Dán token vào → Bấm <b>"Debugging"</b></div>
+                    <div>4. Bấm <b>"Extended access code"</b> → Copy token mới (60 ngày)</div>
+                  </div>
+                </div>
+                <div style={{ background: "#f0fdf4", padding: "8px 10px", borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>🅱️ Cách nâng cao (Token VĨNH VIỄN):</div>
+                  <div style={{ paddingLeft: 8, fontSize: 11.5 }}>
+                    <div>1. Ở Graph API Explorer → dropdown <b>"User or Page"</b> = <b>"User Token"</b></div>
+                    <div>2. Generate Token → Copy → Vào Debug Tool → Extend (bước 🅰️ trên)</div>
+                    <div>3. Quay lại Explorer → Dán <b>Long-lived User Token</b> vào ô Access Token</div>
+                    <div>4. Giữ dropdown ở <b>"User Token"</b> → Gõ <code>me/accounts</code> → Bấm <b>Send</b></div>
+                    <div>5. Kết quả JSON trả về sẽ chứa token Page <b>VĨNH VIỄN</b> → Copy <code>access_token</code></div>
+                    <div>6. Kiểm tra ở Debug Tool → dòng "Expired" = <b>"Never"</b> ✅</div>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4, fontWeight: 600 }}>⚠️ SAI LẦM HAY GẶP: Extend PAGE Token rồi gọi me/accounts → BỊ LỖI! Phải extend USER Token mới đúng!</div>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 6: NHẬP VÀO CRM</div>
+              <div style={{ paddingLeft: 8 }}>
+                <div><b>1.</b> Bấm nút <b>"Thêm tài khoản"</b> ở trên</div>
+                <div><b>2.</b> Điền <b>Tên</b> (tuỳ ý, VD: "BLC Campaign Account")</div>
+                <div><b>3.</b> Điền <b>Ad Account ID</b> (phần số, VD: <code>123456789</code>)</div>
+                <div><b>4.</b> Dán <b>Access Token</b> (đã gia hạn ở Bước 5)</div>
+                <div><b>5.</b> Bấm <b>Lưu</b> → Xong! Chuyển qua tab <b>"Hiệu quả quảng cáo FB"</b> để xem dữ liệu</div>
+              </div>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>❓ XỬ LÝ LỖI THƯỜNG GẶP</div>
+              <div style={{ paddingLeft: 8, fontSize: 11.5 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "4px 10px" }}>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Token hết hạn:</div><div>Lấy token mới (Bước 4-5)</div>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Không thấy dữ liệu:</div><div>Kiểm tra Ad Account ID đúng chưa + Token có quyền <code>ads_read</code> không</div>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi "permissions":</div><div>Vào Dashboard ứng dụng → Thêm quyền <code>ads_read</code> (Bước 2)</div>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi "invalid token":</div><div>Copy lại token, đảm bảo copy ĐẦY ĐỦ (không thừa/thiếu ký tự)</div>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi me/accounts:</div><div>Phải dùng USER Token (không phải Page Token) để gọi <code>me/accounts</code></div>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
 
         {adAccounts.length === 0 ? (
           <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
@@ -4373,16 +4479,25 @@ function UsersPage({ projects, leads }) {
 
       {/* Modal hồ sơ user - đầy đủ thông tin */}
       {showProfileModal && (() => {
+        try {
         const u = showProfileModal;
+        if (!u || typeof u !== "object") return null;
         const userProjects = (u.projectIds || []).map(pid => projects.find(p => p.id === pid)).filter(Boolean);
-        const isOnline = u.lastActive && (Date.now() - new Date(u.lastActive).getTime() < 5 * 60 * 1000);
-        const lastSeenText = u.lastActive ? (() => {
-          const diff = Math.floor((Date.now() - new Date(u.lastActive).getTime()) / 60000);
-          if (diff < 1) return "Vừa mới";
-          if (diff < 60) return `${diff} phút trước`;
-          if (diff < 1440) return `${Math.floor(diff / 60)} giờ trước`;
-          return `${Math.floor(diff / 1440)} ngày trước`;
-        })() : "Chưa hoạt động";
+        let isOnline = false;
+        let lastSeenText = "Chưa hoạt động";
+        try {
+          if (u.lastActive) {
+            const lastActiveTime = new Date(u.lastActive).getTime();
+            if (!isNaN(lastActiveTime)) {
+              isOnline = (Date.now() - lastActiveTime) < 5 * 60 * 1000;
+              const diff = Math.floor((Date.now() - lastActiveTime) / 60000);
+              if (diff < 1) lastSeenText = "Vừa mới";
+              else if (diff < 60) lastSeenText = `${diff} phút trước`;
+              else if (diff < 1440) lastSeenText = `${Math.floor(diff / 60)} giờ trước`;
+              else lastSeenText = `${Math.floor(diff / 1440)} ngày trước`;
+            }
+          }
+        } catch {}
         const infoRow = (IconComp, label, value) => value ? (
           <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
             <span style={{ width: 24, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}>{typeof IconComp === "function" ? <IconComp size={16} /> : IconComp}</span>
@@ -4391,7 +4506,7 @@ function UsersPage({ projects, leads }) {
           </div>
         ) : null;
         return (
-          <Modal onClose={() => setShowProfileModal(null)} title={`Hồ sơ - ${u.displayName}`}>
+          <Modal onClose={() => setShowProfileModal(null)} title={`Hồ sơ - ${u.displayName || "User"}`}>
             {/* Avatar + Header */}
             <div style={{ textAlign: "center", marginBottom: 16, position: "relative" }}>
               <div
@@ -4495,6 +4610,18 @@ function UsersPage({ projects, leads }) {
             </details>
           </Modal>
         );
+        } catch (err) {
+          console.error("Profile modal error:", err);
+          return (
+            <Modal onClose={() => setShowProfileModal(null)} title="Hồ sơ">
+              <div style={{ textAlign: "center", padding: 24, color: "#dc2626" }}>
+                <AlertCircle size={32} style={{ marginBottom: 8, opacity: 0.6 }} />
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Không thể hiển thị hồ sơ</div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Đã xảy ra lỗi khi tải thông tin người dùng</div>
+              </div>
+            </Modal>
+          );
+        }
       })()}
 
       {userCropSrc && <AvatarCropModal imageSrc={userCropSrc} onConfirm={(b64) => {
