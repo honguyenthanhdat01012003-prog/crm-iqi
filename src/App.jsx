@@ -2,6 +2,59 @@
 
 const API = "/api";
 
+/* ===== Toast + Confirm global helpers ===== */
+let _toastFn = null;
+let _confirmFn = null;
+function showToast(msg, type = "info") { _toastFn && _toastFn(msg, type); }
+function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : resolve(window.confirm(msg)); }); }
+
+function ToastContainer() {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    _toastFn = (msg, type) => {
+      const id = Date.now() + Math.random();
+      setToasts(p => [...p, { id, msg, type }]);
+      setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4000);
+    };
+    return () => { _toastFn = null; };
+  }, []);
+  if (!toasts.length) return null;
+  const colors = { success: { bg: "#dcfce7", border: "#22c55e", color: "#15803d" }, error: { bg: "#fee2e2", border: "#ef4444", color: "#b91c1c" }, info: { bg: "#f0faf1", border: "#1a3c20", color: "#1a3c20" }, warning: { bg: "#fef3c7", border: "#f59e0b", color: "#92400e" } };
+  return (
+    <div style={{ position: "fixed", top: 20, right: 20, zIndex: 100000, display: "flex", flexDirection: "column", gap: 8, maxWidth: 400 }}>
+      {toasts.map(t => {
+        const c = colors[t.type] || colors.info;
+        return (
+          <div key={t.id} style={{ background: c.bg, border: `1px solid ${c.border}`, color: c.color, padding: "12px 20px", borderRadius: 10, fontSize: 14, fontWeight: 500, boxShadow: "0 4px 12px rgba(0,0,0,.12)", animation: "slideIn .3s ease" }}>
+            {t.msg}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConfirmModal_() {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    _confirmFn = (msg, resolve) => setState({ msg, resolve });
+    return () => { _confirmFn = null; };
+  }, []);
+  if (!state) return null;
+  const answer = (v) => { state.resolve(v); setState(null); };
+  return (
+    <div onClick={() => answer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 100001, display: "flex", alignItems: "center", justifyContent: "center", animation: "fadeIn .2s ease" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: "28px 32px", maxWidth: 420, width: "90%", boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
+        <div style={{ fontSize: 15, lineHeight: 1.6, whiteSpace: "pre-wrap", color: "#1f2937", marginBottom: 24 }}>{state.msg}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={() => answer(false)} style={{ padding: "10px 24px", border: "1px solid #d1d5db", borderRadius: 10, background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600, color: "#374151" }}>Huỷ</button>
+          <button onClick={() => answer(true)} style={{ padding: "10px 24px", border: "none", borderRadius: 10, background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600, boxShadow: "0 2px 8px rgba(232,138,46,.4)" }}>OK</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== Mobile detection hook ===== */
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= breakpoint);
@@ -46,7 +99,7 @@ const STATUS_COLORS = {
   spam: "#eab308",
   weak_finance: "#f97316",
   unreachable: "#6b7280",
-  callback: "#3b82f6",
+  callback: "#e88a2e",
   wrong_number: "#9ca3af",
   blocked: "#1f2937",
   has_sale: "#0284c7",
@@ -60,12 +113,12 @@ function formatVND(n) {
 
 function getLeadTemp(createdAt) {
   const d = parseLeadDate(createdAt);
-  if (!d) return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#3b82f6", icon: "❄️" };
+  if (!d) return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "❄️" };
   const hours = (Date.now() - d.getTime()) / (1000 * 60 * 60);
   if (hours <= 24) return { label: "🔥🔥 Cực nóng", bg: "#fef2f2", color: "#dc2626", icon: "🔥🔥" };
   if (hours <= 72) return { label: "🔥 Nóng", bg: "#fff7ed", color: "#ea580c", icon: "🔥" };
   if (hours <= 168) return { label: "🌤️ Ấm", bg: "#fffbeb", color: "#d97706", icon: "🌤️" };
-  return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#3b82f6", icon: "❄️" };
+  return { label: "❄️ Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "❄️" };
 }
 
 function authHeaders() {
@@ -158,7 +211,7 @@ function LoginPage({ onLogin }) {
   return (
     <div style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+      background: "linear-gradient(135deg, #1a3c20 0%, #0d2b12 50%, #0a1f0e 100%)",
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       padding: 16,
     }}>
@@ -167,8 +220,8 @@ function LoginPage({ onLogin }) {
         boxShadow: "0 20px 60px rgba(0,0,0,.3)",
       }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div style={{ fontSize: 40, marginBottom: 8 }}>🏠</div>
-          <h2 style={{ margin: 0, color: "#1a1a2e" }}>RealCRM</h2>
+          <div style={{ fontSize: 40, marginBottom: 8 }}><img src="/logo-iqi.svg" alt="LUX IQI" style={{ width: 72, height: 72, objectFit: "contain" }} /></div>
+          <h2 style={{ margin: 0, color: "#1a3c20" }}>LUX IQI</h2>
           <p style={{ color: "#6b7280", fontSize: 13, margin: "4px 0 0" }}>Đăng nhập để tiếp tục</p>
         </div>
         {error && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{error}</div>}
@@ -240,7 +293,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
   return (
     <div style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: "linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+      background: "linear-gradient(135deg, #1a3c20 0%, #0d2b12 50%, #0a1f0e 100%)",
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       padding: 16,
     }}>
@@ -250,7 +303,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
       }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div style={{ fontSize: 40, marginBottom: 8 }}>🔐</div>
-          <h2 style={{ margin: 0, color: "#1a1a2e" }}>Đổi mật khẩu</h2>
+          <h2 style={{ margin: 0, color: "#1a3c20" }}>Đổi mật khẩu</h2>
           <p style={{ color: "#6b7280", fontSize: 13, margin: "4px 0 0" }}>
             Xin chào <strong>{user.displayName}</strong>, đây là lần đăng nhập đầu tiên.<br />
             Vui lòng đổi mật khẩu để tiếp tục sử dụng.
@@ -423,17 +476,17 @@ function CRMApp({ user, updateUser, onLogout }) {
       const r = await apiFetch(`${API}/sync`, { method: "POST" });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        alert("Đồng bộ thất bại: " + (err.error || r.statusText));
+        showToast("Đồng bộ thất bại: " + (err.error || r.statusText), "error");
         return;
       }
       const data = await r.json();
       applyApiData(data);
       if (data.syncErrors && data.syncErrors.length) {
-        alert("Đồng bộ hoàn tất nhưng có lỗi:\n\n" + data.syncErrors.join("\n"));
+        showToast("Đồng bộ hoàn tất nhưng có lỗi: " + data.syncErrors.join(", "), "warning");
       }
     } catch (e) {
       console.error("Sync failed", e);
-      alert("Đồng bộ thất bại: " + e.message);
+      showToast("Đồng bộ thất bại: " + e.message, "error");
     } finally {
       setSyncing(false);
     }
@@ -466,7 +519,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       const r = await apiFetch(url, { method, body: JSON.stringify(body) });
       if (!r.ok) {
         const err = await r.json();
-        alert(err.error || "Lỗi khi lưu dự án");
+        showToast(err.error || "Lỗi khi lưu dự án", "error");
         setSavingProject(false);
         setProjectProgress("");
         return;
@@ -490,7 +543,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     } catch (e) {
       console.error("Save project failed", e);
-      alert("Lỗi khi lưu dự án");
+      showToast("Lỗi khi lưu dự án", "error");
     } finally {
       setSavingProject(false);
       setProjectProgress("");
@@ -498,7 +551,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   };
 
   const deleteProject = async (id) => {
-    if (!confirm("Xóa dự án này?")) return;
+    if (!(await showConfirm("Xóa dự án này?"))) return;
     try {
       const r = await apiFetch(`${API}/projects/${id}`, { method: "DELETE" });
       const data = await r.json();
@@ -636,7 +689,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       <aside
         style={{
           width: isMobile ? 280 : (sidebarOpen ? 220 : 56),
-          background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)",
+          background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)",
           color: "#fff",
           transition: isMobile ? "transform .25s ease" : "width .2s",
           overflow: "hidden",
@@ -651,10 +704,13 @@ function CRMApp({ user, updateUser, onLogout }) {
         }}
       >
         <div
-          style={{ padding: "16px 12px", cursor: "pointer", fontWeight: 700, fontSize: 18, whiteSpace: "nowrap", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+          style={{ padding: "12px 12px", cursor: "pointer", fontWeight: 700, fontSize: 18, whiteSpace: "nowrap", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}
           onClick={() => setSidebarOpen(!sidebarOpen)}
         >
-          <span>{(isMobile || sidebarOpen) ? "🏠 RealCRM" : "☰"}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <img src="/logo-iqi.svg" alt="LUX IQI" style={{ width: 32, height: 32, objectFit: "contain" }} />
+            {(isMobile || sidebarOpen) && <span style={{ fontSize: 16, letterSpacing: 1 }}>LUX IQI</span>}
+          </div>
           {isMobile && sidebarOpen && <span style={{ fontSize: 20, padding: 4 }}>✕</span>}
         </div>
 
@@ -687,7 +743,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                       padding: isMobile ? "14px 16px" : "12px 16px",
                       cursor: "pointer",
                       background: isChildActive ? "rgba(255,255,255,.08)" : "transparent",
-                      borderLeft: isChildActive ? "3px solid #3b82f6" : "3px solid transparent",
+                      borderLeft: isChildActive ? "3px solid #e88a2e" : "3px solid transparent",
                       whiteSpace: "nowrap",
                       fontSize: isMobile ? 15 : 14,
                       transition: "background .15s",
@@ -707,7 +763,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                         padding: isMobile ? "10px 16px 10px 36px" : "8px 16px 8px 36px",
                         cursor: "pointer",
                         background: page === c.key ? "rgba(255,255,255,.15)" : "transparent",
-                        borderLeft: page === c.key ? "3px solid #60a5fa" : "3px solid transparent",
+                        borderLeft: page === c.key ? "3px solid #e88a2e" : "3px solid transparent",
                         whiteSpace: "nowrap",
                         fontSize: isMobile ? 13 : 12,
                         transition: "background .15s",
@@ -728,7 +784,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                   padding: isMobile ? "14px 16px" : "12px 16px",
                   cursor: "pointer",
                   background: page === n.key ? "rgba(255,255,255,.12)" : "transparent",
-                  borderLeft: page === n.key ? "3px solid #3b82f6" : "3px solid transparent",
+                  borderLeft: page === n.key ? "3px solid #e88a2e" : "3px solid transparent",
                   whiteSpace: "nowrap",
                   fontSize: isMobile ? 15 : 14,
                   transition: "background .15s",
@@ -745,7 +801,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.9 }}>
               {user.displayName} <span style={{
                 fontSize: 10, padding: "1px 6px", borderRadius: 8,
-                background: user.role === "admin" ? "#ef4444" : "#3b82f6", color: "#fff",
+                background: user.role === "admin" ? "#e88a2e" : "#7ab648", color: "#fff",
               }}>{user.role === "admin" ? "Admin" : "Sale"}</span>
             </div>
             <button
@@ -772,12 +828,12 @@ function CRMApp({ user, updateUser, onLogout }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             {isMobile && (
               <button onClick={() => setSidebarOpen(true)} style={{
-                background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 8,
+                background: "#1a3c20", color: "#fff", border: "none", borderRadius: 8,
                 width: 40, height: 40, fontSize: 18, cursor: "pointer", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}>☰</button>
             )}
-            <h2 style={{ margin: 0, color: "#1a1a2e", fontSize: isMobile ? 16 : 20, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 16 : 20, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {visibleNav.find((n) => n.key === page)?.label || "Dashboard"}
             </h2>
           </div>
@@ -813,7 +869,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                       <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <b style={{ fontSize: 14 }}>🔔 Thông báo</b>
                         {notifications.length > 0 && (
-                          <button onClick={markAllSeen} style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
+                          <button onClick={markAllSeen} style={{ background: "none", border: "none", color: "#e88a2e", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>
                             Đánh dấu đã đọc
                           </button>
                         )}
@@ -827,7 +883,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                             return (
                               <div key={n.id} style={{
                                 padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
-                                background: "#eff6ff", border: "1px solid #dbeafe", transition: "background .15s",
+                                background: "#f0faf1", border: "1px solid #e8f5e9", transition: "background .15s",
                               }} onClick={() => { setHighlightLeadId(n.id); setPage("leads"); setShowNotif(false); }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                                   <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
@@ -866,7 +922,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                 }}>⏳</span>
                 <span style={{
                   fontSize: 10, fontWeight: 700, marginTop: 1,
-                  color: syncing ? "#3b82f6" : (syncCountdown <= 5 ? "#ef4444" : "#6b7280"),
+                  color: syncing ? "#e88a2e" : (syncCountdown <= 5 ? "#ef4444" : "#6b7280"),
                   fontVariantNumeric: "tabular-nums",
                 }}>{syncing ? "..." : `${syncCountdown}s`}</span>
               </button>
@@ -906,7 +962,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             applyApiData={applyApiData}
           />
         )}
-        {page === "campaigns" && isAdmin && <CampaignsPage leads={filteredLeads} />}
+        {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
@@ -953,6 +1009,8 @@ function CRMApp({ user, updateUser, onLogout }) {
         </Modal>
       )}
       <ChatSidebar currentUser={user} />
+      <ToastContainer />
+      <ConfirmModal_ />
     </div>
   );
 }
@@ -1124,7 +1182,7 @@ function ChatSidebar({ currentUser }) {
           position: "fixed", top: "50%", right: sidebarOpen ? sidebarWidth : 0,
           transform: "translateY(-50%)", zIndex: 1001,
           width: 28, height: 64, border: "none", cursor: "pointer",
-          background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)",
+          background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)",
           color: "#fff", fontSize: 14, borderRadius: "8px 0 0 8px",
           display: "flex", alignItems: "center", justifyContent: "center",
           boxShadow: "-2px 0 8px rgba(0,0,0,.15)", transition: "right .25s ease",
@@ -1143,10 +1201,10 @@ function ChatSidebar({ currentUser }) {
         )}
       </button>
 
-      {/* Mobile overlay */}
-      {isMobile && sidebarOpen && (
+      {/* Overlay to close sidebar on click outside */}
+      {sidebarOpen && (
         <div onClick={() => setSidebarOpen(false)} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 999,
+          position: "fixed", inset: 0, background: isMobile ? "rgba(0,0,0,.4)" : "transparent", zIndex: 999,
         }} />
       )}
 
@@ -1162,7 +1220,7 @@ function ChatSidebar({ currentUser }) {
         {/* Header */}
         <div style={{
           padding: "14px 12px 10px", borderBottom: "1px solid #e4e6eb",
-          background: "linear-gradient(180deg, #1a1a2e 0%, #16213e 100%)", color: "#fff",
+          background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)", color: "#fff",
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <span style={{ fontWeight: 700, fontSize: 15 }}>👥 Liên hệ</span>
@@ -1222,7 +1280,7 @@ function ChatSidebar({ currentUser }) {
         }}>
           {/* Chat header */}
           <div style={{
-            padding: "8px 12px", background: "linear-gradient(135deg, #0084ff, #0066cc)", color: "#fff",
+            padding: "8px 12px", background: "linear-gradient(135deg, #1a3c20, #0d2b12)", color: "#fff",
             display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
           }}>
             <div style={{
@@ -1233,7 +1291,7 @@ function ChatSidebar({ currentUser }) {
               {!activeChat.avatarUrl && (activeChat.displayName || "?")[0]?.toUpperCase()}
               <div style={{
                 position: "absolute", bottom: -1, right: -1, width: 9, height: 9, borderRadius: "50%",
-                background: isOnline(activeChat) ? "#44b700" : "#9ca3af", border: "2px solid #0084ff",
+                background: isOnline(activeChat) ? "#44b700" : "#9ca3af", border: "2px solid #1a3c20",
               }} />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -1274,7 +1332,7 @@ function ChatSidebar({ currentUser }) {
                       isLastInGroup ? (
                         <div style={{
                           width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                          background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                          background: activeChat.avatarUrl ? `url(${activeChat.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
                           display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#fff",
                         }}>
                           {!activeChat.avatarUrl && (activeChat.displayName || "?")[0]?.toUpperCase()}
@@ -1284,7 +1342,7 @@ function ChatSidebar({ currentUser }) {
                     <div style={{
                       maxWidth: "70%", padding: "7px 11px",
                       borderRadius: isMine ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                      background: isMine ? "#0084ff" : "#fff",
+                      background: isMine ? "#1a3c20" : "#fff",
                       color: isMine ? "#fff" : "#1c1e21",
                       fontSize: 13, lineHeight: 1.35, wordBreak: "break-word",
                       boxShadow: isMine ? "none" : "0 1px 2px rgba(0,0,0,.08)",
@@ -1323,7 +1381,7 @@ function ChatSidebar({ currentUser }) {
               disabled={!draft.trim() || sending}
               style={{
                 width: 32, height: 32, borderRadius: "50%", border: "none",
-                background: draft.trim() ? "#0084ff" : "#e4e6eb", color: draft.trim() ? "#fff" : "#bcc0c4",
+                background: draft.trim() ? "#1a3c20" : "#e4e6eb", color: draft.trim() ? "#fff" : "#bcc0c4",
                 cursor: draft.trim() ? "pointer" : "default", fontSize: 15,
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
               }}
@@ -1345,14 +1403,14 @@ function UserContactRow({ u, isOnline: online, onlineStatus, formatTime, onClick
       style={{
         display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
         cursor: "pointer", transition: "background .15s",
-        background: u.unread > 0 ? "#eff6ff" : "transparent",
+        background: u.unread > 0 ? "#fef6ee" : "transparent",
       }}
       onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
-      onMouseLeave={(e) => e.currentTarget.style.background = u.unread > 0 ? "#eff6ff" : "transparent"}
+      onMouseLeave={(e) => e.currentTarget.style.background = u.unread > 0 ? "#fef6ee" : "transparent"}
     >
       <div style={{
         width: 38, height: 38, borderRadius: "50%", flexShrink: 0, position: "relative",
-        background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+        background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
         display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, color: "#fff",
       }}>
         {!u.avatarUrl && (u.displayName || "?")[0]?.toUpperCase()}
@@ -1369,8 +1427,8 @@ function UserContactRow({ u, isOnline: online, onlineStatus, formatTime, onClick
           }}>{u.displayName}</span>
           <span style={{
             fontSize: 9, padding: "1px 5px", borderRadius: 6, flexShrink: 0,
-            background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
-            color: u.role === "admin" ? "#dc2626" : "#2563eb", fontWeight: 600,
+            background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
+            color: u.role === "admin" ? "#dc2626" : "#1a3c20", fontWeight: 600,
           }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -1387,7 +1445,7 @@ function UserContactRow({ u, isOnline: online, onlineStatus, formatTime, onClick
       </div>
       {u.unread > 0 && (
         <span style={{
-          minWidth: 18, height: 18, borderRadius: 9, background: "#0084ff", color: "#fff",
+          minWidth: 18, height: 18, borderRadius: 9, background: "#e88a2e", color: "#fff",
           fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
           padding: "0 4px", flexShrink: 0,
         }}>{u.unread}</span>
@@ -1433,7 +1491,7 @@ function Modal({ onClose, title, children }) {
   );
 }
 
-function Card({ title, value, sub, color = "#3b82f6", percent, compact }) {
+function Card({ title, value, sub, color = "#e88a2e", percent, compact }) {
   return (
     <div
       style={{
@@ -1509,7 +1567,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
-        <Card title="Tổng Lead" value={stats.total} color="#3b82f6" compact={isMobile} />
+        <Card title="Tổng Lead" value={stats.total} color="#1a3c20" compact={isMobile} />
         {allCards.map((c) => (
           <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} compact={isMobile} />
         ))}
@@ -1533,7 +1591,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
               <div key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 10, padding: 12, border: "1px solid #e5e7eb" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                   <span style={{ fontWeight: 700, fontSize: 14 }}>{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `#${i+1}`} {s.name}</span>
-                  <span style={{ fontWeight: 700, fontSize: 16, color: "#3b82f6" }}>{s.total} lead</span>
+                  <span style={{ fontWeight: 700, fontSize: 16, color: "#1a3c20" }}>{s.total} lead</span>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                   {Object.entries(STATUS_LABELS).map(([k, v]) => {
@@ -1794,7 +1852,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         {filtered.length > 0 ? filtered.map(s => (
                           <div key={s} onClick={() => { setShuffleSale(s); setShuffleSaleSearch(s); setShuffleSaleFocused(false); }}
                             style={{ padding: "8px 12px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid #f3f4f6", transition: "background .1s" }}
-                            onMouseEnter={e => e.currentTarget.style.background = "#eff6ff"}
+                            onMouseEnter={e => e.currentTarget.style.background = "#f0faf1"}
                             onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
                             👤 {s}
                           </div>
@@ -1805,7 +1863,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   })()}
                   {shuffleSale && (
                     <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ background: "#dbeafe", color: "#1d4ed8", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600 }}>✅ {shuffleSale}</span>
+                      <span style={{ background: "#e8f5e9", color: "#1a3c20", padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600 }}>✅ {shuffleSale}</span>
                       <button onClick={() => { setShuffleSale(""); setShuffleSaleSearch(""); }}
                         style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }}>✕</button>
                     </div>
@@ -1843,11 +1901,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, maxHeight: 300, overflowY: "auto", marginBottom: 12 }}>
                     <div style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#f9fafb", zIndex: 1 }}>
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
-                        Đã chọn: <span style={{ color: "#2563eb" }}>{shuffleSelected.size}</span> / {shuffleFilteredLeads.length} lead
+                        Đã chọn: <span style={{ color: "#1a3c20" }}>{shuffleSelected.size}</span> / {shuffleFilteredLeads.length} lead
                       </span>
                       <div style={{ display: "flex", gap: 6 }}>
                         <button onClick={() => setShuffleSelected(new Set(shuffleFilteredLeads.map(l => l.id)))}
-                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#2563eb", fontWeight: 600 }}>Chọn tất cả</button>
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#1a3c20", fontWeight: 600 }}>Chọn tất cả</button>
                         <button onClick={() => setShuffleSelected(new Set())}
                           style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>Bỏ tất cả</button>
                       </div>
@@ -1857,7 +1915,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <label key={l.id} style={{
                         display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
                         borderBottom: "1px solid #f3f4f6", cursor: "pointer",
-                        background: shuffleSelected.has(l.id) ? "#eff6ff" : "#fff",
+                        background: shuffleSelected.has(l.id) ? "#f0faf1" : "#fff",
                         transition: "background .1s",
                       }}>
                         <input type="checkbox" checked={shuffleSelected.has(l.id)}
@@ -1867,7 +1925,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                             setShuffleSelected(next);
                             setShufflePickCount("manual");
                           }}
-                          style={{ width: 16, height: 16, accentColor: "#2563eb" }} />
+                          style={{ width: 16, height: 16, accentColor: "#1a3c20" }} />
                         <span style={{ flex: 1, fontSize: 12 }}>
                           <strong>{l.name}</strong>
                           <span style={{ color: "#6b7280", marginLeft: 6 }}>{l.phone || ""}</span>
@@ -1912,8 +1970,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             <button key={t.key} onClick={() => { setActiveTab(t.key); setCurrentPage(1); }}
               style={{
                 padding: isMobile ? "8px 12px" : "8px 14px", borderRadius: 20,
-                border: isActive ? "2px solid #3b82f6" : "1px solid #e5e7eb",
-                background: isActive ? "#eff6ff" : "#fff", color: isActive ? "#1d4ed8" : "#374151",
+                border: isActive ? "2px solid #e88a2e" : "1px solid #e5e7eb",
+                background: isActive ? "#f0faf1" : "#fff", color: isActive ? "#1a3c20" : "#374151",
                 cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 500,
                 display: "flex", alignItems: "center", gap: 4, transition: "all .15s",
                 whiteSpace: "nowrap", flexShrink: 0,
@@ -1921,7 +1979,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <span>{t.icon}</span>
               <span>{t.label}</span>
               <span style={{
-                background: isActive ? "#3b82f6" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
+                background: isActive ? "#e88a2e" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
                 borderRadius: 10, padding: "0 6px", fontSize: 11, fontWeight: 700, minWidth: 20, textAlign: "center",
               }}>{count}</span>
             </button>
@@ -1972,7 +2030,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             return (
-              <div key={l.id} id={`lead-${l.id}`} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #3b82f6" : "1px solid #e5e7eb", overflow: "hidden" }}>
+              <div key={l.id} id={`lead-${l.id}`} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : "1px solid #e5e7eb", overflow: "hidden" }}>
                 <div onClick={() => setExpandedId(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -2032,7 +2090,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 const globalIdx = (currentPage - 1) * pageSize + i;
                 const rows = [
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
-                    style={{ background: isOpen ? "#eff6ff" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
+                    style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? "▼ " : "▶ "}{isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>MỚI</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
@@ -2057,7 +2115,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 if (isOpen) {
                   rows.push(
                     <tr key={`${l.id}-detail`}>
-                      <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #3b82f6" }}>
+                      <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
                         <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={false} />
                       </td>
                     </tr>
@@ -2111,11 +2169,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingSale, setSavingSale] = useState(false);
 
   const handleDeleteHistory = async (histId) => {
-    if (!confirm("Xóa lịch sử liên hệ này?")) return;
+    if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/history/${histId}`, { method: "DELETE" });
       if (r.ok) applyApiData(await r.json());
-      else alert("Xóa thất bại");
+      else showToast("Xóa thất bại", "error");
     } catch (e) { console.error(e); }
   };
 
@@ -2215,11 +2273,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Chia lead cho Sale */}
       {isAdmin && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
+        <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <b style={{ fontSize: 12, color: "#1e40af" }}>📤 Sale phụ trách:</b>
+            <b style={{ fontSize: 12, color: "#1a3c20" }}>📤 Sale phụ trách:</b>
             {lead.saleName
-              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#dbeafe", color: "#1d4ed8" }}>{lead.saleName}</span>
+              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
               : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
             }
           </div>
@@ -2230,7 +2288,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
-              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#93c5fd" : "#2563eb", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
               {savingSale ? "Đang chia..." : "📤 Chia lead"}
             </button>
           </div>
@@ -2277,7 +2335,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           {history.map((h, idx) => {
             const recalled = (h.action || "").toLowerCase().includes("thu h");
             const isUpdate = (h.action || "").toLowerCase().includes("cập nhật") || (h.action || "").toLowerCase().includes("cap nhat");
-            const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#3b82f6";
+            const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#e88a2e";
             return (
               <div key={idx} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
                 <div style={{
@@ -2291,8 +2349,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       {idx + 1}. {h.saleName}
                       <span style={{
                         marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
-                        background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#eff6ff",
-                        color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#2563eb",
+                        background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#f0faf1",
+                        color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#1a3c20",
                       }}>{h.action}</span>
                     </span>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
@@ -2327,13 +2385,13 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
       const r = await apiFetch(`${API}/projects/${id}/sync`, { method: "POST" });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        alert("Đồng bộ thất bại: " + (err.error || r.statusText));
+        showToast("Đồng bộ thất bại: " + (err.error || r.statusText), "error");
       } else {
         const data = await r.json();
         applyApiData(data);
       }
     } catch (e) {
-      alert("Đồng bộ thất bại: " + e.message);
+      showToast("Đồng bộ thất bại: " + e.message, "error");
     } finally {
       setSyncingId(null);
     }
@@ -2355,7 +2413,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
               key={p.id}
               style={{
                 background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 20,
-                boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderTop: "3px solid #3b82f6",
+                boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderTop: "3px solid #e88a2e",
               }}
             >
               <h4 style={{ margin: "0 0 12px" }}>{p.name}</h4>
@@ -2382,72 +2440,131 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
   );
 }
 
-function CampaignsPage({ leads }) {
+function CampaignsPage({ leads, projects }) {
   const isMobile = useIsMobile();
+  const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [expandedCampaigns, setExpandedCampaigns] = React.useState({});
   const [expandedAdsets, setExpandedAdsets] = React.useState({});
 
-  // Build campaign → adset → ad tree with stats
-  const tree = React.useMemo(() => {
+  // Build project → campaign → adset → ad tree
+  const projectTree = React.useMemo(() => {
     const map = {};
+    (projects || []).forEach(p => { map[p.id] = { name: p.name, leads: [], campaigns: {} }; });
     leads.forEach((l) => {
+      const pid = l.projectId || 0;
+      if (!map[pid]) map[pid] = { name: "Không xác định", leads: [], campaigns: {} };
+      map[pid].leads.push(l);
       const cName = l.campaign || "Khác";
       const asName = l.adsetName || "-";
       const adName = l.adName || "-";
-      if (!map[cName]) map[cName] = { leads: [], adsets: {} };
-      map[cName].leads.push(l);
-      if (!map[cName].adsets[asName]) map[cName].adsets[asName] = { leads: [], ads: {} };
-      map[cName].adsets[asName].leads.push(l);
-      if (!map[cName].adsets[asName].ads[adName]) map[cName].adsets[asName].ads[adName] = { leads: [] };
-      map[cName].adsets[asName].ads[adName].leads.push(l);
+      if (!map[pid].campaigns[cName]) map[pid].campaigns[cName] = { leads: [], adsets: {} };
+      map[pid].campaigns[cName].leads.push(l);
+      if (!map[pid].campaigns[cName].adsets[asName]) map[pid].campaigns[cName].adsets[asName] = { leads: [], ads: {} };
+      map[pid].campaigns[cName].adsets[asName].leads.push(l);
+      if (!map[pid].campaigns[cName].adsets[asName].ads[adName]) map[pid].campaigns[cName].adsets[asName].ads[adName] = { leads: [] };
+      map[pid].campaigns[cName].adsets[asName].ads[adName].leads.push(l);
     });
     return map;
-  }, [leads]);
+  }, [leads, projects]);
 
   const calcStats = (arr) => {
     const total = arr.length;
-    if (!total) return { total: 0, interested: 0, bad: 0, remaining: 0, pInterested: 0, pBad: 0, pRemaining: 0, closed: 0, booked: 0, pClosed: 0, pBooked: 0 };
+    if (!total) return { total: 0, newLead: 0, interested: 0, bad: 0, spam: 0, notInterested: 0, remaining: 0, closed: 0, booked: 0, pNewLead: 0, pInterested: 0, pBad: 0, pSpam: 0, pNotInterested: 0, pRemaining: 0, pClosed: 0, pBooked: 0 };
+    const newLead = arr.filter(l => l.status === "new").length;
     const interested = arr.filter((l) => l.status === "interested").length;
+    const notInterested = arr.filter(l => l.status === "not_interested").length;
+    const spam = arr.filter(l => l.status === "spam").length;
     const bad = arr.filter((l) => l.status === "unreachable" || l.status === "not_interested").length;
     const closed = arr.filter((l) => l.status === "closed").length;
     const booked = arr.filter((l) => l.status === "booked").length;
-    const remaining = total - interested - bad - closed - booked;
+    const remaining = total - newLead - interested - notInterested - spam - bad - closed - booked;
+    const pct = (v) => ((v / total) * 100).toFixed(1);
     return {
-      total, interested, bad, remaining, closed, booked,
-      pInterested: ((interested / total) * 100).toFixed(1),
-      pBad: ((bad / total) * 100).toFixed(1),
-      pRemaining: ((remaining / total) * 100).toFixed(1),
-      pClosed: ((closed / total) * 100).toFixed(1),
-      pBooked: ((booked / total) * 100).toFixed(1),
+      total, newLead, interested, notInterested, spam, bad, remaining, closed, booked,
+      pNewLead: pct(newLead), pInterested: pct(interested), pNotInterested: pct(notInterested),
+      pSpam: pct(spam), pBad: pct(bad), pRemaining: pct(remaining), pClosed: pct(closed), pBooked: pct(booked),
     };
   };
 
   const toggleCampaign = (name) => setExpandedCampaigns((p) => ({ ...p, [name]: !p[name] }));
   const toggleAdset = (key) => setExpandedAdsets((p) => ({ ...p, [key]: !p[key] }));
 
-  const campaignNames = Object.keys(tree).sort((a, b) => tree[b].leads.length - tree[a].leads.length);
-
-  const statCellStyle = { ...tdStyle, textAlign: "center", minWidth: 60 };
-  const pctStyle = (v) => ({ fontSize: 11, color: "#6b7280", fontWeight: 400 });
+  const statCellStyle = { ...tdStyle, textAlign: "center", minWidth: 50 };
+  const pctStyle = () => ({ fontSize: 11, color: "#6b7280", fontWeight: 400 });
   const headerBg = "#f0f4ff";
   const adsetBg = "#f9fafb";
   const adBg = "#fff";
 
+  // Project list view
+  if (selectedProjectId === null) {
+    const projectIds = Object.keys(projectTree).sort((a, b) => projectTree[b].leads.length - projectTree[a].leads.length);
+    return (
+      <div>
+        <div style={{ padding: isMobile ? "12px" : "16px 0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>🏗️ Chọn dự án để xem chiến dịch</h3>
+          <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{leads.length} lead · {projectIds.length} dự án</span>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+          {projectIds.map(pid => {
+            const p = projectTree[pid];
+            const stats = calcStats(p.leads);
+            return (
+              <div key={pid} onClick={() => { setSelectedProjectId(Number(pid)); setExpandedCampaigns({}); setExpandedAdsets({}); }}
+                style={{
+                  background: "#fff", borderRadius: 12, padding: 20, cursor: "pointer",
+                  boxShadow: "0 1px 3px rgba(0,0,0,.08)", border: "1px solid #e5e7eb",
+                  transition: "all .2s", hover: { transform: "translateY(-2px)" },
+                }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>🏗️ {p.name}</span>
+                  <span style={{ background: "#e88a2e22", color: "#e88a2e", padding: "4px 12px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}>{stats.total} lead</span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12 }}>
+                  <span style={{ background: "#f59e0b15", color: "#92400e", padding: "3px 8px", borderRadius: 6 }}>Chưa FB: {stats.newLead}</span>
+                  <span style={{ background: "#22c55e15", color: "#15803d", padding: "3px 8px", borderRadius: 6 }}>QT: {stats.interested}</span>
+                  <span style={{ background: "#10b98115", color: "#065f46", padding: "3px 8px", borderRadius: 6 }}>GC: {stats.booked}</span>
+                  <span style={{ background: "#059669", color: "#fff", padding: "3px 8px", borderRadius: 6 }}>Chốt: {stats.closed}</span>
+                  <span style={{ background: "#ef444415", color: "#b91c1c", padding: "3px 8px", borderRadius: 6 }}>KQT: {stats.notInterested}</span>
+                  <span style={{ background: "#eab30815", color: "#92400e", padding: "3px 8px", borderRadius: 6 }}>Phá: {stats.spam}</span>
+                </div>
+                <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af" }}>{Object.keys(p.campaigns).length} chiến dịch · Click để xem chi tiết →</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // Campaign detail view for selected project
+  const projData = projectTree[selectedProjectId] || { name: "?", leads: [], campaigns: {} };
+  const campaignNames = Object.keys(projData.campaigns).sort((a, b) => projData.campaigns[b].leads.length - projData.campaigns[a].leads.length);
+  const tree = projData.campaigns;
+
   return (
     <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
       <div style={{ padding: isMobile ? "12px" : "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>📊 Thống kê chiến dịch</h3>
-        <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{leads.length} lead · {campaignNames.length} chiến dịch</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => setSelectedProjectId(null)} style={{
+            background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 12px",
+            cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151",
+          }}>← Dự án</button>
+          <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16 }}>🏗️ {projData.name}</h3>
+        </div>
+        <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{projData.leads.length} lead · {campaignNames.length} chiến dịch</span>
       </div>
       <table style={tableStyle}>
         <thead>
           <tr>
             <th style={{ ...thStyle, width: 36 }}></th>
             <th style={{ ...thStyle, textAlign: "left" }}>Tên</th>
-            <th style={{ ...thStyle, textAlign: "center" }}>Tổng Lead</th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Tổng</th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Chưa FB</th>
             <th style={{ ...thStyle, textAlign: "center" }}>Quan tâm</th>
             <th style={{ ...thStyle, textAlign: "center" }}>Giữ chỗ</th>
             <th style={{ ...thStyle, textAlign: "center" }}>Chốt</th>
+            <th style={{ ...thStyle, textAlign: "center" }}>KQT</th>
+            <th style={{ ...thStyle, textAlign: "center" }}>Phá/rác</th>
             <th style={{ ...thStyle, textAlign: "center" }}>Hủy/KLH</th>
             <th style={{ ...thStyle, textAlign: "center" }}>Còn lại</th>
           </tr>
@@ -2459,18 +2576,19 @@ function CampaignsPage({ leads }) {
             const adsetNames = Object.keys(tree[cName].adsets).sort((a, b) => tree[cName].adsets[b].leads.length - tree[cName].adsets[a].leads.length);
             return (
               <React.Fragment key={cName}>
-                {/* Campaign row */}
                 <tr style={{ background: headerBg, cursor: "pointer" }} onClick={() => toggleCampaign(cName)}>
                   <td style={{ ...tdStyle, textAlign: "center", fontSize: 14 }}>{isExpanded ? "▼" : "▶"}</td>
                   <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>📢 {cName}</td>
                   <td style={statCellStyle}><strong>{cStats.total}</strong></td>
+                  <td style={statCellStyle}>{cStats.newLead} <span style={pctStyle()}>({cStats.pNewLead}%)</span></td>
                   <td style={statCellStyle}>{cStats.interested} <span style={pctStyle()}>({cStats.pInterested}%)</span></td>
                   <td style={statCellStyle}>{cStats.booked} <span style={pctStyle()}>({cStats.pBooked}%)</span></td>
                   <td style={statCellStyle}>{cStats.closed} <span style={pctStyle()}>({cStats.pClosed}%)</span></td>
+                  <td style={statCellStyle}>{cStats.notInterested} <span style={pctStyle()}>({cStats.pNotInterested}%)</span></td>
+                  <td style={statCellStyle}>{cStats.spam} <span style={pctStyle()}>({cStats.pSpam}%)</span></td>
                   <td style={statCellStyle}>{cStats.bad} <span style={pctStyle()}>({cStats.pBad}%)</span></td>
                   <td style={statCellStyle}>{cStats.remaining} <span style={pctStyle()}>({cStats.pRemaining}%)</span></td>
                 </tr>
-                {/* Adset rows */}
                 {isExpanded && adsetNames.map((asName) => {
                   const asKey = cName + "|" + asName;
                   const asStats = calcStats(tree[cName].adsets[asName].leads);
@@ -2482,13 +2600,15 @@ function CampaignsPage({ leads }) {
                         <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, paddingLeft: 20 }}>{asExpanded ? "▽" : "▷"}</td>
                         <td style={{ ...tdStyle, paddingLeft: 28, fontWeight: 600, fontSize: 12, color: "#4b5563" }}>📁 {asName}</td>
                         <td style={statCellStyle}>{asStats.total}</td>
-                        <td style={statCellStyle}>{asStats.interested} <span style={pctStyle()}>({asStats.pInterested}%)</span></td>
-                        <td style={statCellStyle}>{asStats.booked} <span style={pctStyle()}>({asStats.pBooked}%)</span></td>
-                        <td style={statCellStyle}>{asStats.closed} <span style={pctStyle()}>({asStats.pClosed}%)</span></td>
-                        <td style={statCellStyle}>{asStats.bad} <span style={pctStyle()}>({asStats.pBad}%)</span></td>
-                        <td style={statCellStyle}>{asStats.remaining} <span style={pctStyle()}>({asStats.pRemaining}%)</span></td>
+                        <td style={statCellStyle}>{asStats.newLead}</td>
+                        <td style={statCellStyle}>{asStats.interested}</td>
+                        <td style={statCellStyle}>{asStats.booked}</td>
+                        <td style={statCellStyle}>{asStats.closed}</td>
+                        <td style={statCellStyle}>{asStats.notInterested}</td>
+                        <td style={statCellStyle}>{asStats.spam}</td>
+                        <td style={statCellStyle}>{asStats.bad}</td>
+                        <td style={statCellStyle}>{asStats.remaining}</td>
                       </tr>
-                      {/* Ad rows */}
                       {asExpanded && adNames.map((adN) => {
                         const adStats = calcStats(tree[cName].adsets[asName].ads[adN].leads);
                         return (
@@ -2496,11 +2616,14 @@ function CampaignsPage({ leads }) {
                             <td style={{ ...tdStyle, textAlign: "center" }}></td>
                             <td style={{ ...tdStyle, paddingLeft: 52, fontSize: 12, color: "#6b7280" }}>🔹 {adN}</td>
                             <td style={statCellStyle}>{adStats.total}</td>
-                            <td style={statCellStyle}>{adStats.interested} <span style={pctStyle()}>({adStats.pInterested}%)</span></td>
-                            <td style={statCellStyle}>{adStats.booked} <span style={pctStyle()}>({adStats.pBooked}%)</span></td>
-                            <td style={statCellStyle}>{adStats.closed} <span style={pctStyle()}>({adStats.pClosed}%)</span></td>
-                            <td style={statCellStyle}>{adStats.bad} <span style={pctStyle()}>({adStats.pBad}%)</span></td>
-                            <td style={statCellStyle}>{adStats.remaining} <span style={pctStyle()}>({adStats.pRemaining}%)</span></td>
+                            <td style={statCellStyle}>{adStats.newLead}</td>
+                            <td style={statCellStyle}>{adStats.interested}</td>
+                            <td style={statCellStyle}>{adStats.booked}</td>
+                            <td style={statCellStyle}>{adStats.closed}</td>
+                            <td style={statCellStyle}>{adStats.notInterested}</td>
+                            <td style={statCellStyle}>{adStats.spam}</td>
+                            <td style={statCellStyle}>{adStats.bad}</td>
+                            <td style={statCellStyle}>{adStats.remaining}</td>
                           </tr>
                         );
                       })}
@@ -2511,7 +2634,7 @@ function CampaignsPage({ leads }) {
             );
           })}
           {campaignNames.length === 0 && (
-            <tr><td colSpan={8} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af" }}>Không có dữ liệu chiến dịch</td></tr>
+            <tr><td colSpan={11} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af" }}>Không có dữ liệu chiến dịch</td></tr>
           )}
         </tbody>
       </table>
@@ -2528,7 +2651,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
 
   const PIPELINE_STAGES = [
     { key: "new", label: "Mới", statuses: ["new"], color: "#f59e0b" },
-    { key: "contacting", label: "Đang liên hệ", statuses: ["called", "unreachable", "callback"], color: "#3b82f6" },
+    { key: "contacting", label: "Đang liên hệ", statuses: ["called", "unreachable", "callback"], color: "#e88a2e" },
     { key: "potential", label: "Tiềm năng", statuses: ["interested", "low_interest", "other_project"], color: "#8b5cf6" },
     { key: "site_visit", label: "Hẹn xem", statuses: ["appointment"], color: "#ec4899" },
     { key: "closing", label: "Chốt", statuses: ["booked", "closed"], color: "#10b981" },
@@ -2572,8 +2695,8 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
   };
 
   const tabBtnStyle = (active) => ({
-    padding: "8px 20px", border: "none", borderBottom: active ? "3px solid #3b82f6" : "3px solid transparent",
-    background: "none", fontWeight: active ? 700 : 500, color: active ? "#3b82f6" : "#6b7280",
+    padding: "8px 20px", border: "none", borderBottom: active ? "3px solid #e88a2e" : "3px solid transparent",
+    background: "none", fontWeight: active ? 700 : 500, color: active ? "#e88a2e" : "#6b7280",
     cursor: "pointer", fontSize: 14, transition: "all .2s",
   });
 
@@ -2593,7 +2716,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
           onDragOver={e => e.preventDefault()}
           onDrop={() => handleDrop(stage.key)}
           style={{
-            minWidth: isMobile ? 260 : 220, flex: 1, background: "#f9fafb", borderRadius: 12,
+            minWidth: isMobile ? 220 : 220, flex: 1, background: "#f9fafb", borderRadius: 12,
             padding: 10, display: "flex", flexDirection: "column", gap: 8,
             border: "2px dashed transparent", transition: "border .2s",
           }}
@@ -2911,7 +3034,7 @@ function AvatarCropModal({ imageSrc, onConfirm, onClose }) {
           ref={cropRef}
           style={{
             width: BOX, height: BOX, margin: "0 auto", borderRadius: "50%",
-            overflow: "hidden", cursor: "grab", border: "3px solid #3b82f6",
+            overflow: "hidden", cursor: "grab", border: "3px solid #e88a2e",
             position: "relative", background: "#f3f4f6", touchAction: "none",
           }}
           onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
@@ -2928,7 +3051,7 @@ function AvatarCropModal({ imageSrc, onConfirm, onClose }) {
           <span style={{ fontSize: 14 }}>➖</span>
           <input type="range" min="50" max="300" value={sliderVal}
             onChange={(e) => handleZoom(Number(e.target.value))}
-            style={{ width: 160, accentColor: "#3b82f6" }} />
+            style={{ width: 160, accentColor: "#e88a2e" }} />
           <span style={{ fontSize: 14 }}>➕</span>
           <span style={{ fontSize: 11, color: "#6b7280", minWidth: 36 }}>{sliderVal}%</span>
         </div>
@@ -2989,7 +3112,7 @@ function ProfilePage({ user, updateUser }) {
 
   const handleAvatarFile = (file) => {
     if (!file || !file.type.startsWith("image/")) return;
-    if (file.size > 5 * 1024 * 1024) { alert("Ảnh tối đa 5MB"); return; }
+    if (file.size > 5 * 1024 * 1024) { showToast("Ảnh tối đa 5MB", "warning"); return; }
     const reader = new FileReader();
     reader.onload = () => setCropSrc(reader.result);
     reader.readAsDataURL(file);
@@ -3055,12 +3178,12 @@ function ProfilePage({ user, updateUser }) {
           onClick={() => draft.avatarUrl && setShowLightbox(true)}
           style={{
             width: 100, height: 100, borderRadius: "50%", margin: "0 auto 12px",
-            background: draft.avatarUrl ? `url(${draft.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+            background: draft.avatarUrl ? `url(${draft.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 36, color: "#fff", border: "3px solid #e5e7eb",
             cursor: draft.avatarUrl ? "pointer" : "default", transition: "border-color .2s",
           }}
-          onMouseEnter={e => { if (draft.avatarUrl) e.currentTarget.style.borderColor = "#3b82f6"; }}
+          onMouseEnter={e => { if (draft.avatarUrl) e.currentTarget.style.borderColor = "#e88a2e"; }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = "#e5e7eb"; }}
           title={draft.avatarUrl ? "Bấm để xem ảnh lớn" : ""}
         >
@@ -3070,8 +3193,8 @@ function ProfilePage({ user, updateUser }) {
         {(() => { const r = profile?.role || user?.role; return (
           <span style={{
             padding: "2px 10px", borderRadius: 12, fontSize: 12, fontWeight: 600,
-            background: r === "admin" ? "#fef2f2" : "#eff6ff",
-            color: r === "admin" ? "#dc2626" : "#2563eb",
+            background: r === "admin" ? "#fef2f2" : "#f0faf1",
+            color: r === "admin" ? "#dc2626" : "#1a3c20",
           }}>{r === "admin" ? "Admin" : "Sale"}</span>
         ); })()}
         <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 8 }}>@{profile?.username || user?.username}</div>
@@ -3096,15 +3219,15 @@ function ProfilePage({ user, updateUser }) {
                 background: `url(${draft.avatarUrl}) center/cover`, border: "3px solid #e5e7eb",
                 transition: "border-color .2s",
               }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = "#3b82f6"; }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = "#e88a2e"; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = "#e5e7eb"; }}
               title="Bấm để xem ảnh lớn"
             />
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <label style={{
                 display: "inline-flex", alignItems: "center", gap: 4, padding: "6px 12px",
-                background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer",
-                fontSize: 12, fontWeight: 600, border: "1px solid #bfdbfe",
+                background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer",
+                fontSize: 12, fontWeight: 600, border: "1px solid #c5d9c8",
               }}>
                 📷 Đổi ảnh
                 <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
@@ -3119,13 +3242,13 @@ function ProfilePage({ user, updateUser }) {
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             style={{
-              border: `2px dashed ${dragOver ? "#3b82f6" : "#d1d5db"}`, borderRadius: 12,
+              border: `2px dashed ${dragOver ? "#e88a2e" : "#d1d5db"}`, borderRadius: 12,
               padding: "20px 16px", textAlign: "center", cursor: "pointer", marginBottom: 8,
-              transition: "all .2s", background: dragOver ? "#eff6ff" : "#fafafa",
+              transition: "all .2s", background: dragOver ? "#fef6ee" : "#fafafa",
             }}
           >
             <div style={{ fontSize: 32, marginBottom: 4 }}>📷</div>
-            <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>Kéo thả ảnh vào đây hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm để chọn</span></div>
+            <div style={{ fontSize: 13, color: "#6b7280", fontWeight: 500 }}>Kéo thả ảnh vào đây hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm để chọn</span></div>
             <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>PNG, JPG, WEBP • Tối đa 5MB</div>
             <input ref={avatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleAvatarFile(e.target.files?.[0])} />
           </div>
@@ -3304,16 +3427,16 @@ function UsersPage({ projects, leads }) {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Xóa tài khoản này?")) return;
+    if (!(await showConfirm("Xóa tài khoản này?"))) return;
     try {
       const r = await apiFetch(`${API}/users/${id}`, { method: "DELETE" });
-      if (!r.ok) { const d = await r.json(); alert(d.error); return; }
+      if (!r.ok) { const d = await r.json(); showToast(d.error, "error"); return; }
       setUsers(await r.json());
     } catch (e) { console.error(e); }
   };
 
   const handleAutoCreate = async () => {
-    if (!confirm("Tự động tạo tài khoản cho các Sale có tên trong dữ liệu lead?\n\nMật khẩu mặc định: tên + 123 (VD: thao123)\nSale sẽ phải đổi mật khẩu khi đăng nhập lần đầu.")) return;
+    if (!(await showConfirm("Tự động tạo tài khoản cho các Sale có tên trong dữ liệu lead?\n\nMật khẩu mặc định: tên + 123 (VD: thao123)\nSale sẽ phải đổi mật khẩu khi đăng nhập lần đầu."))) return;
     setAutoCreating(true); setAutoCreateMsg("");
     try {
       const r = await apiFetch(`${API}/users/auto-create-sales`, { method: "POST" });
@@ -3340,7 +3463,7 @@ function UsersPage({ projects, leads }) {
 
   const handleUserAvatarFile = (file, target) => {
     if (!file || !file.type.startsWith("image/")) return;
-    if (file.size > 5 * 1024 * 1024) { alert("Ảnh tối đa 5MB"); return; }
+    if (file.size > 5 * 1024 * 1024) { showToast("Ảnh tối đa 5MB", "warning"); return; }
     const reader = new FileReader();
     reader.onload = () => { setUserCropSrc(reader.result); setUserCropTarget(target); };
     reader.readAsDataURL(file);
@@ -3387,10 +3510,10 @@ function UsersPage({ projects, leads }) {
   };
 
   const handleDeleteBot = async (id) => {
-    if (!confirm("Xóa bot này?")) return;
+    if (!(await showConfirm("Xóa bot này?"))) return;
     try {
       const r = await apiFetch(`${API}/telegram-bots/${id}`, { method: "DELETE" });
-      if (!r.ok) { const d = await r.json(); alert(d.error); return; }
+      if (!r.ok) { const d = await r.json(); showToast(d.error, "error"); return; }
       setBots(await r.json());
     } catch (e) { console.error(e); }
   };
@@ -3419,8 +3542,8 @@ function UsersPage({ projects, leads }) {
       </div>
       {autoCreateMsg && (
         <div style={{
-          background: autoCreateMsg.startsWith("✅") ? "#f0fdf4" : autoCreateMsg.startsWith("ℹ️") ? "#eff6ff" : "#fef2f2",
-          color: autoCreateMsg.startsWith("✅") ? "#16a34a" : autoCreateMsg.startsWith("ℹ️") ? "#2563eb" : "#dc2626",
+          background: autoCreateMsg.startsWith("✅") ? "#f0fdf4" : autoCreateMsg.startsWith("ℹ️") ? "#f0faf1" : "#fef2f2",
+          color: autoCreateMsg.startsWith("✅") ? "#16a34a" : autoCreateMsg.startsWith("ℹ️") ? "#1a3c20" : "#dc2626",
           padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 12, whiteSpace: "pre-line",
         }}>
           {autoCreateMsg}
@@ -3436,7 +3559,7 @@ function UsersPage({ projects, leads }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
-                    background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                    background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: 14, color: "#fff",
                   }}>
@@ -3446,8 +3569,8 @@ function UsersPage({ projects, leads }) {
                     <span style={{ fontWeight: 700, fontSize: 14 }}>{u.displayName || u.username}</span>
                     <span style={{
                       marginLeft: 8, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                      background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
-                      color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                      background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
+                      color: u.role === "admin" ? "#dc2626" : "#1a3c20",
                     }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
                   </div>
                 </div>
@@ -3502,7 +3625,7 @@ function UsersPage({ projects, leads }) {
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{
                       width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                      background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                      background: u.avatarUrl ? `url(${u.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 12, color: "#fff",
                     }}>
@@ -3532,15 +3655,15 @@ function UsersPage({ projects, leads }) {
                 </td>
                 <td style={tdStyle}>
                   {u.telegramId
-                    ? <span style={{ background: "#eff6ff", color: "#2563eb", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>✈️ {u.telegramId}</span>
+                    ? <span style={{ background: "#f0faf1", color: "#1a3c20", padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>✈️ {u.telegramId}</span>
                     : <span style={{ color: "#9ca3af", fontSize: 11 }}>Chưa cập nhật</span>
                   }
                 </td>
                 <td style={tdStyle}>
                   <span style={{
                     padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                    background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
-                    color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                    background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
+                    color: u.role === "admin" ? "#dc2626" : "#1a3c20",
                   }}>
                     {u.role === "admin" ? "Admin" : "Sale"}
                   </span>
@@ -3568,8 +3691,8 @@ function UsersPage({ projects, leads }) {
             try {
               const r = await apiFetch(`${API}/telegram-webhook/setup`, { method: "POST" });
               const d = await r.json();
-              alert(d.ok ? `✅ ${d.msg}` : `❌ ${d.error}`);
-            } catch (e) { alert("❌ " + e.message); }
+              showToast(d.ok ? d.msg : d.error, d.ok ? "success" : "error");
+            } catch (e) { showToast(e.message, "error"); }
           }} style={{ ...btnSecondary, fontSize: 12, padding: "8px 12px", minHeight: 40 }}>🔗 Webhook</button>
           <button onClick={openNewBot} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm Bot</button>
         </div>
@@ -3678,7 +3801,7 @@ function UsersPage({ projects, leads }) {
                 background: `url(${draft.avatarUrl}) center/cover`, border: "2px solid #e5e7eb",
               }} title="Xem ảnh lớn" />
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #c5d9c8" }}>
                   📷 Đổi ảnh
                   <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
                 </label>
@@ -3691,10 +3814,10 @@ function UsersPage({ projects, leads }) {
               onDrop={(e) => { e.preventDefault(); setUserDragOver(false); handleUserAvatarFile(e.dataTransfer.files?.[0], "draft"); }}
               onDragOver={(e) => { e.preventDefault(); setUserDragOver(true); }}
               onDragLeave={() => setUserDragOver(false)}
-              style={{ border: `2px dashed ${userDragOver ? "#3b82f6" : "#d1d5db"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: userDragOver ? "#eff6ff" : "#fafafa" }}
+              style={{ border: `2px dashed ${userDragOver ? "#e88a2e" : "#d1d5db"}`, borderRadius: 10, padding: "14px 12px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: userDragOver ? "#fef6ee" : "#fafafa" }}
             >
               <div style={{ fontSize: 24, marginBottom: 2 }}>📷</div>
-              <div style={{ fontSize: 12, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm chọn ảnh</span></div>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm chọn ảnh</span></div>
               <input ref={userAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "draft")} />
             </div>
           )}
@@ -3728,7 +3851,7 @@ function UsersPage({ projects, leads }) {
                     <label key={p.id} style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
                       borderRadius: 6, cursor: "pointer", fontSize: 13,
-                      background: draft.projectIds.includes(p.id) ? "#eff6ff" : "transparent",
+                      background: draft.projectIds.includes(p.id) ? "#f0faf1" : "transparent",
                     }}>
                       <input
                         type="checkbox"
@@ -3739,7 +3862,7 @@ function UsersPage({ projects, leads }) {
                             : draft.projectIds.filter(id => id !== p.id);
                           setDraft({ ...draft, projectIds: ids });
                         }}
-                        style={{ accentColor: "#3b82f6" }}
+                        style={{ accentColor: "#e88a2e" }}
                       />
                       <span>{p.name}</span>
                     </label>
@@ -3811,7 +3934,7 @@ function UsersPage({ projects, leads }) {
                 onClick={() => profileDraft.avatarUrl && setLightboxSrc(profileDraft.avatarUrl)}
                 style={{
                   width: 90, height: 90, borderRadius: "50%", margin: "0 auto 8px",
-                  background: profileDraft.avatarUrl ? `url(${profileDraft.avatarUrl}) center/cover` : "linear-gradient(135deg, #3b82f6, #8b5cf6)",
+                  background: profileDraft.avatarUrl ? `url(${profileDraft.avatarUrl}) center/cover` : "linear-gradient(135deg, #e88a2e, #d97706)",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   fontSize: 32, color: "#fff", border: "3px solid #e5e7eb",
                   cursor: profileDraft.avatarUrl ? "pointer" : "default", position: "relative",
@@ -3828,8 +3951,8 @@ function UsersPage({ projects, leads }) {
               <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 4 }}>
                 <span style={{
                   padding: "2px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                  background: u.role === "admin" ? "#fef2f2" : "#eff6ff",
-                  color: u.role === "admin" ? "#dc2626" : "#2563eb",
+                  background: u.role === "admin" ? "#fef2f2" : "#f0faf1",
+                  color: u.role === "admin" ? "#dc2626" : "#1a3c20",
                 }}>{u.role === "admin" ? "Admin" : "Sale"}</span>
                 <span style={{ fontSize: 11, color: isOnline ? "#22c55e" : "#9ca3af" }}>
                   {isOnline ? "● Online" : `○ ${lastSeenText}`}
@@ -3878,7 +4001,7 @@ function UsersPage({ projects, leads }) {
                       background: `url(${profileDraft.avatarUrl}) center/cover`, border: "2px solid #e5e7eb",
                     }} title="Xem ảnh lớn" />
                     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                      <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#eff6ff", color: "#2563eb", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 10px", background: "#f0faf1", color: "#1a3c20", borderRadius: 8, cursor: "pointer", fontSize: 11, fontWeight: 600, border: "1px solid #c5d9c8" }}>
                         📷 Đổi ảnh
                         <input type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
                       </label>
@@ -3893,7 +4016,7 @@ function UsersPage({ projects, leads }) {
                     style={{ border: "2px dashed #d1d5db", borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer", marginBottom: 8, background: "#fafafa" }}
                   >
                     <div style={{ fontSize: 20, marginBottom: 2 }}>📷</div>
-                    <div style={{ fontSize: 11, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#3b82f6", fontWeight: 600 }}>bấm chọn</span></div>
+                    <div style={{ fontSize: 11, color: "#6b7280" }}>Kéo thả hoặc <span style={{ color: "#e88a2e", fontWeight: 600 }}>bấm chọn</span></div>
                     <input ref={profileAvatarFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={(e) => handleUserAvatarFile(e.target.files?.[0], "profile")} />
                   </div>
                 )}
@@ -4058,9 +4181,9 @@ function PostsPage({ projects }) {
         ));
       } else {
         const err = await r.json().catch(() => ({}));
-        alert(err.error || "Lỗi cập nhật trạng thái");
+        showToast(err.error || "Lỗi cập nhật trạng thái", "error");
       }
-    } catch (e) { alert("Lỗi kết nối"); }
+    } catch (e) { showToast("Lỗi kết nối", "error"); }
     setTogglingRow(null);
   };
 
@@ -4169,12 +4292,12 @@ function PostsPage({ projects }) {
                     )}
                   </td>
                   <td style={tdStyle}>
-                    <span style={{ background: "#eff6ff", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, color: "#3b82f6" }}>
+                    <span style={{ background: "#fef6ee", padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, color: "#e88a2e" }}>
                       {getProject(post) || "-"}
                     </span>
                   </td>
                   <td style={{ ...tdStyle, maxWidth: 350 }}>
-                    <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340, cursor: "pointer", color: "#1e40af" }}
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 340, cursor: "pointer", color: "#1a3c20" }}
                       onClick={() => setSelectedPost(post)} title="Bấm để xem chi tiết">
                       {getContent(post) || getTitle(post) || "(Chưa có nội dung)"}
                     </div>
@@ -4207,7 +4330,7 @@ function PostsPage({ projects }) {
             const pg = currentPage <= 3 ? i + 1 : currentPage + i - 2;
             if (pg > totalPages || pg < 1) return null;
             return <button key={pg} onClick={() => setCurrentPage(pg)} style={{
-              ...btnSecondary, padding: "4px 10px", background: pg === currentPage ? "#3b82f6" : "#f3f4f6",
+              ...btnSecondary, padding: "4px 10px", background: pg === currentPage ? "#e88a2e" : "#f3f4f6",
               color: pg === currentPage ? "#fff" : "#374151",
             }}>{pg}</button>;
           })}
@@ -4254,7 +4377,7 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
             {status}
           </span>
           {getProject(post) && (
-            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#eff6ff", color: "#3b82f6", fontWeight: 600, fontSize: 12 }}>
+            <span style={{ padding: "4px 14px", borderRadius: 12, background: "#fef6ee", color: "#e88a2e", fontWeight: 600, fontSize: 12 }}>
               🏗️ {getProject(post)}
             </span>
           )}
@@ -4385,14 +4508,14 @@ function SheetConfigPage() {
         setNewUrl("");
       } else {
         const e = await r.json();
-        alert(e.error || "Lỗi thêm");
+        showToast(e.error || "Lỗi thêm", "error");
       }
-    } catch { alert("Lỗi kết nối"); }
+    } catch { showToast("Lỗi kết nối", "error"); }
     setAdding(false);
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Xóa cấu hình Sheet này?")) return;
+    if (!(await showConfirm("Xóa cấu hình Sheet này?"))) return;
     try {
       const r = await apiFetch(`${API}/sheet/configs/${id}`, { method: "DELETE" });
       if (r.ok) { const data = await r.json(); setConfigs(data); }
@@ -4421,8 +4544,8 @@ function SheetConfigPage() {
       <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>⚙️ Cấu hình Google Sheet</h2>
 
       <div style={{ background: "#fff", borderRadius: 12, padding: 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)", maxWidth: 800 }}>
-        <div style={{ background: "#eff6ff", padding: 16, borderRadius: 8, marginBottom: 20, fontSize: 13, lineHeight: 1.6 }}>
-          <div style={{ fontWeight: 700, marginBottom: 8, color: "#1e40af" }}>📌 Hướng dẫn kết nối Google Sheet</div>
+        <div style={{ background: "#f0faf1", padding: 16, borderRadius: 8, marginBottom: 20, fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: 8, color: "#1a3c20" }}>📌 Hướng dẫn kết nối Google Sheet</div>
           <ol style={{ margin: 0, paddingLeft: 20, color: "#374151" }}>
             <li>Mở Google Sheet của bạn</li>
             <li>Vào menu <strong>Tiện ích mở rộng</strong> → <strong>Apps Script</strong></li>
@@ -4438,7 +4561,7 @@ function SheetConfigPage() {
         </div>
 
         <details style={{ marginBottom: 20 }}>
-          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#3b82f6", padding: "8px 0" }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#e88a2e", padding: "8px 0" }}>
             📋 Xem code Apps Script (bấm để mở)
           </summary>
           <pre style={{
@@ -4547,7 +4670,7 @@ function doPost(e) {
             display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8,
           }}>
             <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af" }}>🏗️ {cfg.name}</div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20" }}>🏗️ {cfg.name}</div>
               <div style={{ fontSize: 11, color: "#6b7280", wordBreak: "break-all", marginTop: 2 }}>{cfg.script_url}</div>
               {testResults[cfg.id] && (
                 <div style={{
@@ -4698,11 +4821,11 @@ function CalendarPage({ projects }) {
             return (
               <div key={i} style={{
                 minHeight: isMobile ? 60 : 100, padding: 4, borderBottom: "1px solid #f3f4f6", borderRight: "1px solid #f3f4f6",
-                background: isToday(d) ? "#eff6ff" : (d ? "#fff" : "#fafafa"),
+                background: isToday(d) ? "#fef6ee" : (d ? "#fff" : "#fafafa"),
               }}>
                 {d && (
                   <>
-                    <div style={{ fontSize: 12, fontWeight: isToday(d) ? 700 : 400, color: isToday(d) ? "#3b82f6" : "#374151", marginBottom: 2 }}>{d}</div>
+                    <div style={{ fontSize: 12, fontWeight: isToday(d) ? 700 : 400, color: isToday(d) ? "#e88a2e" : "#374151", marginBottom: 2 }}>{d}</div>
                     {dayPosts.slice(0, isMobile ? 1 : 3).map((p, pi) => {
                       const status = getStatus(p);
                       const st = SHEET_STATUS[status] || SHEET_STATUS.STOP;
@@ -4741,18 +4864,21 @@ function CalendarPage({ projects }) {
 /* ===== Shared styles ===== */
 const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const thStyle = {
-  padding: "10px 12px", textAlign: "left", background: "#f8fafc",
-  borderBottom: "2px solid #e5e7eb", fontSize: 12, fontWeight: 600, color: "#374151", whiteSpace: "nowrap",
+  padding: "10px 12px", textAlign: "left", background: "#f0f4f1",
+  borderBottom: "2px solid #c5d9c8", fontSize: 12, fontWeight: 700, color: "#1a3c20",
+  whiteSpace: "nowrap", letterSpacing: "0.01em",
 };
-const tdStyle = { padding: "8px 12px", borderBottom: "1px solid #f3f4f6" };
-const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 4, marginTop: 12 };
+const tdStyle = { padding: "10px 12px", borderBottom: "1px solid #f0f2f5", verticalAlign: "middle" };
+const labelStyle = { display: "block", fontSize: 13, fontWeight: 600, color: "#1a3c20", marginBottom: 4, marginTop: 12 };
 const inputStyle = {
-  width: "100%", padding: "8px 12px", borderRadius: 8,
+  width: "100%", padding: "10px 12px", borderRadius: 8,
   border: "1px solid #d1d5db", fontSize: 13, marginBottom: 8, boxSizing: "border-box",
+  transition: "border-color .2s, box-shadow .2s",
 };
 const btnPrimary = {
-  padding: "8px 20px", background: "#3b82f6", color: "#fff",
+  padding: "8px 20px", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff",
   border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13,
+  boxShadow: "0 2px 6px rgba(232,138,46,.25)",
 };
 const btnSecondary = {
   padding: "8px 16px", background: "#f3f4f6", color: "#374151",

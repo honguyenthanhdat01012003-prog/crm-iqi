@@ -33,7 +33,7 @@ body {
 }
 
 select:focus, input:focus, button:focus {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid #e88a2e;
   outline-offset: 1px;
 }
 
@@ -78,4 +78,70 @@ select:focus, input:focus, button:focus {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* ===== Brand-consistent interactive states ===== */
+
+/* Buttons: hover lift + darken */
+button {
+  transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease, background .15s ease;
+}
+button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+}
+button:not(:disabled):active {
+  transform: translateY(0);
+}
+button:disabled {
+  cursor: not-allowed !important;
+  opacity: 0.55;
+}
+
+/* Input focus glow */
+input:focus, textarea:focus, select:focus {
+  border-color: #e88a2e !important;
+  box-shadow: 0 0 0 3px rgba(232, 138, 46, 0.15);
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+
+/* Table row hover */
+tr:hover > td {
+  background-color: rgba(232, 138, 46, 0.04);
+}
+
+/* Sidebar nav items hover */
+nav > div:hover {
+  background: rgba(255,255,255,.06) !important;
+}
+
+/* Card hover lift */
+div[style*="boxShadow"]:hover {
+  transition: box-shadow .2s ease, transform .2s ease;
+}
+
+/* Links */
+a, span[style*="cursor: pointer"] {
+  transition: color .15s ease, opacity .15s ease;
+}
+
+/* Smooth scroll */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Selection color */
+::selection {
+  background: rgba(232, 138, 46, 0.25);
+  color: #1a3c20;
+}
+
+/* Smooth transitions for sidebar */
+aside {
+  transition: width .2s ease, transform .25s ease;
 }

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <linearGradient id="topGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F5C842"/>
+      <stop offset="50%" stop-color="#F5A623"/>
+      <stop offset="100%" stop-color="#E8541E"/>
+    </linearGradient>
+    <linearGradient id="botGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A8D65C"/>
+      <stop offset="50%" stop-color="#7AB648"/>
+      <stop offset="100%" stop-color="#3D7C2F"/>
+    </linearGradient>
+    <linearGradient id="swooshGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F5C842"/>
+      <stop offset="100%" stop-color="#F5A623"/>
+    </linearGradient>
+  </defs>
+  <!-- Top orange arc -->
+  <path d="M100 15 C145 15 180 40 190 80 C195 100 180 110 160 100 C140 90 120 70 100 60 C80 50 50 55 40 70 C55 35 75 15 100 15Z" fill="url(#topGrad)"/>
+  <!-- Bottom green bowl -->
+  <path d="M40 110 C40 90 50 80 60 85 C80 95 100 110 130 110 C145 110 155 105 160 100 C165 120 150 155 120 170 C90 185 55 175 40 150 C30 135 35 120 40 110Z" fill="url(#botGrad)"/>
+  <!-- White swoosh -->
+  <path d="M45 95 C60 75 90 80 110 75 C130 70 155 55 170 85 C150 65 120 75 100 78 C80 81 55 82 45 95Z" fill="white" opacity="0.9"/>
+  <!-- Left swoosh accent -->
+  <path d="M35 60 C30 80 32 100 40 115 C30 100 25 75 35 55Z" fill="url(#swooshGrad)" opacity="0.8"/>
+  <!-- Vietnam flag badge -->
+  <rect x="120" y="145" width="38" height="38" rx="8" fill="#DA251D"/>
+  <polygon points="139,153 142,162 151,162 144,168 146,177 139,172 132,177 134,168 127,162 136,162" fill="#FFCD00"/>
+</svg>
