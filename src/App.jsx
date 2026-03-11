@@ -2570,6 +2570,7 @@ function CampaignsPage({ leads, projects }) {
   const [fbLevel, setFbLevel] = useState("campaign");
   const [fbDateFrom, setFbDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); });
   const [fbDateTo, setFbDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [selectedFbProject, setSelectedFbProject] = useState(null);
   // Ad Account form
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
@@ -2583,10 +2584,10 @@ function CampaignsPage({ leads, projects }) {
 
   const loadInsights = async () => {
     if (!selectedAccount) return;
-    setFbLoading(true); setFbError("");
+    setFbLoading(true); setFbError(""); setSelectedFbProject(null);
     try {
       const [insightsRes, campaignsRes] = await Promise.all([
-        apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=${fbLevel}`),
+        apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
         apiFetch(`${API}/fb-ads/campaigns/${selectedAccount}`)
       ]);
       const insightsData = await insightsRes.json();
@@ -2629,24 +2630,41 @@ function CampaignsPage({ leads, projects }) {
   const fmtMoney = (n) => n != null ? Number(n).toLocaleString("vi-VN", { maximumFractionDigits: 0 }) + " ₫" : "—";
   const fmtPct = (n) => n != null ? Number(n).toFixed(2) + "%" : "—";
 
-  // Totals for FB insights
-  const fbTotals = useMemo(() => {
-    if (!fbInsights.length) return null;
-    const t = { spend: 0, impressions: 0, reach: 0, clicks: 0, leads: 0 };
-    fbInsights.forEach(r => {
+  // Compute totals for a set of insights
+  const calcFbTotals = (rows) => {
+    if (!rows.length) return null;
+    const t = { spend: 0, impressions: 0, reach: 0, clicks: 0, leads: 0, linkClicks: 0 };
+    rows.forEach(r => {
       t.spend += Number(r.spend || 0);
       t.impressions += Number(r.impressions || 0);
       t.reach += Number(r.reach || 0);
       t.clicks += Number(r.clicks || 0);
-      const leadAction = (r.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
-      if (leadAction) t.leads += Number(leadAction.value || 0);
+      t.linkClicks += Number(r.inline_link_clicks || 0);
+      const la = (r.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+      if (la) t.leads += Number(la.value || 0);
     });
     t.cpm = t.impressions ? (t.spend / t.impressions * 1000) : 0;
     t.cpc = t.clicks ? (t.spend / t.clicks) : 0;
     t.ctr = t.impressions ? (t.clicks / t.impressions * 100) : 0;
+    t.linkCtr = t.impressions ? (t.linkClicks / t.impressions * 100) : 0;
     t.cpl = t.leads ? (t.spend / t.leads) : 0;
     return t;
-  }, [fbInsights]);
+  };
+  const fbTotals = useMemo(() => calcFbTotals(fbInsights), [fbInsights]);
+
+  // Map insights to projects via CRM lead campaign matching
+  const fbProjectMap = useMemo(() => {
+    if (!fbInsights.length) return {};
+    const campToProject = {};
+    leads.forEach(l => { if (l.campaign) campToProject[l.campaign] = l.projectId || 0; });
+    const map = {};
+    fbInsights.forEach(row => {
+      const pid = campToProject[row.campaign_name] ?? -1;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(row);
+    });
+    return map;
+  }, [fbInsights, leads]);
 
   // Build project → campaign → adset → ad tree
   const projectTree = React.useMemo(() => {
@@ -2718,38 +2736,224 @@ function CampaignsPage({ leads, projects }) {
 
   // === FB Ads Tab ===
   if (tab === "fb_ads") {
+    // Controls bar (shared between views)
+    const fbControls = (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "flex-end" }}>
+        <div style={{ flex: "1 1 180px", minWidth: 150 }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Tài khoản QC</label>
+          <select value={selectedAccount} onChange={(e) => { setSelectedAccount(e.target.value); setSelectedFbProject(null); }} style={{ ...inputStyle, marginBottom: 0 }}>
+            <option value="">-- Chọn tài khoản --</option>
+            {adAccounts.filter(a => a.isActive).map(a => <option key={a.id} value={a.accountId}>{a.name || `act_${a.accountId}`}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: "0 1 140px" }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Từ ngày</label>
+          <input type="date" value={fbDateFrom} onChange={e => setFbDateFrom(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
+        </div>
+        <div style={{ flex: "0 1 140px" }}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Đến ngày</label>
+          <input type="date" value={fbDateTo} onChange={e => setFbDateTo(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
+        </div>
+        <button onClick={loadInsights} disabled={!selectedAccount || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
+          {fbLoading ? <><RefreshCw size={14} className="spin" /> Đang tải...</> : <><RefreshCw size={14} /> Xem báo cáo</>}
+        </button>
+      </div>
+    );
+
+    // Scope data for selected project
+    const scopedInsights = selectedFbProject !== null ? (fbProjectMap[selectedFbProject] || []) : fbInsights;
+    const scopedTotals = calcFbTotals(scopedInsights);
+
+    // CRM leads grouped by campaign name
+    const crmByCamp = {};
+    leads.forEach(l => { if (l.campaign) { if (!crmByCamp[l.campaign]) crmByCamp[l.campaign] = []; crmByCamp[l.campaign].push(l); } });
+
+    // Best performing campaigns (cheapest CPL + highest interest)
+    const totalSpendAll = scopedInsights.reduce((s, r) => s + Number(r.spend || 0), 0);
+    const bestCampaigns = scopedInsights
+        .map(row => {
+          const cl = crmByCamp[row.campaign_name] || [];
+          const interested = cl.filter(l => l.status === "interested").length;
+          const closed = cl.filter(l => l.status === "closed").length;
+          const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+          const fbLeads = la ? Number(la.value) : 0;
+          const spend = Number(row.spend || 0);
+          return {
+            name: row.campaign_name, status: row.status, spend, fbLeads,
+            crmLeads: cl.length, interested, closed,
+            interestPct: cl.length ? (interested / cl.length * 100) : 0,
+            closedPct: cl.length ? (closed / cl.length * 100) : 0,
+            costPct: totalSpendAll ? (spend / totalSpendAll * 100) : 0,
+            cpl: fbLeads ? spend / fbLeads : 0,
+          };
+        })
+        .filter(c => c.crmLeads > 0 || c.fbLeads > 0)
+        .sort((a, b) => {
+          if (a.cpl && b.cpl) return a.cpl - b.cpl;
+          if (a.cpl && !b.cpl) return -1;
+          if (!a.cpl && b.cpl) return 1;
+          return b.interestPct - a.interestPct;
+        });
+
+    if (selectedFbProject !== null) {
+      const projName = selectedFbProject === -1 ? "Chưa phân loại" : (projects || []).find(p => p.id === selectedFbProject)?.name || "Dự án #" + selectedFbProject;
+      return (
+        <div>
+          {tabBar}
+          {fbControls}
+          {fbError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 }}>{fbError}</div>}
+
+          {/* Header */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+            <button onClick={() => setSelectedFbProject(null)} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151" }}>← Dự án</button>
+            <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> {projName}</h3>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>{scopedInsights.length} chiến dịch</span>
+          </div>
+
+          {/* Summary cards */}
+          {scopedTotals && (
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+              <Card title="Tổng chi tiêu" value={fmtMoney(scopedTotals.spend)} color="#8b5cf6" compact />
+              <Card title="Lượt hiển thị" value={fmtNum(scopedTotals.impressions)} color="#3b82f6" compact />
+              <Card title="Lượt tiếp cận" value={fmtNum(scopedTotals.reach)} color="#06b6d4" compact />
+              <Card title="Số click" value={fmtNum(scopedTotals.clicks)} color="#f59e0b" compact />
+              <Card title="CPM" value={fmtMoney(scopedTotals.cpm)} color="#ec4899" compact />
+              <Card title="CPC" value={fmtMoney(scopedTotals.cpc)} color="#e88a2e" compact />
+              <Card title="CTR (liên kết)" value={fmtPct(scopedTotals.linkCtr)} color="#10b981" compact />
+              <Card title="Tổng Leads" value={fmtNum(scopedTotals.leads)} sub={scopedTotals.leads ? `CPL: ${fmtMoney(scopedTotals.cpl)}` : ""} color="#1a3c20" compact />
+            </div>
+          )}
+
+          {/* Campaign detail table */}
+          {scopedInsights.length > 0 && (
+            <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 20 }}>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Megaphone size={16} /> Danh sách chiến dịch</div>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                    <th style={{ ...thStyle, textAlign: "center", minWidth: 80 }}>Trạng thái</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Kết quả</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CP/KQ</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CTR (LK)</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Click LK</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Tiếp cận</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Lead CRM</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CP/Lead QT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scopedInsights.map((row, i) => {
+                    const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                    const resultCount = la ? Number(la.value) : 0;
+                    const cpa = (row.cost_per_action_type || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                    const costPerResult = cpa ? Number(cpa.value) : (resultCount ? Number(row.spend) / resultCount : 0);
+                    const cl = crmByCamp[row.campaign_name] || [];
+                    const interested = cl.filter(l => l.status === "interested").length;
+                    const costPerQT = interested ? Number(row.spend) / interested : 0;
+                    const isActive = row.status === "ACTIVE";
+                    return (
+                      <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                        <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12, maxWidth: 250 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <Megaphone size={13} color="#6b7280" />
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.campaign_name || "—"}</span>
+                          </div>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: "center" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "2px 10px", borderRadius: 20, fontWeight: 700, color: isActive ? "#16a34a" : "#dc2626", background: isActive ? "#dcfce7" : "#fef2f2" }}>
+                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: isActive ? "#16a34a" : "#dc2626", display: "inline-block" }}></span>
+                            {isActive ? "Bật" : "Tắt"}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(row.spend)}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{resultCount || "—"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{resultCount ? fmtMoney(costPerResult) : "—"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpm)}</td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>{row.inline_link_click_ctr ? fmtPct(row.inline_link_click_ctr) : "—"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>{row.inline_link_clicks ? fmtNum(row.inline_link_clicks) : "—"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.reach)}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{cl.length || "—"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", color: "#1a3c20", fontWeight: 600 }}>{interested ? fmtMoney(costPerQT) : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                  {/* Totals */}
+                  {scopedTotals && (
+                    <tr style={{ background: "#f0f4f1", fontWeight: 700 }}>
+                      <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({scopedInsights.length})</td>
+                      <td style={tdStyle}></td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(scopedTotals.spend)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.leads)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{scopedTotals.leads ? fmtMoney(scopedTotals.cpl) : "—"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(scopedTotals.cpm)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(scopedTotals.linkCtr)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.linkClicks)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.reach)}</td>
+                      <td colSpan={2} style={tdStyle}></td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Best performing campaigns */}
+          {bestCampaigns.length > 0 && (
+            <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#1a3c20" }}>
+                <Trophy size={16} color="#e88a2e" /> Chiến dịch hiệu quả (Lead rẻ nhất · Quan tâm cao)
+              </div>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>Khách</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>% Quan tâm</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>% Chi phí</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>% Chuyển đổi</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>CPL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bestCampaigns.map((c, i) => (
+                    <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                      <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {i < 3 && <span style={{ color: "#e88a2e", fontWeight: 700 }}>#{i + 1}</span>}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220, display: "inline-block" }}>{c.name}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "center", fontWeight: 600 }}>{c.crmLeads}</td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <span style={{ color: c.interestPct > 30 ? "#16a34a" : c.interestPct > 10 ? "#e88a2e" : "#6b7280", fontWeight: 600 }}>{c.interestPct.toFixed(1)}%</span>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>{c.costPct.toFixed(1)}%</td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <span style={{ color: c.closedPct > 0 ? "#16a34a" : "#9ca3af", fontWeight: c.closedPct > 0 ? 700 : 400 }}>{c.closedPct.toFixed(1)}%</span>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 700 }}>{c.cpl ? fmtMoney(c.cpl) : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {scopedInsights.length === 0 && !fbLoading && (
+            <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 13 }}>Không có dữ liệu chiến dịch cho dự án này</div>
+          )}
+        </div>
+      );
+    }
+
+    // === Project list view (no project selected) ===
     return (
       <div>
         {tabBar}
-        {/* Controls */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "flex-end" }}>
-          <div style={{ flex: "1 1 180px", minWidth: 150 }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Tài khoản QC</label>
-            <select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }}>
-              <option value="">-- Chọn tài khoản --</option>
-              {adAccounts.filter(a => a.isActive).map(a => <option key={a.id} value={a.accountId}>{a.name || `act_${a.accountId}`}</option>)}
-            </select>
-          </div>
-          <div style={{ flex: "0 1 140px" }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Từ ngày</label>
-            <input type="date" value={fbDateFrom} onChange={e => setFbDateFrom(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
-          </div>
-          <div style={{ flex: "0 1 140px" }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Đến ngày</label>
-            <input type="date" value={fbDateTo} onChange={e => setFbDateTo(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
-          </div>
-          <div style={{ flex: "0 1 140px" }}>
-            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Cấp độ</label>
-            <select value={fbLevel} onChange={e => setFbLevel(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }}>
-              <option value="campaign">Chiến dịch</option>
-              <option value="adset">Nhóm QC</option>
-              <option value="ad">Quảng cáo</option>
-            </select>
-          </div>
-          <button onClick={loadInsights} disabled={!selectedAccount || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
-            {fbLoading ? <><RefreshCw size={14} className="spin" /> Đang tải...</> : <><RefreshCw size={14} /> Xem báo cáo</>}
-          </button>
-        </div>
+        {fbControls}
 
         {!selectedAccount && (
           <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
@@ -2761,90 +2965,68 @@ function CampaignsPage({ leads, projects }) {
 
         {fbError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 }}>{fbError}</div>}
 
-        {/* Summary cards */}
-        {fbTotals && (
-          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
-            <Card title="Tổng chi phí" value={fmtMoney(fbTotals.spend)} color="#8b5cf6" compact />
-            <Card title="Impressions" value={fmtNum(fbTotals.impressions)} color="#3b82f6" compact />
-            <Card title="Reach" value={fmtNum(fbTotals.reach)} color="#06b6d4" compact />
-            <Card title="Clicks" value={fmtNum(fbTotals.clicks)} color="#f59e0b" compact />
-            <Card title="CPM" value={fmtMoney(fbTotals.cpm)} color="#ec4899" compact />
-            <Card title="CPC" value={fmtMoney(fbTotals.cpc)} color="#e88a2e" compact />
-            <Card title="CTR" value={fmtPct(fbTotals.ctr)} color="#10b981" compact />
-            {fbTotals.leads > 0 && <Card title="Leads" value={fmtNum(fbTotals.leads)} sub={`CPL: ${fmtMoney(fbTotals.cpl)}`} color="#1a3c20" compact />}
+        {fbLoading && (
+          <div style={{ textAlign: "center", padding: 40 }}>
+            <RefreshCw size={24} className="spin" style={{ color: "#e88a2e" }} />
+            <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>Đang tải dữ liệu...</div>
           </div>
         )}
 
-        {/* Insights table */}
-        {fbInsights.length > 0 && (
-          <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ ...thStyle, textAlign: "left", minWidth: 200 }}>
-                    {fbLevel === "campaign" ? "Chiến dịch" : fbLevel === "adset" ? "Nhóm QC" : "Quảng cáo"}
-                  </th>
-                  <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Impressions</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Reach</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Clicks</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>CPC</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>CTR</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Kết quả</th>
-                  <th style={{ ...thStyle, textAlign: "right" }}>Chi phí/KQ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {fbInsights.map((row, i) => {
-                  const name = row.campaign_name || row.adset_name || row.ad_name || "—";
-                  const leadAction = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
-                  const resultCount = leadAction ? Number(leadAction.value) : 0;
-                  const costPerAction = (row.cost_per_action_type || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
-                  const costPerResult = costPerAction ? Number(costPerAction.value) : (resultCount ? Number(row.spend) / resultCount : 0);
-                  const statusLabel = row.status === "ACTIVE" ? "Đang hoạt động" : row.status === "PAUSED" ? "Tạm dừng" : row.status || "—";
-                  const statusColor = row.status === "ACTIVE" ? "#16a34a" : row.status === "PAUSED" ? "#d97706" : "#6b7280";
-                  return (
-                    <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                      <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12, maxWidth: 280 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          {fbLevel === "campaign" ? <Megaphone size={13} color="#6b7280" /> : fbLevel === "adset" ? <Folder size={13} color="#6b7280" /> : <CircleDot size={11} color="#6b7280" />}
-                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-                        </div>
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: "center" }}>
-                        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, color: statusColor, background: statusColor + "15" }}>{statusLabel}</span>
-                      </td>
-                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(row.spend)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.impressions)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.reach)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.clicks)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpm)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpc)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(row.ctr)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{resultCount || "—"}</td>
-                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{resultCount ? fmtMoney(costPerResult) : "—"}</td>
-                    </tr>
-                  );
-                })}
-                {/* Totals row */}
-                <tr style={{ background: "#f0f4f1", fontWeight: 700 }}>
-                  <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({fbInsights.length})</td>
-                  <td style={tdStyle}></td>
-                  <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(fbTotals.spend)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.impressions)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.reach)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.clicks)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(fbTotals.cpm)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(fbTotals.cpc)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(fbTotals.ctr)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.leads)}</td>
-                  <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{fbTotals.leads ? fmtMoney(fbTotals.cpl) : "—"}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        {/* Project cards */}
+        {fbInsights.length > 0 && !fbLoading && (
+          <>
+            {/* Overall summary cards */}
+            {fbTotals && (
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+                <Card title="Tổng chi tiêu" value={fmtMoney(fbTotals.spend)} color="#8b5cf6" compact />
+                <Card title="Lượt hiển thị" value={fmtNum(fbTotals.impressions)} color="#3b82f6" compact />
+                <Card title="Lượt tiếp cận" value={fmtNum(fbTotals.reach)} color="#06b6d4" compact />
+                <Card title="Số click" value={fmtNum(fbTotals.clicks)} color="#f59e0b" compact />
+                <Card title="CPM" value={fmtMoney(fbTotals.cpm)} color="#ec4899" compact />
+                <Card title="CPC" value={fmtMoney(fbTotals.cpc)} color="#e88a2e" compact />
+                <Card title="CTR (liên kết)" value={fmtPct(fbTotals.linkCtr)} color="#10b981" compact />
+                <Card title="Tổng Leads" value={fmtNum(fbTotals.leads)} sub={fbTotals.leads ? `CPL: ${fmtMoney(fbTotals.cpl)}` : ""} color="#1a3c20" compact />
+              </div>
+            )}
+
+            <div style={{ marginBottom: 12 }}>
+              <h3 style={{ margin: "0 0 4px", fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> Chọn dự án để xem chiến dịch</h3>
+              <span style={{ fontSize: 12, color: "#6b7280" }}>{fbInsights.length} chiến dịch · {Object.keys(fbProjectMap).length} dự án</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+              {Object.keys(fbProjectMap).sort((a, b) => {
+                const spendA = fbProjectMap[a].reduce((s, r) => s + Number(r.spend || 0), 0);
+                const spendB = fbProjectMap[b].reduce((s, r) => s + Number(r.spend || 0), 0);
+                return spendB - spendA;
+              }).map(pid => {
+                const rows = fbProjectMap[pid];
+                const pName = Number(pid) === -1 ? "Chưa phân loại" : (projects || []).find(p => p.id === Number(pid))?.name || "Dự án #" + pid;
+                const pSpend = rows.reduce((s, r) => s + Number(r.spend || 0), 0);
+                const pLeads = rows.reduce((s, r) => {
+                  const la = (r.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                  return s + (la ? Number(la.value) : 0);
+                }, 0);
+                const activeCount = rows.filter(r => r.status === "ACTIVE").length;
+                return (
+                  <div key={pid} onClick={() => setSelectedFbProject(Number(pid))}
+                    onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,.12)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}
+                    style={{ background: "#fff", borderRadius: 14, padding: 20, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,.08)", border: "1px solid #e5e7eb", transition: "all .25s ease", borderTop: "3px solid #e88a2e" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={16} /> {pName}</span>
+                      <span style={{ background: "#8b5cf622", color: "#8b5cf6", padding: "4px 12px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}>{fmtMoney(pSpend)}</span>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12 }}>
+                      <span style={{ background: "#3b82f615", color: "#1d4ed8", padding: "3px 8px", borderRadius: 6 }}>{rows.length} chiến dịch</span>
+                      <span style={{ background: "#16a34a15", color: "#16a34a", padding: "3px 8px", borderRadius: 6 }}>{activeCount} đang chạy</span>
+                      {pLeads > 0 && <span style={{ background: "#e88a2e15", color: "#e88a2e", padding: "3px 8px", borderRadius: 6 }}>{pLeads} leads</span>}
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af" }}>Click để xem chi tiết chiến dịch →</div>
+                  </div>
+                );
+              })}
+            </div>
+          </>
         )}
 
         {selectedAccount && !fbLoading && fbInsights.length === 0 && !fbError && (

@@ -2565,7 +2565,7 @@ app.get("/api/fb-ads/insights/:accountId", requireAuth, requireAdmin, async (req
     const since = dateFrom || today;
     const until = dateTo || today;
     const insightLevel = level || "campaign";
-    const fields = "campaign_name,campaign_id,adset_name,adset_id,ad_name,ad_id,spend,impressions,reach,clicks,cpm,cpc,ctr,actions,cost_per_action_type";
+    const fields = "campaign_name,campaign_id,adset_name,adset_id,ad_name,ad_id,spend,impressions,reach,clicks,cpm,cpc,ctr,actions,cost_per_action_type,inline_link_clicks,inline_link_click_ctr";
     const url = `https://graph.facebook.com/v22.0/act_${acct.account_id}/insights?fields=${fields}&time_range={"since":"${since}","until":"${until}"}&level=${encodeURIComponent(insightLevel)}&limit=500&access_token=${acct.access_token}`;
     const fbRes = await fetch(url);
     const data = await fbRes.json();
