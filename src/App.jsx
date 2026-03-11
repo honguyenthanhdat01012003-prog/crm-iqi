@@ -2912,29 +2912,57 @@ function CampaignsPage({ leads, projects }) {
             </div>
 
             <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 10 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 5: GIA HẠN TOKEN (TOKEN VĨNH VIỄN)</div>
+              <div style={{ fontWeight: 700, fontSize: 13, color: "#92400e", marginBottom: 6 }}>🔶 BƯỚC 5: GIA HẠN TOKEN (RẤT QUAN TRỌNG!)</div>
               <div style={{ paddingLeft: 8 }}>
-                <div style={{ fontWeight: 600, color: "#b45309", marginBottom: 4 }}>⚠️ Token mặc định chỉ có hạn 1-2 giờ! Phải gia hạn:</div>
-                <div style={{ background: "#fef3c7", padding: "8px 10px", borderRadius: 6, marginBottom: 6 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>🅰️ Cách nhanh (60 ngày):</div>
-                  <div style={{ paddingLeft: 8, fontSize: 11.5 }}>
-                    <div>1. Quay lại Graph API Explorer → Giữ dropdown ở <b>"User Token"</b></div>
-                    <div>2. Vào Debug Tool: <b>developers.facebook.com/tools/debug/accesstoken/</b></div>
-                    <div>3. Dán token vào → Bấm <b>"Debugging"</b></div>
-                    <div>4. Bấm <b>"Extended access code"</b> → Copy token mới (60 ngày)</div>
+                <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", padding: "8px 10px", borderRadius: 6, marginBottom: 8, fontSize: 12 }}>
+                  <div style={{ fontWeight: 700, color: "#dc2626", marginBottom: 4 }}>⚠️ HIỂU RÕ TRƯỚC KHI LÀM:</div>
+                  <div style={{ color: "#991b1b", lineHeight: 1.7 }}>
+                    • Token bạn vừa lấy ở Bước 4 là <b>USER Token ngắn hạn</b> — chỉ sống <b>1-2 giờ</b><br/>
+                    • FB Ads API cần <b>USER Token</b> (token cá nhân của bạn) — KHÔNG phải Page Token<br/>
+                    • <b>KHÔNG cần</b> gọi <code>me/accounts</code> — cái đó là lấy Page Token dùng cho việc <b>đăng bài</b>, hoàn toàn khác!<br/>
+                    • Bạn chỉ cần <b>gia hạn USER Token</b> rồi dán thẳng vào CRM là xong
                   </div>
                 </div>
-                <div style={{ background: "#f0fdf4", padding: "8px 10px", borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>🅱️ Cách nâng cao (Token VĨNH VIỄN):</div>
-                  <div style={{ paddingLeft: 8, fontSize: 11.5 }}>
-                    <div>1. Ở Graph API Explorer → dropdown <b>"User or Page"</b> = <b>"User Token"</b></div>
-                    <div>2. Generate Token → Copy → Vào Debug Tool → Extend (bước 🅰️ trên)</div>
-                    <div>3. Quay lại Explorer → Dán <b>Long-lived User Token</b> vào ô Access Token</div>
-                    <div>4. Giữ dropdown ở <b>"User Token"</b> → Gõ <code>me/accounts</code> → Bấm <b>Send</b></div>
-                    <div>5. Kết quả JSON trả về sẽ chứa token Page <b>VĨNH VIỄN</b> → Copy <code>access_token</code></div>
-                    <div>6. Kiểm tra ở Debug Tool → dòng "Expired" = <b>"Never"</b> ✅</div>
+                <div style={{ fontWeight: 600, color: "#b45309", marginBottom: 6 }}>Chọn 1 trong 2 cách gia hạn:</div>
+                <div style={{ background: "#fef3c7", padding: "10px 12px", borderRadius: 6, marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12.5 }}>🅰️ Cách nhanh — Token 60 ngày (đơn giản, ai cũng làm được):</div>
+                  <div style={{ paddingLeft: 8, fontSize: 11.5, lineHeight: 1.8 }}>
+                    <div><b>1.</b> Ở Bước 4 bạn đã có <b>User Token ngắn hạn</b> trong ô Access Token</div>
+                    <div><b>2.</b> <b>GIỮ NGUYÊN</b> dropdown <b>"User or Page"</b> ở <b>"User Token"</b> (⚠️ KHÔNG đổi sang tên Page!)</div>
+                    <div><b>3.</b> Vào Debug Tool: <b>developers.facebook.com/tools/debug/accesstoken/</b></div>
+                    <div><b>4.</b> Dán User Token vào ô → Bấm <b>"Debugging"</b></div>
+                    <div><b>5.</b> Kiểm tra dòng <b>"Type"</b> phải ghi <b>"User"</b> (nếu ghi "Page" → sai, quay lại Bước 4)</div>
+                    <div><b>6.</b> Kéo xuống dưới cùng → Bấm nút <b>"Extended access code"</b> (nút xanh dương)</div>
+                    <div><b>7.</b> Token mới hiện ra → <b>Copy token này</b> → Đây là <b>User Token 60 ngày</b> ✅</div>
+                    <div><b>8.</b> <b>Dán thẳng token này vào CRM</b> ở Bước 6 → Xong!</div>
+                    <div style={{ background: "#fff7ed", padding: "4px 8px", borderRadius: 4, marginTop: 4, fontSize: 11, color: "#9a3412" }}>📌 Sau 60 ngày hết hạn → Làm lại từ Bước 4 (~2 phút)</div>
                   </div>
-                  <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4, fontWeight: 600 }}>⚠️ SAI LẦM HAY GẶP: Extend PAGE Token rồi gọi me/accounts → BỊ LỖI! Phải extend USER Token mới đúng!</div>
+                </div>
+                <div style={{ background: "#f0fdf4", padding: "10px 12px", borderRadius: 6 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12.5 }}>🅱️ Cách nâng cao — Token VĨNH VIỄN (không bao giờ hết hạn):</div>
+                  <div style={{ paddingLeft: 8, fontSize: 11.5, lineHeight: 1.8 }}>
+                    <div><b>1.</b> Làm theo cách 🅰️ ở trên trước → Bạn đã có <b>Long-lived User Token (60 ngày)</b></div>
+                    <div><b>2.</b> Vào <b>Business Settings</b>: <b>business.facebook.com/settings/</b></div>
+                    <div><b>3.</b> Ở sidebar trái → Mục <b>"Người dùng"</b> → <b>"Người dùng hệ thống"</b> (System Users)</div>
+                    <div><b>4.</b> Bấm <b>"Thêm"</b> → Đặt tên (VD: <code>CRM Bot</code>) → Vai trò: <b>Admin</b> → Tạo</div>
+                    <div><b>5.</b> Bấm <b>"Tạo token mới"</b> (Generate New Token) cho System User vừa tạo</div>
+                    <div><b>6.</b> Chọn <b>ứng dụng</b> bạn đã tạo ở Bước 1</div>
+                    <div><b>7.</b> Tick chọn quyền: <b><code>ads_read</code></b>, <code>business_management</code></div>
+                    <div><b>8.</b> Bấm <b>"Generate Token"</b> → Copy token → Đây là token <b>VĨNH VIỄN</b> ✅</div>
+                    <div><b>9.</b> Kiểm tra: Vào Debug Tool → dán token → dòng "Expired" = <b>"Never"</b></div>
+                  </div>
+                  <div style={{ background: "#dcfce7", padding: "6px 10px", borderRadius: 4, marginTop: 6, fontSize: 11, color: "#15803d" }}>
+                    ✅ Token System User <b>không bao giờ hết hạn</b>, không cần gia hạn lại. Đây là cách tốt nhất cho production.
+                  </div>
+                </div>
+                <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", padding: "8px 10px", borderRadius: 6, marginTop: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 11.5, color: "#dc2626", marginBottom: 4 }}>❌ SAI LẦM HAY GẶP — ĐỪNG LÀM NHƯ NÀY:</div>
+                  <div style={{ fontSize: 11, color: "#991b1b", lineHeight: 1.7 }}>
+                    <div>❌ Đổi dropdown sang tên Page rồi copy → Đó là <b>Page Token</b>, dùng cho <b>đăng bài</b>, KHÔNG dùng cho Ads!</div>
+                    <div>❌ Gọi <code>me/accounts</code> → Trả về <b>1 danh sách token của các Page</b> — hoàn toàn KHÔNG liên quan đến Ads!</div>
+                    <div>❌ Copy Page Token từ <code>me/accounts</code> dán vào đây → Sẽ bị lỗi vì FB Ads API cần <b>User Token</b></div>
+                    <div style={{ marginTop: 4 }}>✅ Đúng: Giữ dropdown ở <b>"User Token"</b> → Extend → Dán <b>User Token dài hạn</b> vào CRM</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2958,7 +2986,7 @@ function CampaignsPage({ leads, projects }) {
                   <div style={{ fontWeight: 600, color: "#b45309" }}>Không thấy dữ liệu:</div><div>Kiểm tra Ad Account ID đúng chưa + Token có quyền <code>ads_read</code> không</div>
                   <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi "permissions":</div><div>Vào Dashboard ứng dụng → Thêm quyền <code>ads_read</code> (Bước 2)</div>
                   <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi "invalid token":</div><div>Copy lại token, đảm bảo copy ĐẦY ĐỦ (không thừa/thiếu ký tự)</div>
-                  <div style={{ fontWeight: 600, color: "#b45309" }}>Lỗi me/accounts:</div><div>Phải dùng USER Token (không phải Page Token) để gọi <code>me/accounts</code></div>
+                  <div style={{ fontWeight: 600, color: "#b45309" }}>Dán Page Token:</div><div>FB Ads API cần <b>User Token</b>, không phải Page Token. Giữ dropdown ở "User Token" khi copy</div>
                 </div>
               </div>
             </div>
