@@ -517,13 +517,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   // --- Project CRUD ---
   const openNewProject = () => {
     setEditingProject(null);
-    setDraftProject({ name: "", leadUrl: "", costUrl: "" });
+    setDraftProject({ name: "", leadUrl: "", costUrl: "", fbCode: "", fbPerson: "" });
     setShowProjectModal(true);
   };
 
   const openEditProject = (p) => {
     setEditingProject(p);
-    setDraftProject({ name: p.name, leadUrl: p.leadUrl || "", costUrl: p.costUrl || "" });
+    setDraftProject({ name: p.name, leadUrl: p.leadUrl || "", costUrl: p.costUrl || "", fbCode: p.fbCode || "", fbPerson: p.fbPerson || "" });
     setShowProjectModal(true);
   };
 
@@ -720,8 +720,8 @@ function CRMApp({ user, updateUser, onLogout }) {
           display: "flex",
           flexDirection: "column",
           flexShrink: 0,
+          position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 999,
           ...(isMobile ? {
-            position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 999,
             transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
             boxShadow: sidebarOpen ? "4px 0 24px rgba(0,0,0,.35)" : "none",
           } : {}),
@@ -901,7 +901,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, overflow: "auto", minWidth: 0, background: "#f8fafb", display: "flex", flexDirection: "column" }}>
+      <main style={{ flex: 1, overflow: "auto", minWidth: 0, background: "#f8fafb", display: "flex", flexDirection: "column", marginLeft: isMobile ? 0 : (sidebarOpen ? 230 : 60), transition: "margin-left .2s ease" }}>
         {/* Top bar - sticky */}
         <div style={{
           position: "sticky", top: 0, zIndex: 100, background: "#f8fafb",
@@ -1087,6 +1087,29 @@ function CRMApp({ user, updateUser, onLogout }) {
             onChange={(e) => setDraftProject({ ...draftProject, costUrl: e.target.value })}
             placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?gid=...&single=true&output=csv"
           />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div>
+              <label style={labelStyle}>Mã dự án (FB Ads)</label>
+              <input
+                style={inputStyle}
+                value={draftProject.fbCode}
+                onChange={(e) => setDraftProject({ ...draftProject, fbCode: e.target.value })}
+                placeholder="VD: CT4, BLC..."
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Người phụ trách</label>
+              <input
+                style={inputStyle}
+                value={draftProject.fbPerson}
+                onChange={(e) => setDraftProject({ ...draftProject, fbPerson: e.target.value })}
+                placeholder="VD: TĐ"
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8, lineHeight: 1.5 }}>
+            💡 Mã dự án dùng để phân loại chiến dịch FB Ads. VD: nếu mã là "CT4", chiến dịch có chứa "CT4" trong tên sẽ tự động gán vào dự án này.
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button
               onClick={saveProject}
@@ -2575,6 +2598,7 @@ function CampaignsPage({ leads, projects }) {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [campSearch, setCampSearch] = useState("");
   const [campPage, setCampPage] = useState(1);
+  const [campSort, setCampSort] = useState({ col: null, asc: true });
   const CAMP_PER_PAGE = 20;
   // Ad Account form
   const [showAccountForm, setShowAccountForm] = useState(false);
@@ -2589,7 +2613,7 @@ function CampaignsPage({ leads, projects }) {
 
   const loadInsights = async () => {
     if (!selectedAccount) return;
-    setFbLoading(true); setFbError(""); setSelectedFbProject(null); setCampSearch(""); setCampPage(1);
+    setFbLoading(true); setFbError(""); setSelectedFbProject(null); setCampSearch(""); setCampPage(1); setCampSort({ col: null, asc: true });
     try {
       const [insightsRes, campaignsRes] = await Promise.all([
         apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
@@ -2699,19 +2723,38 @@ function CampaignsPage({ leads, projects }) {
   };
   const fbTotals = useMemo(() => calcFbTotals(fbInsights), [fbInsights]);
 
-  // Map insights to projects via CRM lead campaign matching
+  // Map insights to projects via fb_code matching + CRM lead campaign matching
   const fbProjectMap = useMemo(() => {
     if (!fbInsights.length) return {};
+    // Build project code matchers from project fbCode/fbPerson
+    const codeMatchers = [];
+    (projects || []).forEach(p => {
+      if (p.fbCode) {
+        const codes = p.fbCode.split(",").map(c => c.trim().toUpperCase()).filter(Boolean);
+        const person = (p.fbPerson || "").trim().toUpperCase();
+        codes.forEach(code => codeMatchers.push({ pid: p.id, code, person }));
+      }
+    });
+    // CRM lead campaign → project mapping (fallback)
     const campToProject = {};
     leads.forEach(l => { if (l.campaign) campToProject[l.campaign] = l.projectId || 0; });
     const map = {};
     fbInsights.forEach(row => {
-      const pid = campToProject[row.campaign_name] ?? -1;
+      const campUpper = (row.campaign_name || "").toUpperCase();
+      // Try fb_code match first
+      let pid = -1;
+      for (const m of codeMatchers) {
+        if (campUpper.includes(m.code) && (!m.person || campUpper.includes(m.person))) {
+          pid = m.pid; break;
+        }
+      }
+      // Fallback to CRM lead matching
+      if (pid === -1) pid = campToProject[row.campaign_name] ?? -1;
       if (!map[pid]) map[pid] = [];
       map[pid].push(row);
     });
     return map;
-  }, [fbInsights, leads]);
+  }, [fbInsights, leads, projects]);
 
   // Build project → campaign → adset → ad tree
   const projectTree = React.useMemo(() => {
@@ -2874,8 +2917,21 @@ function CampaignsPage({ leads, projects }) {
     if (selectedFbProject !== null) {
       const projName = selectedFbProject === -1 ? "Chưa phân loại" : (projects || []).find(p => p.id === selectedFbProject)?.name || "Dự án #" + selectedFbProject;
       const filteredInsights = campSearch ? scopedInsights.filter(r => (r.campaign_name || "").toLowerCase().includes(campSearch.toLowerCase())) : scopedInsights;
-      const totalPages = Math.ceil(filteredInsights.length / CAMP_PER_PAGE);
-      const pagedInsights = filteredInsights.slice((campPage - 1) * CAMP_PER_PAGE, campPage * CAMP_PER_PAGE);
+      // Sort
+      const sortedInsights = [...filteredInsights].sort((a, b) => {
+        if (!campSort.col) return 0;
+        let va, vb;
+        if (campSort.col === "status") { va = a.status === "ACTIVE" ? 1 : 0; vb = b.status === "ACTIVE" ? 1 : 0; }
+        else if (campSort.col === "spend") { va = Number(a.spend || 0); vb = Number(b.spend || 0); }
+        else if (campSort.col === "result") {
+          const la1 = (a.actions || []).find(x => x.action_type === "lead" || x.action_type === "onsite_conversion.messaging_first_reply");
+          const la2 = (b.actions || []).find(x => x.action_type === "lead" || x.action_type === "onsite_conversion.messaging_first_reply");
+          va = la1 ? Number(la1.value) : 0; vb = la2 ? Number(la2.value) : 0;
+        } else { va = 0; vb = 0; }
+        return campSort.asc ? va - vb : vb - va;
+      });
+      const totalPages = Math.ceil(sortedInsights.length / CAMP_PER_PAGE);
+      const pagedInsights = sortedInsights.slice((campPage - 1) * CAMP_PER_PAGE, campPage * CAMP_PER_PAGE);
       const filteredTotals = calcFbTotals(filteredInsights);
       // CRM interested for totals
       const totalCrmLeads = filteredInsights.reduce((s, r) => s + (crmByCamp[r.campaign_name] || []).length, 0);
@@ -2888,7 +2944,7 @@ function CampaignsPage({ leads, projects }) {
 
           {/* Header */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <button onClick={() => { setSelectedFbProject(null); setCampSearch(""); setCampPage(1); }} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151" }}>← Dự án</button>
+            <button onClick={() => { setSelectedFbProject(null); setCampSearch(""); setCampPage(1); setCampSort({ col: null, asc: true }); }} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151" }}>← Dự án</button>
             <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> {projName}</h3>
             <span style={{ fontSize: 12, color: "#6b7280" }}>{scopedInsights.length} chiến dịch</span>
           </div>
@@ -2923,9 +2979,9 @@ function CampaignsPage({ leads, projects }) {
                 <thead>
                   <tr>
                     <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
-                    <th style={{ ...thStyle, textAlign: "center", minWidth: 80 }}>Trạng thái</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
-                    <th style={{ ...thStyle, textAlign: "right" }}>Kết quả</th>
+                    <th onClick={() => setCampSort(s => ({ col: "status", asc: s.col === "status" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "center", minWidth: 80, cursor: "pointer", userSelect: "none" }}>Trạng thái {campSort.col === "status" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
+                    <th onClick={() => setCampSort(s => ({ col: "spend", asc: s.col === "spend" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "right", cursor: "pointer", userSelect: "none" }}>Chi phí {campSort.col === "spend" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
+                    <th onClick={() => setCampSort(s => ({ col: "result", asc: s.col === "result" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "right", cursor: "pointer", userSelect: "none" }}>Kết quả {campSort.col === "result" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>CP/KQ</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>CTR (LK)</th>
@@ -3013,8 +3069,13 @@ function CampaignsPage({ leads, projects }) {
           )}
 
           {/* Best performing campaigns */}
-          {bestCampaigns.length > 0 && (
-            <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          {bestCampaigns.length > 0 && (() => {
+            const BEST_PER_PAGE = 10;
+            const bestTotalPages = Math.ceil(bestCampaigns.length / BEST_PER_PAGE);
+            const bestPage = Math.min(campPage, bestTotalPages) || 1;
+            const pagedBest = bestCampaigns.slice(0, BEST_PER_PAGE);
+            return (
+            <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 20 }}>
               <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#1a3c20" }}>
                 <Trophy size={16} color="#e88a2e" /> Chiến dịch hiệu quả (Lead rẻ nhất · Quan tâm cao)
               </div>
@@ -3022,6 +3083,7 @@ function CampaignsPage({ leads, projects }) {
                 <thead>
                   <tr>
                     <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                    <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
                     <th style={{ ...thStyle, textAlign: "center" }}>Khách</th>
                     <th style={{ ...thStyle, textAlign: "center" }}>% Quan tâm</th>
                     <th style={{ ...thStyle, textAlign: "center" }}>% Chi phí</th>
@@ -3030,13 +3092,21 @@ function CampaignsPage({ leads, projects }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {bestCampaigns.map((c, i) => (
+                  {pagedBest.map((c, i) => {
+                    const isActive = c.status === "ACTIVE";
+                    return (
                     <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
                       <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12 }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           {i < 3 && <span style={{ color: "#e88a2e", fontWeight: 700 }}>#{i + 1}</span>}
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220, display: "inline-block" }}>{c.name}</span>
                         </div>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "2px 10px", borderRadius: 20, fontWeight: 700, color: isActive ? "#16a34a" : "#dc2626", background: isActive ? "#dcfce7" : "#fef2f2" }}>
+                          <span style={{ width: 7, height: 7, borderRadius: "50%", background: isActive ? "#16a34a" : "#dc2626", display: "inline-block" }}></span>
+                          {isActive ? "Bật" : "Tắt"}
+                        </span>
                       </td>
                       <td style={{ ...tdStyle, textAlign: "center", fontWeight: 600 }}>{c.crmLeads}</td>
                       <td style={{ ...tdStyle, textAlign: "center" }}>
@@ -3048,11 +3118,99 @@ function CampaignsPage({ leads, projects }) {
                       </td>
                       <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 700 }}>{c.cpl ? fmtMoney(c.cpl) : "—"}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-          )}
+            );
+          })()}
+
+          {/* Active Campaigns Efficiency - Cost optimization dashboard */}
+          {(() => {
+            const activeCamps = scopedInsights.filter(r => r.status === "ACTIVE").map(row => {
+              const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+              const fbLeads = la ? Number(la.value) : 0;
+              const spend = Number(row.spend || 0);
+              const cl = crmByCamp[row.campaign_name] || [];
+              const interested = cl.filter(l => l.status === "interested").length;
+              const cpl = fbLeads ? spend / fbLeads : 0;
+              // Calculate date range days for daily average
+              const daysDiff = Math.max(1, Math.ceil((new Date(fbDateTo) - new Date(fbDateFrom)) / 86400000) + 1);
+              const dailySpend = spend / daysDiff;
+              // Estimate last 3 days vs previous period
+              const recentDays = Math.min(3, daysDiff);
+              const prevDays = daysDiff - recentDays;
+              const avgDailyAll = spend / daysDiff;
+              return {
+                name: row.campaign_name, spend, fbLeads, cpl,
+                crmLeads: cl.length, interested,
+                cpm: Number(row.cpm || 0), ctr: Number(row.inline_link_click_ctr || 0),
+                reach: Number(row.reach || 0), dailySpend: avgDailyAll,
+                daysDiff,
+                // Efficiency score: lower CPL + higher interested % = better
+                efficiency: (interested > 0 && cpl > 0) ? (interested / cl.length * 100) / (cpl / 1000) : (cpl > 0 ? 1 / cpl * 100 : 0),
+              };
+            }).sort((a, b) => b.efficiency - a.efficiency);
+            if (!activeCamps.length) return null;
+            return (
+              <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginTop: 20 }}>
+                <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 6 }}>
+                  <Activity size={16} color="#16a34a" />
+                  <span style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20" }}>Chiến dịch đang bật — Tối ưu chi phí</span>
+                  <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>{activeCamps.length} chiến dịch đang chạy</span>
+                </div>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>CP/ngày</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Leads</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>CPL</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Lead CRM</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>% QT</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>Hiệu quả</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeCamps.map((c, i) => {
+                      const qtPct = c.crmLeads ? (c.interested / c.crmLeads * 100) : 0;
+                      const effLabel = c.efficiency > 5 ? "Tốt" : c.efficiency > 1 ? "TB" : "Thấp";
+                      const effColor = c.efficiency > 5 ? "#16a34a" : c.efficiency > 1 ? "#e88a2e" : "#dc2626";
+                      const effBg = c.efficiency > 5 ? "#dcfce7" : c.efficiency > 1 ? "#fef3c7" : "#fef2f2";
+                      return (
+                        <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                          <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12, maxWidth: 250 }}>
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{c.name}</span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "2px 10px", borderRadius: 20, fontWeight: 700, color: "#16a34a", background: "#dcfce7" }}>
+                              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#16a34a", display: "inline-block" }}></span>Bật
+                            </span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(c.spend)}</td>
+                          <td style={{ ...tdStyle, textAlign: "right", fontSize: 12 }}>{fmtMoney(c.dailySpend)}</td>
+                          <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{c.fbLeads || "—"}</td>
+                          <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{c.cpl ? fmtMoney(c.cpl) : "—"}</td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>{c.crmLeads || "—"}</td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ color: qtPct > 30 ? "#16a34a" : qtPct > 10 ? "#e88a2e" : "#6b7280", fontWeight: 600 }}>{c.crmLeads ? qtPct.toFixed(1) + "%" : "—"}</span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(c.cpm)}</td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ padding: "3px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, color: effColor, background: effBg }}>{effLabel}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
 
           {scopedInsights.length === 0 && !fbLoading && (
             <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 13 }}>Không có dữ liệu chiến dịch cho dự án này</div>
@@ -3120,7 +3278,7 @@ function CampaignsPage({ leads, projects }) {
                 }, 0);
                 const activeCount = rows.filter(r => r.status === "ACTIVE").length;
                 return (
-                  <div key={pid} onClick={() => { setSelectedFbProject(Number(pid)); setCampSearch(""); setCampPage(1); }}
+                  <div key={pid} onClick={() => { setSelectedFbProject(Number(pid)); setCampSearch(""); setCampPage(1); setCampSort({ col: null, asc: true }); }}
                     onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,.12)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}
                     style={{ background: "#fff", borderRadius: 14, padding: 20, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,.08)", border: "1px solid #e5e7eb", transition: "all .25s ease", borderTop: "3px solid #e88a2e" }}>
@@ -3138,6 +3296,136 @@ function CampaignsPage({ leads, projects }) {
                 );
               })}
             </div>
+
+            {/* Best performing campaigns (overview) */}
+            {bestCampaigns.length > 0 && (
+              <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginTop: 20 }}>
+                <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#1a3c20" }}>
+                  <Trophy size={16} color="#e88a2e" /> Chiến dịch hiệu quả (Lead rẻ nhất · Quan tâm cao)
+                </div>
+                <table style={tableStyle}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>Khách</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>% Quan tâm</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>% Chi phí</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>% Chuyển đổi</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>CPL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bestCampaigns.slice(0, 10).map((c, i) => {
+                      const isActive = c.status === "ACTIVE";
+                      return (
+                        <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                          <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {i < 3 && <span style={{ color: "#e88a2e", fontWeight: 700 }}>#{i + 1}</span>}
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220, display: "inline-block" }}>{c.name}</span>
+                            </div>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "2px 10px", borderRadius: 20, fontWeight: 700, color: isActive ? "#16a34a" : "#dc2626", background: isActive ? "#dcfce7" : "#fef2f2" }}>
+                              <span style={{ width: 7, height: 7, borderRadius: "50%", background: isActive ? "#16a34a" : "#dc2626", display: "inline-block" }}></span>
+                              {isActive ? "Bật" : "Tắt"}
+                            </span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "center", fontWeight: 600 }}>{c.crmLeads}</td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ color: c.interestPct > 30 ? "#16a34a" : c.interestPct > 10 ? "#e88a2e" : "#6b7280", fontWeight: 600 }}>{c.interestPct.toFixed(1)}%</span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>{c.costPct.toFixed(1)}%</td>
+                          <td style={{ ...tdStyle, textAlign: "center" }}>
+                            <span style={{ color: c.closedPct > 0 ? "#16a34a" : "#9ca3af", fontWeight: c.closedPct > 0 ? 700 : 400 }}>{c.closedPct.toFixed(1)}%</span>
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 700 }}>{c.cpl ? fmtMoney(c.cpl) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Active campaigns efficiency (overview) */}
+            {(() => {
+              const activeCampsAll = fbInsights.filter(r => r.status === "ACTIVE").map(row => {
+                const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                const fbLeads = la ? Number(la.value) : 0;
+                const spend = Number(row.spend || 0);
+                const cl = crmByCamp[row.campaign_name] || [];
+                const interested = cl.filter(l => l.status === "interested").length;
+                const cpl = fbLeads ? spend / fbLeads : 0;
+                const daysDiff = Math.max(1, Math.ceil((new Date(fbDateTo) - new Date(fbDateFrom)) / 86400000) + 1);
+                const avgDailyAll = spend / daysDiff;
+                return {
+                  name: row.campaign_name, spend, fbLeads, cpl,
+                  crmLeads: cl.length, interested,
+                  cpm: Number(row.cpm || 0), dailySpend: avgDailyAll,
+                  efficiency: (interested > 0 && cpl > 0) ? (interested / cl.length * 100) / (cpl / 1000) : (cpl > 0 ? 1 / cpl * 100 : 0),
+                };
+              }).sort((a, b) => b.efficiency - a.efficiency);
+              if (!activeCampsAll.length) return null;
+              return (
+                <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginTop: 20 }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 6 }}>
+                    <Activity size={16} color="#16a34a" />
+                    <span style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20" }}>Chiến dịch đang bật — Tối ưu chi phí</span>
+                    <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>{activeCampsAll.length} chiến dịch đang chạy</span>
+                  </div>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
+                        <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>CP/ngày</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Leads</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>CPL</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>Lead CRM</th>
+                        <th style={{ ...thStyle, textAlign: "center" }}>% QT</th>
+                        <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
+                        <th style={{ ...thStyle, textAlign: "center" }}>Hiệu quả</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeCampsAll.map((c, i) => {
+                        const qtPct = c.crmLeads ? (c.interested / c.crmLeads * 100) : 0;
+                        const effLabel = c.efficiency > 5 ? "Tốt" : c.efficiency > 1 ? "TB" : "Thấp";
+                        const effColor = c.efficiency > 5 ? "#16a34a" : c.efficiency > 1 ? "#e88a2e" : "#dc2626";
+                        const effBg = c.efficiency > 5 ? "#dcfce7" : c.efficiency > 1 ? "#fef3c7" : "#fef2f2";
+                        return (
+                          <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                            <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12, maxWidth: 250 }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}>{c.name}</span>
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: "center" }}>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, padding: "2px 10px", borderRadius: 20, fontWeight: 700, color: "#16a34a", background: "#dcfce7" }}>
+                                <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#16a34a", display: "inline-block" }}></span>Bật
+                              </span>
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(c.spend)}</td>
+                            <td style={{ ...tdStyle, textAlign: "right", fontSize: 12 }}>{fmtMoney(c.dailySpend)}</td>
+                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{c.fbLeads || "—"}</td>
+                            <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{c.cpl ? fmtMoney(c.cpl) : "—"}</td>
+                            <td style={{ ...tdStyle, textAlign: "right" }}>{c.crmLeads || "—"}</td>
+                            <td style={{ ...tdStyle, textAlign: "center" }}>
+                              <span style={{ color: qtPct > 30 ? "#16a34a" : qtPct > 10 ? "#e88a2e" : "#6b7280", fontWeight: 600 }}>{c.crmLeads ? qtPct.toFixed(1) + "%" : "—"}</span>
+                            </td>
+                            <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(c.cpm)}</td>
+                            <td style={{ ...tdStyle, textAlign: "center" }}>
+                              <span style={{ padding: "3px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, color: effColor, background: effBg }}>{effLabel}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </>
         )}
 

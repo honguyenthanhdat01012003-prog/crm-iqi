@@ -130,7 +130,9 @@ async function initDb() {
       name TEXT NOT NULL,
       lead_url TEXT DEFAULT '',
       cost_url TEXT DEFAULT '',
-      cost_data TEXT DEFAULT '{}'
+      cost_data TEXT DEFAULT '{}',
+      fb_code TEXT DEFAULT '',
+      fb_person TEXT DEFAULT ''
     )`
   );
 
@@ -294,6 +296,10 @@ async function initDb() {
       FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
     )`
   );
+
+  // Migration: add fb_code, fb_person columns to projects
+  try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
+  try { await run(db, "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''"); } catch {}
 
   // Migrate legacy single sheet_script_url into sheet_configs
   {
@@ -1014,6 +1020,8 @@ async function readData(db) {
       leadUrl: p.lead_url || "",
       costUrl: p.cost_url || "",
       costData: JSON.parse(p.cost_data || "{}"),
+      fbCode: p.fb_code || "",
+      fbPerson: p.fb_person || "",
     })),
   };
 }
@@ -1541,7 +1549,7 @@ app.get("/api/projects", requireAuth, async (_req, res) => {
 
 app.post("/api/projects", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { name, leadUrl, costUrl } = req.body;
+    const { name, leadUrl, costUrl, fbCode, fbPerson } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "Name required" });
     const existing = await get(db, "SELECT id FROM projects WHERE name = ?", [String(name).trim()]);
     if (existing) return res.status(409).json({ error: "Dự án đã tồn tại" });
@@ -1549,8 +1557,8 @@ app.post("/api/projects", requireAuth, requireAdmin, async (req, res) => {
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
       db,
-      "INSERT INTO projects(name, lead_url, cost_url) VALUES(?, ?, ?)",
-      [String(name).trim(), cleanLead, cleanCost]
+      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person) VALUES(?, ?, ?, ?, ?)",
+      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim()]
     );
     const data = await readData(db);
     res.json({ ...data, newProjectId: result.lastID });
@@ -1574,13 +1582,13 @@ app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) =
 app.put("/api/projects/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { name, leadUrl, costUrl } = req.body;
+    const { name, leadUrl, costUrl, fbCode, fbPerson } = req.body;
     const cleanLead = sanitizeSheetUrl(leadUrl);
     const cleanCost = sanitizeSheetUrl(costUrl);
     await run(
       db,
-      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ? WHERE id = ?",
-      [String(name || "").trim(), cleanLead, cleanCost, id]
+      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ? WHERE id = ?",
+      [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), id]
     );
     const data = await readData(db);
     res.json(data);
