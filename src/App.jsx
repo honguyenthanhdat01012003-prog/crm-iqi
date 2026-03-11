@@ -2576,10 +2576,22 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       ) : (
         <div style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, paddingBottom: 8 }}>
           <div style={{ position: "absolute", left: isMobile ? 6 : 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
-          {history.map((h, idx) => {
+          {(() => {
+            // Build "Liên hệ lần" counter: only "Chia lead" entries get numbered, sorted by date
+            let chiaCount = 0;
+            const chiaIndexMap = new Map();
+            history.forEach((h, idx) => {
+              if ((h.action || "").toLowerCase().includes("chia")) {
+                chiaCount++;
+                chiaIndexMap.set(idx, chiaCount);
+              }
+            });
+            return history.map((h, idx) => {
             const recalled = (h.action || "").toLowerCase().includes("thu h");
+            const isChia = (h.action || "").toLowerCase().includes("chia");
             const isUpdate = (h.action || "").toLowerCase().includes("cập nhật") || (h.action || "").toLowerCase().includes("cap nhat");
             const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#e88a2e";
+            const chiaNum = chiaIndexMap.get(idx);
             return (
               <div key={idx} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
                 <div style={{
@@ -2590,7 +2602,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 <div style={{ background: "#fff", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #e5e7eb" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
                     <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13 }}>
-                      {idx + 1}. {h.saleName}
+                      {isChia ? `Liên hệ lần ${chiaNum}` : `${idx + 1}.`} {h.saleName}
                       <span style={{
                         marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
                         background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#f0faf1",
@@ -2611,7 +2623,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </div>
               </div>
             );
-          })}
+          })})()}
         </div>
       )}
     </div>

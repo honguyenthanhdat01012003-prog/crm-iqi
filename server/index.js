@@ -921,6 +921,24 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           prev.id,
         ],
       });
+
+      // Sync sale history from sheet for existing leads (add missing entries)
+      if (l.saleHistory && l.saleHistory.length) {
+        const existingHist = await all(db, "SELECT sale_name, action, contact_date FROM lead_history WHERE lead_id = ?", [prev.id]);
+        const existingSet = new Set(existingHist.map(h => `${h.sale_name}||${h.action}||${h.contact_date}`));
+        let maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [prev.id]);
+        let nextSeq = (maxSeqRow?.m ?? -1) + 1;
+        for (const sh of l.saleHistory) {
+          const key = `${sh.saleName}||${sh.action}||${sh.date}`;
+          if (!existingSet.has(key)) {
+            stmts.push({
+              sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+              args: [prev.id, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, nextSeq++],
+            });
+            existingSet.add(key);
+          }
+        }
+      }
     } else {
       // New lead — INSERT
       const status = l.status;
@@ -1729,10 +1747,19 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       [pid]
     );
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
-    const stmts = leads.map((l, i) => ({
-      sql: "UPDATE leads SET sale_name = ? WHERE id = ?",
-      args: [saleNames[i % saleNames.length], l.id],
-    }));
+    const now = new Date().toLocaleString("vi-VN");
+    const stmts = [];
+    for (let i = 0; i < leads.length; i++) {
+      const l = leads[i];
+      const assignedSale = saleNames[i % saleNames.length];
+      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [assignedSale, l.id] });
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [l.id]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      stmts.push({
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq],
+      });
+    }
     await db.batch(stmts, "write");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
