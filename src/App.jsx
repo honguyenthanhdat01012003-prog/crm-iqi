@@ -9,7 +9,8 @@ import {
   BookOpen, Pin, Folder, CircleDot, Bot, Hand, Minus, ChevronLeft, ChevronRight,
   Camera, Share2, Shuffle, Link, ClipboardList, Pause, Play, ChevronDown, Info,
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
-  ExternalLink, Shield, Globe, Layers, TrendingUp, Activity
+  ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
+  FolderOpen, ArrowLeft
 } from "lucide-react";
 
 const API = "/api";
@@ -416,7 +417,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [projects, setProjects] = useState([]);
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [selectedProject, setSelectedProject] = useState("all");
+  const [selectedProject, setSelectedProject] = useState(null);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -611,7 +612,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   // --- Filtered leads ---
   const filteredLeads = useMemo(() => {
     let list = leads;
-    if (selectedProject !== "all") {
+    if (selectedProject && selectedProject !== "all") {
       list = list.filter((l) => l.projectId === Number(selectedProject));
     }
     if (statusFilter !== "all") {
@@ -1805,7 +1806,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleMsg, setShuffleMsg] = useState("");
   const [shuffleSaleFocused, setShuffleSaleFocused] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
-  const isAdmin = user.role === "admin";
+  const isAdmin = user.role === "admin" || user.role === "manager";
+  const isSale = user.role === "sale";
 
   useEffect(() => {
     if (isAdmin) {
@@ -1826,6 +1828,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     projects.forEach((p) => (m[p.id] = p.name));
     return m;
   }, [projects]);
+
+  // Available projects for this user
+  const availableProjects = useMemo(() => {
+    if (isSale) return projects.filter(p => user.projectIds && user.projectIds.includes(p.id));
+    return projects;
+  }, [projects, isSale, user.projectIds]);
+
+  // Lead counts per project (from ALL leads passed to this page, not filtered)
+  const projectLeadCounts = useMemo(() => {
+    const counts = {};
+    leads.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
+    return counts;
+  }, [leads]);
 
   // Bitrix-style lead categories
   const LEAD_TABS = useMemo(() => [
@@ -1871,6 +1886,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   // Navigate to highlighted lead from notification click
   useEffect(() => {
     if (!highlightLeadId) return;
+    // Auto-select "all" project to ensure the lead is visible
+    if (!selectedProject) setSelectedProject("all");
     // Switch to "all" tab so we can find the lead
     setActiveTab("all");
   }, [highlightLeadId]);
@@ -1965,6 +1982,51 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           </button>
         </div>
       )}
+
+      {/* Project selection screen - shown when no project selected */}
+      {!selectedProject ? (
+        <div>
+          <h2 style={{ fontSize: isMobile ? 16 : 20, fontWeight: 700, color: "#1f2937", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <FolderOpen size={isMobile ? 18 : 22} /> Chọn dự án để xem khách hàng
+          </h2>
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
+            {isAdmin && (
+              <div onClick={() => setSelectedProject("all")}
+                style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", borderRadius: 12, padding: 20, cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(217,119,6,.25)", transition: "transform .15s, box-shadow .15s" }}
+                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 16px rgba(217,119,6,.35)"; }}
+                onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 8px rgba(217,119,6,.25)"; }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                  <ClipboardList size={16} /> Tất cả dự án
+                </div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{leads.length}</div>
+                <div style={{ fontSize: 12, opacity: 0.9 }}>khách hàng</div>
+              </div>
+            )}
+            {availableProjects.map(p => {
+              const count = projectLeadCounts[p.id] || 0;
+              return (
+                <div key={p.id} onClick={() => setSelectedProject(String(p.id))}
+                  style={{ background: "#fff", borderRadius: 12, padding: 20, cursor: "pointer", border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", transition: "transform .15s, box-shadow .15s, border-color .15s" }}
+                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,.1)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
+                  onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.06)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Building2 size={16} style={{ color: "#e88a2e" }} /> {p.name}
+                  </div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "#e88a2e" }}>{count}</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>khách hàng</div>
+                </div>
+              );
+            })}
+          </div>
+          {availableProjects.length === 0 && (
+            <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+              <FolderOpen size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
+              <div style={{ fontSize: 14 }}>Chưa được phân công dự án nào</div>
+            </div>
+          )}
+        </div>
+      ) : (
+      <>
 
       {/* Admin chia lead */}
       {isAdmin && (
@@ -2160,16 +2222,22 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           )}
         </div>
         {setSelectedProject && (
-          <select
-            value={selectedProject}
-            onChange={(e) => setSelectedProject(e.target.value)}
-            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? "100%" : 180 }}
-          >
-            <option value="all">Tất cả dự án</option>
-            {(user.role === "sale" ? projects.filter(p => user.projectIds && user.projectIds.includes(p.id)) : projects).map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: isMobile ? "100%" : "auto" }}>
+            <button onClick={() => setSelectedProject(null)} title="Quay về chọn dự án"
+              style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", minHeight: 44 }}>
+              <ArrowLeft size={16} style={{ color: "#6b7280" }} />
+            </button>
+            <select
+              value={selectedProject || "all"}
+              onChange={(e) => setSelectedProject(e.target.value)}
+              style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", flex: isMobile ? 1 : "none", minWidth: isMobile ? 0 : 180 }}
+            >
+              {isAdmin && <option value="all">Tất cả dự án</option>}
+              {availableProjects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          </div>
         )}
       </div>
 
@@ -2317,6 +2385,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
         );
       })()}
+    </>
+  )}
     </>
   );
 }

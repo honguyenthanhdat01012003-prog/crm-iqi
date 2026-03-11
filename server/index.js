@@ -1740,17 +1740,26 @@ function matchSaleName(leadSaleName, userDisplayName) {
 }
 
 function filterLeadsForSale(data, displayName) {
-  data.leads = data.leads.filter(l => matchSaleName(l.saleName, displayName));
+  data.leads = data.leads.filter(l =>
+    matchSaleName(l.saleName, displayName) ||
+    (l.saleHistory && l.saleHistory.some(h => h.action === "Chia lead" && matchSaleName(h.saleName, displayName)))
+  );
   return data;
 }
 
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
-    // Sale can only update leads assigned to them
+    // Sale can only update leads assigned to them (current or ever assigned via history)
     if (req.user.role === "sale") {
       const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [leadId]);
-      if (!lead || !matchSaleName(lead.sale_name, req.user.displayName)) {
+      const currentMatch = lead && matchSaleName(lead.sale_name, req.user.displayName);
+      let historyMatch = false;
+      if (!currentMatch) {
+        const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [leadId, req.user.displayName]);
+        historyMatch = !!hist;
+      }
+      if (!currentMatch && !historyMatch) {
         return res.status(403).json({ error: "You can only update your own leads" });
       }
     }
@@ -1758,8 +1767,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     const sets = [];
     const params = [];
 
-    // Only admin can change sale assignment and isHot
-    if (req.user.role === "admin") {
+    // Admin/Manager can change sale assignment and isHot
+    if (req.user.role === "admin" || req.user.role === "manager") {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) { sets.push("sale_name = ?"); params.push(saleName); }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
@@ -1781,8 +1790,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       await run(db, `UPDATE leads SET ${sets.join(", ")} WHERE id = ?`, params);
     }
 
-    // When admin assigns lead to a sale: save history + send Telegram
-    if (req.user.role === "admin" && saleName) {
+    // When admin/manager assigns lead to a sale: save history + send Telegram
+    if ((req.user.role === "admin" || req.user.role === "manager") && saleName) {
       const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
       const now = new Date().toLocaleString("vi-VN");
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -1872,9 +1881,10 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
-    // Sale can only add history to their own leads
+    // Sale can only add history to their own leads (current or ever assigned)
     if (req.user.role === "sale" && !matchSaleName(lead.sale_name, req.user.displayName)) {
-      return res.status(403).json({ error: "You can only update your own leads" });
+      const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [leadId, req.user.displayName]);
+      if (!hist) return res.status(403).json({ error: "You can only update your own leads" });
     }
 
     const { status, feedback } = req.body;
