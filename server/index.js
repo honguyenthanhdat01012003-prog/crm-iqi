@@ -1536,10 +1536,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
   try {
     const config = await getConfig(db);
     const data = await readData(db);
-    // Sale users can only see leads assigned to them (flexible name matching)
-    if (req.user.role === "sale") {
-      filterLeadsForSale(data, req.user.displayName);
-    }
+    await filterDataForRole(data, req.user);
     res.json({ ...config, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
@@ -1551,6 +1548,7 @@ app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
     console.log("[sync] Starting sync...");
     const { lastSync, syncErrors } = await syncAllProjects(db);
     const data = await readData(db);
+    await filterDataForRole(data, req.user);
     console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length} errors=${syncErrors.length}`);
     res.json({ lastSync, syncErrors, ...data });
   } catch (err) {
@@ -1594,6 +1592,7 @@ app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) =
     const id = Number(req.params.id);
     await syncProject(db, id);
     const data = await readData(db);
+    await filterDataForRole(data, req.user);
     res.json(data);
   } catch (err) {
     console.error("[syncProject] error:", err.message);
@@ -1700,6 +1699,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     }
 
     const data = await readData(db);
+    await filterDataForRole(data, req.user);
     res.json({ msg: `Đã chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message || "Assign failed" });
@@ -1724,6 +1724,7 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     }));
     await db.batch(stmts, "write");
     const data = await readData(db);
+    await filterDataForRole(data, req.user);
     res.json({ msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message || "Shuffle failed" });
@@ -1745,6 +1746,25 @@ function filterLeadsForSale(data, displayName) {
     matchSaleName(l.saleName, displayName) ||
     (l.saleHistory && l.saleHistory.some(h => h.action === "Chia lead" && matchSaleName(h.saleName, displayName)))
   );
+  return data;
+}
+
+function filterLeadsForManager(data, projectIds) {
+  if (!projectIds || projectIds.length === 0) {
+    data.leads = [];
+    return data;
+  }
+  data.leads = data.leads.filter(l => projectIds.includes(l.projectId));
+  return data;
+}
+
+async function filterDataForRole(data, user) {
+  if (user.role === "sale") {
+    filterLeadsForSale(data, user.displayName);
+  } else if (user.role === "manager") {
+    const projectIds = await getUserProjectIds(user.userId);
+    filterLeadsForManager(data, projectIds);
+  }
   return data;
 }
 
@@ -1866,9 +1886,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     const data = await readData(db);
-    if (req.user.role === "sale") {
-      filterLeadsForSale(data, req.user.displayName);
-    }
+    await filterDataForRole(data, req.user);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message || "Update failed" });
@@ -1912,9 +1930,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     }
 
     const data = await readData(db);
-    if (req.user.role === "sale") {
-      filterLeadsForSale(data, req.user.displayName);
-    }
+    await filterDataForRole(data, req.user);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1998,6 +2014,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 
     await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
     const data = await readData(db);
+    await filterDataForRole(data, req.user);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });

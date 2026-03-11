@@ -1839,9 +1839,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   // Available projects for this user
   const availableProjects = useMemo(() => {
-    if (isSale) return projects.filter(p => user.projectIds && user.projectIds.includes(p.id));
+    if (isSale || user.role === "manager") return projects.filter(p => user.projectIds && user.projectIds.includes(p.id));
     return projects;
-  }, [projects, isSale, user.projectIds]);
+  }, [projects, isSale, user.projectIds, user.role]);
 
   // Lead counts per project (from ALL leads passed to this page, not filtered)
   const projectLeadCounts = useMemo(() => {
@@ -1998,7 +1998,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             <FolderOpen size={isMobile ? 18 : 22} /> Chọn dự án để xem khách hàng
           </h2>
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(260px, 1fr))", gap: 12 }}>
-            {isAdmin && (
+            {isAdmin && user.role === "admin" && (
               <div onClick={() => setSelectedProject("all")}
                 style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", borderRadius: 12, padding: 20, cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(217,119,6,.25)", transition: "transform .15s, box-shadow .15s" }}
                 onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 16px rgba(217,119,6,.35)"; }}
@@ -2240,7 +2240,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               onChange={(e) => setSelectedProject(e.target.value)}
               style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", flex: isMobile ? 1 : "none", minWidth: isMobile ? 0 : 180 }}
             >
-              {isAdmin && <option value="all">Tất cả dự án</option>}
+              {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
               {availableProjects.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -4944,7 +4944,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                 {u.email && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={12} /> {u.email}</div>}
                 {u.phone && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Smartphone size={12} /> {u.phone}</div>}
                 {u.telegramId && <div style={{ display: "flex", alignItems: "center", gap: 4 }}><Send size={12} /> {u.telegramId}</div>}
-                {u.role !== "admin" && u.role !== "manager" && (
+                {u.role !== "admin" && (
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginTop: 2 }}>
                     {(u.projectIds && u.projectIds.length > 0)
                       ? u.projectIds.map(pid => {
@@ -4999,7 +4999,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                   {!u.email && !u.phone && <span style={{ color: "#9ca3af" }}>—</span>}
                 </td>
                 <td style={tdStyle}>
-                  {(u.role === "admin" || u.role === "manager") ? (
+                  {u.role === "admin" ? (
                     <span style={{ color: "#6b7280", fontSize: 11, fontStyle: "italic" }}>Tất cả</span>
                   ) : (u.projectIds && u.projectIds.length > 0) ? (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
