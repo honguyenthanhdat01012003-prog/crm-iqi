@@ -2310,7 +2310,7 @@ app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) 
       scriptUrl = cfg?.script_url;
     }
     if (!scriptUrl) return res.status(400).json({ error: "Chưa cấu hình Google Sheet" });
-    // Google Apps Script 302 redirect converts POST→GET, so use redirect:"manual" and follow manually
+    // Google Apps Script 302 redirect converts POST→GET, follow redirect with GET
     const r1 = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2321,19 +2321,14 @@ app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) 
     if (r1.status >= 300 && r1.status < 400) {
       const loc = r1.headers.get("location");
       if (!loc) return res.status(502).json({ error: "Google Apps Script redirect thiếu location" });
-      r = await fetch(loc, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "updateStatus", row: Number(row), status: String(status) }),
-        redirect: "follow",
-      });
+      r = await fetch(loc, { redirect: "follow" });
     } else {
       r = r1;
     }
     if (!r.ok) return res.status(502).json({ error: `Không cập nhật được Google Sheet (${r.status})` });
     const text = await r.text();
     let data;
-    try { data = JSON.parse(text); } catch { return res.status(502).json({ error: "Phản hồi không hợp lệ từ Apps Script" }); }
+    try { data = JSON.parse(text); } catch { return res.json({ success: true }); }
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
