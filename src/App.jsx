@@ -2571,6 +2571,11 @@ function CampaignsPage({ leads, projects }) {
   const [fbDateFrom, setFbDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); });
   const [fbDateTo, setFbDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [selectedFbProject, setSelectedFbProject] = useState(null);
+  const [fbDatePreset, setFbDatePreset] = useState("7d");
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [campSearch, setCampSearch] = useState("");
+  const [campPage, setCampPage] = useState(1);
+  const CAMP_PER_PAGE = 20;
   // Ad Account form
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
@@ -2584,7 +2589,7 @@ function CampaignsPage({ leads, projects }) {
 
   const loadInsights = async () => {
     if (!selectedAccount) return;
-    setFbLoading(true); setFbError(""); setSelectedFbProject(null);
+    setFbLoading(true); setFbError(""); setSelectedFbProject(null); setCampSearch(""); setCampPage(1);
     try {
       const [insightsRes, campaignsRes] = await Promise.all([
         apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
@@ -2629,6 +2634,48 @@ function CampaignsPage({ leads, projects }) {
   const fmtNum = (n) => n != null ? Number(n).toLocaleString("vi-VN") : "—";
   const fmtMoney = (n) => n != null ? Number(n).toLocaleString("vi-VN", { maximumFractionDigits: 0 }) + " ₫" : "—";
   const fmtPct = (n) => n != null ? Number(n).toFixed(2) + "%" : "—";
+
+  // Date presets
+  const datePresets = [
+    { key: "today", label: "Hôm nay" },
+    { key: "yesterday", label: "Hôm qua" },
+    { key: "3d", label: "3 ngày qua" },
+    { key: "7d", label: "7 ngày qua" },
+    { key: "14d", label: "14 ngày qua" },
+    { key: "28d", label: "28 ngày qua" },
+    { key: "30d", label: "30 ngày qua" },
+    { key: "this_week", label: "Tuần này" },
+    { key: "last_week", label: "Tuần trước" },
+    { key: "this_month", label: "Tháng này" },
+    { key: "last_month", label: "Tháng trước" },
+    { key: "max", label: "Tối đa" },
+  ];
+  const applyDatePreset = (key) => {
+    const now = new Date();
+    const fmt = (d) => d.toISOString().slice(0, 10);
+    let from, to = fmt(now);
+    if (key === "today") { from = fmt(now); }
+    else if (key === "yesterday") { const y = new Date(now); y.setDate(y.getDate() - 1); from = fmt(y); to = fmt(y); }
+    else if (key === "3d") { const d = new Date(now); d.setDate(d.getDate() - 2); from = fmt(d); }
+    else if (key === "7d") { const d = new Date(now); d.setDate(d.getDate() - 6); from = fmt(d); }
+    else if (key === "14d") { const d = new Date(now); d.setDate(d.getDate() - 13); from = fmt(d); }
+    else if (key === "28d") { const d = new Date(now); d.setDate(d.getDate() - 27); from = fmt(d); }
+    else if (key === "30d") { const d = new Date(now); d.setDate(d.getDate() - 29); from = fmt(d); }
+    else if (key === "this_week") { const d = new Date(now); d.setDate(d.getDate() - d.getDay()); from = fmt(d); }
+    else if (key === "last_week") { const d = new Date(now); d.setDate(d.getDate() - d.getDay() - 7); from = fmt(d); const d2 = new Date(d); d2.setDate(d2.getDate() + 6); to = fmt(d2); }
+    else if (key === "this_month") { from = fmt(new Date(now.getFullYear(), now.getMonth(), 1)); }
+    else if (key === "last_month") { from = fmt(new Date(now.getFullYear(), now.getMonth() - 1, 1)); to = fmt(new Date(now.getFullYear(), now.getMonth(), 0)); }
+    else if (key === "max") { const d = new Date(now); d.setFullYear(d.getFullYear() - 1); from = fmt(d); }
+    else { from = fmt(now); }
+    setFbDateFrom(from); setFbDateTo(to); setFbDatePreset(key); setShowDatePicker(false);
+  };
+  const datePickerRef = useRef(null);
+  useEffect(() => {
+    if (!showDatePicker) return;
+    const handler = (e) => { if (datePickerRef.current && !datePickerRef.current.contains(e.target)) setShowDatePicker(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [showDatePicker]);
 
   // Compute totals for a set of insights
   const calcFbTotals = (rows) => {
@@ -2737,6 +2784,7 @@ function CampaignsPage({ leads, projects }) {
   // === FB Ads Tab ===
   if (tab === "fb_ads") {
     // Controls bar (shared between views)
+    const currentPresetLabel = datePresets.find(p => p.key === fbDatePreset)?.label || "Tùy chọn";
     const fbControls = (
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "flex-end" }}>
         <div style={{ flex: "1 1 180px", minWidth: 150 }}>
@@ -2746,13 +2794,41 @@ function CampaignsPage({ leads, projects }) {
             {adAccounts.filter(a => a.isActive).map(a => <option key={a.id} value={a.accountId}>{a.name || `act_${a.accountId}`}</option>)}
           </select>
         </div>
-        <div style={{ flex: "0 1 140px" }}>
-          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Từ ngày</label>
-          <input type="date" value={fbDateFrom} onChange={e => setFbDateFrom(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
-        </div>
-        <div style={{ flex: "0 1 140px" }}>
-          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Đến ngày</label>
-          <input type="date" value={fbDateTo} onChange={e => setFbDateTo(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
+        <div style={{ flex: "0 1 auto", position: "relative" }} ref={datePickerRef}>
+          <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Khoảng thời gian</label>
+          <button onClick={() => setShowDatePicker(!showDatePicker)} style={{ ...inputStyle, marginBottom: 0, background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, minWidth: 180, justifyContent: "space-between", textAlign: "left" }}>
+            <span style={{ fontSize: 13 }}>{currentPresetLabel}: {fbDateFrom} → {fbDateTo}</span>
+            <ChevronDown size={14} style={{ opacity: 0.5, flexShrink: 0 }} />
+          </button>
+          {showDatePicker && (
+            <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 100, background: "#fff", borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,.18)", border: "1px solid #e5e7eb", width: isMobile ? 280 : 340, marginTop: 4, overflow: "hidden" }}>
+              <div style={{ display: "flex" }}>
+                <div style={{ borderRight: "1px solid #e5e7eb", padding: "8px 0", minWidth: 130 }}>
+                  {datePresets.map(p => (
+                    <div key={p.key} onClick={() => applyDatePreset(p.key)}
+                      style={{ padding: "7px 14px", cursor: "pointer", fontSize: 13, color: fbDatePreset === p.key ? "#1a3c20" : "#374151", fontWeight: fbDatePreset === p.key ? 700 : 400, background: fbDatePreset === p.key ? "#e88a2e15" : "transparent", transition: "background .15s" }}
+                      onMouseEnter={(e) => { if (fbDatePreset !== p.key) e.currentTarget.style.background = "#f3f4f6"; }}
+                      onMouseLeave={(e) => { if (fbDatePreset !== p.key) e.currentTarget.style.background = "transparent"; }}>
+                      {p.label}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ flex: 1, padding: 12 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>Từ ngày</label>
+                    <input type="date" value={fbDateFrom} onChange={e => { setFbDateFrom(e.target.value); setFbDatePreset("custom"); }} style={{ ...inputStyle, marginBottom: 0, width: "100%" }} />
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>Đến ngày</label>
+                    <input type="date" value={fbDateTo} onChange={e => { setFbDateTo(e.target.value); setFbDatePreset("custom"); }} style={{ ...inputStyle, marginBottom: 0, width: "100%" }} />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <button onClick={() => setShowDatePicker(false)} style={{ padding: "6px 14px", border: "1px solid #d1d5db", borderRadius: 8, background: "#fff", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#374151" }}>Đóng</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         <button onClick={loadInsights} disabled={!selectedAccount || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
           {fbLoading ? <><RefreshCw size={14} className="spin" /> Đang tải...</> : <><RefreshCw size={14} /> Xem báo cáo</>}
@@ -2797,6 +2873,13 @@ function CampaignsPage({ leads, projects }) {
 
     if (selectedFbProject !== null) {
       const projName = selectedFbProject === -1 ? "Chưa phân loại" : (projects || []).find(p => p.id === selectedFbProject)?.name || "Dự án #" + selectedFbProject;
+      const filteredInsights = campSearch ? scopedInsights.filter(r => (r.campaign_name || "").toLowerCase().includes(campSearch.toLowerCase())) : scopedInsights;
+      const totalPages = Math.ceil(filteredInsights.length / CAMP_PER_PAGE);
+      const pagedInsights = filteredInsights.slice((campPage - 1) * CAMP_PER_PAGE, campPage * CAMP_PER_PAGE);
+      const filteredTotals = calcFbTotals(filteredInsights);
+      // CRM interested for totals
+      const totalCrmLeads = filteredInsights.reduce((s, r) => s + (crmByCamp[r.campaign_name] || []).length, 0);
+      const totalInterested = filteredInsights.reduce((s, r) => s + (crmByCamp[r.campaign_name] || []).filter(l => l.status === "interested").length, 0);
       return (
         <div>
           {tabBar}
@@ -2805,7 +2888,7 @@ function CampaignsPage({ leads, projects }) {
 
           {/* Header */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-            <button onClick={() => setSelectedFbProject(null)} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151" }}>← Dự án</button>
+            <button onClick={() => { setSelectedFbProject(null); setCampSearch(""); setCampPage(1); }} style={{ background: "#f3f4f6", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#374151" }}>← Dự án</button>
             <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> {projName}</h3>
             <span style={{ fontSize: 12, color: "#6b7280" }}>{scopedInsights.length} chiến dịch</span>
           </div>
@@ -2827,7 +2910,15 @@ function CampaignsPage({ leads, projects }) {
           {/* Campaign detail table */}
           {scopedInsights.length > 0 && (
             <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 20 }}>
-              <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Megaphone size={16} /> Danh sách chiến dịch</div>
+              <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "space-between" }}>
+                <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}><Megaphone size={16} /> Danh sách chiến dịch</div>
+                <div style={{ position: "relative", minWidth: 200 }}>
+                  <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#9ca3af" }} />
+                  <input type="text" placeholder="Tìm chiến dịch..." value={campSearch} onChange={(e) => { setCampSearch(e.target.value); setCampPage(1); }}
+                    style={{ ...inputStyle, marginBottom: 0, paddingLeft: 32, fontSize: 12, height: 36 }} />
+                </div>
+              </div>
+              {campSearch && <div style={{ padding: "6px 16px", fontSize: 12, color: "#6b7280", background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>Tìm thấy {filteredInsights.length}/{scopedInsights.length} chiến dịch</div>}
               <table style={tableStyle}>
                 <thead>
                   <tr>
@@ -2845,7 +2936,7 @@ function CampaignsPage({ leads, projects }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {scopedInsights.map((row, i) => {
+                  {pagedInsights.map((row, i) => {
                     const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
                     const resultCount = la ? Number(la.value) : 0;
                     const cpa = (row.cost_per_action_type || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
@@ -2881,22 +2972,43 @@ function CampaignsPage({ leads, projects }) {
                     );
                   })}
                   {/* Totals */}
-                  {scopedTotals && (
+                  {filteredTotals && (
                     <tr style={{ background: "#f0f4f1", fontWeight: 700 }}>
-                      <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({scopedInsights.length})</td>
+                      <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({filteredInsights.length})</td>
                       <td style={tdStyle}></td>
-                      <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(scopedTotals.spend)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.leads)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{scopedTotals.leads ? fmtMoney(scopedTotals.cpl) : "—"}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(scopedTotals.cpm)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(scopedTotals.linkCtr)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.linkClicks)}</td>
-                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(scopedTotals.reach)}</td>
-                      <td colSpan={2} style={tdStyle}></td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(filteredTotals.spend)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(filteredTotals.leads)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{filteredTotals.leads ? fmtMoney(filteredTotals.cpl) : "—"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(filteredTotals.cpm)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(filteredTotals.linkCtr)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(filteredTotals.linkClicks)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(filteredTotals.reach)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{totalCrmLeads || "—"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#1a3c20" }}>{totalInterested ? fmtMoney(filteredTotals.spend / totalInterested) : "—"}</td>
                     </tr>
                   )}
                 </tbody>
               </table>
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderTop: "1px solid #e5e7eb", fontSize: 12 }}>
+                  <span style={{ color: "#6b7280" }}>Trang {campPage}/{totalPages} · {filteredInsights.length} chiến dịch</span>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button onClick={() => setCampPage(Math.max(1, campPage - 1))} disabled={campPage <= 1} style={{ padding: "4px 10px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: campPage <= 1 ? "default" : "pointer", opacity: campPage <= 1 ? 0.4 : 1, fontSize: 12 }}>← Trước</button>
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, idx) => {
+                      let pg;
+                      if (totalPages <= 5) pg = idx + 1;
+                      else if (campPage <= 3) pg = idx + 1;
+                      else if (campPage >= totalPages - 2) pg = totalPages - 4 + idx;
+                      else pg = campPage - 2 + idx;
+                      return (
+                        <button key={pg} onClick={() => setCampPage(pg)} style={{ padding: "4px 10px", border: "1px solid #d1d5db", borderRadius: 6, background: pg === campPage ? "#1a3c20" : "#fff", color: pg === campPage ? "#fff" : "#374151", cursor: "pointer", fontWeight: pg === campPage ? 700 : 400, fontSize: 12 }}>{pg}</button>
+                      );
+                    })}
+                    <button onClick={() => setCampPage(Math.min(totalPages, campPage + 1))} disabled={campPage >= totalPages} style={{ padding: "4px 10px", border: "1px solid #d1d5db", borderRadius: 6, background: "#fff", cursor: campPage >= totalPages ? "default" : "pointer", opacity: campPage >= totalPages ? 0.4 : 1, fontSize: 12 }}>Sau →</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -3008,7 +3120,7 @@ function CampaignsPage({ leads, projects }) {
                 }, 0);
                 const activeCount = rows.filter(r => r.status === "ACTIVE").length;
                 return (
-                  <div key={pid} onClick={() => setSelectedFbProject(Number(pid))}
+                  <div key={pid} onClick={() => { setSelectedFbProject(Number(pid)); setCampSearch(""); setCampPage(1); }}
                     onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,.12)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}
                     style={{ background: "#fff", borderRadius: 14, padding: 20, cursor: "pointer", boxShadow: "0 1px 3px rgba(0,0,0,.08)", border: "1px solid #e5e7eb", transition: "all .25s ease", borderTop: "3px solid #e88a2e" }}>
