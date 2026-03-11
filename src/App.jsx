@@ -1375,8 +1375,8 @@ function ChatSidebar({ currentUser }) {
         <div style={{
           position: "fixed",
           ...(isMobile ? {
-            top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%",
-            borderRadius: 0,
+            left: 0, right: 0, bottom: 0, width: "100%", height: "65vh",
+            borderRadius: "16px 16px 0 0",
           } : {
             bottom: 0, right: sidebarOpen ? sidebarWidth + 8 : 8,
             width: 340, height: 440,
@@ -1602,6 +1602,8 @@ function Modal({ onClose, title, children }) {
 }
 
 function Card({ title, value, sub, color = "#e88a2e", percent, compact }) {
+  const valStr = String(value || "");
+  const autoSize = valStr.length > 10 ? (compact ? 14 : 20) : valStr.length > 7 ? (compact ? 16 : 24) : (compact ? 18 : 28);
   return (
     <div
       style={{
@@ -1613,7 +1615,7 @@ function Card({ title, value, sub, color = "#e88a2e", percent, compact }) {
       }}
     >
       <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 4, fontWeight: 500, letterSpacing: "0.02em", textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
-      <div style={{ fontSize: compact ? 18 : 28, fontWeight: 700, color, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+      <div style={{ fontSize: autoSize, fontWeight: 700, color, letterSpacing: "-0.02em", wordBreak: "break-word", lineHeight: 1.2 }}>{value}</div>
       {percent !== undefined && <div style={{ fontSize: compact ? 10 : 12, color: "#9ca3af", marginTop: 1 }}>{percent}%</div>}
       {sub && <div style={{ fontSize: compact ? 10 : 11, color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
@@ -2554,9 +2556,83 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
 
 function CampaignsPage({ leads, projects }) {
   const isMobile = useIsMobile();
+  const [tab, setTab] = useState("leads"); // "leads" | "fb_ads" | "settings"
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [expandedCampaigns, setExpandedCampaigns] = React.useState({});
   const [expandedAdsets, setExpandedAdsets] = React.useState({});
+
+  // FB Ads state
+  const [adAccounts, setAdAccounts] = useState([]);
+  const [selectedAccount, setSelectedAccount] = useState("");
+  const [fbInsights, setFbInsights] = useState([]);
+  const [fbLoading, setFbLoading] = useState(false);
+  const [fbError, setFbError] = useState("");
+  const [fbLevel, setFbLevel] = useState("campaign");
+  const [fbDateFrom, setFbDateFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); });
+  const [fbDateTo, setFbDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  // Ad Account form
+  const [showAccountForm, setShowAccountForm] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
+  const [acctDraft, setAcctDraft] = useState({ name: "", accountId: "", accessToken: "" });
+  const [savingAcct, setSavingAcct] = useState(false);
+
+  const loadAdAccounts = async () => {
+    try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
+  };
+  useEffect(() => { loadAdAccounts(); }, []);
+
+  const loadInsights = async () => {
+    if (!selectedAccount) return;
+    setFbLoading(true); setFbError("");
+    try {
+      const r = await apiFetch(`${API}/fb-ads/insights/${selectedAccount}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=${fbLevel}`);
+      const data = await r.json();
+      if (!r.ok) { setFbError(data.error || "Lỗi tải dữ liệu"); setFbInsights([]); }
+      else setFbInsights(data);
+    } catch (e) { setFbError("Lỗi kết nối: " + e.message); setFbInsights([]); }
+    setFbLoading(false);
+  };
+
+  const handleSaveAccount = async () => {
+    if (!acctDraft.accountId) { showToast("Vui lòng nhập Account ID", "warning"); return; }
+    setSavingAcct(true);
+    try {
+      const url = editingAccount ? `${API}/fb-ad-accounts/${editingAccount.id}` : `${API}/fb-ad-accounts`;
+      const method = editingAccount ? "PUT" : "POST";
+      const r = await apiFetch(url, { method, body: JSON.stringify(acctDraft) });
+      if (r.ok) { showToast(editingAccount ? "Đã cập nhật" : "Đã thêm tài khoản", "success"); setShowAccountForm(false); setEditingAccount(null); loadAdAccounts(); }
+      else { const d = await r.json(); showToast(d.error || "Lỗi", "error"); }
+    } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+    setSavingAcct(false);
+  };
+
+  const deleteAccount = async (id) => {
+    if (!await showConfirm("Xóa tài khoản quảng cáo này?")) return;
+    try { await apiFetch(`${API}/fb-ad-accounts/${id}`, { method: "DELETE" }); loadAdAccounts(); showToast("Đã xóa", "success"); } catch {}
+  };
+
+  const fmtNum = (n) => n != null ? Number(n).toLocaleString("vi-VN") : "—";
+  const fmtMoney = (n) => n != null ? Number(n).toLocaleString("vi-VN", { maximumFractionDigits: 0 }) + " ₫" : "—";
+  const fmtPct = (n) => n != null ? Number(n).toFixed(2) + "%" : "—";
+
+  // Totals for FB insights
+  const fbTotals = useMemo(() => {
+    if (!fbInsights.length) return null;
+    const t = { spend: 0, impressions: 0, reach: 0, clicks: 0, leads: 0 };
+    fbInsights.forEach(r => {
+      t.spend += Number(r.spend || 0);
+      t.impressions += Number(r.impressions || 0);
+      t.reach += Number(r.reach || 0);
+      t.clicks += Number(r.clicks || 0);
+      const leadAction = (r.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+      if (leadAction) t.leads += Number(leadAction.value || 0);
+    });
+    t.cpm = t.impressions ? (t.spend / t.impressions * 1000) : 0;
+    t.cpc = t.clicks ? (t.spend / t.clicks) : 0;
+    t.ctr = t.impressions ? (t.clicks / t.impressions * 100) : 0;
+    t.cpl = t.leads ? (t.spend / t.leads) : 0;
+    return t;
+  }, [fbInsights]);
 
   // Build project → campaign → adset → ad tree
   const projectTree = React.useMemo(() => {
@@ -2607,11 +2683,254 @@ function CampaignsPage({ leads, projects }) {
   const adsetBg = "#f9fafb";
   const adBg = "#fff";
 
+  const tabBtn = (key, label, icon) => (
+    <button key={key} onClick={() => setTab(key)} style={{
+      padding: isMobile ? "8px 14px" : "10px 20px", cursor: "pointer", fontWeight: 600, fontSize: isMobile ? 12 : 13,
+      background: tab === key ? "#fff" : "transparent", color: tab === key ? "#1a3c20" : "#6b7280",
+      border: tab === key ? "1px solid #e5e7eb" : "1px solid transparent",
+      borderBottom: tab === key ? "2px solid #e88a2e" : "2px solid transparent",
+      borderRadius: "8px 8px 0 0", display: "flex", alignItems: "center", gap: 6, transition: "all .2s",
+    }}>{icon} {label}</button>
+  );
+
+  // Tabs
+  const tabBar = (
+    <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16, flexWrap: "wrap" }}>
+      {tabBtn("leads", "Lead theo chiến dịch", <Target size={15} />)}
+      {tabBtn("fb_ads", "Hiệu quả quảng cáo FB", <Activity size={15} />)}
+      {tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
+    </div>
+  );
+
+  // === FB Ads Tab ===
+  if (tab === "fb_ads") {
+    return (
+      <div>
+        {tabBar}
+        {/* Controls */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "flex-end" }}>
+          <div style={{ flex: "1 1 180px", minWidth: 150 }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Tài khoản QC</label>
+            <select value={selectedAccount} onChange={(e) => setSelectedAccount(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }}>
+              <option value="">-- Chọn tài khoản --</option>
+              {adAccounts.filter(a => a.isActive).map(a => <option key={a.id} value={a.accountId}>{a.name || `act_${a.accountId}`}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: "0 1 140px" }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Từ ngày</label>
+            <input type="date" value={fbDateFrom} onChange={e => setFbDateFrom(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
+          </div>
+          <div style={{ flex: "0 1 140px" }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Đến ngày</label>
+            <input type="date" value={fbDateTo} onChange={e => setFbDateTo(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }} />
+          </div>
+          <div style={{ flex: "0 1 140px" }}>
+            <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4, display: "block" }}>Cấp độ</label>
+            <select value={fbLevel} onChange={e => setFbLevel(e.target.value)} style={{ ...inputStyle, marginBottom: 0 }}>
+              <option value="campaign">Chiến dịch</option>
+              <option value="adset">Nhóm QC</option>
+              <option value="ad">Quảng cáo</option>
+            </select>
+          </div>
+          <button onClick={loadInsights} disabled={!selectedAccount || fbLoading} style={{ ...btnPrimary, height: 42, display: "flex", alignItems: "center", gap: 6 }}>
+            {fbLoading ? <><RefreshCw size={14} className="spin" /> Đang tải...</> : <><RefreshCw size={14} /> Xem báo cáo</>}
+          </button>
+        </div>
+
+        {!selectedAccount && (
+          <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+            <Activity size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
+            <div style={{ fontSize: 14 }}>Chọn tài khoản quảng cáo và bấm "Xem báo cáo" để xem hiệu quả</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>Chưa có tài khoản? Vào tab <b>"Cài đặt tài khoản"</b> để thêm</div>
+          </div>
+        )}
+
+        {fbError && <div style={{ background: "#fef2f2", color: "#dc2626", padding: "10px 14px", borderRadius: 10, marginBottom: 12, fontSize: 13 }}>{fbError}</div>}
+
+        {/* Summary cards */}
+        {fbTotals && (
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
+            <Card title="Tổng chi phí" value={fmtMoney(fbTotals.spend)} color="#8b5cf6" compact />
+            <Card title="Impressions" value={fmtNum(fbTotals.impressions)} color="#3b82f6" compact />
+            <Card title="Reach" value={fmtNum(fbTotals.reach)} color="#06b6d4" compact />
+            <Card title="Clicks" value={fmtNum(fbTotals.clicks)} color="#f59e0b" compact />
+            <Card title="CPM" value={fmtMoney(fbTotals.cpm)} color="#ec4899" compact />
+            <Card title="CPC" value={fmtMoney(fbTotals.cpc)} color="#e88a2e" compact />
+            <Card title="CTR" value={fmtPct(fbTotals.ctr)} color="#10b981" compact />
+            {fbTotals.leads > 0 && <Card title="Leads" value={fmtNum(fbTotals.leads)} sub={`CPL: ${fmtMoney(fbTotals.cpl)}`} color="#1a3c20" compact />}
+          </div>
+        )}
+
+        {/* Insights table */}
+        {fbInsights.length > 0 && (
+          <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, textAlign: "left", minWidth: 200 }}>
+                    {fbLevel === "campaign" ? "Chiến dịch" : fbLevel === "adset" ? "Nhóm QC" : "Quảng cáo"}
+                  </th>
+                  <th style={{ ...thStyle, textAlign: "center" }}>Trạng thái</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Chi phí</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Impressions</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Reach</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Clicks</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>CPC</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>CTR</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Kết quả</th>
+                  <th style={{ ...thStyle, textAlign: "right" }}>Chi phí/KQ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {fbInsights.map((row, i) => {
+                  const name = row.campaign_name || row.adset_name || row.ad_name || "—";
+                  const leadAction = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                  const resultCount = leadAction ? Number(leadAction.value) : 0;
+                  const costPerAction = (row.cost_per_action_type || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+                  const costPerResult = costPerAction ? Number(costPerAction.value) : (resultCount ? Number(row.spend) / resultCount : 0);
+                  const statusLabel = row.status === "ACTIVE" ? "Đang hoạt động" : row.status === "PAUSED" ? "Tạm dừng" : row.status || "—";
+                  const statusColor = row.status === "ACTIVE" ? "#16a34a" : row.status === "PAUSED" ? "#d97706" : "#6b7280";
+                  return (
+                    <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                      <td style={{ ...tdStyle, fontWeight: 600, fontSize: 12, maxWidth: 280 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {fbLevel === "campaign" ? <Megaphone size={13} color="#6b7280" /> : fbLevel === "adset" ? <Folder size={13} color="#6b7280" /> : <CircleDot size={11} color="#6b7280" />}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 600, color: statusColor, background: statusColor + "15" }}>{statusLabel}</span>
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(row.spend)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.impressions)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.reach)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(row.clicks)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpm)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpc)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(row.ctr)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{resultCount || "—"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{resultCount ? fmtMoney(costPerResult) : "—"}</td>
+                    </tr>
+                  );
+                })}
+                {/* Totals row */}
+                <tr style={{ background: "#f0f4f1", fontWeight: 700 }}>
+                  <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({fbInsights.length})</td>
+                  <td style={tdStyle}></td>
+                  <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(fbTotals.spend)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.impressions)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.reach)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.clicks)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(fbTotals.cpm)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(fbTotals.cpc)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtPct(fbTotals.ctr)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(fbTotals.leads)}</td>
+                  <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{fbTotals.leads ? fmtMoney(fbTotals.cpl) : "—"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {selectedAccount && !fbLoading && fbInsights.length === 0 && !fbError && (
+          <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 13 }}>Bấm "Xem báo cáo" để tải dữ liệu từ Facebook</div>
+        )}
+      </div>
+    );
+  }
+
+  // === Settings Tab ===
+  if (tab === "settings") {
+    return (
+      <div>
+        {tabBar}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Settings size={16} /> Tài khoản quảng cáo Facebook</h3>
+          <button onClick={() => { setEditingAccount(null); setAcctDraft({ name: "", accountId: "", accessToken: "" }); setShowAccountForm(true); }} style={{ ...btnPrimary, display: "flex", alignItems: "center", gap: 6 }}>
+            <Plus size={14} /> Thêm tài khoản
+          </button>
+        </div>
+
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#92400e", display: "flex", alignItems: "flex-start", gap: 8 }}>
+          <Info size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <b>Hướng dẫn:</b> Để lấy Ad Account ID, vào <b>Facebook Ads Manager</b> → Xem URL có dạng <code>act_XXXXXXX</code> → Copy phần số. Access Token cần quyền <code>ads_read</code>, lấy từ Graph API Explorer.
+          </div>
+        </div>
+
+        {adAccounts.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+            <Settings size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
+            <div>Chưa có tài khoản quảng cáo nào</div>
+          </div>
+        ) : (
+          <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={{ ...thStyle, textAlign: "left" }}>Tên</th>
+                  <th style={{ ...thStyle, textAlign: "left" }}>Account ID</th>
+                  <th style={{ ...thStyle, textAlign: "center" }}>Token</th>
+                  <th style={{ ...thStyle, textAlign: "center" }}>Active</th>
+                  <th style={{ ...thStyle, textAlign: "center" }}>Thao tác</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adAccounts.map(a => (
+                  <tr key={a.id}>
+                    <td style={tdStyle}>{a.name || "—"}</td>
+                    <td style={{ ...tdStyle, fontFamily: "monospace", fontSize: 12 }}>act_{a.accountId}</td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: a.hasToken ? "#f0fdf4" : "#fef2f2", color: a.hasToken ? "#16a34a" : "#dc2626" }}>
+                        {a.hasToken ? "Đã kết nối" : "Chưa có"}
+                      </span>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: a.isActive ? "#f0fdf4" : "#f3f4f6", color: a.isActive ? "#16a34a" : "#9ca3af" }}>
+                        {a.isActive ? "ON" : "OFF"}
+                      </span>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>
+                      <div style={{ display: "flex", gap: 4, justifyContent: "center" }}>
+                        <button onClick={() => { setEditingAccount(a); setAcctDraft({ name: a.name || "", accountId: a.accountId, accessToken: "" }); setShowAccountForm(true); }} style={{ ...btnSecondary, padding: "4px 10px", fontSize: 12 }}><Pencil size={12} /></button>
+                        <button onClick={() => deleteAccount(a.id)} style={{ ...btnSecondary, padding: "4px 10px", fontSize: 12, color: "#dc2626" }}><Trash2 size={12} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {showAccountForm && (
+          <Modal onClose={() => { setShowAccountForm(false); setEditingAccount(null); }} title={editingAccount ? "Sửa tài khoản QC" : "Thêm tài khoản QC"}>
+            <label style={labelStyle}>Tên (tùy chọn)</label>
+            <input style={inputStyle} value={acctDraft.name} onChange={e => setAcctDraft({ ...acctDraft, name: e.target.value })} placeholder="VD: BLC Campaign Account" />
+            <label style={labelStyle}>Facebook Ad Account ID</label>
+            <input style={inputStyle} value={acctDraft.accountId} onChange={e => setAcctDraft({ ...acctDraft, accountId: e.target.value })} placeholder="VD: 123456789 hoặc act_123456789" />
+            <label style={labelStyle}>Access Token (quyền ads_read)</label>
+            <input style={inputStyle} value={acctDraft.accessToken} onChange={e => setAcctDraft({ ...acctDraft, accessToken: e.target.value })} placeholder="EAAGm0PX4..." />
+            {editingAccount && <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 8 }}>Để trống Access Token nếu không muốn thay đổi</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button onClick={handleSaveAccount} disabled={savingAcct} style={{ ...btnPrimary, flex: 1, opacity: savingAcct ? 0.6 : 1 }}>{savingAcct ? "Đang lưu..." : "Lưu"}</button>
+              <button onClick={() => { setShowAccountForm(false); setEditingAccount(null); }} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+            </div>
+          </Modal>
+        )}
+      </div>
+    );
+  }
+
+  // === Leads Tab (original) ===
+
   // Project list view
   if (selectedProjectId === null) {
     const projectIds = Object.keys(projectTree).sort((a, b) => projectTree[b].leads.length - projectTree[a].leads.length);
     return (
       <div>
+        {tabBar}
         <div style={{ padding: isMobile ? "12px" : "16px 0", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
           <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={18} /> Chọn dự án để xem chiến dịch</h3>
           <span style={{ fontSize: isMobile ? 11 : 13, color: "#6b7280" }}>{leads.length} lead · {projectIds.length} dự án</span>
@@ -2656,6 +2975,8 @@ function CampaignsPage({ leads, projects }) {
   const tree = projData.campaigns;
 
   return (
+    <div>
+    {tabBar}
     <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
       <div style={{ padding: isMobile ? "12px" : "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2752,6 +3073,7 @@ function CampaignsPage({ leads, projects }) {
           )}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }

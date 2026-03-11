@@ -272,6 +272,18 @@ async function initDb() {
   /* ---------- Lead status log for time-in-stage tracking ---------- */
   await run(
     db,
+    `CREATE TABLE IF NOT EXISTS fb_ad_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL DEFAULT '',
+      is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`
+  );
+
+  await run(
+    db,
     `CREATE TABLE IF NOT EXISTS lead_status_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       lead_id INTEGER NOT NULL,
@@ -2503,6 +2515,76 @@ app.get("/api/chat/new/:userId", requireAuth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// --- Facebook Ad Accounts CRUD ---
+app.get("/api/fb-ad-accounts", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM fb_ad_accounts ORDER BY created_at DESC");
+    res.json(rows.map(r => ({ id: r.id, name: r.name, accountId: r.account_id, hasToken: !!r.access_token, isActive: !!r.is_active, createdAt: r.created_at })));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/fb-ad-accounts", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, accountId, accessToken } = req.body;
+    if (!accountId) return res.status(400).json({ error: "Account ID is required" });
+    const cleanId = String(accountId).replace(/^act_/, "");
+    await run(db, "INSERT INTO fb_ad_accounts(name, account_id, access_token) VALUES(?,?,?)", [name || "", cleanId, accessToken || ""]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/fb-ad-accounts/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, accountId, accessToken, isActive } = req.body;
+    const existing = await get(db, "SELECT * FROM fb_ad_accounts WHERE id=?", [req.params.id]);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const cleanId = accountId ? String(accountId).replace(/^act_/, "") : existing.account_id;
+    await run(db, "UPDATE fb_ad_accounts SET name=?, account_id=?, access_token=?, is_active=? WHERE id=?", [
+      name ?? existing.name, cleanId, accessToken ?? existing.access_token, isActive !== undefined ? (isActive ? 1 : 0) : existing.is_active, req.params.id
+    ]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/fb-ad-accounts/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM fb_ad_accounts WHERE id=?", [req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Facebook Ads Insights Proxy ---
+app.get("/api/fb-ads/insights/:accountId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const acct = await get(db, "SELECT * FROM fb_ad_accounts WHERE account_id=? AND is_active=1", [req.params.accountId]);
+    if (!acct || !acct.access_token) return res.status(400).json({ error: "Ad account not found or no token" });
+    const { dateFrom, dateTo, level } = req.query;
+    const today = new Date().toISOString().slice(0, 10);
+    const since = dateFrom || today;
+    const until = dateTo || today;
+    const insightLevel = level || "campaign";
+    const fields = "campaign_name,campaign_id,adset_name,adset_id,ad_name,ad_id,spend,impressions,reach,clicks,cpm,cpc,ctr,actions,cost_per_action_type,objective,status";
+    const url = `https://graph.facebook.com/v22.0/act_${acct.account_id}/insights?fields=${fields}&time_range={"since":"${since}","until":"${until}"}&level=${encodeURIComponent(insightLevel)}&limit=500&access_token=${acct.access_token}`;
+    const fbRes = await fetch(url);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
+    res.json(data.data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/fb-ads/campaigns/:accountId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const acct = await get(db, "SELECT * FROM fb_ad_accounts WHERE account_id=? AND is_active=1", [req.params.accountId]);
+    if (!acct || !acct.access_token) return res.status(400).json({ error: "Ad account not found or no token" });
+    const fields = "name,id,status,objective,daily_budget,lifetime_budget,start_time,stop_time";
+    const url = `https://graph.facebook.com/v22.0/act_${acct.account_id}/campaigns?fields=${fields}&limit=500&access_token=${acct.access_token}`;
+    const fbRes = await fetch(url);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
+    res.json(data.data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // --- SPA fallback: serve index.html for non-API routes ---
