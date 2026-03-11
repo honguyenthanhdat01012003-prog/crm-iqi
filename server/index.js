@@ -905,10 +905,14 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       // Lead exists — UPDATE non-editable fields + sync status/sale from sheet
       const sheetStatus = normalizeStatus(l.rawStatus);
       const sheetSale = l.saleName || "";
-      // Update status from sheet (sheet is source of truth for status)
       // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
       const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
         ? sheetSale : prev.sale_name;
+      // Update status from sheet only if DB status is still default ("new"/empty) or sheet has a more specific status
+      // If CRM/Telegram already updated status (not "new"), keep the DB value
+      const dbStatus = prev.status || "new";
+      const newStatus = (dbStatus === "new" || !dbStatus) && sheetStatus && sheetStatus !== "new"
+        ? sheetStatus : dbStatus;
       stmts.push({
         sql: `UPDATE leads SET campaign = ?, adset_name = ?, ad_name = ?, form_name = ?,
               product = ?, created_at = ?, inbox_url = ?, source = ?, budget = ?, sync_at = ?,
@@ -917,7 +921,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         args: [
           l.campaign, l.adsetName || "-", l.adName || "-", l.formName || "-",
           l.product, l.createdAt, l.inboxUrl, l.source, l.budget, l.syncAt,
-          l.rawStatus || prev.raw_status, sheetStatus || prev.status, newSale,
+          l.rawStatus || prev.raw_status, newStatus, newSale,
           prev.id,
         ],
       });
