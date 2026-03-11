@@ -675,7 +675,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     return result;
   }, [projects]);
 
-  const activeCost = selectedProject === "all" ? totalProjectCost : projectCostMap[selectedProject] || {};
+  const activeCost = (!selectedProject || selectedProject === "all") ? totalProjectCost : projectCostMap[selectedProject] || {};
 
   // --- Stats ---
   const stats = useMemo(() => {
