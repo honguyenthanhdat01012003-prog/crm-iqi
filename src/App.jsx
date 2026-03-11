@@ -375,7 +375,17 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
 function CRMApp({ user, updateUser, onLogout }) {
   const isAdmin = user.role === "admin";
   const isMobile = useIsMobile();
-  const [page, setPage] = useState(isAdmin ? "dashboard" : "leads");
+  const adminPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
+  const salePages = ["leads", "profile"];
+  const [page, setPage] = useState(() => {
+    try {
+      const saved = localStorage.getItem("crm_page");
+      const allowed = isAdmin ? adminPages : salePages;
+      if (saved && allowed.includes(saved)) return saved;
+    } catch {}
+    return isAdmin ? "dashboard" : "leads";
+  });
+  useEffect(() => { localStorage.setItem("crm_page", page); }, [page]);
   const [leads, setLeads] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -685,6 +695,8 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const [openSubmenu, setOpenSubmenu] = useState("post_mgmt");
 
+  const [hoverSubmenu, setHoverSubmenu] = useState(null);
+
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
   return (
@@ -747,10 +759,23 @@ function CRMApp({ user, updateUser, onLogout }) {
             if (n.children) {
               const isOpen = openSubmenu === n.key;
               const isChildActive = n.children.some(c => c.key === page);
+              const isCollapsed = !isMobile && !sidebarOpen;
               return (
-                <div key={n.key}>
+                <div key={n.key}
+                  onMouseEnter={() => isCollapsed && setHoverSubmenu(n.key)}
+                  onMouseLeave={() => isCollapsed && setHoverSubmenu(null)}
+                  style={{ position: "relative" }}
+                >
                   <div
-                    onClick={() => setOpenSubmenu(isOpen ? null : n.key)}
+                    onClick={() => {
+                      if (isCollapsed) {
+                        // On collapsed click, open sidebar
+                        setSidebarOpen(true);
+                        setOpenSubmenu(n.key);
+                      } else {
+                        setOpenSubmenu(isOpen ? null : n.key);
+                      }
+                    }}
                     style={{
                       padding: isMobile ? "14px 16px" : "12px 16px",
                       cursor: "pointer",
@@ -770,6 +795,37 @@ function CRMApp({ user, updateUser, onLogout }) {
                       <ChevronDown size={14} style={{ opacity: 0.6, transition: "transform .2s", transform: isOpen ? "rotate(180deg)" : "rotate(0)" }} />
                     )}
                   </div>
+                  {/* Collapsed hover popup */}
+                  {isCollapsed && hoverSubmenu === n.key && (
+                    <div style={{
+                      position: "absolute", left: 60, top: 0, zIndex: 1050,
+                      background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)",
+                      borderRadius: "0 8px 8px 0", minWidth: 180,
+                      boxShadow: "4px 4px 16px rgba(0,0,0,.3)",
+                      padding: "6px 0",
+                    }}>
+                      <div style={{ padding: "6px 14px 8px", fontSize: 11, color: "rgba(255,255,255,.5)", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{n.label}</div>
+                      {n.children.map(c => (
+                        <div
+                          key={c.key}
+                          onClick={(e) => { e.stopPropagation(); setPage(c.key); setHoverSubmenu(null); }}
+                          style={{
+                            padding: "9px 14px", cursor: "pointer",
+                            background: page === c.key ? "rgba(255,255,255,.15)" : "transparent",
+                            borderLeft: page === c.key ? "3px solid #e88a2e" : "3px solid transparent",
+                            fontSize: 13, color: "#fff", transition: "background .15s",
+                            display: "flex", alignItems: "center", gap: 8,
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.background = "rgba(255,255,255,.1)"}
+                          onMouseLeave={(e) => e.currentTarget.style.background = page === c.key ? "rgba(255,255,255,.15)" : "transparent"}
+                        >
+                          {c.icon && React.createElement(c.icon, { size: 14 })}
+                          {c.label}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* Expanded submenu items */}
                   {isOpen && (isMobile || sidebarOpen) && n.children.map(c => (
                     <div
                       key={c.key}
@@ -798,6 +854,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               <div
                 key={n.key}
                 onClick={() => { setPage(n.key); if (isMobile) setSidebarOpen(false); }}
+                title={!isMobile && !sidebarOpen ? n.label : undefined}
                 style={{
                   padding: isMobile ? "14px 16px" : "12px 16px",
                   cursor: "pointer",
@@ -806,6 +863,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                   whiteSpace: "nowrap",
                   fontSize: isMobile ? 15 : 14,
                   transition: "background .15s",
+                  position: "relative",
                 }}
               >
                 <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -843,9 +901,15 @@ function CRMApp({ user, updateUser, onLogout }) {
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, padding: isMobile ? 14 : 28, overflow: "auto", minWidth: 0, background: "#f8fafb" }}>
-        {/* Top bar */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isMobile ? 14 : 24, gap: 8 }}>
+      <main style={{ flex: 1, overflow: "auto", minWidth: 0, background: "#f8fafb", display: "flex", flexDirection: "column" }}>
+        {/* Top bar - sticky */}
+        <div style={{
+          position: "sticky", top: 0, zIndex: 100, background: "#f8fafb",
+          padding: isMobile ? "10px 14px" : "16px 28px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+          backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+        }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             {isMobile && (
               <button onClick={() => setSidebarOpen(true)} style={{
@@ -956,6 +1020,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           )}
         </div>
 
+        <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20 }}>
         {page === "dashboard" && (
           <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={filteredLeads} />
         )}
@@ -995,6 +1060,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "sheet_config" && isAdmin && <SheetConfigPage />}
+        </div>
       </main>
 
       {/* Project Modal */}
@@ -1197,13 +1263,23 @@ function ChatSidebar({ currentUser }) {
     setDraft("");
     lastMsgIdRef.current = 0;
     loadMessages(chatUser.id);
+    if (isMobile) setSidebarOpen(false); // Hide contacts sidebar on mobile when opening chat
   };
 
   return (
     <>
       {/* Toggle button - fixed right */}
       <button
-        onClick={() => setSidebarOpen(!sidebarOpen)}
+        onClick={() => {
+          if (isMobile && activeChat) {
+            // On mobile, if chat is open, close chat first
+            setActiveChat(null);
+            loadUsers();
+            setSidebarOpen(true);
+          } else {
+            setSidebarOpen(!sidebarOpen);
+          }
+        }}
         style={{
           position: "fixed", top: "50%", right: sidebarOpen ? sidebarWidth : 0,
           transform: "translateY(-50%)", zIndex: 1001,
@@ -1297,9 +1373,16 @@ function ChatSidebar({ currentUser }) {
       {/* Chat popup window */}
       {activeChat && (
         <div style={{
-          position: "fixed", bottom: 0, right: sidebarOpen ? sidebarWidth + 8 : 8,
-          width: isMobile ? "calc(100vw - 16px)" : 340, height: isMobile ? "70vh" : 440,
-          background: "#fff", borderRadius: "12px 12px 0 0",
+          position: "fixed",
+          ...(isMobile ? {
+            top: 0, left: 0, right: 0, bottom: 0, width: "100%", height: "100%",
+            borderRadius: 0,
+          } : {
+            bottom: 0, right: sidebarOpen ? sidebarWidth + 8 : 8,
+            width: 340, height: 440,
+            borderRadius: "12px 12px 0 0",
+          }),
+          background: "#fff",
           boxShadow: "0 -4px 24px rgba(0,0,0,.18)", zIndex: 1002,
           display: "flex", flexDirection: "column", overflow: "hidden",
           transition: "right .25s ease",
@@ -1526,10 +1609,11 @@ function Card({ title, value, sub, color = "#e88a2e", percent, compact }) {
         boxShadow: "0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)",
         borderTop: `3px solid ${color}`,
         transition: "transform .2s, box-shadow .2s",
+        overflow: "hidden", minWidth: 0,
       }}
     >
-      <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 4, fontWeight: 500, letterSpacing: "0.02em", textTransform: "uppercase" }}>{title}</div>
-      <div style={{ fontSize: compact ? 20 : 28, fontWeight: 700, color, letterSpacing: "-0.02em" }}>{value}</div>
+      <div style={{ fontSize: compact ? 11 : 12, color: "#6b7280", marginBottom: 4, fontWeight: 500, letterSpacing: "0.02em", textTransform: "uppercase", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</div>
+      <div style={{ fontSize: compact ? 18 : 28, fontWeight: 700, color, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
       {percent !== undefined && <div style={{ fontSize: compact ? 10 : 12, color: "#9ca3af", marginTop: 1 }}>{percent}%</div>}
       {sub && <div style={{ fontSize: compact ? 10 : 11, color: "#9ca3af", marginTop: 2 }}>{sub}</div>}
     </div>
@@ -2538,10 +2622,12 @@ function CampaignsPage({ leads, projects }) {
             const stats = calcStats(p.leads);
             return (
               <div key={pid} onClick={() => { setSelectedProjectId(Number(pid)); setExpandedCampaigns({}); setExpandedAdsets({}); }}
+                onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,.12)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = "translateY(0)"; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.08)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}
                 style={{
-                  background: "#fff", borderRadius: 12, padding: 20, cursor: "pointer",
+                  background: "#fff", borderRadius: 14, padding: 20, cursor: "pointer",
                   boxShadow: "0 1px 3px rgba(0,0,0,.08)", border: "1px solid #e5e7eb",
-                  transition: "all .2s", hover: { transform: "translateY(-2px)" },
+                  transition: "all .25s ease", borderTop: "3px solid #e88a2e",
                 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                   <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={16} /> {p.name}</span>
@@ -2738,44 +2824,58 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
 
   /* -- KANBAN TAB -- */
   const renderKanban = () => (
-    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 12, minHeight: 400 }}>
+    <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 12, minHeight: 400 }}>
       {PIPELINE_STAGES.map(stage => (
         <div key={stage.key}
           onDragOver={e => e.preventDefault()}
           onDrop={() => handleDrop(stage.key)}
           style={{
-            minWidth: isMobile ? 220 : 220, flex: 1, background: "#f9fafb", borderRadius: 12,
-            padding: 10, display: "flex", flexDirection: "column", gap: 8,
-            border: "2px dashed transparent", transition: "border .2s",
+            minWidth: isMobile ? 220 : 230, flex: 1,
+            background: "#fff", borderRadius: 12,
+            padding: 0, display: "flex", flexDirection: "column",
+            border: `1px solid ${stage.color}33`,
+            boxShadow: "0 1px 4px rgba(0,0,0,.05)",
+            transition: "border-color .2s, box-shadow .2s",
           }}
-          onDragEnter={e => { e.currentTarget.style.borderColor = stage.color; }}
-          onDragLeave={e => { e.currentTarget.style.borderColor = "transparent"; }}
+          onDragEnter={e => { e.currentTarget.style.borderColor = stage.color; e.currentTarget.style.boxShadow = `0 0 0 2px ${stage.color}33`; }}
+          onDragLeave={e => { e.currentTarget.style.borderColor = `${stage.color}33`; e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,.05)"; }}
         >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          {/* Column header */}
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 12px", borderBottom: `2px solid ${stage.color}`,
+            background: stage.color + "08", borderRadius: "12px 12px 0 0",
+          }}>
             <span style={{ fontWeight: 700, fontSize: 13, color: stage.color }}>{stage.label}</span>
             <span style={{
-              background: stage.color + "22", color: stage.color, fontWeight: 700,
-              borderRadius: 12, padding: "2px 10px", fontSize: 12,
+              background: stage.color, color: "#fff", fontWeight: 700,
+              borderRadius: 12, padding: "2px 10px", fontSize: 12, minWidth: 28, textAlign: "center",
             }}>{stageLeads[stage.key]?.length || 0}</span>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", maxHeight: 520, display: "flex", flexDirection: "column", gap: 6 }}>
+          {/* Cards */}
+          <div style={{ flex: 1, overflowY: "auto", maxHeight: 520, display: "flex", flexDirection: "column", gap: 6, padding: "8px 8px" }}>
             {(stageLeads[stage.key] || []).slice(0, 50).map(lead => (
               <div key={lead.id} draggable
                 onDragStart={() => setDragId(lead.id)}
                 onDragEnd={() => setDragId(null)}
+                onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 3px 12px rgba(0,0,0,.12)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.06)"; e.currentTarget.style.transform = "translateY(0)"; }}
                 style={{
-                  background: "#fff", borderRadius: 8, padding: "8px 10px", cursor: "grab",
-                  boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderLeft: `3px solid ${stage.color}`,
-                  opacity: dragId === lead.id ? 0.5 : 1, fontSize: 13, transition: "opacity .2s",
+                  background: "#fff", borderRadius: 10, padding: "10px 12px", cursor: "grab",
+                  boxShadow: "0 1px 3px rgba(0,0,0,.06)",
+                  borderLeft: `3px solid ${stage.color}`,
+                  border: "1px solid #f0f2f5", borderLeftWidth: 3, borderLeftColor: stage.color,
+                  opacity: dragId === lead.id ? 0.5 : 1, fontSize: 13,
+                  transition: "opacity .2s, box-shadow .2s, transform .15s",
                 }}>
-                <div style={{ fontWeight: 600, marginBottom: 2 }}>{lead.name || "—"}</div>
-                <div style={{ color: "#6b7280", fontSize: 11 }}>{lead.phone || ""}</div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 11 }}>
+                <div style={{ fontWeight: 600, marginBottom: 3, color: "#1f2937" }}>{lead.name || "—"}</div>
+                <div style={{ color: "#6b7280", fontSize: 11, marginBottom: 4 }}>{lead.phone || ""}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11 }}>
                   <span style={{ color: "#9ca3af" }}>{lead.saleName || "Chưa chia"}</span>
                   <span style={{
-                    background: (STATUS_COLORS[lead.status] || "#888") + "22",
+                    background: (STATUS_COLORS[lead.status] || "#888") + "18",
                     color: STATUS_COLORS[lead.status] || "#888",
-                    padding: "1px 6px", borderRadius: 6, fontWeight: 600,
+                    padding: "2px 8px", borderRadius: 6, fontWeight: 600, fontSize: 10,
                   }}>{STATUS_LABELS[lead.status] || lead.status}</span>
                 </div>
               </div>
@@ -3492,7 +3592,7 @@ function UsersPage({ projects, leads }) {
 
   const openProfile = (u) => {
     setShowProfileModal(u);
-    setProfileDraft({ avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "" });
+    setProfileDraft({ avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "", telegramId: u.telegramId || "" });
   };
 
   const handleUserAvatarFile = (file, target) => {
@@ -4691,7 +4791,7 @@ function doPost(e) {
             />
             <button onClick={handleAdd} disabled={adding || !newProject.trim() || !newUrl.trim()}
               style={{ ...btnPrimary, opacity: (adding || !newProject.trim() || !newUrl.trim()) ? 0.6 : 1, whiteSpace: "nowrap" }}>
-              {adding ? "\u0110ang th\u00eam..." : <><Plus size={14} /> Th\u00eam</>}
+              {adding ? "Đang thêm..." : <><Plus size={14} /> Thêm</>}
             </button>
           </div>
         </div>
@@ -4924,7 +5024,7 @@ const btnSecondary = {
   padding: "10px 18px", background: "#f8f9fa", color: "#374151",
   border: "1px solid #e5e7eb", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13,
   transition: "transform .15s, box-shadow .15s, background .15s",
-  display: "inline-flex", alignItems: "center", gap: 6,
+  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6,
 };
 const btnDanger = {
   padding: "10px 18px", background: "#fff5f5", color: "#dc2626",
