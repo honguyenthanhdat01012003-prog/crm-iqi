@@ -1674,7 +1674,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const now = new Date().toLocaleString("vi-VN");
     const stmts = [];
     for (const lid of leadIds) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -1835,9 +1835,14 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     const params = [];
 
     // Admin/Manager can change sale assignment and isHot
+    let reassigning = false;
     if (req.user.role === "admin" || req.user.role === "manager") {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
-      if (saleName !== undefined) { sets.push("sale_name = ?"); params.push(saleName); }
+      if (saleName !== undefined) {
+        sets.push("sale_name = ?"); params.push(saleName);
+        // Reset status to "new" (Chưa feedback) when reassigning to a new sale
+        if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
+      }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
     if (status !== undefined) { sets.push("status = ?"); params.push(status); }
@@ -1845,12 +1850,13 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
     if (sets.length) {
       // Log status change
-      if (status !== undefined) {
+      if (status !== undefined || reassigning) {
         const oldLead = await get(db, "SELECT status FROM leads WHERE id = ?", [leadId]);
         const oldStatus = oldLead?.status || "new";
-        if (oldStatus !== status) {
+        const newStatus = status !== undefined ? status : "new";
+        if (oldStatus !== newStatus) {
           await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
-            [leadId, oldStatus, status, req.user.displayName, new Date().toISOString()]);
+            [leadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
         }
       }
       params.push(leadId);
