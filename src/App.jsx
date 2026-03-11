@@ -39,7 +39,7 @@ class ErrorBoundary extends React.Component {
 /* ===== Toast + Confirm global helpers ===== */
 let _toastFn = null;
 let _confirmFn = null;
-function showToast(msg, type = "info") { _toastFn && _toastFn(msg, type); }
+function showToast(msg, type = "info") { _toastFn && _toastFn(typeof msg === "string" ? msg : String(msg || ""), type); }
 function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : resolve(window.confirm(msg)); }); }
 
 function ToastContainer() {
@@ -192,16 +192,16 @@ export default function App() {
   };
 
   if (!user || !token) {
-    return <LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} />;
+    return <ErrorBoundary><LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} /></ErrorBoundary>;
   }
 
   if (user.mustChangePassword) {
-    return <ForceChangePasswordPage user={user} onChanged={(u, t) => updateUser(u, t)} onLogout={() => {
+    return <ErrorBoundary><ForceChangePasswordPage user={user} onChanged={(u, t) => updateUser(u, t)} onLogout={() => {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
       setUser(null);
       setToken("");
-    }} />;
+    }} /></ErrorBoundary>;
   }
 
   return <ErrorBoundary><CRMApp user={user} updateUser={updateUser} onLogout={() => {
@@ -231,7 +231,7 @@ function LoginPage({ onLogin }) {
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || "Đăng nhập thất bại"); return; }
+      if (!res.ok) { setError(String(data.error || "Đăng nhập thất bại")); return; }
       localStorage.setItem("crm_token", data.token);
       localStorage.setItem("crm_user", JSON.stringify(data.user));
       onLogin(data.user, data.token);
@@ -309,7 +309,7 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
         body: JSON.stringify({ newPassword: newPwd }),
       });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || "Lỗi đổi mật khẩu"); return; }
+      if (!res.ok) { setError(String(data.error || "Lỗi đổi mật khẩu")); return; }
       onChanged(data.user, data.token);
     } catch {
       setError("Lỗi kết nối server");
@@ -4407,7 +4407,7 @@ function ProfilePage({ user, updateUser }) {
         body: JSON.stringify({ currentPassword: currentPwd, newPassword: newPwd }),
       });
       const data = await r.json();
-      if (!r.ok) { setPwdError(data.error); return; }
+      if (!r.ok) { setPwdError(String(data.error || "Lỗi đổi mật khẩu")); return; }
       setPwdMsg("[OK] Đổi mật khẩu thành công!");
       setCurrentPwd(""); setNewPwd(""); setConfirmPwd("");
       if (data.token && data.user) updateUser(data.user, data.token);
@@ -4674,7 +4674,7 @@ function UsersPage({ projects, leads }) {
         const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds, avatarUrl: draft.avatarUrl, email: draft.email, phone: draft.phone };
         if (draft.password) body.password = draft.password;
         const r = await apiFetch(`${API}/users/${editingUser.id}`, { method: "PUT", body: JSON.stringify(body) });
-        if (!r.ok) { const d = await r.json(); setError(d.error); return; }
+        if (!r.ok) { const d = await r.json(); setError(String(d.error || "Lỗi cập nhật")); return; }
         setUsers(await r.json());
       } else {
         if (!draft.username || !draft.password) { setError("Username và mật khẩu bắt buộc"); return; }
@@ -4682,7 +4682,7 @@ function UsersPage({ projects, leads }) {
           method: "POST",
           body: JSON.stringify(draft),
         });
-        if (!r.ok) { const d = await r.json(); setError(d.error); return; }
+        if (!r.ok) { const d = await r.json(); setError(String(d.error || "Lỗi tạo tài khoản")); return; }
         setUsers(await r.json());
       }
       setShowForm(false);
@@ -4696,7 +4696,7 @@ function UsersPage({ projects, leads }) {
     if (!(await showConfirm("Xóa tài khoản này?"))) return;
     try {
       const r = await apiFetch(`${API}/users/${id}`, { method: "DELETE" });
-      if (!r.ok) { const d = await r.json(); showToast(d.error, "error"); return; }
+      if (!r.ok) { const d = await r.json(); showToast(String(d.error || "Lỗi xóa tài khoản"), "error"); return; }
       setUsers(await r.json());
     } catch (e) { console.error(e); }
   };
@@ -4773,7 +4773,7 @@ function UsersPage({ projects, leads }) {
         method: editingBot ? "PUT" : "POST",
         body: JSON.stringify(botDraft),
       });
-      if (!r.ok) { const d = await r.json(); setBotError(d.error); setSavingBot(false); return; }
+      if (!r.ok) { const d = await r.json(); setBotError(String(d.error || "Lỗi")); setSavingBot(false); return; }
       setBots(await r.json());
       setShowBotForm(false);
     } catch (e) { setBotError(e.message); }
@@ -4784,7 +4784,7 @@ function UsersPage({ projects, leads }) {
     if (!(await showConfirm("Xóa bot này?"))) return;
     try {
       const r = await apiFetch(`${API}/telegram-bots/${id}`, { method: "DELETE" });
-      if (!r.ok) { const d = await r.json(); showToast(d.error, "error"); return; }
+      if (!r.ok) { const d = await r.json(); showToast(String(d.error || "Lỗi"), "error"); return; }
       setBots(await r.json());
     } catch (e) { console.error(e); }
   };
@@ -5367,7 +5367,7 @@ function PostsPage({ projects }) {
     try {
       const r = await apiFetch(`${API}/sheet/posts`);
       const data = await r.json();
-      if (!r.ok) { setError(data.error || "Lỗi tải dữ liệu"); setLoading(false); return; }
+      if (!r.ok) { setError(String(data.error || "Lỗi tải dữ liệu")); setLoading(false); return; }
       setSheetPosts(data.data || []);
       setSheetHeaders(data.headers || []);
     } catch (e) { setError("Không kết nối được server"); }
@@ -6006,7 +6006,7 @@ function CalendarPage({ projects }) {
         const r = await apiFetch(`${API}/sheet/posts`);
         const data = await r.json();
         if (r.ok && data.data) setSheetPosts(data.data);
-        else setError(data.error || "Lỗi tải dữ liệu");
+        else setError(String(data.error || "Lỗi tải dữ liệu"));
       } catch (e) { setError("Không kết nối được"); }
       setLoading(false);
     })();
