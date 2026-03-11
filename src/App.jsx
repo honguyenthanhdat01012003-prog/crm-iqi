@@ -14,6 +14,28 @@ import {
 
 const API = "/api";
 
+/* ===== Error Boundary ===== */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error("React Error Boundary:", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "#f8fafb", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: 32, maxWidth: 420, textAlign: "center", boxShadow: "0 4px 24px rgba(0,0,0,.1)" }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>⚠️</div>
+            <h2 style={{ margin: "0 0 8px", fontSize: 18, color: "#dc2626" }}>Đã xảy ra lỗi</h2>
+            <p style={{ color: "#6b7280", fontSize: 13, marginBottom: 16 }}>{this.state.error?.message || "Lỗi không xác định"}</p>
+            <button onClick={() => window.location.reload()} style={{ padding: "10px 24px", background: "#1a3c20", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 14 }}>Tải lại trang</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ===== Toast + Confirm global helpers ===== */
 let _toastFn = null;
 let _confirmFn = null;
@@ -182,13 +204,13 @@ export default function App() {
     }} />;
   }
 
-  return <CRMApp user={user} updateUser={updateUser} onLogout={() => {
+  return <ErrorBoundary><CRMApp user={user} updateUser={updateUser} onLogout={() => {
     apiFetch(`${API}/logout`, { method: "POST" }).catch(() => {});
     localStorage.removeItem("crm_token");
     localStorage.removeItem("crm_user");
     setUser(null);
     setToken("");
-  }} />;
+  }} /></ErrorBoundary>;
 }
 
 function LoginPage({ onLogin }) {
