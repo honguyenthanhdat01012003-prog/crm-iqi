@@ -2738,15 +2738,15 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 
 // Module 1: Ad Library Scraper (Facebook Ads Library API)
 async function scrapeAdLibrary(projectName, adAccountRows) {
-  let apiFetchedAds = 0; // Ads we actually fetched via API
-  let estimatedTotalAds = 0; // The real "~630 kết quả" from Ads Library page
+  let apiFetchedAds = 0;
+  let estimatedTotalAds = 0;
   const topAdDurations = [];
   const pageSet = new Map(); // pageName -> { pageId, adCount, maxDays, platforms }
-  const adContentSet = new Set(); // For de-duplication: hash of ad_creative_bodies
+  const adContentSet = new Set();
   const now = Date.now();
-  const MAX_PAGES = 25; // Pagination: fetch up to 25 pages (2500 ads max)
+  const MAX_PAGES = 25;
 
-  // Helper: process a batch of ad results
+  // Helper: process a batch of Graph API ad results
   const processAds = (ads) => {
     ads.forEach(ad => {
       apiFetchedAds += 1;
@@ -2754,7 +2754,6 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
       const pageName = ad.page_name || "Unknown";
       const pageId = ad.page_id || "";
       const days = startDate ? Math.floor((now - new Date(startDate).getTime()) / 86400000) : 0;
-      // De-duplication: create content fingerprint
       const bodies = (ad.ad_creative_bodies || []).join("||").trim();
       const fingerprint = `${pageName}::${bodies.substring(0, 200)}`;
       if (bodies.length > 0) adContentSet.add(fingerprint);
@@ -2769,37 +2768,21 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     });
   };
 
-  // Helper: scrape the public Ads Library web page for total count only
-  const scrapeLibraryPage = async () => {
-    try {
-      const libUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
-      const res = await fetch(libUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" },
-        redirect: "follow",
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.ok) {
-        const html = await res.text();
-        // Extract the real total "~630 kết quả" or "approximately 630"
-        const countMatch = html.match(/~?\s*([\d,.]+)\s*kết quả/i) || html.match(/approximately\s*([\d,]+)/i) || html.match(/([\d,]+)\s*results/i);
-        if (countMatch) {
-          estimatedTotalAds = parseInt(countMatch[1].replace(/[,.]/g, "")) || 0;
-        }
-      }
-    } catch { /* web scraping failed */ }
-  };
-
-  // Step 1: Try using facebook ad library search API with available tokens
+  // Strategy 1: Facebook Graph API ads_archive (requires valid user access token)
+  console.log(`[MI] Starting ads_archive lookup for "${projectName}", ${adAccountRows.length} token(s) available`);
   for (const acct of adAccountRows) {
     if (!acct.access_token) continue;
     try {
-      const baseUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_reached_countries=VN&ad_active_status=ACTIVE&fields=id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_snapshot_url,ad_creative_bodies,publisher_platforms&limit=100&access_token=${acct.access_token}`;
+      // ad_reached_countries must be array format ['VN']
+      const baseUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_reached_countries=['VN']&ad_active_status=ACTIVE&fields=id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_snapshot_url,ad_creative_bodies,publisher_platforms&limit=100&access_token=${acct.access_token}`;
       const res = await fetch(baseUrl);
       const data = await res.json();
+      if (data.error) {
+        console.log(`[MI] ads_archive API error for acct ${acct.account_id}:`, data.error.message);
+        continue;
+      }
       if (data.data && data.data.length > 0) {
         processAds(data.data);
-
-        // Deep pagination: follow paging.next up to MAX_PAGES times
         let nextUrl = data.paging?.next;
         let pageCount = 1;
         while (nextUrl && pageCount < MAX_PAGES) {
@@ -2812,26 +2795,78 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
             pageCount++;
           } catch { break; }
         }
-        break; // Got data from this account, stop trying others
+        console.log(`[MI] Graph API: fetched ${apiFetchedAds} ads, ${pageSet.size} pages for "${projectName}"`);
+        break;
       }
-    } catch { /* continue to next account */ }
+    } catch (err) { console.log(`[MI] ads_archive error:`, err.message); }
   }
 
-  // Step 2: Always scrape the public Ads Library page to get the estimated total count
-  // Even if API returned data, the web page shows the true "~630 kết quả"
-  await scrapeLibraryPage();
+  // Strategy 2: If Graph API returned nothing, try without country filter and with different format
+  if (apiFetchedAds === 0) {
+    for (const acct of adAccountRows) {
+      if (!acct.access_token) continue;
+      try {
+        // Try alternative format: ad_reached_countries as URL array param
+        const altUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_reached_countries[0]=VN&ad_active_status=ACTIVE&fields=id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_creative_bodies,publisher_platforms&limit=100&access_token=${acct.access_token}`;
+        console.log(`[MI] Trying alternative API format for "${projectName}"`);
+        const res = await fetch(altUrl);
+        const data = await res.json();
+        if (data.error) {
+          console.log(`[MI] Alt API error:`, data.error.message);
+          continue;
+        }
+        if (data.data && data.data.length > 0) {
+          processAds(data.data);
+          let nextUrl = data.paging?.next;
+          let pageCount = 1;
+          while (nextUrl && pageCount < MAX_PAGES) {
+            try {
+              const resN = await fetch(nextUrl);
+              const dataN = await resN.json();
+              if (!dataN.data || dataN.data.length === 0) break;
+              processAds(dataN.data);
+              nextUrl = dataN.paging?.next;
+              pageCount++;
+            } catch { break; }
+          }
+          console.log(`[MI] Alt API: fetched ${apiFetchedAds} ads, ${pageSet.size} pages`);
+          break;
+        }
+      } catch (err) { console.log(`[MI] Alt API error:`, err.message); }
+    }
+  }
+
+  // Web scraping of Facebook Ads Library is not viable (403 JS challenge)
+  // The total count and page data must come from the Graph API
+  console.log(`[MI] After API attempts: ${apiFetchedAds} ads, ${pageSet.size} pages for "${projectName}"`);
+
+  // If we got pages from scraping but no individual ad counts, distribute estimated total
+  if (pageSet.size > 0 && apiFetchedAds === 0 && estimatedTotalAds > 0) {
+    // Distribute total ads proportionally among found pages
+    const pagesWithZero = [...pageSet.entries()].filter(([_, v]) => v.adCount === 0);
+    if (pagesWithZero.length > 0) {
+      const remainingAds = estimatedTotalAds - [...pageSet.values()].reduce((s, v) => s + v.adCount, 0);
+      if (remainingAds > 0) {
+        const perPage = Math.max(1, Math.floor(remainingAds / pagesWithZero.length));
+        for (const [name, info] of pagesWithZero) {
+          info.adCount = perPage;
+          if (info.maxDays === 0) info.maxDays = 30;
+        }
+      }
+    }
+  }
 
   // Use the larger of API-fetched vs web-estimated for total count
   const totalAds = Math.max(apiFetchedAds, estimatedTotalAds);
 
   // Calculate final numbers
-  const uniqueAds = adContentSet.size;
+  const uniqueAds = Math.max(adContentSet.size, pageSet.size);
   const activeAds = totalAds;
 
   topAdDurations.sort((a, b) => b.days - a.days);
   const avgLongevity = topAdDurations.length ? topAdDurations.reduce((s, d) => s + d.days, 0) / topAdDurations.length : 0;
 
-  // Build pages info — ONLY pages with verified pageId get Ads Library links
+  // Build pages info — ONLY pages with verified pageId get proper links
   const pagesInfo = [];
   pageSet.forEach((info, name) => {
     pagesInfo.push({
@@ -2848,6 +2883,7 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   });
   pagesInfo.sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays);
 
+  console.log(`[MI] Final: totalAds=${totalAds}, pages=${pagesInfo.length}, apiFetched=${apiFetchedAds} for "${projectName}"`);
   return { totalAds: activeAds, activeAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo };
 }
 
@@ -3088,6 +3124,41 @@ app.get("/api/market-intel/projects", requireAuth, async (_req, res) => {
   try {
     const rows = await all(db, "SELECT id, project_name, location, heat_index, opportunity_score, estimated_cpl_avg, competitor_count, avg_price_m2, segment, scraped_at FROM market_intel_cache ORDER BY heat_index DESC");
     res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/market-intel/test-ads-api - Test Facebook Ads Library API access
+app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
+  try {
+    const q = (req.query.q || "test").trim();
+    const adAccounts = await all(db, "SELECT account_id, access_token FROM fb_ad_accounts WHERE is_active = 1 AND access_token != ''");
+    const results = [];
+    for (const acct of adAccounts) {
+      const formats = [
+        { label: "format_array_single_quote", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_reached_countries=['VN']&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${acct.access_token}` },
+        { label: "format_bracket_index", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_reached_countries[0]=VN&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${acct.access_token}` },
+        { label: "format_json_array", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_reached_countries=${encodeURIComponent('["VN"]')}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${acct.access_token}` },
+      ];
+      for (const fmt of formats) {
+        try {
+          const r = await fetch(fmt.url);
+          const d = await r.json();
+          results.push({
+            account: acct.account_id,
+            format: fmt.label,
+            status: r.status,
+            error: d.error?.message || null,
+            count: d.data?.length || 0,
+            sample: d.data?.[0] ? { page_name: d.data[0].page_name, page_id: d.data[0].page_id } : null,
+            has_paging: !!d.paging,
+          });
+          if (d.data?.length > 0) break; // This format works
+        } catch (err) {
+          results.push({ account: acct.account_id, format: fmt.label, error: err.message });
+        }
+      }
+    }
+    res.json({ tokens_found: adAccounts.length, query: q, results });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

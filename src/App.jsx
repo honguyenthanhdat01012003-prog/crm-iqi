@@ -3300,6 +3300,12 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
                 <MapPin size={14} /> {activeProject.location}
               </div>
+              {activeProject.cached && (
+                <button onClick={() => analyzeProject(activeProject.name, activeProject.location, true)}
+                  style={{ marginTop: 8, fontSize: 11, padding: "4px 12px", borderRadius: 8, border: `1px solid ${darkBorder}`, background: `${neonBlue}10`, color: neonBlue, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <RefreshCw size={11} /> Làm mới dữ liệu
+                </button>
+              )}
             </div>
             <div style={{ textAlign: "center", minWidth: 120 }}>
               <div style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>Market Heat Index</div>
@@ -3342,6 +3348,10 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</div>
               <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
               {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
+              <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.name)}&media_type=all`} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 10, color: neonBlue, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 3, textDecoration: "none" }}>
+                <ExternalLink size={9} /> Xem trên Ads Library
+              </a>
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
                 {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
                 <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
