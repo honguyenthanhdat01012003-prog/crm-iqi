@@ -2816,10 +2816,10 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_type=ALL&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
 
     const formats = [
+      { label: "curl-style", param: `ad_reached_countries=['VN']` },
       { label: "unencoded-json", param: `ad_reached_countries=["VN"]` },
       { label: "encoded-json", param: `ad_reached_countries=${encodeURIComponent('["VN"]')}` },
       { label: "php-bracket", param: `ad_reached_countries%5B%5D=VN` },
-      { label: "php-index", param: `ad_reached_countries%5B0%5D=VN` },
       { label: "literal-index", param: `ad_reached_countries[0]=VN` },
     ];
 
@@ -3113,10 +3113,10 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
       const token = acct.access_token;
       const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_type=ALL&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
       const formats = [
+        { label: "curl-style", url: `${base}&ad_reached_countries=['VN']` },
         { label: "unencoded-json", url: `${base}&ad_reached_countries=["VN"]` },
         { label: "encoded-json", url: `${base}&ad_reached_countries=${encodeURIComponent('["VN"]')}` },
         { label: "php-bracket", url: `${base}&ad_reached_countries%5B%5D=VN` },
-        { label: "php-index", url: `${base}&ad_reached_countries%5B0%5D=VN` },
         { label: "literal-index", url: `${base}&ad_reached_countries[0]=VN` },
       ];
       for (const fmt of formats) {

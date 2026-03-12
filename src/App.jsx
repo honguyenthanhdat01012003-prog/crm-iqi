@@ -3352,7 +3352,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
               {activeProject.competitors === 0 && activeProject.apiError && (
                 <div style={{ fontSize: 9, color: rose, marginTop: 4, padding: "4px 6px", background: `${rose}15`, borderRadius: 6, lineHeight: 1.4 }}>
-                  ⚠ {activeProject.apiError.includes("permission") ? "App chưa bật Marketing API. Vào developers.facebook.com → App Dashboard → Add Product → Marketing API" : activeProject.apiError.length > 80 ? activeProject.apiError.substring(0, 80) + "…" : activeProject.apiError}
+                  ⚠ {activeProject.apiError.includes("permission") || activeProject.apiError.includes("code:10") ? "Cần đăng ký Ad Library API tại facebook.com/ads/library/api (xác minh danh tính + chấp nhận điều khoản)" : activeProject.apiError.length > 100 ? activeProject.apiError.substring(0, 100) + "…" : activeProject.apiError}
                 </div>
               )}
               <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.name)}&media_type=all`} target="_blank" rel="noopener noreferrer"
