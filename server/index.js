@@ -2908,7 +2908,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Extract pages from rendered DOM — key by pageId to avoid duplicates
         const extractedPages = await page.evaluate(() => {
           const pages = {};
-          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/^[\w.-]+\.\w{2,}$/.test(n);
+          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
 
           // Method 1: view_all_page_id links (most reliable)
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
@@ -3371,6 +3371,24 @@ function generateTrend30d(baseValue, volatility = 0.1, trend = "stable") {
   return data;
 }
 
+// Benchmark: compare CPL with region average
+function compareWithRegion(currentCpl, location) {
+  const { cpl: regionAvg, district } = getDistrictAvgCpl(location);
+  if (!regionAvg || !currentCpl) return { diff: 0, percent: 0, label: "N/A", district };
+  const diff = currentCpl - regionAvg;
+  const percent = Math.round((diff / regionAvg) * 100);
+  return { diff, percent, label: percent <= 0 ? `Thấp hơn ${Math.abs(percent)}%` : `Cao hơn ${percent}%`, district };
+}
+
+// Benchmark: compare CPL with center area (HCM Q1-Q3 benchmark: 500K-800K)
+function compareWithCenter(currentCpl, centerMin = 500000, centerMax = 800000) {
+  const centerAvg = (centerMin + centerMax) / 2; // 650K
+  if (!currentCpl) return { diff: 0, percent: 0, label: "N/A", centerAvg };
+  const diff = currentCpl - centerAvg;
+  const percent = Math.round((diff / centerAvg) * 100);
+  return { diff, percent, label: percent <= 0 ? `Thấp hơn ${Math.abs(percent)}%` : `Cao hơn ${percent}%`, centerAvg };
+}
+
 // District average CPL lookup — calibrated for base_cpl=250K
 function getDistrictAvgCpl(location) {
   const loc = (location || "").toUpperCase();
@@ -3485,9 +3503,13 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
         const cachedPages = JSON.parse(cached.winning_pages || "[]");
         const hasRealPages = cachedPages.length > 0 && cachedPages[0]?.name && !/^Page \d+$/i.test(cachedPages[0].name);
         const hasPageIdUrls = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl?.includes("view_all_page_id=");
+        // Detect URL-like page names (old format bug)
+        const hasUrlPageNames = cachedPages.some(p => p.name && (/[\w.-]+\.[a-z]{2,}/i.test(p.name) || p.name.startsWith('http')));
         // Detect old CPL formula (base 35K → values < 200K) — force re-scrape
         const isOldCplFormula = cached.estimated_cpl_avg < 200000;
-        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula) {
+        // Detect old adsLibraryUrl format (missing search_type=page)
+        const hasOldUrlFormat = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl && !cachedPages[0].adsLibraryUrl.includes('search_type=page');
+        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula || hasUrlPageNames || hasOldUrlFormat) {
           // Stale cache with old format or old CPL formula — force re-scrape
         } else {
           const districtInfo = getDistrictAvgCpl(cached.location);
@@ -3519,6 +3541,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
           cpl_trend_30d: JSON.parse(cached.cpl_trend_30d || "[]"),
           top_ad_durations: JSON.parse(cached.top_ad_durations || "[]"),
           activity_feed: [{ time: cached.scraped_at, msg: `Dữ liệu từ cache — cập nhật lúc ${cached.scraped_at}` }],
+          region_benchmark: compareWithRegion(cached.estimated_cpl_avg, cached.location),
+          center_benchmark: compareWithCenter(cached.estimated_cpl_avg),
           cached: true,
           scraped_at: cached.scraped_at,
         });
@@ -3543,6 +3567,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
+
+    // Benchmark comparisons
+    const regionBenchmark = compareWithRegion(cplResult.cplAvg, location);
+    const centerBenchmark = compareWithCenter(cplResult.cplAvg);
 
     // Trends
     const adTrend = generateTrend30d(adData.activeAds, 0.08, adData.activeAds > 80 ? "up" : "stable");
@@ -3615,6 +3643,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       project_phase: priceData.projectPhase || "",
       project_type: priceData.projectType || "both",
       project_status: priceData.projectStatus || "",
+      region_benchmark: regionBenchmark,
+      center_benchmark: centerBenchmark,
       api_fetched_ads: adData.apiFetchedAds || 0,
       api_error: adData.apiError || null,
       cached: false,

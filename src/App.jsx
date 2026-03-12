@@ -3114,6 +3114,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       projectPhase: miData.project_phase || "",
       projectType: miData.project_type || "both",
       projectStatus: miData.project_status || "",
+      regionBenchmark: miData.region_benchmark || { percent: 0, label: "N/A", district: "" },
+      centerBenchmark: miData.center_benchmark || { percent: 0, label: "N/A", centerAvg: 650000 },
       trend: (() => { const t = miData.ad_trend_30d || []; if (t.length < 2) return "down"; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return last > first ? "up" : "down"; })(),
       adTrend: miData.ad_trend_30d || [],
       cplTrend: miData.cpl_trend_30d || [],
@@ -3384,23 +3386,23 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {activeProject.projectType === "cao_tang" ? (
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
-                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: emerald }}>{fmtShort(activeProject.highRisePrice)}</div>
+                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "Chưa mở bán"}</div>
                 </div>
               ) : activeProject.projectType === "thap_tang" ? (
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
-                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: amber }}>{fmtShort(activeProject.lowRisePrice)}</div>
+                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "Chưa mở bán"}</div>
                 </div>
               ) : (
                 <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: emerald }}>{fmtShort(activeProject.highRisePrice)}</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "Chưa mở bán"}</div>
                   </div>
                   <div style={{ width: 1, background: darkBorder }} />
                   <div>
                     <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: amber }}>{fmtShort(activeProject.lowRisePrice)}</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "Chưa mở bán"}</div>
                   </div>
                 </div>
               )}
@@ -3458,16 +3460,27 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <BarChart2 size={16} color={neonBlue} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB {activeProject.districtName}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB Khu vực chung</span>
               </div>
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
               </div>
-              <div style={{ textAlign: "center", marginTop: 6 }}>
-                {activeProject.cplAvg < activeProject.districtAvg
-                  ? <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>✓ CPL thấp hơn TB {activeProject.districtName} {((1 - activeProject.cplAvg / activeProject.districtAvg) * 100).toFixed(0)}%</span>
-                  : <span style={{ fontSize: 11, color: rose, fontWeight: 600 }}>⚠ CPL cao hơn TB {activeProject.districtName} {((activeProject.cplAvg / activeProject.districtAvg - 1) * 100).toFixed(0)}%</span>
-                }
+              {/* Benchmark cards */}
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 100, padding: "8px 10px", borderRadius: 10, background: activeProject.regionBenchmark.percent <= 0 ? `${emerald}10` : `${rose}10`, border: `1px solid ${activeProject.regionBenchmark.percent <= 0 ? emerald : rose}25` }}>
+                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với khu vực</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: activeProject.regionBenchmark.percent <= 0 ? emerald : rose }}>
+                    {activeProject.regionBenchmark.percent <= 0 ? "" : "+"}{activeProject.regionBenchmark.percent}%
+                  </div>
+                  <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>TB {activeProject.districtName}: {fmtShort(activeProject.districtAvg)}</div>
+                </div>
+                <div style={{ flex: 1, minWidth: 100, padding: "8px 10px", borderRadius: 10, background: activeProject.centerBenchmark.percent <= 0 ? `${emerald}10` : `${rose}10`, border: `1px solid ${activeProject.centerBenchmark.percent <= 0 ? emerald : rose}25` }}>
+                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với trung tâm</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: activeProject.centerBenchmark.percent <= 0 ? emerald : rose }}>
+                    {activeProject.centerBenchmark.percent <= 0 ? "" : "+"}{activeProject.centerBenchmark.percent}%
+                  </div>
+                  <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>TB Q1-Q3: {fmtShort(activeProject.centerBenchmark.centerAvg)}</div>
+                </div>
               </div>
             </div>
           </div>
