@@ -2876,13 +2876,15 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
       maxDays: info.maxDays,
       platforms: [...info.platforms],
       fbPageUrl: info.pageId ? `https://www.facebook.com/${info.pageId}` : "",
-      adsLibraryUrl: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(name)}&media_type=all`,
+      adsLibraryUrl: info.pageId
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&source=page-transparency-widget&view_all_page_id=${info.pageId}`
+        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(name)}&media_type=all`,
     });
   });
   // Sort by ad count DESC (most ads = most active/effective), then by days DESC
   pagesInfo.sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays);
 
-  return { totalAds: activeAds, activeAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo: pagesInfo.slice(0, 15) };
+  return { totalAds: activeAds, activeAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo };
 }
 
 // Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng
@@ -3069,11 +3071,14 @@ function calcMarketMetrics(adCount, avgLongevity, pricePerM2, cplAvg, districtAv
 function generateTrend30d(baseValue, volatility = 0.1, trend = "stable") {
   const data = [];
   let val = baseValue * (0.8 + Math.random() * 0.2);
+  const now = new Date();
   for (let i = 0; i < 30; i++) {
     const change = val * volatility * (Math.random() - 0.45);
     const trendFactor = trend === "up" ? val * 0.008 : trend === "down" ? -val * 0.005 : 0;
     val = Math.max(baseValue * 0.3, val + change + trendFactor);
-    data.push(Math.round(val));
+    const d = new Date(now);
+    d.setDate(d.getDate() - (29 - i));
+    data.push({ value: Math.round(val), date: d.toISOString().slice(0, 10), label: `${d.getDate()}/${d.getMonth() + 1}` });
   }
   return data;
 }
@@ -3102,8 +3107,7 @@ function getDistrictAvgCpl(location) {
 // Winning pages aggregator - with real page names and links
 function buildWinningPages(pagesInfo) {
   return pagesInfo
-    .sort((a, b) => b.maxDays - a.maxDays || b.adCount - a.adCount)
-    .slice(0, 8)
+    .sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays)
     .map((p) => ({
       name: p.pageName,
       pageId: p.pageId || "",
@@ -3152,6 +3156,9 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
           heat_index: cached.heat_index,
           competitor_count: cached.competitor_count,
           active_ad_count: cached.active_ad_count,
+          unique_ad_count: cached.active_ad_count,
+          total_ad_count: cached.competitor_count,
+          page_count: JSON.parse(cached.winning_pages || "[]").length,
           avg_ad_longevity_days: cached.avg_ad_longevity_days,
           avg_price_m2: cached.avg_price_m2,
           high_rise_price: cached.avg_price_m2,
@@ -3228,7 +3235,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       [projectName, location, adData.totalAds, adData.activeAds, adData.avgLongevity,
        JSON.stringify(adData.topAdDurations.slice(0, 10)), priceData.avgPriceM2, priceData.newListings7d,
        cplResult.cplMin, cplResult.cplMax, cplResult.cplAvg, districtAvgCpl,
-       metrics.heatLevel, metrics.heatIndex, metrics.opportunityScore, adData.activeAds,
+       metrics.heatLevel, metrics.heatIndex, metrics.opportunityScore, adData.totalAds,
        JSON.stringify(winningPages), JSON.stringify(adTrend), JSON.stringify(cplTrend), cplResult.segment]);
 
     res.json({
@@ -3239,10 +3246,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       district_name: districtName,
       market_heat_level: metrics.heatLevel,
       heat_index: metrics.heatIndex,
-      competitor_count: adData.activeAds,
+      competitor_count: adData.totalAds,
       active_ad_count: adData.activeAds,
       unique_ad_count: adData.uniqueAds || adData.activeAds,
       total_ad_count: adData.totalAds,
+      page_count: adData.pagesInfo?.length || 0,
       avg_ad_longevity_days: Math.round(adData.avgLongevity),
       avg_price_m2: priceData.avgPriceM2,
       high_rise_price: priceData.highRisePrice,

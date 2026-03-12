@@ -2737,6 +2737,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
   const [miLoading, setMiLoading] = useState(false);
   const [miError, setMiError] = useState("");
   const [miActivityFeed, setMiActivityFeed] = useState([]);
+  const [miWpPage, setMiWpPage] = useState(1);
+  const WP_PER_PAGE = 12;
 
   const loadAdAccounts = async () => {
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
@@ -3076,6 +3078,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
         const data = await r.json();
         if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
         setMiData(data);
+        setMiWpPage(1);
         setMiActivityFeed(data.activity_feed || []);
         apiFetch(`${API}/market-intel/projects`).then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && setMiProjects(d)).catch(() => {});
       } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
@@ -3105,7 +3108,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
       lowRiseCount: miData.low_rise_count || 0,
       leadPriceSources: miData.lead_price_sources || [],
       opportunityScore: miData.opportunity_score,
-      trend: (miData.ad_trend_30d || []).length > 1 && miData.ad_trend_30d[29] > miData.ad_trend_30d[0] ? "up" : "down",
+      pageCount: miData.page_count || 0,
+      trend: (() => { const t = miData.ad_trend_30d || []; if (t.length < 2) return "down"; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return last > first ? "up" : "down"; })(),
       adTrend: miData.ad_trend_30d || [],
       cplTrend: miData.cpl_trend_30d || [],
       segment: miData.segment,
@@ -3117,17 +3121,25 @@ function CampaignsPage({ leads, projects, isManager = false }) {
     // Mini line chart SVG
     const MiniChart = ({ data, color, width = 280, height = 80, fill = true }) => {
       if (!data || !data.length) return null;
-      const max = Math.max(...data);
-      const min = Math.min(...data);
+      const vals = data.map(d => typeof d === "object" ? d.value : d);
+      const labels = data.map(d => typeof d === "object" ? d.label : null);
+      const hasLabels = labels.some(l => l);
+      const chartH = hasLabels ? height - 18 : height;
+      const max = Math.max(...vals);
+      const min = Math.min(...vals);
       const range = max - min || 1;
-      const points = data.map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * (height - 10) - 5}`).join(" ");
-      const fillPoints = `0,${height} ${points} ${width},${height}`;
+      const points = vals.map((v, i) => `${(i / (vals.length - 1)) * width},${chartH - ((v - min) / range) * (chartH - 10) - 5}`).join(" ");
+      const fillPoints = `0,${chartH} ${points} ${width},${chartH}`;
       return (
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
           {fill && <polygon points={fillPoints} fill={`${color}15`} />}
           <polyline points={points} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-          {/* Last point dot */}
           {(() => { const parts = points.split(" "); const last = parts[parts.length - 1].split(","); return <circle cx={last[0]} cy={last[1]} r="4" fill={color} stroke={darkBg} strokeWidth="2" />; })()}
+          {hasLabels && vals.map((_, i) => {
+            if (i % 5 !== 0 && i !== vals.length - 1) return null;
+            const x = (i / (vals.length - 1)) * width;
+            return <text key={i} x={x} y={height - 2} textAnchor={i === 0 ? "start" : i === vals.length - 1 ? "end" : "middle"} fill="#64748b" fontSize="9">{labels[i]}</text>;
+          })}
         </svg>
       );
     };
@@ -3329,6 +3341,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               </div>
               <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</div>
               <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
+              {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
                 {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
                 <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
@@ -3383,13 +3396,13 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   <TrendingUp size={12} color={emerald} />
-                  <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>+{((activeProject.adTrend[29] - activeProject.adTrend[0]) / activeProject.adTrend[0] * 100).toFixed(0)}%</span>
+                  <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>+{(() => { const t = activeProject.adTrend; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return first ? ((last - first) / first * 100).toFixed(0) : 0; })()}%</span>
                 </div>
               </div>
               <MiniChart data={activeProject.adTrend} color={neonBlue} width={isMobile ? 260 : 320} height={100} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
-                <span>30 ngày trước</span>
-                <span>Hôm nay: {activeProject.adTrend[29]} QC</span>
+                <span>{typeof activeProject.adTrend[0] === "object" ? activeProject.adTrend[0].label : "30 ngày trước"}</span>
+                <span>Hôm nay: {typeof activeProject.adTrend[activeProject.adTrend.length-1] === "object" ? activeProject.adTrend[activeProject.adTrend.length-1].value : activeProject.adTrend[activeProject.adTrend.length-1]} QC</span>
               </div>
             </div>
 
@@ -3421,8 +3434,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               </div>
               <MiniChart data={activeProject.cplTrend} color={emerald} width={isMobile ? 260 : 320} height={100} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
-                <span>{fmtShort(activeProject.cplTrend[0] * 1000)}</span>
-                <span>Hiện tại: {fmtShort(activeProject.cplTrend[29] * 1000)}</span>
+                <span>{fmtShort((typeof activeProject.cplTrend[0] === "object" ? activeProject.cplTrend[0].value : activeProject.cplTrend[0]) * 1000)}</span>
+                <span>Hiện tại: {fmtShort((typeof activeProject.cplTrend[activeProject.cplTrend.length-1] === "object" ? activeProject.cplTrend[activeProject.cplTrend.length-1].value : activeProject.cplTrend[activeProject.cplTrend.length-1]) * 1000)}</span>
               </div>
             </div>
 
@@ -3461,25 +3474,32 @@ function CampaignsPage({ leads, projects, isManager = false }) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Award size={18} color={amber} />
-                <span style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>Winning Pages — Đối thủ nổi bật</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>Tất cả Pages đang chạy QC</span>
               </div>
-              <span style={{ fontSize: 11, color: slate400 }}>Pages chạy QC nhiều nhất & lâu nhất trên Ads Library</span>
+              <span style={{ fontSize: 11, color: slate400 }}>{(activeProject.winningPages || []).length} pages · Sắp xếp theo số lượng QC</span>
             </div>
+            {(() => {
+              const allWp = activeProject.winningPages || [];
+              const totalWpPages = Math.ceil(allWp.length / WP_PER_PAGE);
+              const wpSlice = allWp.slice((miWpPage - 1) * WP_PER_PAGE, miWpPage * WP_PER_PAGE);
+              return (<>
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-              {(activeProject.winningPages || []).map((page, i) => (
-                <div key={i} style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer" }}
+              {wpSlice.map((page, i) => {
+                const globalIdx = (miWpPage - 1) * WP_PER_PAGE + i;
+                return (
+                <div key={globalIdx} style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer" }}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${neonBlue}50`; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,.3)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = darkBorder; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 12, background: `${neonBlue}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0, fontWeight: 700, color: neonBlue }}>{page.name.charAt(0).toUpperCase()}</div>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: globalIdx < 3 ? darkBg : slate400, background: globalIdx === 0 ? "#fbbf24" : globalIdx === 1 ? "#94a3b8" : globalIdx === 2 ? "#cd7f32" : "rgba(71,85,105,0.3)", flexShrink: 0 }}>{globalIdx + 1}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{page.name}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: slate400, marginTop: 2 }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Clock size={10} /> {page.duration} ngày</span>
-                        <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Layers size={10} /> {page.ads} ads</span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Layers size={10} /> {page.ads} QC</span>
                       </div>
                     </div>
-                    {i === 0 && <Crown size={18} color="#fbbf24" style={{ flexShrink: 0 }} />}
+                    {globalIdx === 0 && <Crown size={18} color="#fbbf24" style={{ flexShrink: 0 }} />}
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
                     {page.fbPageUrl && (
@@ -3499,8 +3519,20 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                     ))}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
+            {totalWpPages > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16 }}>
+                <button onClick={() => setMiWpPage(Math.max(1, miWpPage - 1))} disabled={miWpPage <= 1}
+                  style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${darkBorder}`, background: miWpPage <= 1 ? "transparent" : `${neonBlue}15`, color: miWpPage <= 1 ? slate500 : neonBlue, fontSize: 12, fontWeight: 600, cursor: miWpPage <= 1 ? "default" : "pointer" }}>← Trước</button>
+                <span style={{ fontSize: 12, color: slate400 }}>Trang {miWpPage}/{totalWpPages}</span>
+                <button onClick={() => setMiWpPage(Math.min(totalWpPages, miWpPage + 1))} disabled={miWpPage >= totalWpPages}
+                  style={{ padding: "6px 14px", borderRadius: 8, border: `1px solid ${darkBorder}`, background: miWpPage >= totalWpPages ? "transparent" : `${neonBlue}15`, color: miWpPage >= totalWpPages ? slate500 : neonBlue, fontSize: 12, fontWeight: 600, cursor: miWpPage >= totalWpPages ? "default" : "pointer" }}>Sau →</button>
+              </div>
+            )}
+              </>);
+            })()}
           </div>
 
           {/* Lead Price Sources */}
