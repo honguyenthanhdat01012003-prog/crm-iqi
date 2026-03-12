@@ -1169,7 +1169,15 @@ if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
 
-const db = await initDb();
+let db;
+let dbInitError = null;
+try {
+  db = await initDb();
+  console.log("[DB] Connected successfully");
+} catch (err) {
+  dbInitError = err.message || "Unknown DB error";
+  console.error("[DB] Init failed:", dbInitError);
+}
 
 /* ---------- Auth middleware ---------- */
 function requireAuth(req, res, next) {
@@ -1578,7 +1586,13 @@ app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
 
 /* ---------- Public health ---------- */
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, dbPath: DB_PATH });
+  res.json({
+    ok: !dbInitError,
+    dbReady: !!db,
+    dbError: dbInitError,
+    tursoConfigured: !!process.env.TURSO_URL,
+    nodeVersion: process.version,
+  });
 });
 
 app.get("/api/config", requireAuth, async (_req, res) => {
