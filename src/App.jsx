@@ -3096,6 +3096,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
       districtAvg: miData.district_avg_cpl,
       districtName: miData.district_name || "Khu vực",
       competitors: miData.competitor_count,
+      uniqueAds: miData.unique_ad_count || miData.competitor_count,
+      totalAds: miData.total_ad_count || miData.competitor_count,
       priceM2: miData.avg_price_m2,
       highRisePrice: miData.high_rise_price || miData.avg_price_m2,
       lowRisePrice: miData.low_rise_price || Math.round((miData.avg_price_m2 || 0) * 1.8),
@@ -3326,7 +3328,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Mật độ cạnh tranh</span>
               </div>
               <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors}</div>
-              <div style={{ fontSize: 11, color: slate400 }}>QC đang chạy trên Ads Library</div>
+              <div style={{ fontSize: 11, color: slate400 }}>{activeProject.uniqueAds !== activeProject.totalAds ? `${activeProject.uniqueAds} mẫu duy nhất · ${activeProject.totalAds} tổng` : "QC đang chạy trên Ads Library"}</div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
                 {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
                 <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
