@@ -10,7 +10,7 @@ import {
   Camera, Share2, Shuffle, Link, ClipboardList, Pause, Play, ChevronDown, Info,
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
-  FolderOpen, ArrowLeft
+  FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair
 } from "lucide-react";
 
 const API = "/api";
@@ -2990,11 +2990,371 @@ function CampaignsPage({ leads, projects, isManager = false }) {
   // Tabs
   const tabBar = (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16, flexWrap: "wrap" }}>
+      {tabBtn("market_intel", "Phân tích thị trường", <Radar size={15} />)}
       {tabBtn("leads", "Lead theo chiến dịch", <Target size={15} />)}
       {tabBtn("fb_ads", "Hiệu quả quảng cáo FB", <Activity size={15} />)}
       {!isManager && tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
     </div>
   );
+
+  // === Market Intelligence Tab ===
+  if (tab === "market_intel") {
+    // Dark mode styles for this tab
+    const darkBg = "#0f172a";
+    const darkCard = "rgba(30,41,59,0.8)";
+    const darkBorder = "rgba(71,85,105,0.5)";
+    const neonBlue = "#3b82f6";
+    const emerald = "#10b981";
+    const amber = "#f59e0b";
+    const rose = "#f43f5e";
+    const slate300 = "#cbd5e1";
+    const slate400 = "#94a3b8";
+    const slate500 = "#64748b";
+    const glassCard = { background: "rgba(30,41,59,0.7)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: `1px solid ${darkBorder}`, borderRadius: 16, padding: isMobile ? 16 : 20, transition: "transform .2s, box-shadow .2s" };
+    const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
+
+    // Sample Vietnam real estate projects data
+    const sampleProjects = [
+      { id: 1, name: "Masterise Cosmo", location: "TP. Thủ Đức, TP.HCM", heatIndex: 87, cplMin: 85000, cplMax: 180000, cplAvg: 125000, districtAvg: 155000, competitors: 142, priceM2: 95000000, opportunityScore: 82, trend: "up", adTrend: [45,52,58,61,55,63,70,68,72,78,80,82,75,79,85,88,90,87,92,95,98,102,105,100,108,112,115,118,120,125], cplTrend: [150,145,140,138,135,130,128,125,122,120,125,128,130,125,120,118,115,120,122,125,130,128,125,120,118,115,112,110,108,105] },
+      { id: 2, name: "Global City", location: "An Phú, TP. Thủ Đức", heatIndex: 92, cplMin: 65000, cplMax: 150000, cplAvg: 95000, districtAvg: 155000, competitors: 198, priceM2: 120000000, opportunityScore: 75, trend: "up", adTrend: [80,85,90,88,92,95,98,102,105,110,108,115,118,120,122,125,128,130,135,138,140,142,145,148,150,155,158,160,165,170], cplTrend: [120,118,115,112,110,108,105,100,98,95,92,90,88,85,82,80,85,88,90,92,95,98,100,95,92,90,88,85,82,80] },
+      { id: 3, name: "Vinhomes Grand Park", location: "Long Thạnh Mỹ, TP. Thủ Đức", heatIndex: 78, cplMin: 50000, cplMax: 120000, cplAvg: 78000, districtAvg: 155000, competitors: 95, priceM2: 65000000, opportunityScore: 88, trend: "up", adTrend: [30,32,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80,82,85,88,90,92,95,98,100,102], cplTrend: [100,98,95,92,90,88,85,82,80,78,76,74,72,70,68,70,72,74,76,78,80,78,76,74,72,70,68,66,64,62] },
+      { id: 4, name: "Eaton Park", location: "An Phú, Quận 2, TP.HCM", heatIndex: 85, cplMin: 90000, cplMax: 200000, cplAvg: 140000, districtAvg: 155000, competitors: 88, priceM2: 110000000, opportunityScore: 70, trend: "down", adTrend: [60,62,58,55,52,50,48,45,42,40,38,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80], cplTrend: [180,175,170,168,165,160,158,155,150,148,145,142,140,138,135,140,142,145,148,150,148,145,142,140,138,135,132,130,128,125] },
+      { id: 5, name: "The Opus One", location: "Quận 3, TP.HCM", heatIndex: 71, cplMin: 120000, cplMax: 280000, cplAvg: 195000, districtAvg: 180000, competitors: 52, priceM2: 180000000, opportunityScore: 55, trend: "down", adTrend: [25,28,30,32,35,33,30,28,25,22,20,22,25,28,30,32,35,38,40,42,45,48,50,52,55,52,50,48,45,42], cplTrend: [250,245,240,235,230,225,220,215,210,205,200,195,190,195,200,205,210,205,200,195,190,185,180,185,190,195,200,195,190,185] },
+      { id: 6, name: "Lumière Boulevard", location: "Quận 9, TP.HCM", heatIndex: 68, cplMin: 45000, cplMax: 95000, cplAvg: 65000, districtAvg: 90000, competitors: 67, priceM2: 55000000, opportunityScore: 91, trend: "up", adTrend: [20,22,25,28,30,32,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80,82,85,88,90,92], cplTrend: [90,88,85,82,80,78,75,72,70,68,65,62,60,58,55,58,60,62,65,68,70,68,65,62,60,58,55,52,50,48] },
+    ];
+
+    // Winning pages sample data
+    const winningPages = [
+      { name: "BĐS Thủ Đức Official", duration: 180, ads: 45, style: ["Video tour", "Bảng giá", "Ưu đãi"], avatar: "🏢" },
+      { name: "SaleReal - Chuyên gia BĐS", duration: 150, ads: 38, style: ["Testimonial", "So sánh", "Livesale"], avatar: "🏠" },
+      { name: "Đầu tư BĐS Sài Gòn", duration: 120, ads: 32, style: ["Infographic", "Phân tích", "News"], avatar: "📊" },
+      { name: "Nhà Đẹp Quận 2", duration: 95, ads: 28, style: ["Hình thực tế", "Review", "Giá tốt"], avatar: "🏡" },
+      { name: "Capital House Group", duration: 88, ads: 25, style: ["Brand", "Concept", "Tiến độ"], avatar: "🏗️" },
+    ];
+
+    const [miSearch, setMiSearch] = useState("");
+    const [miSelected, setMiSelected] = useState(null);
+    const [miShowSuggest, setMiShowSuggest] = useState(false);
+    const miSearchRef = useRef(null);
+
+    const filteredSuggestions = sampleProjects.filter(p => p.name.toLowerCase().includes(miSearch.toLowerCase()) || p.location.toLowerCase().includes(miSearch.toLowerCase()));
+    const activeProject = miSelected || sampleProjects[0];
+
+    // Mini line chart SVG
+    const MiniChart = ({ data, color, width = 280, height = 80, fill = true }) => {
+      if (!data || !data.length) return null;
+      const max = Math.max(...data);
+      const min = Math.min(...data);
+      const range = max - min || 1;
+      const points = data.map((v, i) => `${(i / (data.length - 1)) * width},${height - ((v - min) / range) * (height - 10) - 5}`).join(" ");
+      const fillPoints = `0,${height} ${points} ${width},${height}`;
+      return (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
+          {fill && <polygon points={fillPoints} fill={`${color}15`} />}
+          <polyline points={points} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+          {/* Last point dot */}
+          {(() => { const parts = points.split(" "); const last = parts[parts.length - 1].split(","); return <circle cx={last[0]} cy={last[1]} r="4" fill={color} stroke={darkBg} strokeWidth="2" />; })()}
+        </svg>
+      );
+    };
+
+    // Bar chart for CPL comparison
+    const CplCompareChart = ({ projectCpl, districtAvg, width = 280, height = 120 }) => {
+      const maxVal = Math.max(projectCpl, districtAvg) * 1.2;
+      const barW = 60;
+      const gap = 40;
+      const startX = (width - barW * 2 - gap) / 2;
+      const h1 = (projectCpl / maxVal) * (height - 30);
+      const h2 = (districtAvg / maxVal) * (height - 30);
+      const fmt = (n) => (n / 1000).toFixed(0) + "K";
+      return (
+        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: "block" }}>
+          <defs>
+            <linearGradient id="barGrad1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={neonBlue} /><stop offset="100%" stopColor={neonBlue} stopOpacity="0.4" /></linearGradient>
+            <linearGradient id="barGrad2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={slate500} /><stop offset="100%" stopColor={slate500} stopOpacity="0.4" /></linearGradient>
+          </defs>
+          <rect x={startX} y={height - h1 - 20} width={barW} height={h1} rx="6" fill="url(#barGrad1)" />
+          <text x={startX + barW / 2} y={height - h1 - 25} textAnchor="middle" fill={neonBlue} fontSize="11" fontWeight="700">{fmt(projectCpl)}</text>
+          <text x={startX + barW / 2} y={height - 4} textAnchor="middle" fill={slate400} fontSize="10">Dự án</text>
+          <rect x={startX + barW + gap} y={height - h2 - 20} width={barW} height={h2} rx="6" fill="url(#barGrad2)" />
+          <text x={startX + barW + gap + barW / 2} y={height - h2 - 25} textAnchor="middle" fill={slate400} fontSize="11" fontWeight="700">{fmt(districtAvg)}</text>
+          <text x={startX + barW + gap + barW / 2} y={height - 4} textAnchor="middle" fill={slate400} fontSize="10">TB Quận</text>
+        </svg>
+      );
+    };
+
+    // Heat index color
+    const heatColor = (v) => v >= 80 ? "#ef4444" : v >= 60 ? amber : v >= 40 ? neonBlue : slate500;
+    const heatLabel = (v) => v >= 80 ? "Rất nóng" : v >= 60 ? "Nóng" : v >= 40 ? "Ấm" : "Lạnh";
+    const opportunityColor = (v) => v >= 80 ? emerald : v >= 60 ? neonBlue : v >= 40 ? amber : rose;
+
+    const fmtVND = (n) => n != null ? Number(n).toLocaleString("vi-VN") + " ₫" : "—";
+    const fmtShort = (n) => { if (n >= 1e9) return (n / 1e9).toFixed(1) + " tỷ"; if (n >= 1e6) return (n / 1e6).toFixed(1) + " tr"; if (n >= 1e3) return (n / 1e3).toFixed(0) + "K"; return String(n); };
+
+    return (
+      <div style={{ fontFamily: "'Montserrat', 'Inter', system-ui, sans-serif" }}>
+        {tabBar}
+        <div style={{ background: `linear-gradient(135deg, ${darkBg} 0%, #1e293b 50%, #0f172a 100%)`, borderRadius: 20, padding: isMobile ? 16 : 28, minHeight: 600 }}>
+
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <Radar size={24} color={neonBlue} />
+              <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 24, fontWeight: 800, background: `linear-gradient(135deg, ${neonBlue}, ${emerald})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Real Estate Market Intelligence</h2>
+            </div>
+            <p style={{ margin: 0, fontSize: 13, color: slate400, letterSpacing: "0.03em" }}>Phân tích thị trường quảng cáo bất động sản · Powered by AI</p>
+          </div>
+
+          {/* Search Bar */}
+          <div style={{ position: "relative", maxWidth: 600, margin: "0 auto 28px", zIndex: 20 }} ref={miSearchRef}>
+            <div style={{ position: "relative" }}>
+              <Search size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: slate400 }} />
+              <input
+                type="text" placeholder="Tìm dự án... (VD: Masterise Cosmo, Global City)"
+                value={miSearch}
+                onChange={(e) => { setMiSearch(e.target.value); setMiShowSuggest(true); }}
+                onFocus={() => setMiShowSuggest(true)}
+                style={{
+                  width: "100%", padding: "14px 16px 14px 46px", fontSize: 14, fontWeight: 500,
+                  background: "rgba(30,41,59,0.9)", border: `1px solid ${neonBlue}40`, borderRadius: 14,
+                  color: "#f1f5f9", outline: "none", backdropFilter: "blur(8px)",
+                  boxShadow: `0 0 20px ${neonBlue}15`, transition: "all .3s",
+                  boxSizing: "border-box",
+                }}
+                onMouseEnter={(e) => { e.target.style.borderColor = neonBlue; e.target.style.boxShadow = `0 0 30px ${neonBlue}25`; }}
+                onMouseLeave={(e) => { e.target.style.borderColor = `${neonBlue}40`; e.target.style.boxShadow = `0 0 20px ${neonBlue}15`; }}
+              />
+            </div>
+            {miShowSuggest && miSearch && filteredSuggestions.length > 0 && (
+              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 6, background: "rgba(15,23,42,0.98)", border: `1px solid ${darkBorder}`, borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,.5)", overflow: "hidden", backdropFilter: "blur(20px)" }}>
+                {filteredSuggestions.map(p => (
+                  <div key={p.id} onClick={() => { setMiSelected(p); setMiSearch(p.name); setMiShowSuggest(false); }}
+                    style={{ padding: "12px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", transition: "background .15s", borderBottom: `1px solid ${darkBorder}` }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(59,130,246,0.1)"} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "#f1f5f9" }}>{p.name}</div>
+                      <div style={{ fontSize: 11, color: slate400, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}><MapPin size={10} /> {p.location}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: heatColor(p.heatIndex), fontWeight: 700 }}>{p.heatIndex}</span>
+                      <Flame size={14} color={heatColor(p.heatIndex)} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Project Snapshot Header */}
+          <div style={{ ...glassCard, marginBottom: 20, display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 16, flexWrap: "wrap", justifyContent: "space-between" }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <Building2 size={20} color={neonBlue} />
+                <h3 style={{ margin: 0, fontSize: isMobile ? 18 : 22, fontWeight: 800, color: "#f1f5f9" }}>{activeProject.name}</h3>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
+                <MapPin size={14} /> {activeProject.location}
+              </div>
+            </div>
+            <div style={{ textAlign: "center", minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>Market Heat Index</div>
+              <div style={{ position: "relative", width: 80, height: 80, margin: "0 auto" }}>
+                <svg width="80" height="80" viewBox="0 0 80 80">
+                  <circle cx="40" cy="40" r="34" fill="none" stroke={`${heatColor(activeProject.heatIndex)}20`} strokeWidth="6" />
+                  <circle cx="40" cy="40" r="34" fill="none" stroke={heatColor(activeProject.heatIndex)} strokeWidth="6"
+                    strokeDasharray={`${(activeProject.heatIndex / 100) * 213.6} 213.6`}
+                    strokeLinecap="round" transform="rotate(-90 40 40)" style={{ transition: "stroke-dasharray 1s ease" }} />
+                </svg>
+                <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", textAlign: "center" }}>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: heatColor(activeProject.heatIndex), lineHeight: 1 }}>{activeProject.heatIndex}</div>
+                  <div style={{ fontSize: 8, color: slate400, fontWeight: 600, marginTop: 1 }}>{heatLabel(activeProject.heatIndex)}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Golden Metric Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+            {/* CPL Card */}
+            <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: `${neonBlue}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><DollarSign size={16} color={neonBlue} /></div>
+                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>CPL Ước tính</span>
+              </div>
+              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: neonBlue, marginBottom: 4 }}>{fmtShort(activeProject.cplAvg)}</div>
+              <div style={{ fontSize: 11, color: slate400 }}>
+                <span style={{ color: emerald }}>{fmtShort(activeProject.cplMin)}</span> — <span style={{ color: rose }}>{fmtShort(activeProject.cplMax)}</span>
+              </div>
+              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>Min — Max range</div>
+            </div>
+
+            {/* Competition Density */}
+            <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: `${amber}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Crosshair size={16} color={amber} /></div>
+                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Mật độ cạnh tranh</span>
+              </div>
+              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors}</div>
+              <div style={{ fontSize: 11, color: slate400 }}>QC đang chạy trên Ads Library</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+                {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
+                <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
+              </div>
+            </div>
+
+            {/* Property Price */}
+            <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: `${emerald}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Building size={16} color={emerald} /></div>
+                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Giá TB/m²</span>
+              </div>
+              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: emerald, marginBottom: 4 }}>{fmtShort(activeProject.priceM2)}</div>
+              <div style={{ fontSize: 11, color: slate400 }}>Từ sàn giao dịch BĐS</div>
+              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>Batdongsan · Chotot · Homedy</div>
+            </div>
+
+            {/* Opportunity Score */}
+            <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 10, background: `${opportunityColor(activeProject.opportunityScore)}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Sparkles size={16} color={opportunityColor(activeProject.opportunityScore)} /></div>
+                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Opportunity Score</span>
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: opportunityColor(activeProject.opportunityScore) }}>{activeProject.opportunityScore}</span>
+                <span style={{ fontSize: 12, color: slate400 }}>/100</span>
+              </div>
+              <div style={{ width: "100%", height: 6, borderRadius: 3, background: "rgba(71,85,105,0.3)", marginTop: 8 }}>
+                <div style={{ width: `${activeProject.opportunityScore}%`, height: "100%", borderRadius: 3, background: `linear-gradient(90deg, ${opportunityColor(activeProject.opportunityScore)}, ${opportunityColor(activeProject.opportunityScore)}80)`, transition: "width .8s ease" }} />
+              </div>
+              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>AI-calculated score</div>
+            </div>
+          </div>
+
+          {/* Charts Section */}
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
+            {/* Ad Count Trend */}
+            <div style={glassCard}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <BarChart3 size={16} color={neonBlue} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Số lượng QC — 30 ngày</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <TrendingUp size={12} color={emerald} />
+                  <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>+{((activeProject.adTrend[29] - activeProject.adTrend[0]) / activeProject.adTrend[0] * 100).toFixed(0)}%</span>
+                </div>
+              </div>
+              <MiniChart data={activeProject.adTrend} color={neonBlue} width={isMobile ? 260 : 320} height={100} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
+                <span>30 ngày trước</span>
+                <span>Hôm nay: {activeProject.adTrend[29]} QC</span>
+              </div>
+            </div>
+
+            {/* CPL Comparison */}
+            <div style={glassCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+                <BarChart2 size={16} color={neonBlue} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL với trung bình Quận</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} width={isMobile ? 260 : 320} height={130} />
+              </div>
+              <div style={{ textAlign: "center", marginTop: 6 }}>
+                {activeProject.cplAvg < activeProject.districtAvg
+                  ? <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>✓ CPL thấp hơn TB Quận {((1 - activeProject.cplAvg / activeProject.districtAvg) * 100).toFixed(0)}%</span>
+                  : <span style={{ fontSize: 11, color: rose, fontWeight: 600 }}>⚠ CPL cao hơn TB Quận {((activeProject.cplAvg / activeProject.districtAvg - 1) * 100).toFixed(0)}%</span>
+                }
+              </div>
+            </div>
+          </div>
+
+          {/* CPL Trend + All Projects Overview */}
+          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
+            {/* CPL Trend */}
+            <div style={glassCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+                <TrendingDown size={16} color={emerald} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Xu hướng CPL — 30 ngày</span>
+              </div>
+              <MiniChart data={activeProject.cplTrend} color={emerald} width={isMobile ? 260 : 320} height={100} />
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
+                <span>{fmtShort(activeProject.cplTrend[0] * 1000)}</span>
+                <span>Hiện tại: {fmtShort(activeProject.cplTrend[29] * 1000)}</span>
+              </div>
+            </div>
+
+            {/* All Projects Ranking */}
+            <div style={glassCard}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+                <Crown size={16} color={amber} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng dự án</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[...sampleProjects].sort((a, b) => b.opportunityScore - a.opportunityScore).map((p, i) => (
+                  <div key={p.id} onClick={() => { setMiSelected(p); setMiSearch(p.name); }}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer", background: p.id === activeProject.id ? `${neonBlue}15` : "transparent", border: p.id === activeProject.id ? `1px solid ${neonBlue}30` : "1px solid transparent", transition: "all .2s" }}
+                    onMouseEnter={(e) => { if (p.id !== activeProject.id) e.currentTarget.style.background = "rgba(59,130,246,0.05)"; }}
+                    onMouseLeave={(e) => { if (p.id !== activeProject.id) e.currentTarget.style.background = "transparent"; }}>
+                    <span style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: i < 3 ? darkBg : slate400, background: i === 0 ? "#fbbf24" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "rgba(71,85,105,0.3)", flexShrink: 0 }}>{i + 1}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                      <div style={{ fontSize: 10, color: slate500 }}>{p.location}</div>
+                    </div>
+                    <div style={{ textAlign: "right", flexShrink: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: opportunityColor(p.opportunityScore) }}>{p.opportunityScore}</div>
+                      <div style={{ fontSize: 9, color: slate500 }}>Score</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Competitor Insight - Winning Pages */}
+          <div style={glassCard}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Award size={18} color={amber} />
+                <span style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>Winning Pages — Đối thủ nổi bật</span>
+              </div>
+              <span style={{ fontSize: 11, color: slate400 }}>Pages có QC chạy lâu nhất trên Ads Library</span>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+              {winningPages.map((page, i) => (
+                <div key={i} style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${neonBlue}50`; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,.3)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = darkBorder; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: `${neonBlue}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{page.avatar}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{page.name}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: slate400, marginTop: 2 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Clock size={10} /> {page.duration} ngày</span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 3 }}><Layers size={10} /> {page.ads} ads</span>
+                      </div>
+                    </div>
+                    {i === 0 && <Crown size={18} color="#fbbf24" style={{ flexShrink: 0 }} />}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {page.style.map((tag, ti) => (
+                      <span key={ti} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${[neonBlue, emerald, amber, rose][ti % 4]}15`, color: [neonBlue, emerald, amber, rose][ti % 4], fontWeight: 600 }}>{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Footer note */}
+          <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: slate500 }}>
+            <Info size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
+            Dữ liệu được tổng hợp từ Facebook Ads Library, Batdongsan.com.vn và các nguồn công khai · Cập nhật mỗi 24h
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // === FB Ads Tab ===
   if (tab === "fb_ads") {
