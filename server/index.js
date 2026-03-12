@@ -2774,8 +2774,8 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
       const res = await fetch(apiUrl, { signal: AbortSignal.timeout(15000) });
       const data = await res.json();
       if (data.error) {
-        console.log(`[MI] ${label} error: ${data.error.message} (code: ${data.error.code})`);
-        apiError = data.error.message;
+        console.log(`[MI] ${label} error: ${data.error.message} (code: ${data.error.code}, subcode: ${data.error.error_subcode}, type: ${data.error.type})`);
+        apiError = `${data.error.message} [code:${data.error.code}]`;
         return false;
       }
       if (!data.data || data.data.length === 0) {
@@ -2813,7 +2813,7 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   for (const acct of adAccountRows) {
     if (!acct.access_token || apiFetchedAds > 0) continue;
     const token = acct.access_token;
-    const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
+    const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_type=ALL&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
 
     const formats = [
       { label: "unencoded-json", param: `ad_reached_countries=["VN"]` },
@@ -3111,7 +3111,7 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
     const results = [];
     for (const acct of adAccounts) {
       const token = acct.access_token;
-      const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
+      const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_type=ALL&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
       const formats = [
         { label: "unencoded-json", url: `${base}&ad_reached_countries=["VN"]` },
         { label: "encoded-json", url: `${base}&ad_reached_countries=${encodeURIComponent('["VN"]')}` },
@@ -3128,7 +3128,7 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
             token_prefix: token.substring(0, 20) + "...",
             format: fmt.label,
             status: r.status,
-            error: d.error ? { message: d.error.message, type: d.error.type, code: d.error.code, fbtrace_id: d.error.fbtrace_id } : null,
+            error: d.error ? { message: d.error.message, type: d.error.type, code: d.error.code, error_subcode: d.error.error_subcode, fbtrace_id: d.error.fbtrace_id } : null,
             count: d.data?.length || 0,
             sample: d.data?.[0] ? { page_name: d.data[0].page_name, page_id: d.data[0].page_id } : null,
             has_paging: !!d.paging,
