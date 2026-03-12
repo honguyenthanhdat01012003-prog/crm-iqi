@@ -2951,17 +2951,15 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (!m) return;
             const pid = m[1];
             let name = '';
-            // Walk up to find the ad card container
             const card = link.closest('[role="article"]') || link.closest('div[class]');
             if (card) {
-              // Strategy 1: Find page name from links to facebook.com/PageName
+              // Try all text sources in the card to find the page name
               const allLinks = card.querySelectorAll('a[href*="facebook.com/"]');
               for (const a of allLinks) {
                 if (a.href.includes('/ads/library/') || a.href.includes('/ad_library/')) continue;
                 const txt = a.textContent?.trim();
                 if (isValidName(txt)) { name = txt; break; }
               }
-              // Strategy 2: Heading elements
               if (!name) {
                 for (const sel of ['h3', 'h4', 'h5', 'strong', '[dir="auto"] span', 'span[dir="auto"]']) {
                   const el = card.querySelector(sel);
@@ -2969,29 +2967,13 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
                   if (isValidName(txt) && txt.length < 60) { name = txt; break; }
                 }
               }
-              // Strategy 3: First non-trivial text in the card header area
-              if (!name) {
-                const allSpans = card.querySelectorAll('span');
-                for (const sp of allSpans) {
-                  const txt = sp.textContent?.trim();
-                  if (isValidName(txt) && txt.length > 2 && txt.length < 50 && !txt.includes('·') && !txt.includes('quảng cáo') && !txt.includes('ad')) {
-                    name = txt;
-                    break;
-                  }
-                }
-              }
-              // Strategy 4: The "See all" link text itself may contain the page name in aria-label
-              const seeAll = link.getAttribute('aria-label') || link.textContent?.trim();
-              if (!name && seeAll && isValidName(seeAll) && !seeAll.includes('See all') && !seeAll.includes('Xem tất cả')) {
-                name = seeAll;
-              }
             }
             if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
             else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
             pages[pid].count++;
           });
 
-          // Method 2: Extract from ad cards by sponsor links
+          // Method 2: Extract from ad cards by sponsor links (for cards without view_all_page_id)
           document.querySelectorAll('[role="article"]').forEach(card => {
             if (card.querySelector('a[href*="view_all_page_id="]')) return;
             const sponsorLinks = card.querySelectorAll('a');
@@ -3011,37 +2993,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             }
           });
 
-          // Method 3: Broader scan — find ALL facebook.com/PageSlug links on the page
-          // (catches pages outside [role="article"] containers)
-          document.querySelectorAll('a[href*="facebook.com/"]').forEach(a => {
-            const href = a.href || '';
-            if (href.includes('/ads/library/') || href.includes('/ad_library/')) return;
-            // Match facebook.com/PageSlug (not subpaths like /PageSlug/photos)
-            const m = href.match(/facebook\.com\/([\w.]{2,50})(?:\/?$|\?)/);
-            if (!m || !isValidSlug(m[1])) return;
-            const slug = m[1];
-            if (pages[slug]) return; // already captured
-            const txt = a.textContent?.trim();
-            if (isValidName(txt)) {
-              pages[slug] = { pageName: txt, pageId: slug, count: 1 };
-            }
-          });
-
-          // Debug stats for server logs
-          const stats = {
-            totalLinks: document.querySelectorAll('a').length,
-            viewAllLinks: document.querySelectorAll('a[href*="view_all_page_id="]').length,
-            articleCards: document.querySelectorAll('[role="article"]').length,
-            fbLinks: document.querySelectorAll('a[href*="facebook.com/"]').length,
-            pagesFound: Object.keys(pages).length,
-          };
-          console.log('[MI-DOM] Extraction stats:', JSON.stringify(stats));
-
-          return { pages: Object.values(pages), stats };
+          return Object.values(pages);
         });
 
-        console.log(`[MI] DOM extraction stats:`, JSON.stringify(extractedPages.stats));
-        const pagesList = extractedPages.pages || [];
+        const pagesList = extractedPages || [];
 
         // Store pages keyed by pageId
         pagesList.forEach(p => {
@@ -3064,7 +3019,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           if (!pageSet.has(p.pageId)) {
             pageSet.set(p.pageId, { pageName: p.pageName || p.pageId, pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
           } else if (p.pageName && p.pageName !== p.pageId) {
-            // Update name if we found a real name from HTML patterns
             const existing = pageSet.get(p.pageId);
             if (!existing.pageName || existing.pageName === existing.pageId || /^\d+$/.test(existing.pageName)) {
               existing.pageName = p.pageName;
@@ -3072,32 +3026,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
         });
 
-        // Post-process: Try to resolve numeric page names from embedded JSON data in HTML
-        // Facebook embeds page names in various JSON structures
-        const pageNamePatterns = [
-          // "page_id":"123","name":"Page Name"
-          /"page_id"\s*:\s*"?(\d+)"?\s*[,}].*?"name"\s*:\s*"([^"]{2,80})"/g,
-          // "name":"Page Name"..."page_id":"123"
-          /"name"\s*:\s*"([^"]{2,80})".*?"page_id"\s*:\s*"?(\d+)"?/g,
-          // "id":"123","name":"Page Name"
-          /"id"\s*:\s*"?(\d+)"?\s*,\s*"name"\s*:\s*"([^"]{2,80})"/g,
-        ];
-        for (const pat of pageNamePatterns) {
-          let nameMatch;
-          while ((nameMatch = pat.exec(html)) !== null) {
-            // Pattern 1 & 3: group 1 = id, group 2 = name
-            // Pattern 2: group 1 = name, group 2 = id
-            const pid = /^\d+$/.test(nameMatch[1]) ? nameMatch[1] : nameMatch[2];
-            const pname = /^\d+$/.test(nameMatch[1]) ? nameMatch[2] : nameMatch[1];
-            if (pageSet.has(pid)) {
-              const existing = pageSet.get(pid);
-              if (!existing.pageName || existing.pageName === pid || /^\d+$/.test(existing.pageName)) {
-                existing.pageName = pname;
-                console.log(`[MI] Resolved page name from HTML: ${pid} → "${pname}"`);
-              }
-            }
-          }
-        }
+        console.log(`[MI] Pages found so far: ${pageSet.size}`);
 
         // Check for "no results" message
         if (bodyText.includes("Không có quảng cáo") || bodyText.includes("No ads")) {
@@ -3601,64 +3530,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     const projectName = (req.query.project || "").trim();
     if (!projectName) return res.status(400).json({ error: "Missing project name" });
     const location = (req.query.location || "").trim();
-    const forceRefresh = req.query.refresh === "1";
 
-    // Check cache (valid for 24h)
-    if (!forceRefresh) {
-      const cached = await get(db, "SELECT * FROM market_intel_cache WHERE project_name = ? AND scraped_at > datetime('now', '-24 hours')", [projectName]);
-      if (cached) {
-        // Check if cached winning pages have real names and proper view_all_page_id URLs
-        const cachedPages = JSON.parse(cached.winning_pages || "[]");
-        const hasRealPages = cachedPages.length > 0 && cachedPages[0]?.name && !/^Page \d+$/i.test(cachedPages[0].name);
-        const hasPageIdUrls = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl?.includes("view_all_page_id=");
-        // Detect URL-like page names (old format bug)
-        const hasUrlPageNames = cachedPages.some(p => p.name && (/[\w.-]+\.[a-z]{2,}/i.test(p.name) || p.name.startsWith('http')));
-        // Detect old CPL formula (base 35K → values < 200K) — force re-scrape
-        const isOldCplFormula = cached.estimated_cpl_avg < 200000;
-        // Detect old adsLibraryUrl format (missing search_type=page or using keyword_unordered for page URLs)
-        const hasOldUrlFormat = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl && (!cachedPages[0].adsLibraryUrl.includes('search_type=page') || cachedPages.some(p => p.adsLibraryUrl?.includes('keyword_unordered')));
-        // Detect pages with numeric-only names (unresolved page IDs shown as names)
-        const hasNumericNames = cachedPages.some(p => p.name && /^\d+$/.test(p.name));
-        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula || hasUrlPageNames || hasOldUrlFormat || hasNumericNames) {
-          // Stale cache with old format or old CPL formula — force re-scrape
-        } else {
-          const districtInfo = getDistrictAvgCpl(cached.location);
-        return res.json({
-          project_name: cached.project_name,
-          location: cached.location,
-          estimated_cpl_range: { min: cached.estimated_cpl_min, max: cached.estimated_cpl_max, avg: cached.estimated_cpl_avg },
-          district_avg_cpl: cached.district_avg_cpl,
-          district_name: districtInfo.district,
-          market_heat_level: cached.market_heat_level,
-          heat_index: cached.heat_index,
-          competitor_count: cached.competitor_count,
-          active_ad_count: cached.active_ad_count,
-          unique_ad_count: cached.active_ad_count,
-          total_ad_count: cached.competitor_count,
-          page_count: JSON.parse(cached.winning_pages || "[]").length,
-          avg_ad_longevity_days: cached.avg_ad_longevity_days,
-          avg_price_m2: cached.avg_price_m2,
-          high_rise_price: cached.avg_price_m2,
-          low_rise_price: Math.round(cached.avg_price_m2 * 1.8),
-          high_rise_count: 0,
-          low_rise_count: 0,
-          new_listings_7d: cached.new_listings_7d,
-          lead_price_sources: [],
-          opportunity_score: cached.opportunity_score,
-          segment: cached.segment,
-          winning_pages: JSON.parse(cached.winning_pages || "[]"),
-          ad_trend_30d: JSON.parse(cached.ad_trend_30d || "[]"),
-          cpl_trend_30d: JSON.parse(cached.cpl_trend_30d || "[]"),
-          top_ad_durations: JSON.parse(cached.top_ad_durations || "[]"),
-          activity_feed: [{ time: cached.scraped_at, msg: `Dữ liệu từ cache — cập nhật lúc ${cached.scraped_at}` }],
-          region_benchmark: compareWithRegion(cached.estimated_cpl_avg, cached.location),
-          center_benchmark: compareWithCenter(cached.estimated_cpl_avg),
-          cached: true,
-          scraped_at: cached.scraped_at,
-        });
-        } // end hasRealPages
-      }
-    }
+    // Always scrape fresh — no cache
 
     // Fetch ad accounts for API access
     const adAccounts = await all(db, "SELECT account_id, access_token FROM fb_ad_accounts WHERE is_active = 1 AND access_token != ''");
@@ -3701,25 +3574,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       });
     }
 
-    // Store aggregate data in cache (never raw lead info or personal ad account IDs)
-    await run(db, `INSERT INTO market_intel_cache (project_name, location, ad_count, active_ad_count, avg_ad_longevity_days, top_ad_durations, avg_price_m2, new_listings_7d, estimated_cpl_min, estimated_cpl_max, estimated_cpl_avg, district_avg_cpl, market_heat_level, heat_index, opportunity_score, competitor_count, winning_pages, ad_trend_30d, cpl_trend_30d, segment, scraped_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(project_name) DO UPDATE SET
-        location=excluded.location, ad_count=excluded.ad_count, active_ad_count=excluded.active_ad_count,
-        avg_ad_longevity_days=excluded.avg_ad_longevity_days, top_ad_durations=excluded.top_ad_durations,
-        avg_price_m2=excluded.avg_price_m2, new_listings_7d=excluded.new_listings_7d,
-        estimated_cpl_min=excluded.estimated_cpl_min, estimated_cpl_max=excluded.estimated_cpl_max,
-        estimated_cpl_avg=excluded.estimated_cpl_avg, district_avg_cpl=excluded.district_avg_cpl,
-        market_heat_level=excluded.market_heat_level, heat_index=excluded.heat_index,
-        opportunity_score=excluded.opportunity_score, competitor_count=excluded.competitor_count,
-        winning_pages=excluded.winning_pages, ad_trend_30d=excluded.ad_trend_30d,
-        cpl_trend_30d=excluded.cpl_trend_30d, segment=excluded.segment, scraped_at=excluded.scraped_at`,
-      [projectName, location, adData.totalAds, adData.activeAds, adData.avgLongevity,
-       JSON.stringify(adData.topAdDurations.slice(0, 10)), priceData.avgPriceM2, priceData.newListings7d,
-       cplResult.cplMin, cplResult.cplMax, cplResult.cplAvg, districtAvgCpl,
-       metrics.heatLevel, metrics.heatIndex, metrics.opportunityScore, adData.totalAds,
-       JSON.stringify(winningPages), JSON.stringify(adTrend), JSON.stringify(cplTrend), cplResult.segment]);
-
+    // No cache — always return fresh data
     res.json({
       project_name: projectName,
       location,

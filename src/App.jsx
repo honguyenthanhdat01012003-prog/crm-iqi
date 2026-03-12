@@ -3025,7 +3025,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     // No suggestion list — user types exactly what they want to search
 
     // Analyze a project
-    const analyzeProject = async (projectName, location, refresh = false) => {
+    const analyzeProject = async (projectName, location) => {
       setMiLoading(true); setMiError("");
       // Show live activity feed while loading
       setMiActivityFeed([
@@ -3035,7 +3035,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 1600);
       const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích CPL & đối thủ...`, time: new Date().toISOString() }]), 2400);
       try {
-        const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}&refresh=${refresh ? "1" : "0"}`);
+        const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
         const data = await r.json();
         if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
         setMiData(data);
@@ -3253,12 +3253,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 {activeProject.projectPhase && <span style={{ fontSize: 11, color: amber, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectPhase}</span>}
                 {activeProject.projectStatus && <span style={{ fontSize: 11, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectStatus}</span>}
               </div>
-              {activeProject.cached && (
-                <button onClick={() => analyzeProject(activeProject.name, activeProject.location, true)}
-                  style={{ marginTop: 8, fontSize: 11, padding: "4px 12px", borderRadius: 8, border: `1px solid ${darkBorder}`, background: `${neonBlue}10`, color: neonBlue, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <RefreshCw size={11} /> Làm mới dữ liệu
-                </button>
-              )}
+
             </div>
             <div style={{ textAlign: "center", minWidth: 120 }}>
               <div style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>Market Heat Index</div>
