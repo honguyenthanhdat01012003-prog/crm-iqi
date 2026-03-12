@@ -1,5 +1,4 @@
 import { createClient } from "@libsql/client";
-import chromium from "@sparticuz/chromium";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
@@ -7,7 +6,6 @@ import fs from "fs";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import path from "path";
-import puppeteer from "puppeteer-core";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2744,149 +2742,204 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   let totalAdsFound = 0;
   let apiError = null;
   const activityLog = [];
-  let browser = null;
 
-  try {
-    activityLog.push("Đang khởi động trình duyệt ảo thám thính dự án...");
-    console.log(`[MI] Launching headless browser for "${projectName}"`);
+  // Strategy 1: Try Graph API first (if tokens available and have permission)
+  if (adAccountRows.length > 0) {
+    activityLog.push("Đang thử kết nối Facebook Graph API...");
+    const fields = "id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_creative_bodies,publisher_platforms";
+    const now = Date.now();
+    for (const acct of adAccountRows) {
+      if (!acct.access_token || totalAdsFound > 0) continue;
+      const token = acct.access_token;
+      const formats = [
+        `ad_reached_countries=['VN']`,
+        `ad_reached_countries=["VN"]`,
+        `ad_reached_countries=${encodeURIComponent('["VN"]')}`,
+        `ad_reached_countries%5B%5D=VN`,
+        `ad_reached_countries[0]=VN`,
+      ];
+      for (const fmt of formats) {
+        if (totalAdsFound > 0) break;
+        const url = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_type=ALL&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}&${fmt}`;
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(12000) });
+          const data = await res.json();
+          if (data.data && data.data.length > 0) {
+            data.data.forEach(ad => {
+              totalAdsFound++;
+              const pageName = ad.page_name || "Unknown";
+              const pageId = ad.page_id || "";
+              const startDate = ad.ad_delivery_start_time || ad.ad_creation_time;
+              const days = startDate ? Math.floor((now - new Date(startDate).getTime()) / 86400000) : 0;
+              if (!pageSet.has(pageName)) pageSet.set(pageName, { pageId, adCount: 0, maxDays: 0, platforms: new Set() });
+              const pg = pageSet.get(pageName);
+              pg.adCount++;
+              pg.maxDays = Math.max(pg.maxDays, days);
+              if (ad.publisher_platforms) ad.publisher_platforms.forEach(p => pg.platforms.add(p));
+            });
+            // Paginate
+            let nextUrl = data.paging?.next;
+            let page = 1;
+            while (nextUrl && page < 25) {
+              try {
+                const r = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
+                const d = await r.json();
+                if (!d.data || d.data.length === 0) break;
+                d.data.forEach(ad => {
+                  totalAdsFound++;
+                  const pageName = ad.page_name || "Unknown";
+                  const pageId = ad.page_id || "";
+                  if (!pageSet.has(pageName)) pageSet.set(pageName, { pageId, adCount: 0, maxDays: 0, platforms: new Set() });
+                  pageSet.get(pageName).adCount++;
+                });
+                nextUrl = d.paging?.next;
+                page++;
+              } catch { break; }
+            }
+            activityLog.push(`Graph API: Lấy được ${totalAdsFound} mẫu QC, ${pageSet.size} pages.`);
+            console.log(`[MI] Graph API success: ${totalAdsFound} ads, ${pageSet.size} pages`);
+            break;
+          }
+        } catch {}
+      }
+    }
+  }
 
-    browser = await puppeteer.launch({
-      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"],
-      defaultViewport: { width: 1920, height: 1080 },
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless ?? "new",
-    });
-
-    const page = await browser.newPage();
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
-    await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8" });
-
+  // Strategy 2: Lightweight fetch of Ads Library page (extract count from HTML/meta tags)
+  if (totalAdsFound === 0) {
+    activityLog.push("Đang kết nối Facebook Ads Library...");
+    console.log(`[MI] Trying lightweight Ads Library scrape for "${projectName}"`);
     const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
-    activityLog.push(`Đang truy cập Ads Library tìm kiếm "${projectName}"...`);
-    console.log(`[MI] Navigating to: ${searchUrl}`);
-
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 25000 });
-    await new Promise(r => setTimeout(r, 4000)); // Wait for JS rendering
-
-    const html = await page.content();
-    console.log(`[MI] Page loaded, HTML length: ${html.length}`);
-
-    // Extract results count from page text
-    const countPatterns = [
-      /Khoảng\s+([\d.,]+)\s+kết quả/i,
-      /About\s+([\d.,]+)\s+results/i,
-      /([\d.,]+)\s+kết quả/i,
-      /([\d.,]+)\s+results?\s+for/i,
-      /aria-label="[^"]*?([\d.,]+)\s+(?:kết quả|results)/i,
+    const userAgents = [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     ];
-    for (const pattern of countPatterns) {
-      const match = html.match(pattern);
-      if (match) {
-        totalAdsFound = parseInt(match[1].replace(/[.,]/g, ""), 10);
-        break;
+    for (const ua of userAgents) {
+      if (totalAdsFound > 0) break;
+      try {
+        const res = await fetch(searchUrl, {
+          headers: {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+          },
+          signal: AbortSignal.timeout(15000),
+          redirect: "follow",
+        });
+        const html = await res.text();
+        console.log(`[MI] Ads Library HTML: status=${res.status}, length=${html.length}`);
+
+        // Extract count from various patterns in HTML source
+        const countPatterns = [
+          /"count"\s*:\s*(\d+)/,
+          /"total_count"\s*:\s*(\d+)/,
+          /"numResults"\s*:\s*(\d+)/,
+          /"result_count"\s*:\s*(\d+)/,
+          /Khoảng\s+([\d.,]+)\s+kết quả/i,
+          /About\s+([\d.,]+)\s+results/i,
+          /([\d.,]+)\s+kết quả/i,
+          /([\d.,]+)\s+results?/i,
+          /"totalCount"\s*:\s*(\d+)/,
+          /collectionCount"?\s*:\s*"?(\d+)/,
+        ];
+        for (const pattern of countPatterns) {
+          const match = html.match(pattern);
+          if (match) {
+            const num = parseInt(match[1].replace(/[.,]/g, ""), 10);
+            if (num > 0 && num < 1000000) {
+              totalAdsFound = num;
+              console.log(`[MI] Found count ${num} with pattern: ${pattern}`);
+              break;
+            }
+          }
+        }
+
+        // Extract page IDs from view_all_page_id links in HTML
+        const pageIdMatches = html.matchAll(/view_all_page_id=(\d+)/g);
+        for (const m of pageIdMatches) {
+          const pid = m[1];
+          if (!pageSet.has(pid)) pageSet.set(pid, { pageId: pid, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+        }
+
+        // Extract page names from HTML
+        const pageNameMatches = html.matchAll(/"page_name"\s*:\s*"([^"]+)"/g);
+        for (const m of pageNameMatches) {
+          const name = m[1];
+          if (!pageSet.has(name) && name.length > 1 && name.length < 80) {
+            pageSet.set(name, { pageId: "", adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+          }
+        }
+
+        if (totalAdsFound > 0 || pageSet.size > 0) break;
+      } catch (err) {
+        console.log(`[MI] Fetch attempt error: ${err.message}`);
       }
     }
 
-    // Also try extracting from visible text
-    if (totalAdsFound === 0) {
-      const textContent = await page.evaluate(() => document.body.innerText);
-      for (const pattern of countPatterns) {
-        const match = textContent.match(pattern);
-        if (match) {
-          totalAdsFound = parseInt(match[1].replace(/[.,]/g, ""), 10);
-          break;
-        }
-      }
+    if (totalAdsFound > 0) {
+      activityLog.push(`Phát hiện ${totalAdsFound} mẫu quảng cáo đang hoạt động trên Ads Library.`);
+    } else {
+      activityLog.push("Facebook chặn truy cập trực tiếp — thử phương thức khác...");
     }
+  }
 
-    console.log(`[MI] Found ${totalAdsFound} total ads`);
-    activityLog.push(`Phát hiện ${totalAdsFound} mẫu quảng cáo đang hoạt động trên Ads Library.`);
-
-    // Scroll to load more ad cards
-    const scrollRounds = Math.min(8, Math.max(2, Math.ceil(totalAdsFound / 30)));
-    for (let i = 0; i < scrollRounds; i++) {
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-      await new Promise(r => setTimeout(r, 2000));
-    }
-
-    // Extract page information from ad cards
-    const extractedPages = await page.evaluate(() => {
-      const pages = {};
-      // Method 1: Find links that lead to view_all_page_id
-      document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
-        const match = link.href.match(/view_all_page_id=(\d+)/);
-        const name = link.textContent?.trim();
-        if (match && name && name.length > 1 && name.length < 100) {
-          const pid = match[1];
-          if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
-          pages[pid].count++;
-        }
+  // Strategy 3: Search via Facebook's public search rendering (mobile endpoint)
+  if (totalAdsFound === 0) {
+    try {
+      const mobileUrl = `https://m.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}`;
+      const res = await fetch(mobileUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+          "Accept": "text/html",
+          "Accept-Language": "vi-VN,vi;q=0.9",
+        },
+        signal: AbortSignal.timeout(12000),
+        redirect: "follow",
       });
-      // Method 2: Find page name spans near "Xem tất cả" links
-      if (Object.keys(pages).length === 0) {
-        document.querySelectorAll('a[href*="/ads/library/"]').forEach(link => {
-          const match = link.href.match(/view_all_page_id=(\d+)/);
-          if (!match) return;
-          const pid = match[1];
-          // Walk up to find page name in parent containers
-          let el = link.parentElement;
-          for (let i = 0; i < 5 && el; i++) {
-            const spans = el.querySelectorAll("span");
-            for (const span of spans) {
-              const txt = span.textContent?.trim();
-              if (txt && txt.length > 2 && txt.length < 80 && !txt.includes("Xem") && !txt.includes("Library")) {
-                if (!pages[pid]) pages[pid] = { pageName: txt, pageId: pid, count: 0 };
-                pages[pid].count++;
-                break;
-              }
-            }
-            el = el.parentElement;
-          }
-        });
+      const html = await res.text();
+      console.log(`[MI] Mobile Ads Library: status=${res.status}, length=${html.length}`);
+      const countPatterns = [/([\d.,]+)\s+kết quả/i, /([\d.,]+)\s+results/i, /"count"\s*:\s*(\d+)/];
+      for (const pattern of countPatterns) {
+        const match = html.match(pattern);
+        if (match) {
+          const num = parseInt(match[1].replace(/[.,]/g, ""), 10);
+          if (num > 0 && num < 1000000) { totalAdsFound = num; break; }
+        }
       }
-      // Method 3: Find strong/bold page names in cards
-      if (Object.keys(pages).length === 0) {
-        const cards = document.querySelectorAll('[class*="ad"]');
-        cards.forEach((card, idx) => {
-          const strong = card.querySelector("strong, b, [role='heading']");
-          if (strong) {
-            const name = strong.textContent?.trim();
-            if (name && name.length > 1) {
-              if (!pages[`unknown_${idx}`]) pages[`unknown_${idx}`] = { pageName: name, pageId: "", count: 1 };
-            }
-          }
-        });
-      }
-      return Object.values(pages);
-    });
-
-    console.log(`[MI] Extracted ${extractedPages.length} pages from DOM`);
-    activityLog.push(`Phát hiện ${extractedPages.length} page đối thủ đang chạy QC.`);
-
-    // Build pageSet from extracted data
-    extractedPages.forEach(p => {
-      const name = p.pageName;
-      if (!pageSet.has(name)) {
-        pageSet.set(name, { pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
-      } else {
-        const existing = pageSet.get(name);
-        existing.adCount += p.count;
-      }
-    });
-
-    // If we got a total count but no pages, distribute evenly as estimate
-    if (totalAdsFound > 0 && pageSet.size === 0) {
-      activityLog.push("Không thể bóc tách chi tiết pages — dùng tổng số lượng QC.");
+      if (totalAdsFound > 0) activityLog.push(`Mobile endpoint: Phát hiện ${totalAdsFound} mẫu QC.`);
+    } catch (err) {
+      console.log(`[MI] Mobile fetch error: ${err.message}`);
     }
+  }
 
-  } catch (err) {
-    console.log(`[MI] Scraping error: ${err.message}`);
-    apiError = `Scraping: ${err.message}`;
-    activityLog.push(`Lỗi cào dữ liệu: ${err.message}`);
-  } finally {
-    if (browser) {
-      try { await browser.close(); } catch {}
-    }
+  // Strategy 4: Use Google search cache as fallback
+  if (totalAdsFound === 0) {
+    try {
+      const googleUrl = `https://www.google.com/search?q=site:facebook.com/ads/library+${encodeURIComponent(projectName)}+ads+vietnam`;
+      const res = await fetch(googleUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(10000),
+      });
+      const html = await res.text();
+      // Look for "About X results" from Google
+      const match = html.match(/About ([\d,]+) results/i) || html.match(/Khoảng ([\d.]+) kết quả/i);
+      if (match) {
+        const googleCount = parseInt(match[1].replace(/[.,]/g, ""), 10);
+        if (googleCount > 0) {
+          // Google count is approximate — use as indicator
+          totalAdsFound = Math.min(googleCount * 3, 1000); // Scale up (Google shows pages not ads)
+          activityLog.push(`Google Search: Ước tính ~${totalAdsFound} mẫu QC từ kết quả tìm kiếm.`);
+        }
+      }
+    } catch {}
+  }
+
+  // If still 0, set error message
+  if (totalAdsFound === 0) {
+    apiError = "Không thể lấy dữ liệu Ads Library. Vui lòng thử lại sau hoặc đăng ký Ad Library API tại facebook.com/ads/library/api";
+    activityLog.push("Không tìm được dữ liệu QC — Facebook chặn server-side fetch.");
   }
 
   // Build pages info
@@ -2894,10 +2947,10 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   pageSet.forEach((info, name) => {
     pagesInfo.push({
       pageName: name,
-      pageId: info.pageId,
+      pageId: info.pageId || "",
       adCount: info.adCount,
       maxDays: info.maxDays,
-      platforms: [...info.platforms],
+      platforms: [...(info.platforms || [])],
       fbPageUrl: info.pageId ? `https://www.facebook.com/${info.pageId}` : "",
       adsLibraryUrl: info.pageId
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&source=page-transparency-widget&view_all_page_id=${info.pageId}`
