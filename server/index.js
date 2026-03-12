@@ -2753,7 +2753,7 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
-  const MAX_TIME = 45000; // 45s budget — leave 15s for price scraping + response
+  const MAX_TIME = 50000; // 50s budget — leave 10s for price + response (accuracy > speed)
   const isTimedOut = () => Date.now() - startTime > MAX_TIME;
   const pageSet = new Map();
   let adCount = 0;
@@ -3178,8 +3178,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         resolveIdx++;
         try {
           const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6000 });
-          await new Promise(r => setTimeout(r, 800));
+          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 8000 });
+          await new Promise(r => setTimeout(r, 1500));
+          // Scroll down to expose date text in ad cards
+          await page.evaluate(() => window.scrollBy(0, 1000)).catch(() => {});
 
           // Fast: get page title first (usually "PageName | Thư viện quảng cáo" or similar)
           const rawTitle = await page.title().catch(() => '');
@@ -3412,6 +3414,38 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             }
           }
         } catch (err) { console.log(`[MI] FB fetch failed for ${pid}: ${err.message}`); }
+      }
+
+      // ── Strategy 5: Mobile Facebook (lighter HTML, better name extraction) ──
+      if (needsName()) {
+        try {
+          const resp = await fetch(`https://m.facebook.com/${pid}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1', 'Accept-Language': 'vi-VN,vi;q=0.9', 'Accept': 'text/html' },
+            redirect: 'follow', signal: AbortSignal.timeout(5000),
+          });
+          const html = await resp.text();
+          // Mobile FB has simpler HTML, try title and structured data
+          const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+          if (titleMatch) {
+            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (mFB title)`); }
+          }
+          if (needsName()) {
+            // Try h1/h3 tags on mobile (often contain page name directly)
+            const h1Match = html.match(/<h[13][^>]*>([^<]{2,80})<\/h[13]>/i);
+            if (h1Match) {
+              const cleaned = decodeHtml(h1Match[1]).trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (mFB heading)`); }
+            }
+          }
+          if (needsName()) {
+            const jsonName = html.match(/"name"\s*:\s*"([^"]{2,80})"/);
+            if (jsonName) {
+              const decoded = decodeUnicode(jsonName[1]);
+              if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (mFB JSON)`); }
+            }
+          }
+        } catch (err) { console.log(`[MI] mFB fetch failed for ${pid}: ${err.message}`); }
       }
     });
 
@@ -3827,25 +3861,20 @@ function getDistrictAvgCpl(location) {
 
 // Winning pages aggregator - with real page names and links
 function buildWinningPages(pagesInfo) {
-  const badDisplayNames = ['error', 'facebook', 'page not found', 'content not found', 'sorry', 'log in'];
+  const badDisplayNames = ['error', 'facebook', 'meta', 'page not found', 'content not found', 'sorry', 'log in', 'ad library', 'ads library', 'thư viện'];
+  const isRealName = (n) => n && n.length > 1 && !/^\d+$/.test(n) && !badDisplayNames.some(b => n.toLowerCase().includes(b.toLowerCase()));
   return pagesInfo
-    .sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays)
-    .map((p) => {
-      let name = p.pageName || '';
-      // If name is still a numeric ID or a bad name, create a readable fallback
-      if (/^\d+$/.test(name) || badDisplayNames.some(b => name.toLowerCase().includes(b)) || !name) {
-        name = `Page ${(p.pageId || '').slice(-6)}`;
-      }
-      return {
-        name,
-        pageId: p.pageId || "",
-        duration: p.maxDays,
-        ads: p.adCount,
-        platforms: p.platforms || ["facebook"],
-        fbPageUrl: p.fbPageUrl || "",
-        adsLibraryUrl: p.adsLibraryUrl || "",
-      };
-    });
+    .filter((p) => isRealName(p.pageName)) // Only include pages with real names
+    .sort((a, b) => b.maxDays - a.maxDays || b.adCount - a.adCount) // Duration first, then ad count
+    .map((p) => ({
+      name: p.pageName,
+      pageId: p.pageId || "",
+      duration: p.maxDays,
+      ads: p.adCount,
+      platforms: p.platforms || ["facebook"],
+      fbPageUrl: p.fbPageUrl || "",
+      adsLibraryUrl: p.adsLibraryUrl || "",
+    }));
 }
 
 // GET /api/market-intel/projects - List all cached market intel projects

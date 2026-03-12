@@ -3487,7 +3487,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <Crown size={16} color={amber} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng Pages — Đối thủ mạnh nhất</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng Pages — Chạy QC lâu nhất</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {(activeProject.winningPages || []).slice(0, 8).map((page, i) => (
@@ -3501,8 +3501,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                       <div style={{ fontSize: 10, color: slate500 }}>{page.ads} QC · {page.duration} ngày</div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: i === 0 ? amber : emerald }}>{page.ads}</div>
-                      <div style={{ fontSize: 9, color: slate500 }}>ads</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: i === 0 ? amber : emerald }}>{page.duration}</div>
+                      <div style={{ fontSize: 9, color: slate500 }}>ngày</div>
                     </div>
                   </a>
                 ))}
@@ -3520,7 +3520,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <Award size={18} color={amber} />
                 <span style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>Tất cả Pages đang chạy QC</span>
               </div>
-              <span style={{ fontSize: 11, color: slate400 }}>{(activeProject.winningPages || []).length} pages · Sắp xếp theo số lượng QC</span>
+              <span style={{ fontSize: 11, color: slate400 }}>{(activeProject.winningPages || []).length} pages · Sắp xếp theo thời gian chạy</span>
             </div>
             {(() => {
               const allWp = activeProject.winningPages || [];
