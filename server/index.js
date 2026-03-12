@@ -2873,7 +2873,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     try {
       activityLog.push("Đang truy vấn Facebook Ads Library API...");
       console.log(`[MI] Bulk API call for "${projectName}" with token`);
-      const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+      const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
       const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
       const data = await resp.json();
       // If first format fails, try alternative format
@@ -3091,10 +3091,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             }
             if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
-          } else if (apiInfo.pageName) {
-            // API found pages not in DOM — add them
-            pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
           }
+          // API pages NOT in DOM are ignored — only browser-found pages are kept
         }
 
         // Extract dates from search results for duration calculation
@@ -3360,8 +3358,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       // ── Strategy 2: Ads Library API per page (for dates + name fallback) ── try ALL status
       if (fbToken && (needsName() || needsDuration())) {
         try {
-          // Try ALL status first (catches more ads including paused/completed)
-          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
+          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
           const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
           const data = await resp.json();
           if (data.data?.length > 0) {
