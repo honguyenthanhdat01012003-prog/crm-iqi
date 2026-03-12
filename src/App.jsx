@@ -180,16 +180,17 @@ function parseLeadDate(str) {
   return isNaN(iso.getTime()) ? null : iso;
 }
 
-const CountdownTimer = ({ seconds }) => {
-  const [remaining, setRemaining] = React.useState(seconds);
+const ElapsedTimer = ({ estimatedTime }) => {
+  const [elapsed, setElapsed] = React.useState(0);
   React.useEffect(() => {
-    setRemaining(seconds);
-    const interval = setInterval(() => setRemaining(r => Math.max(0, r - 1)), 1000);
+    setElapsed(0);
+    const interval = setInterval(() => setElapsed(e => e + 1), 1000);
     return () => clearInterval(interval);
-  }, [seconds]);
-  const mins = Math.floor(remaining / 60);
-  const secs = remaining % 60;
-  const progress = Math.max(0, 1 - remaining / seconds);
+  }, []);
+  const est = estimatedTime || 0;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const progress = est > 0 ? Math.min(0.95, elapsed / est) : Math.min(0.95, elapsed / 120);
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
       <div style={{ position: "relative", width: 80, height: 80 }}>
@@ -202,11 +203,11 @@ const CountdownTimer = ({ seconds }) => {
             style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dashoffset 1s linear" }} />
         </svg>
         <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 18, fontWeight: 800, color: "#f1f5f9", fontVariantNumeric: "tabular-nums" }}>
-          {remaining > 0 ? `${mins}:${String(secs).padStart(2, "0")}` : "\u2713"}
+          {`${mins}:${String(secs).padStart(2, "0")}`}
         </div>
       </div>
       <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>
-        {remaining > 0 ? `Dự kiến còn ~${mins > 0 ? `${mins} phút ` : ""}${secs}s` : "Đang hoàn tất..."}
+        {est > 0 ? `\u01af\u1edbc t\u00ednh ~${est}s` : "\u0110ang x\u1eed l\u00fd..."}
       </div>
     </div>
   );
@@ -2766,6 +2767,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [miError, setMiError] = useState("");
   const [miActivityFeed, setMiActivityFeed] = useState([]);
   const [miWpPage, setMiWpPage] = useState(1);
+  const [miProgress, setMiProgress] = useState({ step: '', msg: '', current: 0, total: 0, pageCount: 0, estimatedTime: 0 });
   const WP_PER_PAGE = 12;
 
   const loadAdAccounts = async () => {
@@ -3054,34 +3056,55 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const glassCard = { background: "rgba(30,41,59,0.7)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: `1px solid ${darkBorder}`, borderRadius: 16, padding: isMobile ? 16 : 20, transition: "transform .2s, box-shadow .2s" };
     const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
 
-    // Countdown Timer component
     // No suggestion list — user types exactly what they want to search
 
-    // Analyze a project
+    // Analyze a project (reads SSE stream for real-time progress)
     const analyzeProject = async (projectName, location) => {
-      setMiLoading(true); setMiError("");
-      // Show live activity feed while loading
-      setMiActivityFeed([
-        { msg: `Đang kết nối Facebook Ads Library...`, time: new Date().toISOString() },
-      ]);
-      const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 800);
-      const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 1600);
-      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích CPL & đối thủ...`, time: new Date().toISOString() }]), 2400);
+      setMiLoading(true); setMiError(""); setMiData(null);
+      setMiProgress({ step: 'start', msg: 'Đang kết nối...', current: 0, total: 0, pageCount: 0, estimatedTime: 0 });
+      setMiActivityFeed([{ msg: 'Đang kết nối Facebook Ads Library...', time: new Date().toISOString() }]);
       try {
         const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
-        const contentType = r.headers.get("content-type") || "";
-        if (!contentType.includes("application/json")) {
-          setMiError(r.status === 504 ? "Hết thời gian chờ — vui lòng thử lại" : `Lỗi server (${r.status})`);
+        if (!r.ok && !r.body) {
+          setMiError(`Lỗi server (${r.status})`);
           setMiLoading(false); return;
         }
-        const data = await r.json();
-        if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
-        setMiData(data);
-        setMiWpPage(1);
-        setMiActivityFeed(data.activity_feed || []);
-
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() || '';
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const evt = JSON.parse(line.slice(6));
+              if (evt.type === 'progress') {
+                setMiProgress(prev => ({ ...prev, ...evt }));
+                setMiActivityFeed(f => [...f, { msg: evt.msg, time: new Date().toISOString() }]);
+              } else if (evt.type === 'result') {
+                setMiData(evt.data);
+                setMiWpPage(1);
+                setMiActivityFeed(evt.data.activity_feed || []);
+              } else if (evt.type === 'error') {
+                setMiError(evt.error || 'Lỗi phân tích');
+              }
+            } catch {}
+          }
+        }
+        // Process any remaining buffer
+        if (buffer.trim().startsWith('data: ')) {
+          try {
+            const evt = JSON.parse(buffer.trim().slice(6));
+            if (evt.type === 'result') { setMiData(evt.data); setMiWpPage(1); setMiActivityFeed(evt.data.activity_feed || []); }
+            else if (evt.type === 'error') { setMiError(evt.error || 'Lỗi phân tích'); }
+          } catch {}
+        }
       } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
-      clearTimeout(feedTimer1); clearTimeout(feedTimer2); clearTimeout(feedTimer3);
       setMiLoading(false);
     };
 
@@ -3248,18 +3271,22 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             </div>
           )}
 
-          {/* Loading State */}
-          {miLoading && (() => {
-            const totalPages = 11; // typical page count
-            const estimatedSeconds = 25 + totalPages * 3; // ~25s base + 3s per page
-            return (
+          {/* Loading State — real-time progress from SSE */}
+          {miLoading && (
             <div style={{ ...glassCard, textAlign: "center", padding: 60 }}>
-              <CountdownTimer seconds={estimatedSeconds} />
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginTop: 16 }}>Đang phân tích dự án...</div>
+              <ElapsedTimer estimatedTime={miProgress.estimatedTime} />
+              {miProgress.total > 0 && (
+                <div style={{ marginTop: 12, fontSize: 12, color: neonBlue, fontWeight: 700 }}>
+                  Page {miProgress.current}/{miProgress.total}
+                  <div style={{ marginTop: 6, width: 200, height: 4, borderRadius: 2, background: 'rgba(59,130,246,0.15)', margin: '0 auto' }}>
+                    <div style={{ width: `${(miProgress.current / miProgress.total) * 100}%`, height: '100%', borderRadius: 2, background: neonBlue, transition: 'width .5s ease' }} />
+                  </div>
+                </div>
+              )}
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginTop: 16 }}>{miProgress.msg || 'Đang phân tích dự án...'}</div>
               <div style={{ fontSize: 12, color: slate400, marginTop: 6 }}>Thu thập dữ liệu từ Facebook Ads Library & Batdongsan.com.vn</div>
             </div>
-            );
-          })()}
+          )}
 
           {/* Error State */}
           {!miLoading && miError && (
