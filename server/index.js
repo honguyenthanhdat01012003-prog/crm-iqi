@@ -3350,18 +3350,19 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         } catch (err) { console.log(`[MI] Graph API failed for ${pid}: ${err.message}`); }
       }
 
-      // ── Strategy 2: Ads Library API per page (for dates + name fallback) ── use ALL to find oldest ad
+      // ── Strategy 2: Ads Library API per page (PRIMARY for duration — gets oldest ad start date) ──
       if (fbToken) {
         try {
-          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
-          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
+          // Use ALL status + limit 200 to find the very oldest ad this page ever ran
+          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=200`;
+          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
           const data = await resp.json();
           if (data.data?.length > 0) {
             if (needsName() && data.data[0].page_name && isGoodName(data.data[0].page_name)) {
               info.pageName = data.data[0].page_name;
               console.log(`[MI] Page ${pid} → "${info.pageName}" (Ads API)`);
             }
-            // Always try to find the oldest ad start date for best duration
+            // Find the oldest ad start date across ALL ads returned
             const now = Date.now();
             let maxDays = 0;
             for (const ad of data.data) {
@@ -3370,13 +3371,13 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
                 if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
               }
             }
-            if (maxDays > info.maxDays) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (Ads API)`); }
+            if (maxDays > info.maxDays) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days from ${data.data.length} ads (Ads API)`); }
           }
         } catch (err) { console.log(`[MI] Ads API failed for ${pid}: ${err.message}`); }
       }
 
       // ── Strategy 3: HTTP fetch Ads Library page (embedded JSON in HTML) ──
-      if (needsName() || needsDuration()) {
+      if (needsName() || info.maxDays === 0) {
         try {
           const adsUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
           const resp = await fetch(adsUrl, {
