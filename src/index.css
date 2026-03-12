@@ -45,6 +45,12 @@ select:focus, input:focus, button:focus {
   outline-offset: 2px;
 }
 
+/* Market Intelligence search input placeholder */
+.mi-search-input::placeholder {
+  color: #64748b !important;
+  opacity: 1;
+}
+
 /* Touch-friendly tap targets */
 @media (max-width: 768px) {
   button, select, input[type="date"], a {

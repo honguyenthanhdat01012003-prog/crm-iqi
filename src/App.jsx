@@ -2736,6 +2736,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
   const [miProjects, setMiProjects] = useState([]);
   const [miLoading, setMiLoading] = useState(false);
   const [miError, setMiError] = useState("");
+  const [miActivityFeed, setMiActivityFeed] = useState([]);
 
   const loadAdAccounts = async () => {
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
@@ -3063,13 +3064,22 @@ function CampaignsPage({ leads, projects, isManager = false }) {
     // Analyze a project
     const analyzeProject = async (projectName, location, refresh = false) => {
       setMiLoading(true); setMiError("");
+      // Show live activity feed while loading
+      setMiActivityFeed([
+        { msg: `Đang kết nối Facebook Ads Library...`, time: new Date().toISOString() },
+      ]);
+      const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 800);
+      const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 1600);
+      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích CPL & đối thủ...`, time: new Date().toISOString() }]), 2400);
       try {
         const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}&refresh=${refresh ? "1" : "0"}`);
         const data = await r.json();
         if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
         setMiData(data);
-        loadMiProjects(); // refresh project list
+        setMiActivityFeed(data.activity_feed || []);
+        apiFetch(`${API}/market-intel/projects`).then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && setMiProjects(d)).catch(() => {});
       } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
+      clearTimeout(feedTimer1); clearTimeout(feedTimer2); clearTimeout(feedTimer3);
       setMiLoading(false);
     };
 
@@ -3084,8 +3094,14 @@ function CampaignsPage({ leads, projects, isManager = false }) {
       cplMax: miData.estimated_cpl_range.max,
       cplAvg: miData.estimated_cpl_range.avg,
       districtAvg: miData.district_avg_cpl,
+      districtName: miData.district_name || "Khu vực",
       competitors: miData.competitor_count,
       priceM2: miData.avg_price_m2,
+      highRisePrice: miData.high_rise_price || miData.avg_price_m2,
+      lowRisePrice: miData.low_rise_price || Math.round((miData.avg_price_m2 || 0) * 1.8),
+      highRiseCount: miData.high_rise_count || 0,
+      lowRiseCount: miData.low_rise_count || 0,
+      leadPriceSources: miData.lead_price_sources || [],
       opportunityScore: miData.opportunity_score,
       trend: (miData.ad_trend_30d || []).length > 1 && miData.ad_trend_30d[29] > miData.ad_trend_30d[0] ? "up" : "down",
       adTrend: miData.ad_trend_30d || [],
@@ -3115,7 +3131,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
     };
 
     // Bar chart for CPL comparison
-    const CplCompareChart = ({ projectCpl, districtAvg, width = 280, height = 120 }) => {
+    const CplCompareChart = ({ projectCpl, districtAvg, districtLabel, width = 280, height = 120 }) => {
       const maxVal = Math.max(projectCpl, districtAvg) * 1.2;
       const barW = 60;
       const gap = 40;
@@ -3134,7 +3150,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
           <text x={startX + barW / 2} y={height - 4} textAnchor="middle" fill={slate400} fontSize="10">Dự án</text>
           <rect x={startX + barW + gap} y={height - h2 - 20} width={barW} height={h2} rx="6" fill="url(#barGrad2)" />
           <text x={startX + barW + gap + barW / 2} y={height - h2 - 25} textAnchor="middle" fill={slate400} fontSize="11" fontWeight="700">{fmt(districtAvg)}</text>
-          <text x={startX + barW + gap + barW / 2} y={height - 4} textAnchor="middle" fill={slate400} fontSize="10">TB Quận</text>
+          <text x={startX + barW + gap + barW / 2} y={height - 4} textAnchor="middle" fill={slate400} fontSize="10">{districtLabel || "TB Quận"}</text>
         </svg>
       );
     };
@@ -3167,16 +3183,17 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <Search size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: slate400 }} />
               <input
                 type="text" placeholder="Tìm dự án... (VD: Masterise Cosmo, Global City)"
+                className="mi-search-input"
                 value={miSearch}
                 onChange={(e) => { setMiSearch(e.target.value); setMiShowSuggest(true); }}
                 onFocus={() => setMiShowSuggest(true)}
                 onKeyDown={(e) => { if (e.key === "Enter" && miSearch.trim()) { setMiShowSuggest(false); const match = filteredSuggestions[0]; analyzeProject(match ? match.name : miSearch.trim(), match ? match.location : ""); } }}
                 style={{
-                  width: "100%", padding: "14px 16px 14px 46px", fontSize: 14, fontWeight: 500,
-                  background: "rgba(30,41,59,0.9)", border: `1px solid ${neonBlue}40`, borderRadius: 14,
-                  color: "#f1f5f9", outline: "none", backdropFilter: "blur(8px)",
+                  width: "100%", padding: "14px 16px 14px 46px", fontSize: 15, fontWeight: 600,
+                  background: "rgba(15,23,42,0.95)", border: `1px solid ${neonBlue}50`, borderRadius: 14,
+                  color: "#ffffff", outline: "none", backdropFilter: "blur(8px)",
                   boxShadow: `0 0 20px ${neonBlue}15`, transition: "all .3s",
-                  boxSizing: "border-box",
+                  boxSizing: "border-box", caretColor: neonBlue, letterSpacing: "0.01em",
                 }}
                 onMouseEnter={(e) => { e.target.style.borderColor = neonBlue; e.target.style.boxShadow = `0 0 30px ${neonBlue}25`; }}
                 onMouseLeave={(e) => { e.target.style.borderColor = `${neonBlue}40`; e.target.style.boxShadow = `0 0 20px ${neonBlue}15`; }}
@@ -3201,6 +3218,32 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               </div>
             )}
           </div>
+
+          {/* Live Activity Feed - bottom right corner */}
+          {miActivityFeed.length > 0 && (
+            <div style={{
+              position: "fixed", bottom: isMobile ? 12 : 20, right: isMobile ? 12 : 20,
+              width: isMobile ? "calc(100% - 24px)" : 360, maxHeight: 220, zIndex: 50,
+              background: "rgba(15,23,42,0.95)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
+              border: `1px solid ${darkBorder}`, borderRadius: 14, padding: "12px 14px",
+              boxShadow: "0 10px 40px rgba(0,0,0,.5)", overflow: "hidden",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: emerald, boxShadow: `0 0 8px ${emerald}`, animation: "pulse 2s infinite" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: emerald, letterSpacing: "0.05em", textTransform: "uppercase" }}>Live Activity</span>
+                <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 170, overflowY: "auto" }}>
+                {miActivityFeed.slice(-6).map((evt, i) => (
+                  <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, color: slate300, padding: "3px 0", borderBottom: `1px solid ${darkBorder}30`, animation: "fadeIn .3s ease" }}>
+                    <span style={{ color: slate500, fontSize: 10, flexShrink: 0, marginTop: 1 }}>{new Date(evt.time).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                    <span>{evt.msg}</span>
+                  </div>
+                ))}
+              </div>
+              <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+            </div>
+          )}
 
           {/* Loading State */}
           {miLoading && (
@@ -3290,15 +3333,24 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               </div>
             </div>
 
-            {/* Property Price */}
+            {/* Property Price - Separated cao tầng / thấp tầng */}
             <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${emerald}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Building size={16} color={emerald} /></div>
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Giá TB/m²</span>
               </div>
-              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: emerald, marginBottom: 4 }}>{fmtShort(activeProject.priceM2)}</div>
-              <div style={{ fontSize: 11, color: slate400 }}>Từ sàn giao dịch BĐS</div>
-              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>Batdongsan · Chotot · Homedy</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
+                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: emerald }}>{fmtShort(activeProject.highRisePrice)}</div>
+                </div>
+                <div style={{ width: 1, background: darkBorder }} />
+                <div>
+                  <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
+                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: amber }}>{fmtShort(activeProject.lowRisePrice)}</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>Batdongsan · Chợ Tốt</div>
             </div>
 
             {/* Opportunity Score */}
@@ -3343,15 +3395,15 @@ function CampaignsPage({ leads, projects, isManager = false }) {
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <BarChart2 size={16} color={neonBlue} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL với trung bình Quận</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB {activeProject.districtName}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "center" }}>
-                <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} width={isMobile ? 260 : 320} height={130} />
+                <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
               </div>
               <div style={{ textAlign: "center", marginTop: 6 }}>
                 {activeProject.cplAvg < activeProject.districtAvg
-                  ? <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>✓ CPL thấp hơn TB Quận {((1 - activeProject.cplAvg / activeProject.districtAvg) * 100).toFixed(0)}%</span>
-                  : <span style={{ fontSize: 11, color: rose, fontWeight: 600 }}>⚠ CPL cao hơn TB Quận {((activeProject.cplAvg / activeProject.districtAvg - 1) * 100).toFixed(0)}%</span>
+                  ? <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>✓ CPL thấp hơn TB {activeProject.districtName} {((1 - activeProject.cplAvg / activeProject.districtAvg) * 100).toFixed(0)}%</span>
+                  : <span style={{ fontSize: 11, color: rose, fontWeight: 600 }}>⚠ CPL cao hơn TB {activeProject.districtName} {((activeProject.cplAvg / activeProject.districtAvg - 1) * 100).toFixed(0)}%</span>
                 }
               </div>
             </div>
@@ -3414,7 +3466,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${neonBlue}50`; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,.3)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = darkBorder; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 12, background: `${neonBlue}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{page.avatar}</div>
+                    <div style={{ width: 40, height: 40, borderRadius: 12, background: `${neonBlue}15`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0, fontWeight: 700, color: neonBlue }}>{page.name.charAt(0).toUpperCase()}</div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{page.name}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: slate400, marginTop: 2 }}>
@@ -3424,15 +3476,46 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                     </div>
                     {i === 0 && <Crown size={18} color="#fbbf24" style={{ flexShrink: 0 }} />}
                   </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {page.style.map((tag, ti) => (
-                      <span key={ti} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${[neonBlue, emerald, amber, rose][ti % 4]}15`, color: [neonBlue, emerald, amber, rose][ti % 4], fontWeight: 600 }}>{tag}</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                    {page.fbPageUrl && (
+                      <a href={page.fbPageUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${neonBlue}15`, color: neonBlue, fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <ExternalLink size={9} /> FB Page
+                      </a>
+                    )}
+                    {page.adsLibraryUrl && (
+                      <a href={page.adsLibraryUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${amber}15`, color: amber, fontWeight: 600, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        <ExternalLink size={9} /> Ads Library
+                      </a>
+                    )}
+                    {(page.platforms || []).map((plat, pi) => (
+                      <span key={pi} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${emerald}15`, color: emerald, fontWeight: 600 }}>{plat}</span>
                     ))}
                   </div>
                 </div>
               ))}
             </div>
           </div>
+
+          {/* Lead Price Sources */}
+          {activeProject.leadPriceSources && activeProject.leadPriceSources.length > 0 && (
+            <div style={{ ...glassCard, marginTop: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <DollarSign size={16} color={emerald} />
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#f1f5f9" }}>Giá lead công bố từ các sàn</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
+                {activeProject.leadPriceSources.map((src, si) => (
+                  <div key={si} style={{ background: "rgba(15,23,42,0.5)", borderRadius: 12, padding: 14, border: `1px solid ${darkBorder}` }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: slate300, marginBottom: 6 }}>{src.source}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, color: emerald }}>{fmtShort(src.avgPrice)}</div>
+                    <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>{src.count} tin đăng</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Footer note */}
           <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: slate500 }}>
