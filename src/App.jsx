@@ -3109,6 +3109,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       leadPriceSources: miData.lead_price_sources || [],
       opportunityScore: miData.opportunity_score,
       pageCount: miData.page_count || 0,
+      searchTerm: miData.search_term || miData.project_name,
+      officialPrice: miData.official_price || "",
+      projectPhase: miData.project_phase || "",
+      projectType: miData.project_type || "both",
+      projectStatus: miData.project_status || "",
       trend: (() => { const t = miData.ad_trend_30d || []; if (t.length < 2) return "down"; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return last > first ? "up" : "down"; })(),
       adTrend: miData.ad_trend_30d || [],
       cplTrend: miData.cpl_trend_30d || [],
@@ -3301,6 +3306,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
                 <MapPin size={14} /> {activeProject.location}
+                {activeProject.projectPhase && <span style={{ fontSize: 11, color: amber, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectPhase}</span>}
+                {activeProject.projectStatus && <span style={{ fontSize: 11, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectStatus}</span>}
               </div>
               {activeProject.cached && (
                 <button onClick={() => analyzeProject(activeProject.name, activeProject.location, true)}
@@ -3355,10 +3362,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                   ⚠ {activeProject.apiError.length > 100 ? activeProject.apiError.substring(0, 100) + "…" : activeProject.apiError}
                 </div>
               )}
-              <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.name)}&media_type=all`} target="_blank" rel="noopener noreferrer"
+              <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.searchTerm || activeProject.name)}&search_type=keyword_unordered`} target="_blank" rel="noopener noreferrer"
                 style={{ fontSize: 10, color: neonBlue, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 3, textDecoration: "none" }}>
                 <ExternalLink size={9} /> Xem trên Ads Library
               </a>
+              {activeProject.searchTerm && activeProject.searchTerm !== activeProject.name && (
+                <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>Tìm kiếm: "{activeProject.searchTerm}"</div>
+              )}
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
                 {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
                 <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
@@ -3371,17 +3381,38 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${emerald}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Building size={16} color={emerald} /></div>
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Giá TB/m²</span>
               </div>
-              <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+              {activeProject.projectType === "cao_tang" ? (
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
                   <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: emerald }}>{fmtShort(activeProject.highRisePrice)}</div>
                 </div>
-                <div style={{ width: 1, background: darkBorder }} />
+              ) : activeProject.projectType === "thap_tang" ? (
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
                   <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: amber }}>{fmtShort(activeProject.lowRisePrice)}</div>
                 </div>
-              </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: emerald }}>{fmtShort(activeProject.highRisePrice)}</div>
+                  </div>
+                  <div style={{ width: 1, background: darkBorder }} />
+                  <div>
+                    <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: amber }}>{fmtShort(activeProject.lowRisePrice)}</div>
+                  </div>
+                </div>
+              )}
+              {activeProject.officialPrice && (
+                <div style={{ fontSize: 10, color: neonBlue, marginTop: 4, fontWeight: 600 }}>🏷️ Giá chính thức: {activeProject.officialPrice}</div>
+              )}
+              {activeProject.projectPhase && (
+                <div style={{ fontSize: 10, color: amber, marginTop: 2 }}>📅 {activeProject.projectPhase}</div>
+              )}
+              {activeProject.projectStatus && (
+                <div style={{ fontSize: 10, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, marginTop: 2 }}>● {activeProject.projectStatus}</div>
+              )}
               <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>Batdongsan · Chợ Tốt</div>
             </div>
 
@@ -3418,8 +3449,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </div>
               <MiniChart data={activeProject.adTrend} color={neonBlue} width={isMobile ? 260 : 320} height={100} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
-                <span>{typeof activeProject.adTrend[0] === "object" ? activeProject.adTrend[0].label : "30 ngày trước"}</span>
-                <span>Hôm nay: {typeof activeProject.adTrend[activeProject.adTrend.length-1] === "object" ? activeProject.adTrend[activeProject.adTrend.length-1].value : activeProject.adTrend[activeProject.adTrend.length-1]} QC</span>
+                <span>{typeof activeProject.adTrend[0] === "object" && activeProject.adTrend[0].date ? activeProject.adTrend[0].date.split("-").reverse().join("/") : "30 ngày trước"}</span>
+                <span>{typeof activeProject.adTrend[activeProject.adTrend.length-1] === "object" && activeProject.adTrend[activeProject.adTrend.length-1].date ? activeProject.adTrend[activeProject.adTrend.length-1].date.split("-").reverse().join("/") : "Hôm nay"}: {typeof activeProject.adTrend[activeProject.adTrend.length-1] === "object" ? activeProject.adTrend[activeProject.adTrend.length-1].value : activeProject.adTrend[activeProject.adTrend.length-1]} QC</span>
               </div>
             </div>
 
@@ -3451,8 +3482,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </div>
               <MiniChart data={activeProject.cplTrend} color={emerald} width={isMobile ? 260 : 320} height={100} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
-                <span>{fmtShort((typeof activeProject.cplTrend[0] === "object" ? activeProject.cplTrend[0].value : activeProject.cplTrend[0]) * 1000)}</span>
-                <span>Hiện tại: {fmtShort((typeof activeProject.cplTrend[activeProject.cplTrend.length-1] === "object" ? activeProject.cplTrend[activeProject.cplTrend.length-1].value : activeProject.cplTrend[activeProject.cplTrend.length-1]) * 1000)}</span>
+                <span>{typeof activeProject.cplTrend[0] === "object" && activeProject.cplTrend[0].date ? activeProject.cplTrend[0].date.split("-").reverse().join("/") : ""}: {fmtShort((typeof activeProject.cplTrend[0] === "object" ? activeProject.cplTrend[0].value : activeProject.cplTrend[0]) * 1000)}</span>
+                <span>{typeof activeProject.cplTrend[activeProject.cplTrend.length-1] === "object" && activeProject.cplTrend[activeProject.cplTrend.length-1].date ? activeProject.cplTrend[activeProject.cplTrend.length-1].date.split("-").reverse().join("/") : "Hôm nay"}: {fmtShort((typeof activeProject.cplTrend[activeProject.cplTrend.length-1] === "object" ? activeProject.cplTrend[activeProject.cplTrend.length-1].value : activeProject.cplTrend[activeProject.cplTrend.length-1]) * 1000)}</span>
               </div>
             </div>
 

@@ -2927,6 +2927,37 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               pages[m[1]] = { pageName: name || m[1], pageId: m[1], count: 1 };
             }
           });
+          // Method 3: Extract from ad cards — page names shown as ad sponsors
+          document.querySelectorAll('[role="article"], [class*="_7jyr"], div[class*="x1yztbdb"]').forEach(card => {
+            const sponsorLink = card.querySelector('a[href*="facebook.com/"]');
+            if (sponsorLink) {
+              const name = sponsorLink.textContent?.trim();
+              const href = sponsorLink.href;
+              const pidMatch = href.match(/facebook\.com\/(\d+)/) || href.match(/facebook\.com\/([\w.]+)/);
+              if (name && name.length > 1 && name.length < 80 && pidMatch) {
+                const pid = pidMatch[1];
+                if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
+                pages[pid].count++;
+              }
+            }
+          });
+          // Method 4: Find page names from "Được tài trợ" labels
+          document.querySelectorAll('span').forEach(span => {
+            if (span.textContent === 'Được tài trợ' || span.textContent === 'Sponsored') {
+              const container = span.closest('div')?.parentElement?.parentElement;
+              if (container) {
+                const nameEl = container.querySelector('a');
+                if (nameEl) {
+                  const name = nameEl.textContent?.trim();
+                  const href = nameEl.href || '';
+                  const pidMatch = href.match(/view_all_page_id=(\d+)/) || href.match(/facebook\.com\/(\d+)/);
+                  if (name && name.length > 1 && pidMatch && !pages[pidMatch[1]]) {
+                    pages[pidMatch[1]] = { pageName: name, pageId: pidMatch[1], count: 1 };
+                  }
+                }
+              }
+            }
+          });
           return Object.values(pages);
         });
 
@@ -3060,87 +3091,140 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     pagesInfo,
     apiError,
     activityLog,
+    searchTerm: bestTerm,
   };
 }
 
-// Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng
+// Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng + project info
 async function scrapeMarketPrice(projectName, location) {
   let highRisePrice = 0; // Cao tầng (chung cư, căn hộ)
   let lowRisePrice = 0; // Thấp tầng (nhà phố, biệt thự, shophouse)
   let highRiseCount = 0;
   let lowRiseCount = 0;
   let newListings7d = 0;
-  const leadPriceSources = []; // Real published lead prices
+  const leadPriceSources = [];
+  let officialPrice = ""; // Giá bán chính thức
+  let projectPhase = ""; // Giai đoạn dự án
+  let projectType = ""; // cao_tang, thap_tang, or both
+  let projectStatus = ""; // Đang mở bán, Sắp mở bán, etc.
+
+  const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
+  // Helper: extract prices from HTML text
+  const extractPricesFromHtml = (html) => {
+    const priceMatches = html.match(/(\d+[.,]?\d*)\s*(tỷ|triệu|tr)\s*\/?\s*m/gi) || [];
+    return priceMatches.map(p => {
+      const num = parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0");
+      if (/tỷ/i.test(p)) return num * 1e9;
+      if (/triệu|tr/i.test(p)) return num * 1e6;
+      return num;
+    }).filter(p => p > 5e6 && p < 5e9);
+  };
+
+  // Helper: extract project phase from text
+  const extractPhase = (text) => {
+    const phaseMatch = text.match(/giai\s*đoạn\s*(\d+)/i) || text.match(/phase\s*(\d+)/i);
+    if (phaseMatch) return `Giai đoạn ${phaseMatch[1]}`;
+    const phaseMatch2 = text.match(/GĐ\s*(\d+)/i);
+    if (phaseMatch2) return `Giai đoạn ${phaseMatch2[1]}`;
+    return "";
+  };
+
+  // Helper: extract project status
+  const extractStatus = (text) => {
+    if (/đang\s*mở\s*bán|hiện\s*đang\s*bán|mở\s*bán/i.test(text)) return "Đang mở bán";
+    if (/sắp\s*mở\s*bán|chuẩn\s*bị\s*mở|sắp\s*ra\s*mắt/i.test(text)) return "Sắp mở bán";
+    if (/đã\s*bàn\s*giao|đã\s*hoàn\s*thành/i.test(text)) return "Đã bàn giao";
+    if (/đang\s*xây\s*dựng|đang\s*thi\s*công/i.test(text)) return "Đang xây dựng";
+    if (/chưa\s*mở\s*bán/i.test(text)) return "Chưa mở bán";
+    return "";
+  };
+
+  // Helper: extract official price
+  const extractOfficialPrice = (text) => {
+    // Look for "Giá từ X tỷ" or "Giá X triệu/m²" patterns
+    const m = text.match(/giá\s*(?:từ|chỉ\s*từ|khởi\s*điểm)?\s*(\d+[.,]?\d*)\s*(tỷ|triệu)/i);
+    if (m) {
+      const num = parseFloat(m[1].replace(/,/g, "."));
+      const unit = /tỷ/i.test(m[2]) ? "tỷ" : "triệu";
+      return `Từ ${num} ${unit}`;
+    }
+    const m2 = text.match(/(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(tỷ|triệu)/i);
+    if (m2) {
+      return `${m2[1].replace(/,/g, ".")} - ${m2[2].replace(/,/g, ".")} ${/tỷ/i.test(m2[3]) ? "tỷ" : "triệu"}`;
+    }
+    return "";
+  };
+
+  // Try scraping batdongsan.com.vn — search for project
+  try {
+    const searchUrl = `https://batdongsan.com.vn/nha-dat-ban/tim-kiem?keyword=${encodeURIComponent(projectName)}`;
+    const res = await fetch(searchUrl, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const html = await res.text();
+      // Extract project info
+      if (!projectPhase) projectPhase = extractPhase(html);
+      if (!projectStatus) projectStatus = extractStatus(html);
+      if (!officialPrice) officialPrice = extractOfficialPrice(html);
+
+      // Detect project type from content
+      const hasHighRise = /căn\s*hộ|chung\s*cư|apartment|cao\s*tầng/i.test(html);
+      const hasLowRise = /nhà\s*phố|biệt\s*thự|shophouse|villa|thấp\s*tầng|liền\s*kề/i.test(html);
+      if (hasHighRise && hasLowRise) projectType = "both";
+      else if (hasHighRise) projectType = "cao_tang";
+      else if (hasLowRise) projectType = "thap_tang";
+    }
+  } catch {}
 
   // Try scraping batdongsan.com.vn for HIGH-RISE (căn hộ chung cư)
   try {
-    const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const bdURL = `https://batdongsan.com.vn/ban-can-ho-chung-cu-${slug}`;
-    const res = await fetch(bdURL, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(10000),
-    });
+    const res = await fetch(bdURL, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
     if (res.ok) {
       const html = await res.text();
-      // Extract per-m2 prices
-      const priceMatches = html.match(/(\d+[.,]?\d*)\s*(tỷ|triệu|tr)\s*\/?\s*m/gi) || [];
-      const prices = priceMatches.map(p => {
-        const num = parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0");
-        if (/tỷ/i.test(p)) return num * 1e9;
-        if (/triệu|tr/i.test(p)) return num * 1e6;
-        return num;
-      }).filter(p => p > 5e6 && p < 5e9);
+      const prices = extractPricesFromHtml(html);
       if (prices.length > 0) {
         highRisePrice = prices.reduce((a, b) => a + b, 0) / prices.length;
         highRiseCount = prices.length;
         newListings7d += Math.min(prices.length, 30);
       }
-      // Try to find total price per unit
+      // Total price per unit fallback
       const totalPriceMatches = html.match(/(\d+[.,]?\d*)\s*tỷ(?!\s*\/)/gi) || [];
       if (totalPriceMatches.length > 0) {
         const totals = totalPriceMatches.map(p => parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0") * 1e9).filter(p => p > 1e9 && p < 100e9);
         if (totals.length > 0 && highRisePrice === 0) {
-          highRisePrice = totals.reduce((a, b) => a + b, 0) / totals.length / 70; // assume ~70m2
+          highRisePrice = totals.reduce((a, b) => a + b, 0) / totals.length / 70;
           highRiseCount = totals.length;
         }
       }
+      if (!projectPhase) projectPhase = extractPhase(html);
+      if (!projectStatus) projectStatus = extractStatus(html);
+      if (!officialPrice) officialPrice = extractOfficialPrice(html);
     }
-  } catch { /* scraping failed */ }
+  } catch {}
 
   // Try scraping for LOW-RISE (nhà phố, biệt thự)
   try {
-    const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     const bdURL2 = `https://batdongsan.com.vn/ban-nha-biet-thu-lien-ke-${slug}`;
-    const res2 = await fetch(bdURL2, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" },
-      redirect: "follow",
-      signal: AbortSignal.timeout(10000),
-    });
+    const res2 = await fetch(bdURL2, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
     if (res2.ok) {
       const html2 = await res2.text();
-      const priceMatches2 = html2.match(/(\d+[.,]?\d*)\s*(tỷ|triệu|tr)\s*\/?\s*m/gi) || [];
-      const prices2 = priceMatches2.map(p => {
-        const num = parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0");
-        if (/tỷ/i.test(p)) return num * 1e9;
-        if (/triệu|tr/i.test(p)) return num * 1e6;
-        return num;
-      }).filter(p => p > 5e6 && p < 15e9);
+      const prices2 = extractPricesFromHtml(html2);
       if (prices2.length > 0) {
         lowRisePrice = prices2.reduce((a, b) => a + b, 0) / prices2.length;
         lowRiseCount = prices2.length;
         newListings7d += Math.min(prices2.length, 20);
       }
+      if (!projectPhase) projectPhase = extractPhase(html2);
+      if (!projectStatus) projectStatus = extractStatus(html2);
     }
   } catch {}
 
   // Try scraping lead price info from chotot.com
   try {
     const ctUrl = `https://gateway.chotot.com/v1/public/ad-listing?cg=1000&q=${encodeURIComponent(projectName)}&limit=10&st=s&region_v2=13000`;
-    const resCt = await fetch(ctUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-      signal: AbortSignal.timeout(8000),
-    });
+    const resCt = await fetch(ctUrl, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }, signal: AbortSignal.timeout(8000) });
     if (resCt.ok) {
       const ctData = await resCt.json();
       if (ctData.ads && ctData.ads.length > 0) {
@@ -3154,7 +3238,7 @@ async function scrapeMarketPrice(projectName, location) {
 
   // Fallback estimates
   const locationUpper = (location || projectName).toUpperCase();
-  if (highRisePrice === 0) {
+  if (highRisePrice === 0 && (projectType !== "thap_tang")) {
     if (/QU[ẬA]N\s*1|QU[ẬA]N\s*3|PH[ÚU]\s*NHU[ẬA]N/i.test(locationUpper)) highRisePrice = 150000000;
     else if (/QU[ẬA]N\s*2|TH[ỦU]\s*[ĐD][ỨU]C|AN\s*PH[ÚU]/i.test(locationUpper)) highRisePrice = 90000000;
     else if (/QU[ẬA]N\s*7|B[ÌI]NH\s*TH[ẠA]NH/i.test(locationUpper)) highRisePrice = 70000000;
@@ -3163,8 +3247,14 @@ async function scrapeMarketPrice(projectName, location) {
     else if (/V[ŨU]NG\s*T[ÀA]U|B[ÀA]\s*R[ỊI]A/i.test(locationUpper)) highRisePrice = 45000000;
     else highRisePrice = 55000000;
   }
-  if (lowRisePrice === 0) {
-    lowRisePrice = Math.round(highRisePrice * 1.8); // Thấp tầng thường đắt hơn ~1.8x
+  if (lowRisePrice === 0 && projectType !== "cao_tang" && highRisePrice > 0) {
+    lowRisePrice = Math.round(highRisePrice * 1.8);
+  }
+  if (!projectType) {
+    if (highRiseCount > 0 && lowRiseCount > 0) projectType = "both";
+    else if (highRiseCount > 0) projectType = "cao_tang";
+    else if (lowRiseCount > 0) projectType = "thap_tang";
+    else projectType = "both";
   }
   if (newListings7d === 0) newListings7d = 5 + Math.floor(Math.random() * 30);
 
@@ -3178,6 +3268,10 @@ async function scrapeMarketPrice(projectName, location) {
     lowRiseCount,
     newListings7d,
     leadPriceSources,
+    officialPrice,
+    projectPhase,
+    projectType,
+    projectStatus,
   };
 }
 
@@ -3497,6 +3591,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       cpl_trend_30d: cplTrend,
       top_ad_durations: adData.topAdDurations.slice(0, 10),
       activity_feed: activityFeed,
+      search_term: adData.searchTerm || projectName,
+      official_price: priceData.officialPrice || "",
+      project_phase: priceData.projectPhase || "",
+      project_type: priceData.projectType || "both",
+      project_status: priceData.projectStatus || "",
       api_fetched_ads: adData.apiFetchedAds || 0,
       api_error: adData.apiError || null,
       cached: false,
