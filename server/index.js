@@ -2873,13 +2873,23 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     try {
       activityLog.push("Đang truy vấn Facebook Ads Library API...");
       console.log(`[MI] Bulk API call for "${projectName}" with token`);
-      const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+      const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
       const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
       const data = await resp.json();
-      if (data.data?.length > 0) {
-        console.log(`[MI] API returned ${data.data.length} ads`);
+      // If first format fails, try alternative format
+      let ads = data.data || [];
+      if (ads.length === 0 && !data.error) {
+        try {
+          const alt = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&ad_reached_countries%5B%5D=VN&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+          const r2 = await fetch(alt, { signal: AbortSignal.timeout(8000) });
+          const d2 = await r2.json();
+          if (d2.data?.length > 0) ads = d2.data;
+        } catch {}
+      }
+      if (ads.length > 0) {
+        console.log(`[MI] API returned ${ads.length} ads`);
         const now = Date.now();
-        for (const ad of data.data) {
+        for (const ad of ads) {
           const pid = ad.page_id;
           if (!pid) continue;
           if (!apiPagesMap.has(pid)) apiPagesMap.set(pid, { pageName: '', maxDays: 0, adCount: 0 });
@@ -2894,10 +2904,13 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             }
           }
         }
-        activityLog.push(`API: ${apiPagesMap.size} pages, ${data.data.length} ads.`);
+        activityLog.push(`API: ${apiPagesMap.size} pages, ${ads.length} ads.`);
         console.log(`[MI] API found ${apiPagesMap.size} unique pages`);
       } else if (data.error) {
         console.log(`[MI] API error: ${data.error.message}`);
+        activityLog.push(`API: ${data.error.message?.substring(0, 60)}`);
+      } else {
+        console.log(`[MI] API returned 0 ads`);
       }
     } catch (err) {
       console.log(`[MI] Bulk API failed: ${err.message}`);
@@ -3182,6 +3195,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           await new Promise(r => setTimeout(r, 1500));
           // Scroll down to expose date text in ad cards
           await page.evaluate(() => window.scrollBy(0, 1000)).catch(() => {});
+          await new Promise(r => setTimeout(r, 500));
 
           // Fast: get page title first (usually "PageName | Thư viện quảng cáo" or similar)
           const rawTitle = await page.title().catch(() => '');
@@ -3257,7 +3271,32 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             console.log(`[MI] Page ${pid} → "${pageDetails.pageName}" (from evaluate)`);
           }
           if (pageDetails.realAdCount > 0) info.adCount = pageDetails.realAdCount;
-          if (pageDetails.maxDays > 0) info.maxDays = pageDetails.maxDays;
+          if (pageDetails.maxDays > 0) info.maxDays = Math.max(info.maxDays, pageDetails.maxDays);
+
+          // Also extract dates from page HTML source (embedded JSON has ad_delivery_start_time)
+          if (info.maxDays === 0) {
+            try {
+              const pageHtml = await page.content();
+              const now = Date.now();
+              let maxDays = 0;
+              const jsonDates = pageHtml.matchAll(/"ad_delivery_start_time"\s*:\s*"(\d{4}-\d{2}-\d{2})"/g);
+              for (const m of jsonDates) {
+                const d = new Date(m[1]);
+                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+              }
+              // Also try unix timestamps: "creation_time":1234567890 or "start_time":1234567890
+              const tsDates = pageHtml.matchAll(/"(?:creation_time|start_time)"\s*:\s*(\d{10,13})/g);
+              for (const m of tsDates) {
+                const ts = parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1);
+                const d = new Date(ts);
+                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+              }
+              if (maxDays > 0) {
+                info.maxDays = maxDays;
+                console.log(`[MI] Page ${pid} duration: ${maxDays} days (from page HTML source)`);
+              }
+            } catch {}
+          }
 
         } catch (err) {
           console.log(`[MI] Failed to resolve page ${pid}: ${err.message}`);
@@ -3318,10 +3357,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         } catch (err) { console.log(`[MI] Graph API failed for ${pid}: ${err.message}`); }
       }
 
-      // ── Strategy 2: Ads Library API per page (for dates + name fallback) ──
+      // ── Strategy 2: Ads Library API per page (for dates + name fallback) ── try ALL status
       if (fbToken && (needsName() || needsDuration())) {
         try {
-          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=25`;
+          // Try ALL status first (catches more ads including paused/completed)
+          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
           const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
           const data = await resp.json();
           if (data.data?.length > 0) {
@@ -3861,13 +3901,10 @@ function getDistrictAvgCpl(location) {
 
 // Winning pages aggregator - with real page names and links
 function buildWinningPages(pagesInfo) {
-  const badDisplayNames = ['error', 'facebook', 'meta', 'page not found', 'content not found', 'sorry', 'log in', 'ad library', 'ads library', 'thư viện'];
-  const isRealName = (n) => n && n.length > 1 && !/^\d+$/.test(n) && !badDisplayNames.some(b => n.toLowerCase().includes(b.toLowerCase()));
   return pagesInfo
-    .filter((p) => isRealName(p.pageName)) // Only include pages with real names
-    .sort((a, b) => b.maxDays - a.maxDays || b.adCount - a.adCount) // Duration first, then ad count
+    .sort((a, b) => b.maxDays - a.maxDays || b.adCount - a.adCount)
     .map((p) => ({
-      name: p.pageName,
+      name: p.pageName || p.pageId || '',
       pageId: p.pageId || "",
       duration: p.maxDays,
       ads: p.adCount,
