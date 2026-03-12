@@ -2729,11 +2729,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
 
   // Market Intelligence state
   const [miSearch, setMiSearch] = useState("");
-  const [miSelected, setMiSelected] = useState(null);
-  const [miShowSuggest, setMiShowSuggest] = useState(false);
-  const miSearchRef = useRef(null);
   const [miData, setMiData] = useState(null);
-  const [miProjects, setMiProjects] = useState([]);
   const [miLoading, setMiLoading] = useState(false);
   const [miError, setMiError] = useState("");
   const [miActivityFeed, setMiActivityFeed] = useState([]);
@@ -2744,13 +2740,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
   };
   useEffect(() => { loadAdAccounts(); }, []);
-
-  // Load cached market intel projects when tab switches
-  useEffect(() => {
-    if (tab === "market_intel") {
-      apiFetch(`${API}/market-intel/projects`).then(r => r.ok ? r.json() : []).then(data => Array.isArray(data) && setMiProjects(data)).catch(() => {});
-    }
-  }, [tab]);
 
   // Click-outside for account dropdown
   useEffect(() => {
@@ -3033,35 +3022,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const glassCard = { background: "rgba(30,41,59,0.7)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: `1px solid ${darkBorder}`, borderRadius: 16, padding: isMobile ? 16 : 20, transition: "transform .2s, box-shadow .2s" };
     const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
 
-    // Sample projects for suggestions (always available, supplemented by API cache)
-    const defaultSuggestions = [
-      { name: "Masterise Cosmo", location: "TP. Thủ Đức, TP.HCM" },
-      { name: "Global City", location: "An Phú, TP. Thủ Đức" },
-      { name: "Vinhomes Grand Park", location: "Long Thạnh Mỹ, TP. Thủ Đức" },
-      { name: "Eaton Park", location: "An Phú, Quận 2, TP.HCM" },
-      { name: "The Opus One", location: "Quận 3, TP.HCM" },
-      { name: "Lumière Boulevard", location: "Quận 9, TP.HCM" },
-      { name: "Masteri Centre Point", location: "Quận 9, TP.HCM" },
-      { name: "The Beverly", location: "Quận 9, TP.HCM" },
-      { name: "Picity High Park", location: "Quận 12, TP.HCM" },
-      { name: "Akari City", location: "Bình Tân, TP.HCM" },
-    ];
-
-    // Merge cached projects into suggestions
-    const allSuggestions = [...defaultSuggestions];
-    miProjects.forEach(p => {
-      if (!allSuggestions.find(s => s.name.toLowerCase() === p.project_name.toLowerCase())) {
-        allSuggestions.push({ name: p.project_name, location: p.location || "", heatIndex: p.heat_index, opportunityScore: p.opportunity_score });
-      } else {
-        const idx = allSuggestions.findIndex(s => s.name.toLowerCase() === p.project_name.toLowerCase());
-        if (idx >= 0) { allSuggestions[idx].heatIndex = p.heat_index; allSuggestions[idx].opportunityScore = p.opportunity_score; }
-      }
-    });
-
-    // Load cached projects on mount
-    const loadMiProjects = async () => {
-      try { const r = await apiFetch(`${API}/market-intel/projects`); if (r.ok) setMiProjects(await r.json()); } catch {}
-    };
+    // No suggestion list — user types exactly what they want to search
 
     // Analyze a project
     const analyzeProject = async (projectName, location, refresh = false) => {
@@ -3080,13 +3041,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
         setMiData(data);
         setMiWpPage(1);
         setMiActivityFeed(data.activity_feed || []);
-        apiFetch(`${API}/market-intel/projects`).then(r => r.ok ? r.json() : []).then(d => Array.isArray(d) && setMiProjects(d)).catch(() => {});
+
       } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
       clearTimeout(feedTimer1); clearTimeout(feedTimer2); clearTimeout(feedTimer3);
       setMiLoading(false);
     };
 
-    const filteredSuggestions = allSuggestions.filter(p => p.name.toLowerCase().includes(miSearch.toLowerCase()) || (p.location || "").toLowerCase().includes(miSearch.toLowerCase()));
+
 
     // Build active project from API data or defaults
     const activeProject = miData ? {
@@ -3201,16 +3162,15 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
           </div>
 
           {/* Search Bar */}
-          <div style={{ position: "relative", maxWidth: 600, margin: "0 auto 28px", zIndex: 20 }} ref={miSearchRef}>
+          <div style={{ position: "relative", maxWidth: 600, margin: "0 auto 28px", zIndex: 20 }}>
             <div style={{ position: "relative" }}>
               <Search size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: slate400 }} />
               <input
                 type="text" placeholder="Tìm dự án... (VD: Masterise Cosmo, Global City)"
                 className="mi-search-input"
                 value={miSearch}
-                onChange={(e) => { setMiSearch(e.target.value); setMiShowSuggest(true); }}
-                onFocus={() => setMiShowSuggest(true)}
-                onKeyDown={(e) => { if (e.key === "Enter" && miSearch.trim()) { setMiShowSuggest(false); const match = filteredSuggestions[0]; analyzeProject(match ? match.name : miSearch.trim(), match ? match.location : ""); } }}
+                onChange={(e) => { setMiSearch(e.target.value); }}
+                onKeyDown={(e) => { if (e.key === "Enter" && miSearch.trim()) { analyzeProject(miSearch.trim(), ""); } }}
                 style={{
                   width: "100%", padding: "14px 16px 14px 46px", fontSize: 15, fontWeight: 600,
                   background: "rgba(15,23,42,0.95)", border: `1px solid ${neonBlue}50`, borderRadius: 14,
@@ -3222,24 +3182,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 onMouseLeave={(e) => { e.target.style.borderColor = `${neonBlue}40`; e.target.style.boxShadow = `0 0 20px ${neonBlue}15`; }}
               />
             </div>
-            {miShowSuggest && miSearch && filteredSuggestions.length > 0 && (
-              <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 6, background: "rgba(15,23,42,0.98)", border: `1px solid ${darkBorder}`, borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,.5)", overflow: "hidden", backdropFilter: "blur(20px)" }}>
-                {filteredSuggestions.map(p => (
-                  <div key={p.name} onClick={() => { setMiSelected(p); setMiSearch(p.name); setMiShowSuggest(false); analyzeProject(p.name, p.location); }}
-                    style={{ padding: "12px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", transition: "background .15s", borderBottom: `1px solid ${darkBorder}` }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = "rgba(59,130,246,0.1)"} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: 13, color: "#f1f5f9" }}>{p.name}</div>
-                      <div style={{ fontSize: 11, color: slate400, display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}><MapPin size={10} /> {p.location}</div>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 11, color: heatColor(p.heatIndex), fontWeight: 700 }}>{p.heatIndex}</span>
-                      <Flame size={14} color={heatColor(p.heatIndex)} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* Live Activity Feed - bottom right corner */}

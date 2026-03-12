@@ -2951,20 +2951,39 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (!m) return;
             const pid = m[1];
             let name = '';
+            // Walk up to find the ad card container
             const card = link.closest('[role="article"]') || link.closest('div[class]');
             if (card) {
+              // Strategy 1: Find page name from links to facebook.com/PageName
               const allLinks = card.querySelectorAll('a[href*="facebook.com/"]');
               for (const a of allLinks) {
-                if (a.href.includes('/ads/library/')) continue;
+                if (a.href.includes('/ads/library/') || a.href.includes('/ad_library/')) continue;
                 const txt = a.textContent?.trim();
                 if (isValidName(txt)) { name = txt; break; }
               }
+              // Strategy 2: Heading elements
               if (!name) {
-                for (const sel of ['h4', 'strong', '[dir="auto"] span']) {
+                for (const sel of ['h3', 'h4', 'h5', 'strong', '[dir="auto"] span', 'span[dir="auto"]']) {
                   const el = card.querySelector(sel);
                   const txt = el?.textContent?.trim();
                   if (isValidName(txt) && txt.length < 60) { name = txt; break; }
                 }
+              }
+              // Strategy 3: First non-trivial text in the card header area
+              if (!name) {
+                const allSpans = card.querySelectorAll('span');
+                for (const sp of allSpans) {
+                  const txt = sp.textContent?.trim();
+                  if (isValidName(txt) && txt.length > 2 && txt.length < 50 && !txt.includes('·') && !txt.includes('quảng cáo') && !txt.includes('ad')) {
+                    name = txt;
+                    break;
+                  }
+                }
+              }
+              // Strategy 4: The "See all" link text itself may contain the page name in aria-label
+              const seeAll = link.getAttribute('aria-label') || link.textContent?.trim();
+              if (!name && seeAll && isValidName(seeAll) && !seeAll.includes('See all') && !seeAll.includes('Xem tất cả')) {
+                name = seeAll;
               }
             }
             if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
@@ -3044,8 +3063,41 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         htmlPages.forEach(p => {
           if (!pageSet.has(p.pageId)) {
             pageSet.set(p.pageId, { pageName: p.pageName || p.pageId, pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+          } else if (p.pageName && p.pageName !== p.pageId) {
+            // Update name if we found a real name from HTML patterns
+            const existing = pageSet.get(p.pageId);
+            if (!existing.pageName || existing.pageName === existing.pageId || /^\d+$/.test(existing.pageName)) {
+              existing.pageName = p.pageName;
+            }
           }
         });
+
+        // Post-process: Try to resolve numeric page names from embedded JSON data in HTML
+        // Facebook embeds page names in various JSON structures
+        const pageNamePatterns = [
+          // "page_id":"123","name":"Page Name"
+          /"page_id"\s*:\s*"?(\d+)"?\s*[,}].*?"name"\s*:\s*"([^"]{2,80})"/g,
+          // "name":"Page Name"..."page_id":"123"
+          /"name"\s*:\s*"([^"]{2,80})".*?"page_id"\s*:\s*"?(\d+)"?/g,
+          // "id":"123","name":"Page Name"
+          /"id"\s*:\s*"?(\d+)"?\s*,\s*"name"\s*:\s*"([^"]{2,80})"/g,
+        ];
+        for (const pat of pageNamePatterns) {
+          let nameMatch;
+          while ((nameMatch = pat.exec(html)) !== null) {
+            // Pattern 1 & 3: group 1 = id, group 2 = name
+            // Pattern 2: group 1 = name, group 2 = id
+            const pid = /^\d+$/.test(nameMatch[1]) ? nameMatch[1] : nameMatch[2];
+            const pname = /^\d+$/.test(nameMatch[1]) ? nameMatch[2] : nameMatch[1];
+            if (pageSet.has(pid)) {
+              const existing = pageSet.get(pid);
+              if (!existing.pageName || existing.pageName === pid || /^\d+$/.test(existing.pageName)) {
+                existing.pageName = pname;
+                console.log(`[MI] Resolved page name from HTML: ${pid} → "${pname}"`);
+              }
+            }
+          }
+        }
 
         // Check for "no results" message
         if (bodyText.includes("Không có quảng cáo") || bodyText.includes("No ads")) {
@@ -3133,6 +3185,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const pagesInfo = [];
   pageSet.forEach((info, key) => {
     const pid = info.pageId || key;
+    const isNumericId = /^\d+$/.test(pid);
     pagesInfo.push({
       pageName: info.pageName || pid,
       pageId: pid,
@@ -3140,9 +3193,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       maxDays: info.maxDays,
       platforms: [...(info.platforms || [])],
       fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
-      adsLibraryUrl: /^\d+$/.test(pid)
+      // For numeric IDs: use view_all_page_id (direct). For slugs: use /PageSlug/ads/ which redirects to the correct Ads Library page
+      adsLibraryUrl: isNumericId
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
-        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(info.pageName || pid)}&search_type=page`,
+        : `https://www.facebook.com/${pid}/ads/`,
     });
   });
   pagesInfo.sort((a, b) => b.adCount - a.adCount);
@@ -3563,7 +3617,9 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
         const isOldCplFormula = cached.estimated_cpl_avg < 200000;
         // Detect old adsLibraryUrl format (missing search_type=page or using keyword_unordered for page URLs)
         const hasOldUrlFormat = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl && (!cachedPages[0].adsLibraryUrl.includes('search_type=page') || cachedPages.some(p => p.adsLibraryUrl?.includes('keyword_unordered')));
-        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula || hasUrlPageNames || hasOldUrlFormat) {
+        // Detect pages with numeric-only names (unresolved page IDs shown as names)
+        const hasNumericNames = cachedPages.some(p => p.name && /^\d+$/.test(p.name));
+        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula || hasUrlPageNames || hasOldUrlFormat || hasNumericNames) {
           // Stale cache with old format or old CPL formula — force re-scrape
         } else {
           const districtInfo = getDistrictAvgCpl(cached.location);
