@@ -3215,107 +3215,148 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     if (browser) try { await browser.close(); } catch {}
   }
 
-  // ===== RESOLVE REMAINING NUMERIC-ID PAGES VIA HTTP FETCH (fast, no browser needed) =====
-  const unresolvedPages = [...pageSet.entries()].filter(([pid, info]) => /^\d+$/.test(pid) && (!info.pageName || info.pageName === pid || /^\d+$/.test(info.pageName)));
-  if (unresolvedPages.length > 0) {
-    activityLog.push(`Đang xử lý ${unresolvedPages.length} pages còn lại (HTTP)...`);
-    console.log(`[MI] Resolving ${unresolvedPages.length} remaining pages via HTTP fetch`);
-    const fetchPromises = unresolvedPages.map(async ([pid, info]) => {
-      try {
-        const fbUrl = `https://www.facebook.com/${pid}`;
-        const resp = await fetch(fbUrl, {
-          headers: { 'User-Agent': ua, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8', 'Accept': 'text/html' },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(5000),
-        });
-        const html = await resp.text();
-        // Extract from <title> tag
-        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-        if (titleMatch) {
-          const raw = titleMatch[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
-          const cleaned = raw.replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
-          const badTitle = ['facebook', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng'];
-          if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !badTitle.some(b => cleaned.toLowerCase().includes(b))) {
-            info.pageName = cleaned;
-            console.log(`[MI] Page ${pid} → "${cleaned}" (HTTP fetch)`);
-          }
-        }
-        // Try og:title
-        if (!info.pageName || info.pageName === pid || /^\d+$/.test(info.pageName)) {
-          const ogMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || html.match(/<meta\s+content="([^"]+)"\s+property="og:title"/i);
-          if (ogMatch) {
-            const cleaned = ogMatch[1].replace(/&amp;/g, '&').replace(/\s*[-–|·].*$/g, '').trim();
-            const badOg = ['facebook', 'error', 'page not found', 'content not found', 'sorry', 'không tìm thấy'];
-            if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !badOg.some(b => cleaned.toLowerCase().includes(b))) {
-              info.pageName = cleaned;
-              console.log(`[MI] Page ${pid} → "${cleaned}" (og:title)`);
+  // ===== RESOLVE REMAINING PAGES: NAME + DURATION (combined, single pass) =====
+  const pagesToResolveHttp = [...pageSet.entries()].filter(([pid, info]) => {
+    if (!/^\d+$/.test(pid)) return false;
+    const needsName = !info.pageName || info.pageName === pid || /^\d+$/.test(info.pageName);
+    const needsDuration = info.maxDays === 0;
+    return needsName || needsDuration;
+  });
+
+  if (pagesToResolveHttp.length > 0) {
+    activityLog.push(`Đang xử lý ${pagesToResolveHttp.length} pages còn lại (API + HTTP)...`);
+    console.log(`[MI] Resolving ${pagesToResolveHttp.length} pages via API + HTTP`);
+
+    // Get Facebook token for Ads Library API (most reliable for name + dates)
+    const fbToken = _adAccountRows?.[0]?.access_token || '';
+    const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country'];
+    const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase()));
+    const decodeHtml = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
+
+    const resolvePromises = pagesToResolveHttp.map(async ([pid, info]) => {
+      const needsName = () => !info.pageName || info.pageName === pid || /^\d+$/.test(info.pageName);
+      const needsDuration = () => info.maxDays === 0;
+
+      // ── Strategy 1: Facebook Ads Library API (structured JSON — best source) ──
+      if (fbToken && (needsName() || needsDuration())) {
+        try {
+          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=10`;
+          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
+          const data = await resp.json();
+          if (data.data?.length > 0) {
+            // Page name from API
+            if (needsName() && data.data[0].page_name && isGoodName(data.data[0].page_name)) {
+              info.pageName = data.data[0].page_name;
+              console.log(`[MI] Page ${pid} → "${info.pageName}" (API)`);
+            }
+            // Duration from ad_delivery_start_time
+            if (needsDuration()) {
+              const now = Date.now();
+              let maxDays = 0;
+              for (const ad of data.data) {
+                if (ad.ad_delivery_start_time) {
+                  const d = new Date(ad.ad_delivery_start_time);
+                  if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+                }
+              }
+              if (maxDays > 0) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (API)`); }
             }
           }
-        }
-      } catch (err) {
-        console.log(`[MI] HTTP fetch failed for ${pid}: ${err.message}`);
+        } catch (err) { console.log(`[MI] API failed for ${pid}: ${err.message}`); }
       }
-    });
-    await Promise.all(fetchPromises);
-    activityLog.push(`Đã xử lý xong pages via HTTP.`);
-  }
 
-  // ===== RESOLVE DURATION FOR PAGES WITH 0 maxDays VIA HTTP FETCH OF ADS LIBRARY =====
-  const pagesNeedDuration = [...pageSet.entries()].filter(([pid, info]) => /^\d+$/.test(pid) && info.maxDays === 0);
-  if (pagesNeedDuration.length > 0) {
-    activityLog.push(`Đang lấy thời gian chạy QC cho ${pagesNeedDuration.length} pages...`);
-    console.log(`[MI] Fetching duration for ${pagesNeedDuration.length} pages via HTTP`);
-    const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
-    const durationPromises = pagesNeedDuration.map(async ([pid, info]) => {
-      try {
-        const adsUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-        const resp = await fetch(adsUrl, {
-          headers: { 'User-Agent': ua, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8', 'Accept': 'text/html' },
-          redirect: 'follow',
-          signal: AbortSignal.timeout(8000),
-        });
-        const html = await resp.text();
-        let maxDays = 0;
-        const now = Date.now();
-        // Vietnamese: "ngày DD tháng M, YYYY" or "ngày DD tháng M năm YYYY"
-        const vnDates = html.matchAll(/ng\u00e0y\s+(\d{1,2})\s+th\u00e1ng\s+(\d{1,2})[\s,]+(?:n\u0103m\s+)?(\d{4})/gi);
-        for (const m of vnDates) {
-          const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-        }
-        // English: "Mon DD, YYYY"
-        const enDates = html.matchAll(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),?\s+(\d{4})/gi);
-        for (const m of enDates) {
-          const mon = monthsEn[m[1].substring(0, 3).toLowerCase()];
-          if (mon !== undefined) {
-            const d = new Date(parseInt(m[3]), mon, parseInt(m[2]));
-            if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+      // ── Strategy 2: HTTP fetch Ads Library page (name from <title> + dates from embedded JSON) ──
+      if (needsName() || needsDuration()) {
+        try {
+          const adsUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
+          const resp = await fetch(adsUrl, {
+            headers: { 'User-Agent': ua, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8', 'Accept': 'text/html' },
+            redirect: 'follow', signal: AbortSignal.timeout(8000),
+          });
+          const html = await resp.text();
+
+          // -- Name from <title>: "PageName | Meta Ad Library" --
+          if (needsName()) {
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            if (titleMatch) {
+              const raw = decodeHtml(titleMatch[1]);
+              const cleaned = raw.replace(/\s*[-–|·]\s*(Facebook|Meta|Thư viện|Ad Library|Ads Library|FB).*$/i, '').trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (Ads Library title)`); }
+            }
           }
-        }
-        // DD/MM/YYYY
-        const slashDates = html.matchAll(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/g);
-        for (const m of slashDates) {
-          const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-        }
-        // Also try embedded JSON with timestamps: "start_date":"YYYY-MM-DD" or "creation_time":<timestamp>
-        const jsonDates = html.matchAll(/"(?:start_date|creation_time|start_time)"\s*:\s*"?(\d{4}-\d{2}-\d{2}|\d{10,13})"?/g);
-        for (const m of jsonDates) {
-          let d;
-          if (m[1].includes('-')) d = new Date(m[1]);
-          else d = new Date(parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1));
-          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-        }
-        if (maxDays > 0) {
-          info.maxDays = maxDays;
-          console.log(`[MI] Page ${pid} duration: ${maxDays} days (HTTP Ads Library)`);
-        }
-      } catch (err) {
-        console.log(`[MI] Duration fetch failed for ${pid}: ${err.message}`);
+          // -- Name from og:title --
+          if (needsName()) {
+            const ogMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || html.match(/<meta\s+content="([^"]+)"\s+property="og:title"/i);
+            if (ogMatch) {
+              const cleaned = decodeHtml(ogMatch[1]).replace(/\s*[-–|·].*$/g, '').trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (og:title)`); }
+            }
+          }
+          // -- Name from embedded JSON: "page_name":"..." --
+          if (needsName()) {
+            const jsonNames = html.matchAll(/"page_name"\s*:\s*"([^"]{2,80})"/g);
+            for (const m of jsonNames) {
+              const decoded = m[1].replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+              if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (embedded JSON)`); break; }
+            }
+          }
+          // -- Duration from embedded JSON dates --
+          if (needsDuration()) {
+            const now = Date.now();
+            let maxDays = 0;
+            // "ad_delivery_start_time":"2024-01-15" or "start_date":"2024-01-15"
+            const jsonDates = html.matchAll(/"(?:ad_delivery_start_time|start_date|creation_time|start_time)"\s*:\s*"?(\d{4}-\d{2}-\d{2}|\d{10,13})"?/g);
+            for (const m of jsonDates) {
+              let d; if (m[1].includes('-')) d = new Date(m[1]); else d = new Date(parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1));
+              if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+            }
+            // Vietnamese dates in HTML text
+            const vnDates = html.matchAll(/ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})[\s,]+(?:năm\s+)?(\d{4})/gi);
+            for (const m of vnDates) {
+              const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+              if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+            }
+            if (maxDays > 0) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (Ads Library HTML)`); }
+          }
+        } catch (err) { console.log(`[MI] HTTP fetch failed for ${pid}: ${err.message}`); }
+      }
+
+      // ── Strategy 3: Fetch facebook.com/{pid} for name only (last resort) ──
+      if (needsName()) {
+        try {
+          const resp = await fetch(`https://www.facebook.com/${pid}`, {
+            headers: { 'User-Agent': ua, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8', 'Accept': 'text/html' },
+            redirect: 'follow', signal: AbortSignal.timeout(5000),
+          });
+          const html = await resp.text();
+          // <title>
+          const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+          if (titleMatch) {
+            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (FB profile)`); }
+          }
+          // og:title
+          if (needsName()) {
+            const ogMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || html.match(/<meta\s+content="([^"]+)"\s+property="og:title"/i);
+            if (ogMatch) {
+              const cleaned = decodeHtml(ogMatch[1]).replace(/\s*[-–|·].*$/g, '').trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (FB og:title)`); }
+            }
+          }
+          // "name":"..." in embedded JSON
+          if (needsName()) {
+            const nameMatch = html.match(/"name"\s*:\s*"([^"]{2,80})"/);
+            if (nameMatch) {
+              const decoded = nameMatch[1].replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+              if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (FB JSON)`); }
+            }
+          }
+        } catch (err) { console.log(`[MI] FB fetch failed for ${pid}: ${err.message}`); }
       }
     });
-    await Promise.all(durationPromises);
-    activityLog.push(`Đã lấy thời gian chạy QC xong.`);
+
+    await Promise.all(resolvePromises);
+    activityLog.push(`Đã xử lý xong ${pagesToResolveHttp.length} pages.`);
   }
 
   // ===== STRATEGY 2: HTTP Fetch fallback (if Chromium failed) =====
@@ -3721,17 +3762,25 @@ function getDistrictAvgCpl(location) {
 
 // Winning pages aggregator - with real page names and links
 function buildWinningPages(pagesInfo) {
+  const badDisplayNames = ['error', 'facebook', 'page not found', 'content not found', 'sorry', 'log in'];
   return pagesInfo
     .sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays)
-    .map((p) => ({
-      name: p.pageName,
-      pageId: p.pageId || "",
-      duration: p.maxDays,
-      ads: p.adCount,
-      platforms: p.platforms || ["facebook"],
-      fbPageUrl: p.fbPageUrl || "",
-      adsLibraryUrl: p.adsLibraryUrl || "",
-    }));
+    .map((p) => {
+      let name = p.pageName || '';
+      // If name is still a numeric ID or a bad name, create a readable fallback
+      if (/^\d+$/.test(name) || badDisplayNames.some(b => name.toLowerCase().includes(b)) || !name) {
+        name = `Page ${(p.pageId || '').slice(-6)}`;
+      }
+      return {
+        name,
+        pageId: p.pageId || "",
+        duration: p.maxDays,
+        ads: p.adCount,
+        platforms: p.platforms || ["facebook"],
+        fbPageUrl: p.fbPageUrl || "",
+        adsLibraryUrl: p.adsLibraryUrl || "",
+      };
+    });
 }
 
 // GET /api/market-intel/projects - List all cached market intel projects
