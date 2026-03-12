@@ -2758,19 +2758,85 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const activityLog = [];
   const topAdDurations = [];
 
+  // Extract meaningful search keywords from project name
+  // e.g. "Salacia VillThe global city" → try "the global city", "Salacia Vill"
+  // e.g. "Masterise Homes" → try "Masterise Homes"
+  const stopWords = new Set(["dự","án","khu","đô","thị","căn","hộ","nhà","phố","biệt","thự"]);
+  function buildSearchTerms(name) {
+    const terms = [name]; // always try full name first
+    // Split on common separators and try sub-phrases
+    const parts = name.split(/[-–—|,;/\\]/).map(s => s.trim()).filter(s => s.length > 2);
+    if (parts.length > 1) parts.forEach(p => terms.push(p));
+    // Remove stop words and try remaining
+    const words = name.split(/\s+/).filter(w => !stopWords.has(w.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")));
+    if (words.length > 1 && words.join(" ") !== name) terms.push(words.join(" "));
+    // If name has > 3 words, try last 2-3 words (often the main brand)
+    const allWords = name.split(/\s+/);
+    if (allWords.length >= 4) terms.push(allWords.slice(-3).join(" "));
+    if (allWords.length >= 3) terms.push(allWords.slice(-2).join(" "));
+    // Deduplicate while preserving order
+    return [...new Map(terms.map(t => [t.toLowerCase(), t])).values()];
+  }
+
+  const searchTerms = buildSearchTerms(projectName);
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
   ];
   const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
 
+  // Helper: extract ad count from text using multiple patterns
+  function extractAdCount(text) {
+    const patterns = [
+      /~\s*([\d.,]+)\s*k\u1ebft qu\u1ea3/i,
+      /Kho\u1ea3ng\s+([\d.,]+)\s*k\u1ebft qu\u1ea3/i,
+      /About\s+([\d.,]+)\s*results/i,
+      /([\d.,]+)\s*k\u1ebft qu\u1ea3/i,
+      /([\d.,]+)\s*results?\b/i,
+    ];
+    for (const p of patterns) {
+      const m = text.match(p);
+      if (m) {
+        const num = parseInt(m[1].replace(/[.,\s]/g, ""), 10);
+        if (num > 0 && num < 10000000) return num;
+      }
+    }
+    return 0;
+  }
+
+  // Helper: extract page info from HTML
+  function extractPagesFromHtml(html) {
+    const pages = [];
+    const regex = /view_all_page_id=(\d+)/g;
+    const seen = new Set();
+    let m;
+    while ((m = regex.exec(html)) !== null) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        pages.push({ pageId: m[1], pageName: "", adCount: 1 });
+      }
+    }
+    // Try to extract page names from nearby text
+    const nameRegex = /data-testid="[^"]*page[^"]*"[^>]*>([^<]{2,80})</gi;
+    let nm;
+    while ((nm = nameRegex.exec(html)) !== null) {
+      const name = nm[1].trim();
+      if (name && pages.length > 0) {
+        const pg = pages.find(p => !p.pageName);
+        if (pg) pg.pageName = name;
+      }
+    }
+    return pages;
+  }
+
+  // ===== STRATEGY 1: Headless Chromium =====
   let browser = null;
+  let bestTerm = searchTerms[0];
   try {
     activityLog.push("Đang khởi tạo trình duyệt ảo (Headless Chromium)...");
     console.log("[MI] Launching headless Chromium...");
 
-    // Dynamic imports — prevent crash if Chromium binary unavailable
     const chromium = (await import("@sparticuz/chromium")).default;
     const puppeteer = (await import("puppeteer-core")).default;
 
@@ -2784,95 +2850,187 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     const page = await browser.newPage();
     await page.setUserAgent(ua);
     await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8" });
-
-    // Stealth: mask webdriver flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => false });
       Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
       window.chrome = { runtime: {} };
     });
 
-    const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&search_type=keyword_unordered`;
-    activityLog.push(`Đang truy cập Ads Library: "${projectName}"...`);
-    console.log(`[MI] Navigating to: ${searchUrl}`);
-
-    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 45000 });
-
-    // Auto-scroll 3 times to trigger lazy-load
-    activityLog.push("Đang auto-scroll để load dữ liệu...");
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 2000));
-      await new Promise(r => setTimeout(r, 2500));
-    }
-    activityLog.push("Scroll hoàn tất — đang phân tích kết quả...");
-
-    // Extract ad count from visible text
-    const bodyText = await page.evaluate(() => document.body.innerText);
-    const html = await page.content();
-
-    const countPatterns = [
-      /~?([\d.,]+)\s+k\u1ebft qu\u1ea3/i,
-      /Kho\u1ea3ng\s+([\d.,]+)\s+k\u1ebft qu\u1ea3/i,
-      /About\s+([\d.,]+)\s+results/i,
-      />([\d.,]+)\s+k\u1ebft qu\u1ea3/i,
-      /([\d.,]+)\s+results?/i,
-      /"count"\s*:\s*(\d+)/,
-      /"total_count"\s*:\s*(\d+)/,
-    ];
-
-    // Search body text first, then HTML
-    for (const source of [bodyText, html]) {
+    // Try each search term until we find results
+    for (const term of searchTerms) {
       if (adCount > 0) break;
-      for (const pattern of countPatterns) {
-        const match = source.match(pattern);
-        if (match) {
-          const num = parseInt(match[1].replace(/[.,]/g, ""), 10);
-          if (num > 0 && num < 10000000) { adCount = num; break; }
+      const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(term)}&search_type=keyword_unordered`;
+      activityLog.push(`Đang tìm kiếm: "${term}"...`);
+      console.log(`[MI] Navigating to: ${searchUrl}`);
+
+      try {
+        await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40000 });
+
+        // Handle cookie consent / login modals
+        try {
+          const consentBtn = await page.$('button[data-cookiebanner="accept_button"], button[title="Cho phép tất cả cookie"], button[title="Allow all cookies"], [aria-label="Allow all cookies"], [aria-label="Cho phép tất cả cookie"]');
+          if (consentBtn) {
+            await consentBtn.click();
+            activityLog.push("Đã chấp nhận cookie consent.");
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        } catch {}
+
+        // Wait for content to render - look for key indicators
+        try {
+          await page.waitForFunction(
+            () => document.body.innerText.includes("kết quả") || document.body.innerText.includes("results") || document.body.innerText.includes("Không có quảng cáo") || document.body.innerText.includes("No ads"),
+            { timeout: 15000 }
+          );
+        } catch {
+          // Timeout - page may not have rendered, continue anyway
         }
+
+        // Scroll to trigger lazy loading
+        for (let i = 0; i < 3; i++) {
+          await page.evaluate(() => window.scrollBy(0, 2000));
+          await new Promise(r => setTimeout(r, 2000));
+        }
+
+        // Extract count
+        const bodyText = await page.evaluate(() => document.body.innerText);
+        const html = await page.content();
+
+        // Debug: log first 200 chars of body text
+        console.log(`[MI] Body text (first 300): ${bodyText.substring(0, 300).replace(/\n/g, " | ")}`);
+
+        const count = Math.max(extractAdCount(bodyText), extractAdCount(html));
+        if (count > adCount) {
+          adCount = count;
+          bestTerm = term;
+        }
+
+        // Extract pages from rendered DOM
+        const extractedPages = await page.evaluate(() => {
+          const pages = {};
+          // Method 1: view_all_page_id links
+          document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
+            const m = link.href.match(/view_all_page_id=(\d+)/);
+            const name = link.textContent?.trim() || link.closest('[role="article"]')?.querySelector('span')?.textContent?.trim();
+            if (m) {
+              const pid = m[1];
+              if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
+              pages[pid].count++;
+            }
+          });
+          // Method 2: Sponsored/ad page links
+          document.querySelectorAll('a[href*="/ads/library/?view_all_page_id="]').forEach(link => {
+            const m = link.href.match(/view_all_page_id=(\d+)/);
+            if (m && !pages[m[1]]) {
+              const card = link.closest('div[class]');
+              const name = card?.querySelector('a[href*="facebook.com/"]')?.textContent?.trim();
+              pages[m[1]] = { pageName: name || m[1], pageId: m[1], count: 1 };
+            }
+          });
+          return Object.values(pages);
+        });
+
+        extractedPages.forEach(p => {
+          if (p.pageName && !pageSet.has(p.pageName)) {
+            pageSet.set(p.pageName, { pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
+          }
+        });
+
+        // Also extract pages from HTML source
+        const htmlPages = extractPagesFromHtml(html);
+        htmlPages.forEach(p => {
+          if (!pageSet.has(p.pageId) && !pageSet.has(p.pageName)) {
+            pageSet.set(p.pageId, { pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+          }
+        });
+
+        // Check for "no results" message
+        if (bodyText.includes("Không có quảng cáo") || bodyText.includes("No ads")) {
+          activityLog.push(`Không có quảng cáo cho "${term}".`);
+          console.log(`[MI] No ads for "${term}"`);
+        }
+      } catch (navErr) {
+        console.log(`[MI] Nav error for "${term}": ${navErr.message}`);
       }
     }
 
-    console.log(`[MI] Ad count found: ${adCount}`);
-    activityLog.push(`Tìm thấy ${adCount > 0 ? adCount.toLocaleString("vi-VN") : "0"} mẫu quảng cáo.`);
-
-    // Extract competitor pages from DOM
-    const extractedPages = await page.evaluate(() => {
-      const pages = {};
-      document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
-        const m = link.href.match(/view_all_page_id=(\d+)/);
-        const name = link.textContent?.trim();
-        if (m && name && name.length > 1 && name.length < 100) {
-          const pid = m[1];
-          if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
-          pages[pid].count++;
-        }
-      });
-      return Object.values(pages);
-    });
-
-    extractedPages.forEach(p => {
-      if (!pageSet.has(p.pageName)) {
-        pageSet.set(p.pageName, { pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
-      } else {
-        pageSet.get(p.pageName).adCount += p.count;
-      }
-    });
-
-    activityLog.push(`Phát hiện ${pageSet.size} page đối thủ đang chạy QC.`);
-
+    activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
   } catch (err) {
-    console.error(`[MI] Scraping error: ${err.message}`);
-    apiError = `Scraping error: ${err.message}`;
-    activityLog.push(`Lỗi scraping: ${err.message}`);
+    console.error(`[MI] Chromium error: ${err.message}`);
+    activityLog.push(`Lỗi Chromium: ${err.message.substring(0, 100)}`);
   } finally {
     if (browser) try { await browser.close(); } catch {}
+  }
+
+  // ===== STRATEGY 2: HTTP Fetch fallback (if Chromium failed) =====
+  if (adCount === 0) {
+    activityLog.push("Chromium không lấy được dữ liệu — thử HTTP fetch fallback...");
+    for (const term of searchTerms.slice(0, 3)) {
+      if (adCount > 0) break;
+      try {
+        const url = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(term)}&search_type=keyword_unordered`;
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent": ua,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8",
+            "Cache-Control": "no-cache",
+          },
+          signal: AbortSignal.timeout(15000),
+          redirect: "follow",
+        });
+        const html = await res.text();
+        console.log(`[MI] Fetch HTML: status=${res.status}, length=${html.length} for "${term}"`);
+
+        // Try to extract count from embedded JSON in <script> tags
+        const countFromHtml = extractAdCount(html);
+        if (countFromHtml > adCount) {
+          adCount = countFromHtml;
+          bestTerm = term;
+        }
+
+        // Try to find count in embedded data
+        const jsonPatterns = [
+          /"count"\s*:\s*(\d+)/g,
+          /"total_count"\s*:\s*(\d+)/g,
+          /"numResults"\s*:\s*(\d+)/g,
+          /"totalNumResults"\s*:\s*(\d+)/g,
+        ];
+        for (const pat of jsonPatterns) {
+          let jm;
+          while ((jm = pat.exec(html)) !== null) {
+            const n = parseInt(jm[1], 10);
+            if (n > adCount && n < 10000000) adCount = n;
+          }
+        }
+
+        // Extract pages from HTML
+        const htmlPages = extractPagesFromHtml(html);
+        htmlPages.forEach(p => {
+          if (!pageSet.has(p.pageId)) {
+            pageSet.set(p.pageId, { pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+          }
+        });
+
+        if (adCount > 0) {
+          activityLog.push(`HTTP fetch: "${term}" — ${adCount} QC.`);
+        }
+      } catch (err) {
+        console.log(`[MI] Fetch error for "${term}": ${err.message}`);
+      }
+    }
+  }
+
+  if (adCount === 0) {
+    apiError = "Không thể lấy dữ liệu từ Ads Library. Facebook có thể đang chặn truy cập tự động.";
+    activityLog.push("Không lấy được số liệu QC — Facebook có thể chặn bot.");
   }
 
   // Build pages info
   const pagesInfo = [];
   pageSet.forEach((info, name) => {
     pagesInfo.push({
-      pageName: name,
+      pageName: info.pageName || name,
       pageId: info.pageId || "",
       adCount: info.adCount,
       maxDays: info.maxDays,
@@ -2890,7 +3048,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     : 0;
 
   activityLog.push("Hoàn tất thu thập dữ liệu Ads Library.");
-  console.log(`[MI] Final: totalAds=${adCount}, pages=${pagesInfo.length} for "${projectName}"`);
+  console.log(`[MI] Final: totalAds=${adCount}, pages=${pagesInfo.length}, bestTerm="${bestTerm}" for "${projectName}"`);
 
   return {
     totalAds: adCount,
@@ -3214,8 +3372,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
         const cachedPages = JSON.parse(cached.winning_pages || "[]");
         const hasRealPages = cachedPages.length > 0 && cachedPages[0]?.name && !/^Page \d+$/i.test(cachedPages[0].name);
         const hasPageIdUrls = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl?.includes("view_all_page_id=");
-        if (!hasRealPages || !hasPageIdUrls) {
-          // Stale cache with old format — force re-scrape
+        // Detect old CPL formula (base 35K → values < 200K) — force re-scrape
+        const isOldCplFormula = cached.estimated_cpl_avg < 200000;
+        if (!hasRealPages || !hasPageIdUrls || isOldCplFormula) {
+          // Stale cache with old format or old CPL formula — force re-scrape
         } else {
           const districtInfo = getDistrictAvgCpl(cached.location);
         return res.json({
