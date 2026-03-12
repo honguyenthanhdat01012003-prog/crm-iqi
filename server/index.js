@@ -3327,13 +3327,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const decodeHtml = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
   const decodeUnicode = (s) => s.replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
-  // Find pages that still need name or duration
-  const pagesToResolveHttp = [...pageSet.entries()].filter(([pid, info]) => {
-    if (!/^\d+$/.test(pid)) return false;
-    const needsName = !isGoodName(info.pageName);
-    const needsDuration = info.maxDays === 0;
-    return needsName || needsDuration;
-  });
+  // All pages go through HTTP resolve — always try to improve duration via per-page Ads API
+  const pagesToResolveHttp = [...pageSet.entries()].filter(([pid]) => /^\d+$/.test(pid));
 
   if (pagesToResolveHttp.length > 0) {
     activityLog.push(`Đang xử lý ${pagesToResolveHttp.length} pages (API + Graph + HTTP)...`);
@@ -3355,10 +3350,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         } catch (err) { console.log(`[MI] Graph API failed for ${pid}: ${err.message}`); }
       }
 
-      // ── Strategy 2: Ads Library API per page (for dates + name fallback) ── try ALL status
-      if (fbToken && (needsName() || needsDuration())) {
+      // ── Strategy 2: Ads Library API per page (for dates + name fallback) ── use ALL to find oldest ad
+      if (fbToken) {
         try {
-          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
+          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=50`;
           const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(8000) });
           const data = await resp.json();
           if (data.data?.length > 0) {
@@ -3366,17 +3361,16 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               info.pageName = data.data[0].page_name;
               console.log(`[MI] Page ${pid} → "${info.pageName}" (Ads API)`);
             }
-            if (needsDuration()) {
-              const now = Date.now();
-              let maxDays = 0;
-              for (const ad of data.data) {
-                if (ad.ad_delivery_start_time) {
-                  const d = new Date(ad.ad_delivery_start_time);
-                  if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-                }
+            // Always try to find the oldest ad start date for best duration
+            const now = Date.now();
+            let maxDays = 0;
+            for (const ad of data.data) {
+              if (ad.ad_delivery_start_time) {
+                const d = new Date(ad.ad_delivery_start_time);
+                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
               }
-              if (maxDays > 0) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (Ads API)`); }
             }
+            if (maxDays > info.maxDays) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (Ads API)`); }
           }
         } catch (err) { console.log(`[MI] Ads API failed for ${pid}: ${err.message}`); }
       }
@@ -3406,8 +3400,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (HTML title)`); }
             }
           }
-          // Duration: embedded JSON dates
-          if (needsDuration()) {
+          // Duration: embedded JSON dates — always try to improve
+          {
             const now = Date.now();
             let maxDays = 0;
             const jsonDates = html.matchAll(/"(?:ad_delivery_start_time|start_date|creation_time)"\s*:\s*"?(\d{4}-\d{2}-\d{2}|\d{10,13})"?/g);
@@ -3415,7 +3409,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               let d; if (m[1].includes('-')) d = new Date(m[1]); else d = new Date(parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1));
               if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
             }
-            if (maxDays > 0) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (HTML JSON)`); }
+            if (maxDays > info.maxDays) { info.maxDays = maxDays; console.log(`[MI] Page ${pid} duration: ${maxDays} days (HTML JSON)`); }
           }
         } catch (err) { console.log(`[MI] HTML fetch failed for ${pid}: ${err.message}`); }
       }
