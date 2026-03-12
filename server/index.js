@@ -3042,17 +3042,16 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
     // ===== RESOLVE PAGE DETAILS: Visit each page's Ads Library to get real name + ad count =====
     if (pageSet.size > 0) {
-      activityLog.push(`Đang lấy chi tiết ${Math.min(pageSet.size, 10)} pages...`);
+      activityLog.push(`Đang lấy chi tiết ${pageSet.size} pages...`);
       const pagesToResolve = [...pageSet.entries()]
-        .sort((a, b) => b[1].adCount - a[1].adCount)
-        .slice(0, 5); // Top 5 pages only (time budget ~15s)
+        .sort((a, b) => b[1].adCount - a[1].adCount);
 
       for (const [pid, info] of pagesToResolve) {
         if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
         try {
           const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=${pid}`;
-          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 8000 });
-          await new Promise(r => setTimeout(r, 1500)); // Wait for render
+          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6000 });
+          await new Promise(r => setTimeout(r, 1000)); // Wait for render
 
           const pageDetails = await page.evaluate(() => {
             const body = document.body.innerText || '';
