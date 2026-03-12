@@ -2813,7 +2813,7 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   for (const acct of adAccountRows) {
     if (!acct.access_token || apiFetchedAds > 0) continue;
     const token = acct.access_token;
-    const base = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
+    const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
 
     const formats = [
       { label: "unencoded-json", param: `ad_reached_countries=["VN"]` },
@@ -3111,7 +3111,7 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
     const results = [];
     for (const acct of adAccounts) {
       const token = acct.access_token;
-      const base = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
+      const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
       const formats = [
         { label: "unencoded-json", url: `${base}&ad_reached_countries=["VN"]` },
         { label: "encoded-json", url: `${base}&ad_reached_countries=${encodeURIComponent('["VN"]')}` },
@@ -3152,7 +3152,7 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
       query: q,
       token_check: tokenCheck?.id ? { id: tokenCheck.id, name: tokenCheck.name } : { error: tokenCheck?.error?.message || "Token invalid" },
       results,
-      help: "If all formats show errors, your token may need Ad Library API access. Go to developers.facebook.com > Your App > App Review > Request ad_library_access permission."
+      help: "If permission error: App Dashboard → Add Product → Marketing API → Accept Terms. Then test endpoint in Graph API Explorer: /ads_archive?search_terms=test&ad_reached_countries=[\"VN\"]&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5. Also make sure token in CRM matches the one from Graph API Explorer."
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
