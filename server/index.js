@@ -3087,7 +3087,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       platforms: [...(info.platforms || [])],
       fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
       adsLibraryUrl: pid
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
         : "",
     });
   });

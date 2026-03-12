@@ -3444,6 +3444,9 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                   <BarChart3 size={16} color={neonBlue} />
                   <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Số lượng QC — 30 ngày</span>
                 </div>
+                <div style={{ fontSize: 9, color: slate500, fontWeight: 500 }}>
+                  {(() => { const t = activeProject.adTrend; const s = typeof t[0] === "object" && t[0].date ? t[0].date.split("-").reverse().join("/") : ""; const e = typeof t[t.length-1] === "object" && t[t.length-1].date ? t[t.length-1].date.split("-").reverse().join("/") : ""; return s && e ? `Từ ${s} đến ${e}` : ""; })()}
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                   <TrendingUp size={12} color={emerald} />
                   <span style={{ fontSize: 11, color: emerald, fontWeight: 600 }}>+{(() => { const t = activeProject.adTrend; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return first ? ((last - first) / first * 100).toFixed(0) : 0; })()}%</span>
@@ -3460,7 +3463,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <BarChart2 size={16} color={neonBlue} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB Khu vực chung</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB {activeProject.districtName}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
@@ -3489,9 +3492,14 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, marginBottom: 20 }}>
             {/* CPL Trend */}
             <div style={glassCard}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
-                <TrendingDown size={16} color={emerald} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Xu hướng CPL — 30 ngày</span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <TrendingDown size={16} color={emerald} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Xu hướng CPL — 30 ngày</span>
+                </div>
+                <div style={{ fontSize: 9, color: slate500, fontWeight: 500 }}>
+                  {(() => { const t = activeProject.cplTrend; const s = typeof t[0] === "object" && t[0].date ? t[0].date.split("-").reverse().join("/") : ""; const e = typeof t[t.length-1] === "object" && t[t.length-1].date ? t[t.length-1].date.split("-").reverse().join("/") : ""; return s && e ? `Từ ${s} đến ${e}` : ""; })()}
+                </div>
               </div>
               <MiniChart data={activeProject.cplTrend} color={emerald} width={isMobile ? 260 : 320} height={100} />
               <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: slate500 }}>
