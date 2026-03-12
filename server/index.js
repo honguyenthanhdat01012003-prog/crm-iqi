@@ -2744,7 +2744,7 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   const pageSet = new Map(); // pageName -> { pageId, adCount, maxDays, platforms }
   const adContentSet = new Set(); // For de-duplication: hash of ad_creative_bodies
   const now = Date.now();
-  const MAX_PAGES = 10; // Pagination: fetch up to 10 pages (1000 ads max)
+  const MAX_PAGES = 25; // Pagination: fetch up to 25 pages (2500 ads max)
 
   // Helper: process a batch of ad results
   const processAds = (ads) => {
@@ -2769,7 +2769,7 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     });
   };
 
-  // Helper: scrape the public Ads Library web page for total count & page names
+  // Helper: scrape the public Ads Library web page for total count only
   const scrapeLibraryPage = async () => {
     try {
       const libUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
@@ -2785,24 +2785,6 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
         if (countMatch) {
           estimatedTotalAds = parseInt(countMatch[1].replace(/[,.]/g, "")) || 0;
         }
-        // Extract page names from embedded JSON in HTML
-        const pageNameMatches = html.match(/"page_name":"([^"]+)"/g) || [];
-        const pageIdMatches = html.match(/"page_id":"(\d+)"/g) || [];
-        pageNameMatches.forEach((m, idx) => {
-          const name = m.match(/"page_name":"([^"]+)"/)?.[1] || "";
-          const id = pageIdMatches[idx]?.match(/"page_id":"(\d+)"/)?.[1] || "";
-          if (name && name !== "null") {
-            adContentSet.add(name);
-            if (!pageSet.has(name)) {
-              pageSet.set(name, { pageId: id, adCount: 0, maxDays: 0, platforms: new Set(["facebook"]) });
-            }
-            // Only increment adCount from web if we didn't already get this page from API
-            if (apiFetchedAds === 0) {
-              topAdDurations.push({ days: 30 + Math.floor(Math.random() * 120), pageName: name, pageId: id });
-              pageSet.get(name).adCount += 1;
-            }
-          }
-        });
       }
     } catch { /* web scraping failed */ }
   };
@@ -2842,31 +2824,14 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   // Use the larger of API-fetched vs web-estimated for total count
   const totalAds = Math.max(apiFetchedAds, estimatedTotalAds);
 
-  // If we still have nothing, use fallback
-  if (totalAds === 0 && pageSet.size === 0) {
-    const hash = Array.from(projectName).reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
-    const seed = Math.abs(hash);
-    estimatedTotalAds = 50 + (seed % 200);
-    const pagePrefixes = ["BĐS", "Nhà Đất", "Đầu Tư", "Căn Hộ", "Dự Án", "Sàn GD"];
-    const pageSuffixes = ["Official", "Chính Chủ", "Ưu Đãi", "Hot", "Giá Tốt", "Mới Nhất"];
-    for (let i = 0; i < 8; i++) {
-      const pName = `${pagePrefixes[i % pagePrefixes.length]} ${projectName.split(" ").slice(0, 2).join(" ")} ${pageSuffixes[i % pageSuffixes.length]}`;
-      const days = 10 + ((seed * (i + 1)) % 180);
-      topAdDurations.push({ days, pageName: pName, pageId: "" });
-      pageSet.set(pName, { pageId: "", adCount: 2 + (seed % 4), maxDays: days, platforms: new Set(["facebook"]) });
-      adContentSet.add(`${pName}::content_${i}`);
-    }
-  }
-
   // Calculate final numbers
-  const finalTotal = Math.max(apiFetchedAds, estimatedTotalAds) || estimatedTotalAds;
   const uniqueAds = adContentSet.size;
-  const activeAds = finalTotal; // All results are active (we filter by ad_active_status=ACTIVE)
+  const activeAds = totalAds;
 
   topAdDurations.sort((a, b) => b.days - a.days);
   const avgLongevity = topAdDurations.length ? topAdDurations.reduce((s, d) => s + d.days, 0) / topAdDurations.length : 0;
 
-  // Build pages info for winning pages — sorted by adCount first (most active), then days
+  // Build pages info — ONLY pages with verified pageId get Ads Library links
   const pagesInfo = [];
   pageSet.forEach((info, name) => {
     pagesInfo.push({
@@ -2878,10 +2843,9 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
       fbPageUrl: info.pageId ? `https://www.facebook.com/${info.pageId}` : "",
       adsLibraryUrl: info.pageId
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&source=page-transparency-widget&view_all_page_id=${info.pageId}`
-        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(name)}&media_type=all`,
+        : "",
     });
   });
-  // Sort by ad count DESC (most ads = most active/effective), then by days DESC
   pagesInfo.sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays);
 
   return { totalAds: activeAds, activeAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo };
@@ -3139,10 +3103,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     if (!forceRefresh) {
       const cached = await get(db, "SELECT * FROM market_intel_cache WHERE project_name = ? AND scraped_at > datetime('now', '-24 hours')", [projectName]);
       if (cached) {
-        // Check if cached winning pages have real names (not old "Page N" format)
+        // Check if cached winning pages have real names and proper view_all_page_id URLs
         const cachedPages = JSON.parse(cached.winning_pages || "[]");
         const hasRealPages = cachedPages.length > 0 && cachedPages[0]?.name && !/^Page \d+$/i.test(cachedPages[0].name);
-        if (!hasRealPages) {
+        const hasPageIdUrls = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl?.includes("view_all_page_id=");
+        if (!hasRealPages || !hasPageIdUrls) {
           // Stale cache with old format — force re-scrape
         } else {
           const districtInfo = getDistrictAvgCpl(cached.location);
