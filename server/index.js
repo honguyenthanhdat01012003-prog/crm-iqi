@@ -2905,54 +2905,62 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           bestTerm = term;
         }
 
-        // Extract pages from rendered DOM
+        // Extract pages from rendered DOM — key by pageId to avoid duplicates
         const extractedPages = await page.evaluate(() => {
           const pages = {};
-          // Method 1: view_all_page_id links
+          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/^[\w.-]+\.\w{2,}$/.test(n);
+
+          // Method 1: view_all_page_id links (most reliable)
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
             const m = link.href.match(/view_all_page_id=(\d+)/);
-            const name = link.textContent?.trim() || link.closest('[role="article"]')?.querySelector('span')?.textContent?.trim();
             if (m) {
               const pid = m[1];
-              if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
+              // Get page name from link text or nearby elements
+              let name = link.textContent?.trim();
+              if (!isValidName(name)) {
+                const card = link.closest('[role="article"]') || link.closest('div[class]');
+                name = card?.querySelector('h3, h4, strong, [dir="auto"]')?.textContent?.trim();
+              }
+              if (!pages[pid]) pages[pid] = { pageName: isValidName(name) ? name : pid, pageId: pid, count: 0 };
+              else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
               pages[pid].count++;
             }
           });
-          // Method 2: Sponsored/ad page links
-          document.querySelectorAll('a[href*="/ads/library/?view_all_page_id="]').forEach(link => {
-            const m = link.href.match(/view_all_page_id=(\d+)/);
-            if (m && !pages[m[1]]) {
-              const card = link.closest('div[class]');
-              const name = card?.querySelector('a[href*="facebook.com/"]')?.textContent?.trim();
-              pages[m[1]] = { pageName: name || m[1], pageId: m[1], count: 1 };
-            }
-          });
-          // Method 3: Extract from ad cards — page names shown as ad sponsors
+
+          // Method 2: Ad cards with sponsor info
           document.querySelectorAll('[role="article"], [class*="_7jyr"], div[class*="x1yztbdb"]').forEach(card => {
-            const sponsorLink = card.querySelector('a[href*="facebook.com/"]');
-            if (sponsorLink) {
-              const name = sponsorLink.textContent?.trim();
+            // Look for the page name link that points to a Facebook page
+            const links = card.querySelectorAll('a[href*="www.facebook.com/"]');
+            for (const sponsorLink of links) {
               const href = sponsorLink.href;
-              const pidMatch = href.match(/facebook\.com\/(\d+)/) || href.match(/facebook\.com\/([\w.]+)/);
-              if (name && name.length > 1 && name.length < 80 && pidMatch) {
+              // Skip ads library links, external links
+              if (href.includes('/ads/library/') || href.includes('/ad_library/')) continue;
+              const name = sponsorLink.textContent?.trim();
+              if (!isValidName(name)) continue;
+              const pidMatch = href.match(/facebook\.com\/(\d+)/) || href.match(/facebook\.com\/([\w.]+?)(?:[/?#]|$)/);
+              if (pidMatch) {
                 const pid = pidMatch[1];
                 if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
+                else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
                 pages[pid].count++;
               }
             }
           });
-          // Method 4: Find page names from "Được tài trợ" labels
+
+          // Method 3: "Được tài trợ"/"Sponsored" label traversal
           document.querySelectorAll('span').forEach(span => {
             if (span.textContent === 'Được tài trợ' || span.textContent === 'Sponsored') {
               const container = span.closest('div')?.parentElement?.parentElement;
               if (container) {
-                const nameEl = container.querySelector('a');
+                const nameEl = container.querySelector('a[href*="www.facebook.com/"]');
                 if (nameEl) {
                   const name = nameEl.textContent?.trim();
                   const href = nameEl.href || '';
                   const pidMatch = href.match(/view_all_page_id=(\d+)/) || href.match(/facebook\.com\/(\d+)/);
-                  if (name && name.length > 1 && pidMatch && !pages[pidMatch[1]]) {
-                    pages[pidMatch[1]] = { pageName: name, pageId: pidMatch[1], count: 1 };
+                  if (isValidName(name) && pidMatch) {
+                    const pid = pidMatch[1];
+                    if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 1 };
+                    else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
                   }
                 }
               }
@@ -2961,17 +2969,27 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           return Object.values(pages);
         });
 
+        // Store pages keyed by pageId to properly aggregate counts
         extractedPages.forEach(p => {
-          if (p.pageName && !pageSet.has(p.pageName)) {
-            pageSet.set(p.pageName, { pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
+          if (p.pageId) {
+            if (!pageSet.has(p.pageId)) {
+              pageSet.set(p.pageId, { pageName: p.pageName, pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
+            } else {
+              const existing = pageSet.get(p.pageId);
+              existing.adCount += p.count;
+              // Prefer a real name over a numeric ID
+              if (p.pageName && p.pageName !== p.pageId && (!existing.pageName || existing.pageName === existing.pageId)) {
+                existing.pageName = p.pageName;
+              }
+            }
           }
         });
 
         // Also extract pages from HTML source
         const htmlPages = extractPagesFromHtml(html);
         htmlPages.forEach(p => {
-          if (!pageSet.has(p.pageId) && !pageSet.has(p.pageName)) {
-            pageSet.set(p.pageId, { pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
+          if (!pageSet.has(p.pageId)) {
+            pageSet.set(p.pageId, { pageName: p.pageName || p.pageId, pageId: p.pageId, adCount: 1, maxDays: 0, platforms: new Set(["facebook"]) });
           }
         });
 
@@ -3059,16 +3077,17 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
   // Build pages info
   const pagesInfo = [];
-  pageSet.forEach((info, name) => {
+  pageSet.forEach((info, key) => {
+    const pid = info.pageId || key;
     pagesInfo.push({
-      pageName: info.pageName || name,
-      pageId: info.pageId || "",
+      pageName: info.pageName || pid,
+      pageId: pid,
       adCount: info.adCount,
       maxDays: info.maxDays,
       platforms: [...(info.platforms || [])],
-      fbPageUrl: info.pageId ? `https://www.facebook.com/${info.pageId}` : "",
-      adsLibraryUrl: info.pageId
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&view_all_page_id=${info.pageId}`
+      fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
+      adsLibraryUrl: pid
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
         : "",
     });
   });
