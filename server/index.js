@@ -2919,10 +2919,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           // Timeout - page may not have rendered, continue anyway
         }
 
-        // Scroll to trigger lazy loading — more scrolling to find more pages
-        for (let i = 0; i < 5; i++) {
-          await page.evaluate(() => window.scrollBy(0, 2500));
-          await new Promise(r => setTimeout(r, 2000));
+        // Scroll to trigger lazy loading
+        for (let i = 0; i < 3; i++) {
+          await page.evaluate(() => window.scrollBy(0, 3000));
+          await new Promise(r => setTimeout(r, 1500));
         }
 
         // Extract count
@@ -3039,6 +3039,92 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     }
 
     activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
+
+    // ===== RESOLVE PAGE DETAILS: Visit each page's Ads Library to get real name + ad count =====
+    if (pageSet.size > 0) {
+      activityLog.push(`Đang lấy chi tiết ${Math.min(pageSet.size, 10)} pages...`);
+      const pagesToResolve = [...pageSet.entries()]
+        .sort((a, b) => b[1].adCount - a[1].adCount)
+        .slice(0, 5); // Top 5 pages only (time budget ~15s)
+
+      for (const [pid, info] of pagesToResolve) {
+        if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
+        try {
+          const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=${pid}`;
+          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 8000 });
+          await new Promise(r => setTimeout(r, 1500)); // Wait for render
+
+          const pageDetails = await page.evaluate(() => {
+            const body = document.body.innerText || '';
+            let pageName = '';
+            // The page name appears in titles/headings on the page-specific view
+            for (const sel of ['h1', '[role="heading"]', 'h2', 'strong']) {
+              const el = document.querySelector(sel);
+              const txt = el?.textContent?.trim();
+              if (txt && txt.length > 1 && txt.length < 80 && !/^\d+$/.test(txt) && !txt.includes('Thư viện') && !txt.includes('Ad Library') && !txt.includes('ads_library')) {
+                pageName = txt;
+                break;
+              }
+            }
+            // Also try: page name in links to facebook.com/PageName
+            if (!pageName) {
+              document.querySelectorAll('a[href*="facebook.com/"]').forEach(a => {
+                if (pageName) return;
+                const href = a.href || '';
+                if (href.includes('/ads/library/') || href.includes('/ad_library/')) return;
+                const txt = a.textContent?.trim();
+                if (txt && txt.length > 1 && txt.length < 60 && !/^\d+$/.test(txt) && !txt.startsWith('http')) {
+                  pageName = txt;
+                }
+              });
+            }
+            // Extract ad count from the page body text
+            let realAdCount = 0;
+            const countMatch = body.match(/(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
+            if (countMatch) {
+              realAdCount = parseInt(countMatch[1].replace(/[.,]/g, ''), 10);
+            }
+            // Extract oldest ad start date to calculate max duration
+            let maxDays = 0;
+            const now = Date.now();
+            // Look for "Started running on DD/MM/YYYY" or "Bắt đầu chạy vào ngày DD/MM/YYYY"
+            const datePatterns = body.matchAll(/(?:Started running on|Bắt đầu chạy (?:vào )?(?:ngày )?)\s*(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/gi);
+            for (const dm of datePatterns) {
+              const d = new Date(`${dm[3]}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`);
+              if (!isNaN(d)) {
+                const days = Math.floor((now - d.getTime()) / 86400000);
+                if (days > maxDays && days < 3650) maxDays = days;
+              }
+            }
+            // Also try "ngày DD tháng MM năm YYYY" format
+            const vnDatePatterns = body.matchAll(/ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})/gi);
+            for (const dm of vnDatePatterns) {
+              const d = new Date(`${dm[3]}-${dm[2].padStart(2,'0')}-${dm[1].padStart(2,'0')}`);
+              if (!isNaN(d)) {
+                const days = Math.floor((now - d.getTime()) / 86400000);
+                if (days > maxDays && days < 3650) maxDays = days;
+              }
+            }
+            return { pageName, realAdCount, maxDays };
+          });
+
+          if (pageDetails.pageName) {
+            info.pageName = pageDetails.pageName;
+            console.log(`[MI] Page ${pid} → "${pageDetails.pageName}" (${pageDetails.realAdCount} ads, ${pageDetails.maxDays} days)`);
+          }
+          if (pageDetails.realAdCount > 0) {
+            info.adCount = pageDetails.realAdCount;
+          }
+          if (pageDetails.maxDays > 0) {
+            info.maxDays = pageDetails.maxDays;
+          }
+        } catch (err) {
+          console.log(`[MI] Failed to resolve page ${pid}: ${err.message}`);
+        }
+      }
+      activityLog.push(`Đã lấy chi tiết pages xong.`);
+    }
+
   } catch (err) {
     console.error(`[MI] Chromium error: ${err.message}`);
     activityLog.push(`Lỗi Chromium: ${err.message.substring(0, 100)}`);
