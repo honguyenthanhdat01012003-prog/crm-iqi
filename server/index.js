@@ -3056,24 +3056,37 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const pageDetails = await page.evaluate(() => {
             const body = document.body.innerText || '';
             let pageName = '';
-            // The page name appears in titles/headings on the page-specific view
-            for (const sel of ['h1', '[role="heading"]', 'h2', 'strong']) {
-              const el = document.querySelector(sel);
-              const txt = el?.textContent?.trim();
-            const badNames = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Quốc gia', 'Country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page'];
-              if (txt && txt.length > 1 && txt.length < 80 && !/^\d+$/.test(txt) && !badNames.some(b => txt.toLowerCase().includes(b.toLowerCase()))) {
-                pageName = txt;
-                break;
+            const badNames = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Quốc gia', 'Country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Không hoạt động', 'hoạt động', 'Trạng thái', 'Status', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Filters', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Thông tin', 'Info', 'About', 'Danh mục', 'Category', 'Transparency', 'Minh bạch', 'Xem chi tiết', 'See more', 'Report', 'Báo cáo', 'Đăng nhập', 'Log in', 'Sign up', 'Đăng ký', 'Tạo trang', 'Create', 'Chính sách', 'Policy', 'Quyền riêng tư', 'Privacy', 'Điều khoản', 'Terms', 'Trợ giúp', 'Help', 'Tiếng Việt', 'Vietnamese', 'English'];
+            const isBadName = (txt) => !txt || txt.length <= 1 || txt.length > 80 || /^\d+$/.test(txt) || badNames.some(b => txt.toLowerCase() === b.toLowerCase()) || badNames.some(b => txt.toLowerCase().includes(b.toLowerCase()));
+            // Method 1: Document title — often "Page Name - Ads Library"
+            const titleText = document.title || '';
+            const titleClean = titleText.replace(/[-–|·].*$/g, '').trim();
+            if (titleClean && !isBadName(titleClean)) pageName = titleClean;
+            // Method 2: og:title meta tag
+            if (!pageName) {
+              const ogTitle = document.querySelector('meta[property="og:title"]')?.content?.trim();
+              const ogClean = (ogTitle || '').replace(/[-–|·].*$/g, '').trim();
+              if (ogClean && !isBadName(ogClean)) pageName = ogClean;
+            }
+            // Method 3: heading elements
+            if (!pageName) {
+              for (const sel of ['h1', '[role="heading"]', 'h2', 'strong']) {
+                const el = document.querySelector(sel);
+                const txt = el?.textContent?.trim();
+                if (txt && !isBadName(txt)) {
+                  pageName = txt;
+                  break;
+                }
               }
             }
-            // Also try: page name in links to facebook.com/PageName
+            // Method 4: links to facebook.com/PageName
             if (!pageName) {
               document.querySelectorAll('a[href*="facebook.com/"]').forEach(a => {
                 if (pageName) return;
                 const href = a.href || '';
                 if (href.includes('/ads/library/') || href.includes('/ad_library/')) return;
                 const txt = a.textContent?.trim();
-                if (txt && txt.length > 1 && txt.length < 60 && !/^\d+$/.test(txt) && !txt.startsWith('http')) {
+                if (txt && !isBadName(txt) && !txt.startsWith('http')) {
                   pageName = txt;
                 }
               });

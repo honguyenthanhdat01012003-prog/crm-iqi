@@ -180,6 +180,38 @@ function parseLeadDate(str) {
   return isNaN(iso.getTime()) ? null : iso;
 }
 
+const CountdownTimer = ({ seconds }) => {
+  const [remaining, setRemaining] = React.useState(seconds);
+  React.useEffect(() => {
+    setRemaining(seconds);
+    const interval = setInterval(() => setRemaining(r => Math.max(0, r - 1)), 1000);
+    return () => clearInterval(interval);
+  }, [seconds]);
+  const mins = Math.floor(remaining / 60);
+  const secs = remaining % 60;
+  const progress = Math.max(0, 1 - remaining / seconds);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+      <div style={{ position: "relative", width: 80, height: 80 }}>
+        <svg width="80" height="80" viewBox="0 0 80 80">
+          <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(59,130,246,0.15)" strokeWidth="5" />
+          <circle cx="40" cy="40" r="34" fill="none" stroke="#3b82f6" strokeWidth="5"
+            strokeDasharray={`${2 * Math.PI * 34}`}
+            strokeDashoffset={`${2 * Math.PI * 34 * (1 - progress)}`}
+            strokeLinecap="round"
+            style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dashoffset 1s linear" }} />
+        </svg>
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 18, fontWeight: 800, color: "#f1f5f9", fontVariantNumeric: "tabular-nums" }}>
+          {remaining > 0 ? `${mins}:${String(secs).padStart(2, "0")}` : "\u2713"}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>
+        {remaining > 0 ? `Dự kiến còn ~${mins > 0 ? `${mins} phút ` : ""}${secs}s` : "Đang hoàn tất..."}
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
@@ -3023,38 +3055,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
 
     // Countdown Timer component
-    const CountdownTimer = ({ seconds }) => {
-      const [remaining, setRemaining] = React.useState(seconds);
-      React.useEffect(() => {
-        setRemaining(seconds);
-        const interval = setInterval(() => setRemaining(r => Math.max(0, r - 1)), 1000);
-        return () => clearInterval(interval);
-      }, [seconds]);
-      const mins = Math.floor(remaining / 60);
-      const secs = remaining % 60;
-      const progress = Math.max(0, 1 - remaining / seconds);
-      return (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-          <div style={{ position: "relative", width: 80, height: 80 }}>
-            <svg width="80" height="80" viewBox="0 0 80 80">
-              <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(59,130,246,0.15)" strokeWidth="5" />
-              <circle cx="40" cy="40" r="34" fill="none" stroke="#3b82f6" strokeWidth="5"
-                strokeDasharray={`${2 * Math.PI * 34}`}
-                strokeDashoffset={`${2 * Math.PI * 34 * (1 - progress)}`}
-                strokeLinecap="round"
-                style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dashoffset 1s linear" }} />
-            </svg>
-            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 18, fontWeight: 800, color: "#f1f5f9", fontVariantNumeric: "tabular-nums" }}>
-              {remaining > 0 ? `${mins}:${String(secs).padStart(2, "0")}` : "✓"}
-            </div>
-          </div>
-          <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>
-            {remaining > 0 ? `Dự kiến còn ~${mins > 0 ? `${mins} phút ` : ""}${secs}s` : "Đang hoàn tất..."}
-          </div>
-        </div>
-      );
-    };
-
     // No suggestion list — user types exactly what they want to search
 
     // Analyze a project
@@ -3069,6 +3069,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích CPL & đối thủ...`, time: new Date().toISOString() }]), 2400);
       try {
         const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
+        const contentType = r.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+          setMiError(r.status === 504 ? "Hết thời gian chờ — vui lòng thử lại" : `Lỗi server (${r.status})`);
+          setMiLoading(false); return;
+        }
         const data = await r.json();
         if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
         setMiData(data);
