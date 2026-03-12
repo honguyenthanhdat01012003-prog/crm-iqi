@@ -3327,8 +3327,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${amber}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Crosshair size={16} color={amber} /></div>
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Mật độ cạnh tranh</span>
               </div>
-              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors}</div>
-              <div style={{ fontSize: 11, color: slate400 }}>{activeProject.uniqueAds !== activeProject.totalAds ? `${activeProject.uniqueAds} mẫu duy nhất · ${activeProject.totalAds} tổng` : "QC đang chạy trên Ads Library"}</div>
+              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</div>
+              <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
                 {activeProject.trend === "up" ? <TrendingUp size={12} color={rose} /> : <TrendingDown size={12} color={emerald} />}
                 <span style={{ fontSize: 10, color: activeProject.trend === "up" ? rose : emerald, fontWeight: 600 }}>{activeProject.trend === "up" ? "Tăng" : "Giảm"}</span>
@@ -3430,25 +3430,28 @@ function CampaignsPage({ leads, projects, isManager = false }) {
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <Crown size={16} color={amber} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng dự án</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng Pages — Đối thủ mạnh nhất</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[...allSuggestions].filter(p => p.opportunityScore).sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0)).map((p, i) => (
-                  <div key={p.name} onClick={() => { setMiSelected(p); setMiSearch(p.name); analyzeProject(p.name, p.location); }}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer", background: p.name === activeProject.name ? `${neonBlue}15` : "transparent", border: p.name === activeProject.name ? `1px solid ${neonBlue}30` : "1px solid transparent", transition: "all .2s" }}
-                    onMouseEnter={(e) => { if (p.name !== activeProject.name) e.currentTarget.style.background = "rgba(59,130,246,0.05)"; }}
-                    onMouseLeave={(e) => { if (p.name !== activeProject.name) e.currentTarget.style.background = "transparent"; }}>
+                {(activeProject.winningPages || []).slice(0, 8).map((page, i) => (
+                  <a key={i} href={page.adsLibraryUrl || page.fbPageUrl || "#"} target="_blank" rel="noopener noreferrer"
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer", textDecoration: "none", background: i === 0 ? `${amber}10` : "transparent", border: i === 0 ? `1px solid ${amber}30` : "1px solid transparent", transition: "all .2s" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(59,130,246,0.05)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = i === 0 ? `${amber}10` : "transparent"; }}>
                     <span style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: i < 3 ? darkBg : slate400, background: i === 0 ? "#fbbf24" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "rgba(71,85,105,0.3)", flexShrink: 0 }}>{i + 1}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
-                      <div style={{ fontSize: 10, color: slate500 }}>{p.location}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{page.name}</div>
+                      <div style={{ fontSize: 10, color: slate500 }}>{page.ads} QC · {page.duration} ngày</div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: opportunityColor(p.opportunityScore) }}>{p.opportunityScore}</div>
-                      <div style={{ fontSize: 9, color: slate500 }}>Score</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: i === 0 ? amber : emerald }}>{page.ads}</div>
+                      <div style={{ fontSize: 9, color: slate500 }}>ads</div>
                     </div>
-                  </div>
+                  </a>
                 ))}
+                {(!activeProject.winningPages || activeProject.winningPages.length === 0) && (
+                  <div style={{ fontSize: 12, color: slate500, textAlign: "center", padding: 16 }}>Chưa có dữ liệu — thử tìm kiếm dự án</div>
+                )}
               </div>
             </div>
           </div>
@@ -3460,7 +3463,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 <Award size={18} color={amber} />
                 <span style={{ fontSize: 15, fontWeight: 800, color: "#f1f5f9" }}>Winning Pages — Đối thủ nổi bật</span>
               </div>
-              <span style={{ fontSize: 11, color: slate400 }}>Pages có QC chạy lâu nhất trên Ads Library</span>
+              <span style={{ fontSize: 11, color: slate400 }}>Pages chạy QC nhiều nhất & lâu nhất trên Ads Library</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
               {(activeProject.winningPages || []).map((page, i) => (

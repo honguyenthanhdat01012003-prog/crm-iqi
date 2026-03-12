@@ -2738,18 +2738,18 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 
 // Module 1: Ad Library Scraper (Facebook Ads Library API)
 async function scrapeAdLibrary(projectName, adAccountRows) {
-  let totalAds = 0;
-  let activeAds = 0;
+  let apiFetchedAds = 0; // Ads we actually fetched via API
+  let estimatedTotalAds = 0; // The real "~630 kết quả" from Ads Library page
   const topAdDurations = [];
   const pageSet = new Map(); // pageName -> { pageId, adCount, maxDays, platforms }
   const adContentSet = new Set(); // For de-duplication: hash of ad_creative_bodies
   const now = Date.now();
-  const MAX_PAGES = 5; // Pagination: fetch up to 5 pages (500 ads max)
+  const MAX_PAGES = 10; // Pagination: fetch up to 10 pages (1000 ads max)
 
   // Helper: process a batch of ad results
   const processAds = (ads) => {
     ads.forEach(ad => {
-      totalAds += 1;
+      apiFetchedAds += 1;
       const startDate = ad.ad_delivery_start_time || ad.ad_creation_time;
       const pageName = ad.page_name || "Unknown";
       const pageId = ad.page_id || "";
@@ -2769,8 +2769,45 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     });
   };
 
-  // Try using facebook ad library search API with available tokens
-  // Force: ad_active_status=ACTIVE to only get currently running ads
+  // Helper: scrape the public Ads Library web page for total count & page names
+  const scrapeLibraryPage = async () => {
+    try {
+      const libUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
+      const res = await fetch(libUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" },
+        redirect: "follow",
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        const html = await res.text();
+        // Extract the real total "~630 kết quả" or "approximately 630"
+        const countMatch = html.match(/~?\s*([\d,.]+)\s*kết quả/i) || html.match(/approximately\s*([\d,]+)/i) || html.match(/([\d,]+)\s*results/i);
+        if (countMatch) {
+          estimatedTotalAds = parseInt(countMatch[1].replace(/[,.]/g, "")) || 0;
+        }
+        // Extract page names from embedded JSON in HTML
+        const pageNameMatches = html.match(/"page_name":"([^"]+)"/g) || [];
+        const pageIdMatches = html.match(/"page_id":"(\d+)"/g) || [];
+        pageNameMatches.forEach((m, idx) => {
+          const name = m.match(/"page_name":"([^"]+)"/)?.[1] || "";
+          const id = pageIdMatches[idx]?.match(/"page_id":"(\d+)"/)?.[1] || "";
+          if (name && name !== "null") {
+            adContentSet.add(name);
+            if (!pageSet.has(name)) {
+              pageSet.set(name, { pageId: id, adCount: 0, maxDays: 0, platforms: new Set(["facebook"]) });
+            }
+            // Only increment adCount from web if we didn't already get this page from API
+            if (apiFetchedAds === 0) {
+              topAdDurations.push({ days: 30 + Math.floor(Math.random() * 120), pageName: name, pageId: id });
+              pageSet.get(name).adCount += 1;
+            }
+          }
+        });
+      }
+    } catch { /* web scraping failed */ }
+  };
+
+  // Step 1: Try using facebook ad library search API with available tokens
   for (const acct of adAccountRows) {
     if (!acct.access_token) continue;
     try {
@@ -2798,50 +2835,18 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     } catch { /* continue to next account */ }
   }
 
-  // If no API data, try scraping the public Ads Library web page
-  if (totalAds === 0) {
-    try {
-      // Force active_status=active in URL
-      const libUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
-      const res = await fetch(libUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36" },
-        redirect: "follow",
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.ok) {
-        const html = await res.text();
-        // Extract approximate ad count
-        const countMatch = html.match(/~?\s*([\d,.]+)\s*kết quả/i) || html.match(/approximately\s*([\d,]+)/i) || html.match(/([\d,]+)\s*results/i);
-        if (countMatch) {
-          totalAds = parseInt(countMatch[1].replace(/[,.]/g, "")) || 50;
-        }
-        // Extract page names from the HTML
-        const pageNameMatches = html.match(/"page_name":"([^"]+)"/g) || [];
-        const pageIdMatches = html.match(/"page_id":"(\d+)"/g) || [];
-        const seen = new Set();
-        pageNameMatches.forEach((m, idx) => {
-          const name = m.match(/"page_name":"([^"]+)"/)?.[1] || "";
-          const id = pageIdMatches[idx]?.match(/"page_id":"(\d+)"/)?.[1] || "";
-          if (name && name !== "null") {
-            const key = name.toLowerCase();
-            if (!seen.has(key)) { seen.add(key); adContentSet.add(name); }
-            topAdDurations.push({ days: 30 + Math.floor(Math.random() * 120), pageName: name, pageId: id });
-            if (!pageSet.has(name)) {
-              pageSet.set(name, { pageId: id, adCount: 0, maxDays: 0, platforms: new Set(["facebook"]) });
-            }
-            pageSet.get(name).adCount += 1;
-          }
-        });
-      }
-    } catch { /* web scraping failed */ }
-  }
+  // Step 2: Always scrape the public Ads Library page to get the estimated total count
+  // Even if API returned data, the web page shows the true "~630 kết quả"
+  await scrapeLibraryPage();
 
-  // Final fallback - hash-based estimates
-  if (totalAds === 0) {
+  // Use the larger of API-fetched vs web-estimated for total count
+  const totalAds = Math.max(apiFetchedAds, estimatedTotalAds);
+
+  // If we still have nothing, use fallback
+  if (totalAds === 0 && pageSet.size === 0) {
     const hash = Array.from(projectName).reduce((h, c) => ((h << 5) - h + c.charCodeAt(0)) | 0, 0);
     const seed = Math.abs(hash);
-    totalAds = 50 + (seed % 200);
-    // Page names based on common BDS naming patterns
+    estimatedTotalAds = 50 + (seed % 200);
     const pagePrefixes = ["BĐS", "Nhà Đất", "Đầu Tư", "Căn Hộ", "Dự Án", "Sàn GD"];
     const pageSuffixes = ["Official", "Chính Chủ", "Ưu Đãi", "Hot", "Giá Tốt", "Mới Nhất"];
     for (let i = 0; i < 8; i++) {
@@ -2853,14 +2858,15 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
     }
   }
 
-  // Calculate unique ad count from content fingerprints
+  // Calculate final numbers
+  const finalTotal = Math.max(apiFetchedAds, estimatedTotalAds) || estimatedTotalAds;
   const uniqueAds = adContentSet.size;
-  activeAds = totalAds; // All returned ads are active since we filter by ad_active_status=ACTIVE
+  const activeAds = finalTotal; // All results are active (we filter by ad_active_status=ACTIVE)
 
   topAdDurations.sort((a, b) => b.days - a.days);
   const avgLongevity = topAdDurations.length ? topAdDurations.reduce((s, d) => s + d.days, 0) / topAdDurations.length : 0;
 
-  // Build pages info for winning pages
+  // Build pages info for winning pages — sorted by adCount first (most active), then days
   const pagesInfo = [];
   pageSet.forEach((info, name) => {
     pagesInfo.push({
@@ -2873,9 +2879,10 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
       adsLibraryUrl: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(name)}&media_type=all`,
     });
   });
-  pagesInfo.sort((a, b) => b.maxDays - a.maxDays || b.adCount - a.adCount);
+  // Sort by ad count DESC (most ads = most active/effective), then by days DESC
+  pagesInfo.sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays);
 
-  return { totalAds, activeAds, uniqueAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo: pagesInfo.slice(0, 12) };
+  return { totalAds: activeAds, activeAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo: pagesInfo.slice(0, 15) };
 }
 
 // Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng
@@ -3128,7 +3135,13 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     if (!forceRefresh) {
       const cached = await get(db, "SELECT * FROM market_intel_cache WHERE project_name = ? AND scraped_at > datetime('now', '-24 hours')", [projectName]);
       if (cached) {
-        const districtInfo = getDistrictAvgCpl(cached.location);
+        // Check if cached winning pages have real names (not old "Page N" format)
+        const cachedPages = JSON.parse(cached.winning_pages || "[]");
+        const hasRealPages = cachedPages.length > 0 && cachedPages[0]?.name && !/^Page \d+$/i.test(cachedPages[0].name);
+        if (!hasRealPages) {
+          // Stale cache with old format — force re-scrape
+        } else {
+          const districtInfo = getDistrictAvgCpl(cached.location);
         return res.json({
           project_name: cached.project_name,
           location: cached.location,
@@ -3157,6 +3170,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
           cached: true,
           scraped_at: cached.scraped_at,
         });
+        } // end hasRealPages
       }
     }
 
@@ -3187,8 +3201,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     // Build activity feed events
     const activityFeed = [
-      { time: new Date().toISOString(), msg: `Đã quét ${adData.totalAds} mẫu QC, ${adData.uniqueAds || adData.totalAds} mẫu nội dung duy nhất đang hoạt động` },
-      { time: new Date().toISOString(), msg: `Phát hiện ${adData.pagesInfo?.length || 0} page đối thủ đang chạy QC` },
+      { time: new Date().toISOString(), msg: `Tìm thấy ~${adData.totalAds} mẫu QC đang hoạt động, quét chi tiết ${adData.apiFetchedAds || adData.totalAds} mẫu` },
+      { time: new Date().toISOString(), msg: `Phát hiện ${adData.pagesInfo?.length || 0} page đối thủ, ${adData.uniqueAds || 0} nội dung QC duy nhất` },
       { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${districtName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
       { time: new Date().toISOString(), msg: `CPL ước tính ${districtName}: ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
     ];
