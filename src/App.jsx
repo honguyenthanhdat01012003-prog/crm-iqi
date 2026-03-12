@@ -3116,6 +3116,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
       winningPages: miData.winning_pages || [],
       cached: miData.cached,
       scrapedAt: miData.scraped_at,
+      apiFetchedAds: miData.api_fetched_ads || 0,
+      apiError: miData.api_error || null,
     } : null;
 
     // Mini line chart SVG
@@ -3348,6 +3350,11 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</div>
               <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
               {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
+              {activeProject.competitors === 0 && activeProject.apiError && (
+                <div style={{ fontSize: 9, color: rose, marginTop: 4, padding: "4px 6px", background: `${rose}15`, borderRadius: 6 }}>
+                  ⚠ API: {activeProject.apiError.length > 80 ? activeProject.apiError.substring(0, 80) + "…" : activeProject.apiError}
+                </div>
+              )}
               <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.name)}&media_type=all`} target="_blank" rel="noopener noreferrer"
                 style={{ fontSize: 10, color: neonBlue, marginTop: 4, display: "inline-flex", alignItems: "center", gap: 3, textDecoration: "none" }}>
                 <ExternalLink size={9} /> Xem trên Ads Library
