@@ -2808,22 +2808,31 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
   // Try each token with multiple URL formats
   console.log(`[MI] ads_archive: searching "${projectName}", ${adAccountRows.length} token(s)`);
   const fields = "id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_snapshot_url,ad_creative_bodies,publisher_platforms";
+  const allErrors = [];
 
   for (const acct of adAccountRows) {
     if (!acct.access_token || apiFetchedAds > 0) continue;
     const token = acct.access_token;
+    const base = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
 
-    // Format 1: ad_reached_countries=["VN"] (official FB docs format, URL-encoded)
-    const url1 = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_reached_countries=${encodeURIComponent('["VN"]')}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
-    if (await tryAdsArchive(url1, "Format1-JSON")) continue;
+    const formats = [
+      { label: "unencoded-json", param: `ad_reached_countries=["VN"]` },
+      { label: "encoded-json", param: `ad_reached_countries=${encodeURIComponent('["VN"]')}` },
+      { label: "php-bracket", param: `ad_reached_countries%5B%5D=VN` },
+      { label: "php-index", param: `ad_reached_countries%5B0%5D=VN` },
+      { label: "literal-index", param: `ad_reached_countries[0]=VN` },
+    ];
 
-    // Format 2: ad_reached_countries[0]=VN (array index)
-    const url2 = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_reached_countries[0]=VN&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
-    if (await tryAdsArchive(url2, "Format2-Index")) continue;
-
-    // Format 3: No country filter (global search)
-    const url3 = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
-    if (await tryAdsArchive(url3, "Format3-Global")) continue;
+    for (const fmt of formats) {
+      if (apiFetchedAds > 0) break;
+      const url = `${base}&${fmt.param}`;
+      const oldErr = apiError;
+      if (await tryAdsArchive(url, fmt.label)) break;
+      if (apiError && apiError !== oldErr) allErrors.push(`${fmt.label}: ${apiError}`);
+    }
+  }
+  if (apiFetchedAds === 0 && allErrors.length > 0) {
+    apiError = allErrors.join(" | ");
   }
 
   // Calculate final numbers
@@ -3102,10 +3111,13 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
     const results = [];
     for (const acct of adAccounts) {
       const token = acct.access_token;
+      const base = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}`;
       const formats = [
-        { label: "json_encoded", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_reached_countries=${encodeURIComponent('["VN"]')}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}` },
-        { label: "bracket_index", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_reached_countries[0]=VN&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}` },
-        { label: "no_country", url: `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(q)}&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5&access_token=${token}` },
+        { label: "unencoded-json", url: `${base}&ad_reached_countries=["VN"]` },
+        { label: "encoded-json", url: `${base}&ad_reached_countries=${encodeURIComponent('["VN"]')}` },
+        { label: "php-bracket", url: `${base}&ad_reached_countries%5B%5D=VN` },
+        { label: "php-index", url: `${base}&ad_reached_countries%5B0%5D=VN` },
+        { label: "literal-index", url: `${base}&ad_reached_countries[0]=VN` },
       ];
       for (const fmt of formats) {
         try {
