@@ -12,11 +12,13 @@
   },
   "dependencies": {
     "@libsql/client": "^0.17.0",
+    "@sparticuz/chromium": "^143.0.4",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.577.0",
+    "puppeteer-core": "^24.39.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

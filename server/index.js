@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import chromium from "@sparticuz/chromium";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
@@ -6,6 +7,7 @@ import fs from "fs";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import path from "path";
+import puppeteer from "puppeteer-core";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -2738,111 +2740,156 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 
 // Module 1: Ad Library Scraper (Facebook Ads Library API)
 async function scrapeAdLibrary(projectName, adAccountRows) {
-  let apiFetchedAds = 0;
-  const topAdDurations = [];
-  const pageSet = new Map(); // pageName -> { pageId, adCount, maxDays, platforms }
-  const adContentSet = new Set();
-  const now = Date.now();
-  const MAX_PAGES = 25;
+  const pageSet = new Map();
+  let totalAdsFound = 0;
   let apiError = null;
+  const activityLog = [];
+  let browser = null;
 
-  // Helper: process a batch of Graph API ad results
-  const processAds = (ads) => {
-    ads.forEach(ad => {
-      apiFetchedAds += 1;
-      const startDate = ad.ad_delivery_start_time || ad.ad_creation_time;
-      const pageName = ad.page_name || "Unknown";
-      const pageId = ad.page_id || "";
-      const days = startDate ? Math.floor((now - new Date(startDate).getTime()) / 86400000) : 0;
-      const bodies = (ad.ad_creative_bodies || []).join("||").trim();
-      const fingerprint = `${pageName}::${bodies.substring(0, 200)}`;
-      if (bodies.length > 0) adContentSet.add(fingerprint);
-      topAdDurations.push({ days, pageName, pageId });
-      if (!pageSet.has(pageName)) {
-        pageSet.set(pageName, { pageId, adCount: 0, maxDays: 0, platforms: new Set() });
-      }
-      const pg = pageSet.get(pageName);
-      pg.adCount += 1;
-      pg.maxDays = Math.max(pg.maxDays, days);
-      if (ad.publisher_platforms) ad.publisher_platforms.forEach(p => pg.platforms.add(p));
+  try {
+    activityLog.push("Đang khởi động trình duyệt ảo thám thính dự án...");
+    console.log(`[MI] Launching headless browser for "${projectName}"`);
+
+    browser = await puppeteer.launch({
+      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"],
+      defaultViewport: { width: 1920, height: 1080 },
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless ?? "new",
     });
-  };
 
-  // Try calling ads_archive API with pagination
-  const tryAdsArchive = async (apiUrl, label) => {
-    try {
-      const res = await fetch(apiUrl, { signal: AbortSignal.timeout(15000) });
-      const data = await res.json();
-      if (data.error) {
-        console.log(`[MI] ${label} error: ${data.error.message} (code: ${data.error.code}, subcode: ${data.error.error_subcode}, type: ${data.error.type})`);
-        apiError = `${data.error.message} [code:${data.error.code}]`;
-        return false;
-      }
-      if (!data.data || data.data.length === 0) {
-        console.log(`[MI] ${label}: 0 results`);
-        return false;
-      }
-      processAds(data.data);
-      // Paginate
-      let nextUrl = data.paging?.next;
-      let page = 1;
-      while (nextUrl && page < MAX_PAGES) {
-        try {
-          const r = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
-          const d = await r.json();
-          if (!d.data || d.data.length === 0) break;
-          processAds(d.data);
-          nextUrl = d.paging?.next;
-          page++;
-        } catch { break; }
-      }
-      console.log(`[MI] ${label}: fetched ${apiFetchedAds} ads, ${pageSet.size} pages (${page} API pages)`);
-      return true;
-    } catch (err) {
-      console.log(`[MI] ${label} fetch error: ${err.message}`);
-      apiError = err.message;
-      return false;
-    }
-  };
+    const page = await browser.newPage();
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+    await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8" });
 
-  // Try each token with multiple URL formats
-  console.log(`[MI] ads_archive: searching "${projectName}", ${adAccountRows.length} token(s)`);
-  const fields = "id,ad_creation_time,ad_delivery_start_time,page_name,page_id,ad_snapshot_url,ad_creative_bodies,publisher_platforms";
-  const allErrors = [];
+    const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(projectName)}&media_type=all`;
+    activityLog.push(`Đang truy cập Ads Library tìm kiếm "${projectName}"...`);
+    console.log(`[MI] Navigating to: ${searchUrl}`);
 
-  for (const acct of adAccountRows) {
-    if (!acct.access_token || apiFetchedAds > 0) continue;
-    const token = acct.access_token;
-    const base = `https://graph.facebook.com/v25.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_type=ALL&ad_active_status=ACTIVE&fields=${fields}&limit=100&access_token=${token}`;
+    await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 25000 });
+    await new Promise(r => setTimeout(r, 4000)); // Wait for JS rendering
 
-    const formats = [
-      { label: "curl-style", param: `ad_reached_countries=['VN']` },
-      { label: "unencoded-json", param: `ad_reached_countries=["VN"]` },
-      { label: "encoded-json", param: `ad_reached_countries=${encodeURIComponent('["VN"]')}` },
-      { label: "php-bracket", param: `ad_reached_countries%5B%5D=VN` },
-      { label: "literal-index", param: `ad_reached_countries[0]=VN` },
+    const html = await page.content();
+    console.log(`[MI] Page loaded, HTML length: ${html.length}`);
+
+    // Extract results count from page text
+    const countPatterns = [
+      /Khoảng\s+([\d.,]+)\s+kết quả/i,
+      /About\s+([\d.,]+)\s+results/i,
+      /([\d.,]+)\s+kết quả/i,
+      /([\d.,]+)\s+results?\s+for/i,
+      /aria-label="[^"]*?([\d.,]+)\s+(?:kết quả|results)/i,
     ];
+    for (const pattern of countPatterns) {
+      const match = html.match(pattern);
+      if (match) {
+        totalAdsFound = parseInt(match[1].replace(/[.,]/g, ""), 10);
+        break;
+      }
+    }
 
-    for (const fmt of formats) {
-      if (apiFetchedAds > 0) break;
-      const url = `${base}&${fmt.param}`;
-      const oldErr = apiError;
-      if (await tryAdsArchive(url, fmt.label)) break;
-      if (apiError && apiError !== oldErr) allErrors.push(`${fmt.label}: ${apiError}`);
+    // Also try extracting from visible text
+    if (totalAdsFound === 0) {
+      const textContent = await page.evaluate(() => document.body.innerText);
+      for (const pattern of countPatterns) {
+        const match = textContent.match(pattern);
+        if (match) {
+          totalAdsFound = parseInt(match[1].replace(/[.,]/g, ""), 10);
+          break;
+        }
+      }
+    }
+
+    console.log(`[MI] Found ${totalAdsFound} total ads`);
+    activityLog.push(`Phát hiện ${totalAdsFound} mẫu quảng cáo đang hoạt động trên Ads Library.`);
+
+    // Scroll to load more ad cards
+    const scrollRounds = Math.min(8, Math.max(2, Math.ceil(totalAdsFound / 30)));
+    for (let i = 0; i < scrollRounds; i++) {
+      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // Extract page information from ad cards
+    const extractedPages = await page.evaluate(() => {
+      const pages = {};
+      // Method 1: Find links that lead to view_all_page_id
+      document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
+        const match = link.href.match(/view_all_page_id=(\d+)/);
+        const name = link.textContent?.trim();
+        if (match && name && name.length > 1 && name.length < 100) {
+          const pid = match[1];
+          if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
+          pages[pid].count++;
+        }
+      });
+      // Method 2: Find page name spans near "Xem tất cả" links
+      if (Object.keys(pages).length === 0) {
+        document.querySelectorAll('a[href*="/ads/library/"]').forEach(link => {
+          const match = link.href.match(/view_all_page_id=(\d+)/);
+          if (!match) return;
+          const pid = match[1];
+          // Walk up to find page name in parent containers
+          let el = link.parentElement;
+          for (let i = 0; i < 5 && el; i++) {
+            const spans = el.querySelectorAll("span");
+            for (const span of spans) {
+              const txt = span.textContent?.trim();
+              if (txt && txt.length > 2 && txt.length < 80 && !txt.includes("Xem") && !txt.includes("Library")) {
+                if (!pages[pid]) pages[pid] = { pageName: txt, pageId: pid, count: 0 };
+                pages[pid].count++;
+                break;
+              }
+            }
+            el = el.parentElement;
+          }
+        });
+      }
+      // Method 3: Find strong/bold page names in cards
+      if (Object.keys(pages).length === 0) {
+        const cards = document.querySelectorAll('[class*="ad"]');
+        cards.forEach((card, idx) => {
+          const strong = card.querySelector("strong, b, [role='heading']");
+          if (strong) {
+            const name = strong.textContent?.trim();
+            if (name && name.length > 1) {
+              if (!pages[`unknown_${idx}`]) pages[`unknown_${idx}`] = { pageName: name, pageId: "", count: 1 };
+            }
+          }
+        });
+      }
+      return Object.values(pages);
+    });
+
+    console.log(`[MI] Extracted ${extractedPages.length} pages from DOM`);
+    activityLog.push(`Phát hiện ${extractedPages.length} page đối thủ đang chạy QC.`);
+
+    // Build pageSet from extracted data
+    extractedPages.forEach(p => {
+      const name = p.pageName;
+      if (!pageSet.has(name)) {
+        pageSet.set(name, { pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
+      } else {
+        const existing = pageSet.get(name);
+        existing.adCount += p.count;
+      }
+    });
+
+    // If we got a total count but no pages, distribute evenly as estimate
+    if (totalAdsFound > 0 && pageSet.size === 0) {
+      activityLog.push("Không thể bóc tách chi tiết pages — dùng tổng số lượng QC.");
+    }
+
+  } catch (err) {
+    console.log(`[MI] Scraping error: ${err.message}`);
+    apiError = `Scraping: ${err.message}`;
+    activityLog.push(`Lỗi cào dữ liệu: ${err.message}`);
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch {}
     }
   }
-  if (apiFetchedAds === 0 && allErrors.length > 0) {
-    apiError = allErrors.join(" | ");
-  }
 
-  // Calculate final numbers
-  const totalAds = apiFetchedAds;
-  const uniqueAds = Math.max(adContentSet.size, pageSet.size);
-
-  topAdDurations.sort((a, b) => b.days - a.days);
-  const avgLongevity = topAdDurations.length ? topAdDurations.reduce((s, d) => s + d.days, 0) / topAdDurations.length : 0;
-
-  // Build pages info — each page gets a view_all_page_id link
+  // Build pages info
   const pagesInfo = [];
   pageSet.forEach((info, name) => {
     pagesInfo.push({
@@ -2857,10 +2904,16 @@ async function scrapeAdLibrary(projectName, adAccountRows) {
         : "",
     });
   });
-  pagesInfo.sort((a, b) => b.adCount - a.adCount || b.maxDays - a.maxDays);
+  pagesInfo.sort((a, b) => b.adCount - a.adCount);
 
-  console.log(`[MI] Final: totalAds=${totalAds}, pages=${pagesInfo.length}, unique=${uniqueAds} for "${projectName}"`);
-  return { totalAds, activeAds: totalAds, uniqueAds, apiFetchedAds, topAdDurations: topAdDurations.slice(0, 20), avgLongevity, pagesInfo, apiError };
+  const totalAds = totalAdsFound || 0;
+  const uniqueAds = Math.max(pageSet.size, 1);
+  const avgLongevity = 0;
+
+  activityLog.push("Hoàn tất thu thập dữ liệu Ads Library.");
+  console.log(`[MI] Final: totalAds=${totalAds}, pages=${pagesInfo.length} for "${projectName}"`);
+
+  return { totalAds, activeAds: totalAds, uniqueAds, apiFetchedAds: totalAds, topAdDurations: [], avgLongevity, pagesInfo, apiError, activityLog };
 }
 
 // Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng
@@ -2983,22 +3036,16 @@ async function scrapeMarketPrice(projectName, location) {
 
 // Module 3: Calculation Engine
 function estimateCpl(adCount, pricePerM2, baseCpl) {
-  let cpl = baseCpl || 80000; // Base CPL 80K VND
+  // Base CPL = 35K VND, adjusted by competition density
+  let cpl = 35000 * (1 + (adCount / 100));
   let segment = "standard";
 
-  // Competition density adjustment
-  if (adCount > 150) { cpl *= 1.4; }
-  else if (adCount > 100) { cpl *= 1.3; }
-  else if (adCount > 50) { cpl *= 1.2; }
-  // Low competition bonus
-  if (adCount < 30) { cpl *= 0.8; }
-
-  // Segment classification
-  if (pricePerM2 > 150000000) { segment = "ultra_luxury"; cpl *= 1.8; }
-  else if (pricePerM2 > 100000000) { segment = "luxury"; cpl *= 1.5; }
-  else if (pricePerM2 > 60000000) { segment = "mid_high"; cpl *= 1.2; }
+  // Segment classification based on price/m2
+  if (pricePerM2 > 150000000) { segment = "ultra_luxury"; cpl *= 1.6; }
+  else if (pricePerM2 > 100000000) { segment = "luxury"; cpl *= 1.3; } // +30% for luxury
+  else if (pricePerM2 > 60000000) { segment = "mid_high"; cpl *= 1.15; }
   else if (pricePerM2 > 30000000) { segment = "mid"; cpl *= 1.0; }
-  else { segment = "affordable"; cpl *= 0.7; }
+  else { segment = "affordable"; cpl *= 0.8; }
 
   const cplAvg = Math.round(cpl);
   const cplMin = Math.round(cpl * 0.55);
@@ -3237,13 +3284,12 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Winning pages - real page data
     const winningPages = buildWinningPages(adData.pagesInfo || []);
 
-    // Build activity feed events
-    const activityFeed = [
-      { time: new Date().toISOString(), msg: `Tìm thấy ~${adData.totalAds} mẫu QC đang hoạt động, quét chi tiết ${adData.apiFetchedAds || adData.totalAds} mẫu` },
-      { time: new Date().toISOString(), msg: `Phát hiện ${adData.pagesInfo?.length || 0} page đối thủ, ${adData.uniqueAds || 0} nội dung QC duy nhất` },
+    // Build activity feed events from scraping logs
+    const activityFeed = (adData.activityLog || []).map(msg => ({ time: new Date().toISOString(), msg }));
+    activityFeed.push(
       { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${districtName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
-      { time: new Date().toISOString(), msg: `CPL ước tính ${districtName}: ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
-    ];
+      { time: new Date().toISOString(), msg: `Hoàn tất tính toán chi phí dựa trên mật độ cạnh tranh: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
+    );
     if (priceData.leadPriceSources.length > 0) {
       priceData.leadPriceSources.forEach(s => {
         activityFeed.push({ time: new Date().toISOString(), msg: `${s.source}: ${s.count} tin đăng, giá TB ${(s.avgPrice / 1e9).toFixed(1)} tỷ` });
