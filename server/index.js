@@ -2778,7 +2778,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     return [...new Map(terms.map(t => [t.toLowerCase(), t])).values()];
   }
 
-  const searchTerms = buildSearchTerms(projectName);
+  // Search with exactly the user's input — no modifications
+  const searchTerms = [projectName];
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
@@ -2808,15 +2809,36 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   // Helper: extract page info from HTML
   function extractPagesFromHtml(html) {
     const pages = [];
-    const regex = /view_all_page_id=(\d+)/g;
     const seen = new Set();
+
+    // Pattern 1: view_all_page_id in URLs
+    const regex1 = /view_all_page_id=(\d+)/g;
     let m;
-    while ((m = regex.exec(html)) !== null) {
+    while ((m = regex1.exec(html)) !== null) {
       if (!seen.has(m[1])) {
         seen.add(m[1]);
         pages.push({ pageId: m[1], pageName: "", adCount: 1 });
       }
     }
+
+    // Pattern 2: page_id in embedded JSON
+    const regex2 = /"page_id"\s*:\s*"?(\d+)"?/g;
+    while ((m = regex2.exec(html)) !== null) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        pages.push({ pageId: m[1], pageName: "", adCount: 1 });
+      }
+    }
+
+    // Pattern 3: pageID or ownerPageId in embedded data
+    const regex3 = /"(?:pageID|ownerPageId|page_profile_id)"\s*:\s*"?(\d+)"?/g;
+    while ((m = regex3.exec(html)) !== null) {
+      if (!seen.has(m[1])) {
+        seen.add(m[1]);
+        pages.push({ pageId: m[1], pageName: "", adCount: 1 });
+      }
+    }
+
     // Try to extract page names from nearby text
     const nameRegex = /data-testid="[^"]*page[^"]*"[^>]*>([^<]{2,80})</gi;
     let nm;
@@ -2827,6 +2849,17 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         if (pg) pg.pageName = name;
       }
     }
+
+    // Pattern 4: "name":"PageName" near "page_id" in JSON
+    const nameJsonRegex = /"page_id"\s*:\s*"?(\d+)"?\s*,\s*"name"\s*:\s*"([^"]{2,80})"/g;
+    while ((nm = nameJsonRegex.exec(html)) !== null) {
+      const pid = nm[1];
+      const name = nm[2];
+      const existing = pages.find(p => p.pageId === pid);
+      if (existing && !existing.pageName) existing.pageName = name;
+    }
+
+    console.log(`[MI] extractPagesFromHtml found ${pages.length} pages from raw HTML`);
     return pages;
   }
 
@@ -2908,7 +2941,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Extract pages from rendered DOM
         const extractedPages = await page.evaluate(() => {
           const pages = {};
+          const reserved = new Set(['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help', 'marketplace', 'gaming', 'stories', 'reels', 'hashtag', 'profile.php', 'people', 'search', 'policies', 'privacy', 'settings', 'notifications', 'messages', 'bookmarks', 'saved']);
           const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
+          const isValidSlug = (s) => s && s.length > 1 && s.length < 60 && !reserved.has(s.toLowerCase()) && !/^\d+$/.test(s);
 
           // Method 1: view_all_page_id links (most reliable — real page IDs)
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
@@ -2937,9 +2972,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             pages[pid].count++;
           });
 
-          // Method 2: Extract pages from ad card sponsor section (for cards without view_all_page_id)
+          // Method 2: Extract from ad cards by sponsor links
           document.querySelectorAll('[role="article"]').forEach(card => {
-            // Skip if this card already has a view_all_page_id link (covered by Method 1)
             if (card.querySelector('a[href*="view_all_page_id="]')) return;
             const sponsorLinks = card.querySelectorAll('a');
             for (const a of sponsorLinks) {
@@ -2947,23 +2981,51 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               if (!href.includes('facebook.com/') || href.includes('/ads/library/')) continue;
               const txt = a.textContent?.trim();
               if (!isValidName(txt)) continue;
-              // Extract slug from URL (e.g. facebook.com/MasteriseHomes)
               const slugMatch = href.match(/facebook\.com\/([\w.]+)/);
-              if (slugMatch && !['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help'].includes(slugMatch[1])) {
+              if (slugMatch && isValidSlug(slugMatch[1])) {
                 const slug = slugMatch[1];
                 if (!pages[slug]) pages[slug] = { pageName: txt, pageId: slug, count: 0 };
                 else if (isValidName(txt) && !isValidName(pages[slug].pageName)) pages[slug].pageName = txt;
                 pages[slug].count++;
               }
-              break; // Only first valid sponsor link per card
+              break;
             }
           });
 
-          return Object.values(pages);
+          // Method 3: Broader scan — find ALL facebook.com/PageSlug links on the page
+          // (catches pages outside [role="article"] containers)
+          document.querySelectorAll('a[href*="facebook.com/"]').forEach(a => {
+            const href = a.href || '';
+            if (href.includes('/ads/library/') || href.includes('/ad_library/')) return;
+            // Match facebook.com/PageSlug (not subpaths like /PageSlug/photos)
+            const m = href.match(/facebook\.com\/([\w.]{2,50})(?:\/?$|\?)/);
+            if (!m || !isValidSlug(m[1])) return;
+            const slug = m[1];
+            if (pages[slug]) return; // already captured
+            const txt = a.textContent?.trim();
+            if (isValidName(txt)) {
+              pages[slug] = { pageName: txt, pageId: slug, count: 1 };
+            }
+          });
+
+          // Debug stats for server logs
+          const stats = {
+            totalLinks: document.querySelectorAll('a').length,
+            viewAllLinks: document.querySelectorAll('a[href*="view_all_page_id="]').length,
+            articleCards: document.querySelectorAll('[role="article"]').length,
+            fbLinks: document.querySelectorAll('a[href*="facebook.com/"]').length,
+            pagesFound: Object.keys(pages).length,
+          };
+          console.log('[MI-DOM] Extraction stats:', JSON.stringify(stats));
+
+          return { pages: Object.values(pages), stats };
         });
 
+        console.log(`[MI] DOM extraction stats:`, JSON.stringify(extractedPages.stats));
+        const pagesList = extractedPages.pages || [];
+
         // Store pages keyed by pageId
-        extractedPages.forEach(p => {
+        pagesList.forEach(p => {
           if (p.pageId) {
             if (!pageSet.has(p.pageId)) {
               pageSet.set(p.pageId, { pageName: p.pageName, pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
@@ -3080,7 +3142,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
       adsLibraryUrl: /^\d+$/.test(pid)
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
-        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(info.pageName || pid)}&search_type=keyword_unordered`,
+        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(info.pageName || pid)}&search_type=page`,
     });
   });
   pagesInfo.sort((a, b) => b.adCount - a.adCount);
@@ -3499,8 +3561,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
         const hasUrlPageNames = cachedPages.some(p => p.name && (/[\w.-]+\.[a-z]{2,}/i.test(p.name) || p.name.startsWith('http')));
         // Detect old CPL formula (base 35K → values < 200K) — force re-scrape
         const isOldCplFormula = cached.estimated_cpl_avg < 200000;
-        // Detect old adsLibraryUrl format (missing search_type=page)
-        const hasOldUrlFormat = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl && !cachedPages[0].adsLibraryUrl.includes('search_type=page');
+        // Detect old adsLibraryUrl format (missing search_type=page or using keyword_unordered for page URLs)
+        const hasOldUrlFormat = cachedPages.length > 0 && cachedPages[0]?.adsLibraryUrl && (!cachedPages[0].adsLibraryUrl.includes('search_type=page') || cachedPages.some(p => p.adsLibraryUrl?.includes('keyword_unordered')));
         if (!hasRealPages || !hasPageIdUrls || isOldCplFormula || hasUrlPageNames || hasOldUrlFormat) {
           // Stale cache with old format or old CPL formula — force re-scrape
         } else {
