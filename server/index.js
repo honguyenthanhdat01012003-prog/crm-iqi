@@ -2905,79 +2905,60 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           bestTerm = term;
         }
 
-        // Extract pages from rendered DOM — key by pageId to avoid duplicates
+        // Extract pages from rendered DOM — ONLY use view_all_page_id as trusted source
         const extractedPages = await page.evaluate(() => {
           const pages = {};
           const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
 
-          // Method 1: view_all_page_id links (most reliable)
+          // ONLY trusted source: view_all_page_id links — these are REAL Facebook Page IDs
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
             const m = link.href.match(/view_all_page_id=(\d+)/);
-            if (m) {
-              const pid = m[1];
-              // Get page name from link text or nearby elements
-              let name = link.textContent?.trim();
-              if (!isValidName(name)) {
-                const card = link.closest('[role="article"]') || link.closest('div[class]');
-                name = card?.querySelector('h3, h4, strong, [dir="auto"]')?.textContent?.trim();
-              }
-              if (!pages[pid]) pages[pid] = { pageName: isValidName(name) ? name : pid, pageId: pid, count: 0 };
-              else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
-              pages[pid].count++;
-            }
-          });
+            if (!m) return;
+            const pid = m[1];
 
-          // Method 2: Ad cards with sponsor info
-          document.querySelectorAll('[role="article"], [class*="_7jyr"], div[class*="x1yztbdb"]').forEach(card => {
-            // Look for the page name link that points to a Facebook page
-            const links = card.querySelectorAll('a[href*="www.facebook.com/"]');
-            for (const sponsorLink of links) {
-              const href = sponsorLink.href;
-              // Skip ads library links, external links
-              if (href.includes('/ads/library/') || href.includes('/ad_library/')) continue;
-              const name = sponsorLink.textContent?.trim();
-              if (!isValidName(name)) continue;
-              const pidMatch = href.match(/facebook\.com\/(\d+)/) || href.match(/facebook\.com\/([\w.]+?)(?:[/?#]|$)/);
-              if (pidMatch) {
-                const pid = pidMatch[1];
-                if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 0 };
-                else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
-                pages[pid].count++;
-              }
+            let name = '';
+            // Strategy A: Link text (skip generic labels)
+            const linkText = link.textContent?.trim();
+            if (isValidName(linkText) && !/xem tất cả|see all|quảng cáo/i.test(linkText)) {
+              name = linkText;
             }
-          });
-
-          // Method 3: "Được tài trợ"/"Sponsored" label traversal
-          document.querySelectorAll('span').forEach(span => {
-            if (span.textContent === 'Được tài trợ' || span.textContent === 'Sponsored') {
-              const container = span.closest('div')?.parentElement?.parentElement;
-              if (container) {
-                const nameEl = container.querySelector('a[href*="www.facebook.com/"]');
-                if (nameEl) {
-                  const name = nameEl.textContent?.trim();
-                  const href = nameEl.href || '';
-                  const pidMatch = href.match(/view_all_page_id=(\d+)/) || href.match(/facebook\.com\/(\d+)/);
-                  if (isValidName(name) && pidMatch) {
-                    const pid = pidMatch[1];
-                    if (!pages[pid]) pages[pid] = { pageName: name, pageId: pid, count: 1 };
-                    else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
+            // Strategy B: Find page name in the closest ad card
+            if (!name) {
+              const card = link.closest('[role="article"]') || link.closest('div[class]');
+              if (card) {
+                // Page name is usually in a link near "Được tài trợ" label
+                const allLinks = card.querySelectorAll('a[href*="www.facebook.com/"]');
+                for (const a of allLinks) {
+                  if (a.href.includes('/ads/library/')) continue;
+                  const txt = a.textContent?.trim();
+                  if (isValidName(txt)) { name = txt; break; }
+                }
+                // Fallback: h4, strong, [dir=auto]
+                if (!name) {
+                  for (const sel of ['h4', 'strong', '[dir="auto"] span', '[dir="auto"]']) {
+                    const el = card.querySelector(sel);
+                    const txt = el?.textContent?.trim();
+                    if (isValidName(txt) && txt.length < 60) { name = txt; break; }
                   }
                 }
               }
             }
+            if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
+            else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
+            pages[pid].count++;
           });
+
           return Object.values(pages);
         });
 
-        // Store pages keyed by pageId to properly aggregate counts
+        // Store pages keyed by pageId
         extractedPages.forEach(p => {
           if (p.pageId) {
             if (!pageSet.has(p.pageId)) {
               pageSet.set(p.pageId, { pageName: p.pageName, pageId: p.pageId, adCount: Math.max(1, p.count), maxDays: 0, platforms: new Set(["facebook"]) });
             } else {
               const existing = pageSet.get(p.pageId);
-              existing.adCount += p.count;
-              // Prefer a real name over a numeric ID
+              existing.adCount = Math.max(existing.adCount, p.count);
               if (p.pageName && p.pageName !== p.pageId && (!existing.pageName || existing.pageName === existing.pageId)) {
                 existing.pageName = p.pageName;
               }
@@ -2985,7 +2966,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
         });
 
-        // Also extract pages from HTML source
+        // Also extract page IDs from HTML source (only view_all_page_id)
         const htmlPages = extractPagesFromHtml(html);
         htmlPages.forEach(p => {
           if (!pageSet.has(p.pageId)) {
