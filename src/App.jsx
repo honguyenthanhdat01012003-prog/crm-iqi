@@ -2767,7 +2767,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [miError, setMiError] = useState("");
   const [miActivityFeed, setMiActivityFeed] = useState([]);
   const [miWpPage, setMiWpPage] = useState(1);
-  const [miProgress, setMiProgress] = useState({ step: '', msg: '', current: 0, total: 0, pageCount: 0, estimatedTime: 0 });
+
   const WP_PER_PAGE = 12;
 
   const loadAdAccounts = async () => {
@@ -3058,53 +3058,31 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
 
     // No suggestion list — user types exactly what they want to search
 
-    // Analyze a project (reads SSE stream for real-time progress)
+    // Analyze a project
     const analyzeProject = async (projectName, location) => {
       setMiLoading(true); setMiError(""); setMiData(null);
-      setMiProgress({ step: 'start', msg: 'Đang kết nối...', current: 0, total: 0, pageCount: 0, estimatedTime: 0 });
-      setMiActivityFeed([{ msg: 'Đang kết nối Facebook Ads Library...', time: new Date().toISOString() }]);
+      setMiActivityFeed([
+        { msg: `Đang kết nối Facebook Ads Library...`, time: new Date().toISOString() },
+      ]);
+      const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 3000);
+      const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích pages & đối thủ...`, time: new Date().toISOString() }]), 8000);
+      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang lấy tên chi tiết từng page...`, time: new Date().toISOString() }]), 15000);
+      const feedTimer4 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 30000);
+      const feedTimer5 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang tính toán CPL & benchmark...`, time: new Date().toISOString() }]), 40000);
       try {
         const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
-        if (!r.ok && !r.body) {
-          setMiError(`Lỗi server (${r.status})`);
+        const contentType = r.headers.get("content-type") || "";
+        if (!contentType.includes("application/json")) {
+          setMiError(r.status === 504 ? "Hết thời gian chờ — vui lòng thử lại" : `Lỗi server (${r.status})`);
           setMiLoading(false); return;
         }
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split('\n\n');
-          buffer = parts.pop() || '';
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const evt = JSON.parse(line.slice(6));
-              if (evt.type === 'progress') {
-                setMiProgress(prev => ({ ...prev, ...evt }));
-                setMiActivityFeed(f => [...f, { msg: evt.msg, time: new Date().toISOString() }]);
-              } else if (evt.type === 'result') {
-                setMiData(evt.data);
-                setMiWpPage(1);
-                setMiActivityFeed(evt.data.activity_feed || []);
-              } else if (evt.type === 'error') {
-                setMiError(evt.error || 'Lỗi phân tích');
-              }
-            } catch {}
-          }
-        }
-        // Process any remaining buffer
-        if (buffer.trim().startsWith('data: ')) {
-          try {
-            const evt = JSON.parse(buffer.trim().slice(6));
-            if (evt.type === 'result') { setMiData(evt.data); setMiWpPage(1); setMiActivityFeed(evt.data.activity_feed || []); }
-            else if (evt.type === 'error') { setMiError(evt.error || 'Lỗi phân tích'); }
-          } catch {}
-        }
+        const data = await r.json();
+        if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
+        setMiData(data);
+        setMiWpPage(1);
+        setMiActivityFeed(data.activity_feed || []);
       } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
+      [feedTimer1, feedTimer2, feedTimer3, feedTimer4, feedTimer5].forEach(clearTimeout);
       setMiLoading(false);
     };
 
@@ -3271,19 +3249,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             </div>
           )}
 
-          {/* Loading State — real-time progress from SSE */}
+          {/* Loading State — elapsed timer counting up */}
           {miLoading && (
             <div style={{ ...glassCard, textAlign: "center", padding: 60 }}>
-              <ElapsedTimer estimatedTime={miProgress.estimatedTime} />
-              {miProgress.total > 0 && (
-                <div style={{ marginTop: 12, fontSize: 12, color: neonBlue, fontWeight: 700 }}>
-                  Page {miProgress.current}/{miProgress.total}
-                  <div style={{ marginTop: 6, width: 200, height: 4, borderRadius: 2, background: 'rgba(59,130,246,0.15)', margin: '0 auto' }}>
-                    <div style={{ width: `${(miProgress.current / miProgress.total) * 100}%`, height: '100%', borderRadius: 2, background: neonBlue, transition: 'width .5s ease' }} />
-                  </div>
-                </div>
-              )}
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginTop: 16 }}>{miProgress.msg || 'Đang phân tích dự án...'}</div>
+              <ElapsedTimer />
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginTop: 16 }}>Đang phân tích dự án...</div>
               <div style={{ fontSize: 12, color: slate400, marginTop: 6 }}>Thu thập dữ liệu từ Facebook Ads Library & Batdongsan.com.vn</div>
             </div>
           )}

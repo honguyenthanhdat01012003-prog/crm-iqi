@@ -2751,7 +2751,10 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // ========== MARKET INTELLIGENCE ENGINE ==========
 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
-async function scrapeAdLibrary(projectName, _adAccountRows, progress = () => {}) {
+async function scrapeAdLibrary(projectName, _adAccountRows) {
+  const startTime = Date.now();
+  const MAX_TIME = 45000; // 45s budget — leave 15s for price scraping + response
+  const isTimedOut = () => Date.now() - startTime > MAX_TIME;
   const pageSet = new Map();
   let adCount = 0;
   let apiError = null;
@@ -2868,7 +2871,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows, progress = () => {})
   let bestTerm = searchTerms[0];
   try {
     activityLog.push("Đang khởi tạo trình duyệt ảo (Headless Chromium)...");
-    progress({ step: 'init', msg: 'Đang khởi tạo trình duyệt...' });
     console.log("[MI] Launching headless Chromium...");
 
     const chromium = (await import("@sparticuz/chromium")).default;
@@ -2895,7 +2897,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows, progress = () => {})
       if (adCount > 0) break;
       const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(term)}&search_type=keyword_unordered`;
       activityLog.push(`Đang tìm kiếm: "${term}"...`);
-      progress({ step: 'searching', msg: `Đang quét quảng cáo của "${term}"...` });
       console.log(`[MI] Navigating to: ${searchUrl}`);
 
       try {
@@ -3043,24 +3044,24 @@ async function scrapeAdLibrary(projectName, _adAccountRows, progress = () => {})
     activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
 
     // ===== RESOLVE PAGE DETAILS: Visit each page's Ads Library to get real name + ad count =====
-    if (pageSet.size > 0) {
-      const totalPages = [...pageSet.entries()].filter(([pid]) => /^\d+$/.test(pid)).length;
-      const estimatedTime = 25 + totalPages * 3;
+    if (pageSet.size > 0 && !isTimedOut()) {
       activityLog.push(`Đang lấy chi tiết ${pageSet.size} pages...`);
-      progress({ step: 'pages_found', msg: `Tìm thấy ${pageSet.size} pages — ước tính ~${estimatedTime}s`, pageCount: pageSet.size, estimatedTime });
       const pagesToResolve = [...pageSet.entries()]
         .sort((a, b) => b[1].adCount - a[1].adCount);
 
       let resolveIdx = 0;
-      const resolveTotal = pagesToResolve.filter(([pid]) => /^\d+$/.test(pid)).length;
       for (const [pid, info] of pagesToResolve) {
         if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
+        if (isTimedOut()) {
+          activityLog.push(`Hết thời gian — đã xử lý ${resolveIdx} pages.`);
+          console.log(`[MI] Time limit reached after ${resolveIdx} pages`);
+          break;
+        }
         resolveIdx++;
-        progress({ step: 'resolving', msg: `Đang xử lý page ${resolveIdx}/${resolveTotal}...`, current: resolveIdx, total: resolveTotal });
         try {
           const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 8000 });
-          await new Promise(r => setTimeout(r, 2000)); // Wait longer for SPA render
+          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6000 });
+          await new Promise(r => setTimeout(r, 1500)); // Wait for SPA render
 
           const pageDetails = await page.evaluate(() => {
             const body = document.body.innerText || '';
@@ -3646,38 +3647,21 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/market-intel/analyze?project=Name&location=Optional - Analyze a project (SSE streaming)
+// GET /api/market-intel/analyze?project=Name&location=Optional - Analyze a project
 app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
-  const projectName = (req.query.project || "").trim();
-  if (!projectName) return res.status(400).json({ error: "Missing project name" });
-  const location = (req.query.location || "").trim();
-
-  // Set up SSE streaming
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
-
-  const send = (data) => { try { res.write(`data: ${JSON.stringify(data)}\n\n`); } catch {} };
-  const progress = (info) => send({ type: 'progress', ...info });
-
   try {
-    progress({ step: 'start', msg: 'Đang kết nối Facebook Ads Library...' });
+    const projectName = (req.query.project || "").trim();
+    if (!projectName) return res.status(400).json({ error: "Missing project name" });
+    const location = (req.query.location || "").trim();
 
     // Fetch ad accounts for API access
     const adAccounts = await all(db, "SELECT account_id, access_token FROM fb_ad_accounts WHERE is_active = 1 AND access_token != ''");
 
-    // Module 1: Ad Library (with progress streaming)
-    const adData = await scrapeAdLibrary(projectName, adAccounts, progress);
+    // Module 1: Ad Library (internal 45s budget)
+    const adData = await scrapeAdLibrary(projectName, adAccounts);
 
-    progress({ step: 'price', msg: 'Đang thu thập giá từ Batdongsan.com.vn...' });
-
-    // Module 2: Market Price (separated cao tầng / thấp tầng)
+    // Module 2: Market Price
     const priceData = await scrapeMarketPrice(projectName, location);
-
-    progress({ step: 'analysis', msg: 'Đang phân tích CPL & đối thủ...' });
 
     // Module 3: CPL Calculation
     const districtInfo = getDistrictAvgCpl(location);
@@ -3699,11 +3683,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Winning pages - real page data
     const winningPages = buildWinningPages(adData.pagesInfo || []);
 
-    // Build activity feed events from scraping logs
+    // Build activity feed
     const activityFeed = (adData.activityLog || []).map(msg => ({ time: new Date().toISOString(), msg }));
     activityFeed.push(
       { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${districtName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
-      { time: new Date().toISOString(), msg: `Hoàn tất tính toán chi phí dựa trên mật độ cạnh tranh: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
+      { time: new Date().toISOString(), msg: `Hoàn tất tính toán: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
     );
     if (priceData.leadPriceSources.length > 0) {
       priceData.leadPriceSources.forEach(s => {
@@ -3711,8 +3695,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       });
     }
 
-    // Send final result
-    send({ type: 'result', data: {
+    res.json({
       project_name: projectName,
       location,
       estimated_cpl_range: { min: cplResult.cplMin, max: cplResult.cplMax, avg: cplResult.cplAvg },
@@ -3751,11 +3734,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       api_error: adData.apiError || null,
       cached: false,
       scraped_at: new Date().toISOString(),
-    }});
-  } catch (err) {
-    send({ type: 'error', error: err.message });
-  }
-  res.end();
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // DELETE /api/market-intel/cache/:id - Clear cached data

@@ -8,9 +8,8 @@
   ],
   "functions": {
     "api/index.js": {
-      "maxDuration": 300,
-      "memory": 1024,
-      "supportsResponseStreaming": true
+      "maxDuration": 60,
+      "memory": 1024
     }
   }
 }
