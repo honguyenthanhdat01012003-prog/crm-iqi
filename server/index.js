@@ -3049,7 +3049,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       for (const [pid, info] of pagesToResolve) {
         if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
         try {
-          const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=${pid}`;
+          const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
           await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 6000 });
           await new Promise(r => setTimeout(r, 1000)); // Wait for render
 
@@ -3060,7 +3060,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             for (const sel of ['h1', '[role="heading"]', 'h2', 'strong']) {
               const el = document.querySelector(sel);
               const txt = el?.textContent?.trim();
-              if (txt && txt.length > 1 && txt.length < 80 && !/^\d+$/.test(txt) && !txt.includes('Thư viện') && !txt.includes('Ad Library') && !txt.includes('ads_library')) {
+            const badNames = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Quốc gia', 'Country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page'];
+              if (txt && txt.length > 1 && txt.length < 80 && !/^\d+$/.test(txt) && !badNames.some(b => txt.toLowerCase().includes(b.toLowerCase()))) {
                 pageName = txt;
                 break;
               }
@@ -3209,7 +3210,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
       // For numeric IDs: use view_all_page_id (direct). For slugs: use /PageSlug/ads/ which redirects to the correct Ads Library page
       adsLibraryUrl: isNumericId
-        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
+        ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&view_all_page_id=${pid}`
         : `https://www.facebook.com/${pid}/ads/`,
     });
   });

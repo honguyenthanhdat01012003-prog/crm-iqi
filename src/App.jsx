@@ -3022,6 +3022,39 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const glassCard = { background: "rgba(30,41,59,0.7)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: `1px solid ${darkBorder}`, borderRadius: 16, padding: isMobile ? 16 : 20, transition: "transform .2s, box-shadow .2s" };
     const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
 
+    // Countdown Timer component
+    const CountdownTimer = ({ seconds }) => {
+      const [remaining, setRemaining] = React.useState(seconds);
+      React.useEffect(() => {
+        setRemaining(seconds);
+        const interval = setInterval(() => setRemaining(r => Math.max(0, r - 1)), 1000);
+        return () => clearInterval(interval);
+      }, [seconds]);
+      const mins = Math.floor(remaining / 60);
+      const secs = remaining % 60;
+      const progress = Math.max(0, 1 - remaining / seconds);
+      return (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <div style={{ position: "relative", width: 80, height: 80 }}>
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(59,130,246,0.15)" strokeWidth="5" />
+              <circle cx="40" cy="40" r="34" fill="none" stroke="#3b82f6" strokeWidth="5"
+                strokeDasharray={`${2 * Math.PI * 34}`}
+                strokeDashoffset={`${2 * Math.PI * 34 * (1 - progress)}`}
+                strokeLinecap="round"
+                style={{ transform: "rotate(-90deg)", transformOrigin: "center", transition: "stroke-dashoffset 1s linear" }} />
+            </svg>
+            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: 18, fontWeight: 800, color: "#f1f5f9", fontVariantNumeric: "tabular-nums" }}>
+              {remaining > 0 ? `${mins}:${String(secs).padStart(2, "0")}` : "✓"}
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>
+            {remaining > 0 ? `Dự kiến còn ~${mins > 0 ? `${mins} phút ` : ""}${secs}s` : "Đang hoàn tất..."}
+          </div>
+        </div>
+      );
+    };
+
     // No suggestion list — user types exactly what they want to search
 
     // Analyze a project
@@ -3211,14 +3244,17 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
           )}
 
           {/* Loading State */}
-          {miLoading && (
+          {miLoading && (() => {
+            const totalPages = 11; // typical page count
+            const estimatedSeconds = 25 + totalPages * 3; // ~25s base + 3s per page
+            return (
             <div style={{ ...glassCard, textAlign: "center", padding: 60 }}>
-              <div style={{ width: 40, height: 40, border: `3px solid ${neonBlue}30`, borderTop: `3px solid ${neonBlue}`, borderRadius: "50%", margin: "0 auto 16px", animation: "spin 1s linear infinite" }} />
-              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9" }}>Đang phân tích dự án...</div>
+              <CountdownTimer seconds={estimatedSeconds} />
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9", marginTop: 16 }}>Đang phân tích dự án...</div>
               <div style={{ fontSize: 12, color: slate400, marginTop: 6 }}>Thu thập dữ liệu từ Facebook Ads Library & Batdongsan.com.vn</div>
-              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
-          )}
+            );
+          })()}
 
           {/* Error State */}
           {!miLoading && miError && (
