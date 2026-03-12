@@ -3128,7 +3128,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           // Fast: get page title first (usually "PageName | Thư viện quảng cáo" or similar)
           const rawTitle = await page.title().catch(() => '');
           const titleClean = rawTitle.replace(/\s*[-–|·].*/g, '').trim();
-          const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country'];
+          const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry'];
           const isTitleGood = titleClean && titleClean.length > 1 && titleClean.length < 80 && !/^\d+$/.test(titleClean) && !titleBad.some(b => titleClean.toLowerCase().includes(b.toLowerCase()));
           if (isTitleGood) {
             info.pageName = titleClean;
@@ -3234,7 +3234,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         if (titleMatch) {
           const raw = titleMatch[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"');
           const cleaned = raw.replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
-          if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !cleaned.toLowerCase().includes('facebook') && !cleaned.toLowerCase().includes('log in')) {
+          const badTitle = ['facebook', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng'];
+          if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !badTitle.some(b => cleaned.toLowerCase().includes(b))) {
             info.pageName = cleaned;
             console.log(`[MI] Page ${pid} → "${cleaned}" (HTTP fetch)`);
           }
@@ -3244,7 +3245,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const ogMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i) || html.match(/<meta\s+content="([^"]+)"\s+property="og:title"/i);
           if (ogMatch) {
             const cleaned = ogMatch[1].replace(/&amp;/g, '&').replace(/\s*[-–|·].*$/g, '').trim();
-            if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !cleaned.toLowerCase().includes('facebook')) {
+            const badOg = ['facebook', 'error', 'page not found', 'content not found', 'sorry', 'không tìm thấy'];
+            if (cleaned && cleaned.length > 1 && cleaned.length < 80 && !/^\d+$/.test(cleaned) && !badOg.some(b => cleaned.toLowerCase().includes(b))) {
               info.pageName = cleaned;
               console.log(`[MI] Page ${pid} → "${cleaned}" (og:title)`);
             }
@@ -3256,6 +3258,64 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     });
     await Promise.all(fetchPromises);
     activityLog.push(`Đã xử lý xong pages via HTTP.`);
+  }
+
+  // ===== RESOLVE DURATION FOR PAGES WITH 0 maxDays VIA HTTP FETCH OF ADS LIBRARY =====
+  const pagesNeedDuration = [...pageSet.entries()].filter(([pid, info]) => /^\d+$/.test(pid) && info.maxDays === 0);
+  if (pagesNeedDuration.length > 0) {
+    activityLog.push(`Đang lấy thời gian chạy QC cho ${pagesNeedDuration.length} pages...`);
+    console.log(`[MI] Fetching duration for ${pagesNeedDuration.length} pages via HTTP`);
+    const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
+    const durationPromises = pagesNeedDuration.map(async ([pid, info]) => {
+      try {
+        const adsUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
+        const resp = await fetch(adsUrl, {
+          headers: { 'User-Agent': ua, 'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8', 'Accept': 'text/html' },
+          redirect: 'follow',
+          signal: AbortSignal.timeout(8000),
+        });
+        const html = await resp.text();
+        let maxDays = 0;
+        const now = Date.now();
+        // Vietnamese: "ngày DD tháng M, YYYY" or "ngày DD tháng M năm YYYY"
+        const vnDates = html.matchAll(/ng\u00e0y\s+(\d{1,2})\s+th\u00e1ng\s+(\d{1,2})[\s,]+(?:n\u0103m\s+)?(\d{4})/gi);
+        for (const m of vnDates) {
+          const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+        }
+        // English: "Mon DD, YYYY"
+        const enDates = html.matchAll(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),?\s+(\d{4})/gi);
+        for (const m of enDates) {
+          const mon = monthsEn[m[1].substring(0, 3).toLowerCase()];
+          if (mon !== undefined) {
+            const d = new Date(parseInt(m[3]), mon, parseInt(m[2]));
+            if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+          }
+        }
+        // DD/MM/YYYY
+        const slashDates = html.matchAll(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/g);
+        for (const m of slashDates) {
+          const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+        }
+        // Also try embedded JSON with timestamps: "start_date":"YYYY-MM-DD" or "creation_time":<timestamp>
+        const jsonDates = html.matchAll(/"(?:start_date|creation_time|start_time)"\s*:\s*"?(\d{4}-\d{2}-\d{2}|\d{10,13})"?/g);
+        for (const m of jsonDates) {
+          let d;
+          if (m[1].includes('-')) d = new Date(m[1]);
+          else d = new Date(parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1));
+          if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+        }
+        if (maxDays > 0) {
+          info.maxDays = maxDays;
+          console.log(`[MI] Page ${pid} duration: ${maxDays} days (HTTP Ads Library)`);
+        }
+      } catch (err) {
+        console.log(`[MI] Duration fetch failed for ${pid}: ${err.message}`);
+      }
+    });
+    await Promise.all(durationPromises);
+    activityLog.push(`Đã lấy thời gian chạy QC xong.`);
   }
 
   // ===== STRATEGY 2: HTTP Fetch fallback (if Chromium failed) =====
