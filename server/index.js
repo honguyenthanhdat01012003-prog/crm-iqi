@@ -2886,9 +2886,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           // Timeout - page may not have rendered, continue anyway
         }
 
-        // Scroll to trigger lazy loading
-        for (let i = 0; i < 3; i++) {
-          await page.evaluate(() => window.scrollBy(0, 2000));
+        // Scroll to trigger lazy loading — more scrolling to find more pages
+        for (let i = 0; i < 5; i++) {
+          await page.evaluate(() => window.scrollBy(0, 2500));
           await new Promise(r => setTimeout(r, 2000));
         }
 
@@ -2905,47 +2905,58 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           bestTerm = term;
         }
 
-        // Extract pages from rendered DOM — ONLY use view_all_page_id as trusted source
+        // Extract pages from rendered DOM
         const extractedPages = await page.evaluate(() => {
           const pages = {};
           const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
 
-          // ONLY trusted source: view_all_page_id links — these are REAL Facebook Page IDs
+          // Method 1: view_all_page_id links (most reliable — real page IDs)
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
             const m = link.href.match(/view_all_page_id=(\d+)/);
             if (!m) return;
             const pid = m[1];
-
             let name = '';
-            // Strategy A: Link text (skip generic labels)
-            const linkText = link.textContent?.trim();
-            if (isValidName(linkText) && !/xem tất cả|see all|quảng cáo/i.test(linkText)) {
-              name = linkText;
-            }
-            // Strategy B: Find page name in the closest ad card
-            if (!name) {
-              const card = link.closest('[role="article"]') || link.closest('div[class]');
-              if (card) {
-                // Page name is usually in a link near "Được tài trợ" label
-                const allLinks = card.querySelectorAll('a[href*="www.facebook.com/"]');
-                for (const a of allLinks) {
-                  if (a.href.includes('/ads/library/')) continue;
-                  const txt = a.textContent?.trim();
-                  if (isValidName(txt)) { name = txt; break; }
-                }
-                // Fallback: h4, strong, [dir=auto]
-                if (!name) {
-                  for (const sel of ['h4', 'strong', '[dir="auto"] span', '[dir="auto"]']) {
-                    const el = card.querySelector(sel);
-                    const txt = el?.textContent?.trim();
-                    if (isValidName(txt) && txt.length < 60) { name = txt; break; }
-                  }
+            const card = link.closest('[role="article"]') || link.closest('div[class]');
+            if (card) {
+              const allLinks = card.querySelectorAll('a[href*="facebook.com/"]');
+              for (const a of allLinks) {
+                if (a.href.includes('/ads/library/')) continue;
+                const txt = a.textContent?.trim();
+                if (isValidName(txt)) { name = txt; break; }
+              }
+              if (!name) {
+                for (const sel of ['h4', 'strong', '[dir="auto"] span']) {
+                  const el = card.querySelector(sel);
+                  const txt = el?.textContent?.trim();
+                  if (isValidName(txt) && txt.length < 60) { name = txt; break; }
                 }
               }
             }
             if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
             else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
             pages[pid].count++;
+          });
+
+          // Method 2: Extract pages from ad card sponsor section (for cards without view_all_page_id)
+          document.querySelectorAll('[role="article"]').forEach(card => {
+            // Skip if this card already has a view_all_page_id link (covered by Method 1)
+            if (card.querySelector('a[href*="view_all_page_id="]')) return;
+            const sponsorLinks = card.querySelectorAll('a');
+            for (const a of sponsorLinks) {
+              const href = a.href || '';
+              if (!href.includes('facebook.com/') || href.includes('/ads/library/')) continue;
+              const txt = a.textContent?.trim();
+              if (!isValidName(txt)) continue;
+              // Extract slug from URL (e.g. facebook.com/MasteriseHomes)
+              const slugMatch = href.match(/facebook\.com\/([\w.]+)/);
+              if (slugMatch && !['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help'].includes(slugMatch[1])) {
+                const slug = slugMatch[1];
+                if (!pages[slug]) pages[slug] = { pageName: txt, pageId: slug, count: 0 };
+                else if (isValidName(txt) && !isValidName(pages[slug].pageName)) pages[slug].pageName = txt;
+                pages[slug].count++;
+              }
+              break; // Only first valid sponsor link per card
+            }
           });
 
           return Object.values(pages);
@@ -3067,9 +3078,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       maxDays: info.maxDays,
       platforms: [...(info.platforms || [])],
       fbPageUrl: pid ? `https://www.facebook.com/${pid}` : "",
-      adsLibraryUrl: pid
+      adsLibraryUrl: /^\d+$/.test(pid)
         ? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&sort_data[mode]=total_impressions&sort_data[direction]=desc&source=page-transparency-widget&view_all_page_id=${pid}`
-        : "",
+        : `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(info.pageName || pid)}&search_type=keyword_unordered`,
     });
   });
   pagesInfo.sort((a, b) => b.adCount - a.adCount);
