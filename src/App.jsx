@@ -2727,10 +2727,27 @@ function CampaignsPage({ leads, projects, isManager = false }) {
   const [acctDraft, setAcctDraft] = useState({ name: "", accountId: "", accessToken: "" });
   const [savingAcct, setSavingAcct] = useState(false);
 
+  // Market Intelligence state
+  const [miSearch, setMiSearch] = useState("");
+  const [miSelected, setMiSelected] = useState(null);
+  const [miShowSuggest, setMiShowSuggest] = useState(false);
+  const miSearchRef = useRef(null);
+  const [miData, setMiData] = useState(null);
+  const [miProjects, setMiProjects] = useState([]);
+  const [miLoading, setMiLoading] = useState(false);
+  const [miError, setMiError] = useState("");
+
   const loadAdAccounts = async () => {
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
   };
   useEffect(() => { loadAdAccounts(); }, []);
+
+  // Load cached market intel projects when tab switches
+  useEffect(() => {
+    if (tab === "market_intel") {
+      apiFetch(`${API}/market-intel/projects`).then(r => r.ok ? r.json() : []).then(data => Array.isArray(data) && setMiProjects(data)).catch(() => {});
+    }
+  }, [tab]);
 
   // Click-outside for account dropdown
   useEffect(() => {
@@ -3013,32 +3030,71 @@ function CampaignsPage({ leads, projects, isManager = false }) {
     const glassCard = { background: "rgba(30,41,59,0.7)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", border: `1px solid ${darkBorder}`, borderRadius: 16, padding: isMobile ? 16 : 20, transition: "transform .2s, box-shadow .2s" };
     const glassCardHover = { transform: "translateY(-2px)", boxShadow: "0 8px 32px rgba(0,0,0,.3)" };
 
-    // Sample Vietnam real estate projects data
-    const sampleProjects = [
-      { id: 1, name: "Masterise Cosmo", location: "TP. Thủ Đức, TP.HCM", heatIndex: 87, cplMin: 85000, cplMax: 180000, cplAvg: 125000, districtAvg: 155000, competitors: 142, priceM2: 95000000, opportunityScore: 82, trend: "up", adTrend: [45,52,58,61,55,63,70,68,72,78,80,82,75,79,85,88,90,87,92,95,98,102,105,100,108,112,115,118,120,125], cplTrend: [150,145,140,138,135,130,128,125,122,120,125,128,130,125,120,118,115,120,122,125,130,128,125,120,118,115,112,110,108,105] },
-      { id: 2, name: "Global City", location: "An Phú, TP. Thủ Đức", heatIndex: 92, cplMin: 65000, cplMax: 150000, cplAvg: 95000, districtAvg: 155000, competitors: 198, priceM2: 120000000, opportunityScore: 75, trend: "up", adTrend: [80,85,90,88,92,95,98,102,105,110,108,115,118,120,122,125,128,130,135,138,140,142,145,148,150,155,158,160,165,170], cplTrend: [120,118,115,112,110,108,105,100,98,95,92,90,88,85,82,80,85,88,90,92,95,98,100,95,92,90,88,85,82,80] },
-      { id: 3, name: "Vinhomes Grand Park", location: "Long Thạnh Mỹ, TP. Thủ Đức", heatIndex: 78, cplMin: 50000, cplMax: 120000, cplAvg: 78000, districtAvg: 155000, competitors: 95, priceM2: 65000000, opportunityScore: 88, trend: "up", adTrend: [30,32,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80,82,85,88,90,92,95,98,100,102], cplTrend: [100,98,95,92,90,88,85,82,80,78,76,74,72,70,68,70,72,74,76,78,80,78,76,74,72,70,68,66,64,62] },
-      { id: 4, name: "Eaton Park", location: "An Phú, Quận 2, TP.HCM", heatIndex: 85, cplMin: 90000, cplMax: 200000, cplAvg: 140000, districtAvg: 155000, competitors: 88, priceM2: 110000000, opportunityScore: 70, trend: "down", adTrend: [60,62,58,55,52,50,48,45,42,40,38,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80], cplTrend: [180,175,170,168,165,160,158,155,150,148,145,142,140,138,135,140,142,145,148,150,148,145,142,140,138,135,132,130,128,125] },
-      { id: 5, name: "The Opus One", location: "Quận 3, TP.HCM", heatIndex: 71, cplMin: 120000, cplMax: 280000, cplAvg: 195000, districtAvg: 180000, competitors: 52, priceM2: 180000000, opportunityScore: 55, trend: "down", adTrend: [25,28,30,32,35,33,30,28,25,22,20,22,25,28,30,32,35,38,40,42,45,48,50,52,55,52,50,48,45,42], cplTrend: [250,245,240,235,230,225,220,215,210,205,200,195,190,195,200,205,210,205,200,195,190,185,180,185,190,195,200,195,190,185] },
-      { id: 6, name: "Lumière Boulevard", location: "Quận 9, TP.HCM", heatIndex: 68, cplMin: 45000, cplMax: 95000, cplAvg: 65000, districtAvg: 90000, competitors: 67, priceM2: 55000000, opportunityScore: 91, trend: "up", adTrend: [20,22,25,28,30,32,35,38,40,42,45,48,50,52,55,58,60,62,65,68,70,72,75,78,80,82,85,88,90,92], cplTrend: [90,88,85,82,80,78,75,72,70,68,65,62,60,58,55,58,60,62,65,68,70,68,65,62,60,58,55,52,50,48] },
+    // Sample projects for suggestions (always available, supplemented by API cache)
+    const defaultSuggestions = [
+      { name: "Masterise Cosmo", location: "TP. Thủ Đức, TP.HCM" },
+      { name: "Global City", location: "An Phú, TP. Thủ Đức" },
+      { name: "Vinhomes Grand Park", location: "Long Thạnh Mỹ, TP. Thủ Đức" },
+      { name: "Eaton Park", location: "An Phú, Quận 2, TP.HCM" },
+      { name: "The Opus One", location: "Quận 3, TP.HCM" },
+      { name: "Lumière Boulevard", location: "Quận 9, TP.HCM" },
+      { name: "Masteri Centre Point", location: "Quận 9, TP.HCM" },
+      { name: "The Beverly", location: "Quận 9, TP.HCM" },
+      { name: "Picity High Park", location: "Quận 12, TP.HCM" },
+      { name: "Akari City", location: "Bình Tân, TP.HCM" },
     ];
 
-    // Winning pages sample data
-    const winningPages = [
-      { name: "BĐS Thủ Đức Official", duration: 180, ads: 45, style: ["Video tour", "Bảng giá", "Ưu đãi"], avatar: "🏢" },
-      { name: "SaleReal - Chuyên gia BĐS", duration: 150, ads: 38, style: ["Testimonial", "So sánh", "Livesale"], avatar: "🏠" },
-      { name: "Đầu tư BĐS Sài Gòn", duration: 120, ads: 32, style: ["Infographic", "Phân tích", "News"], avatar: "📊" },
-      { name: "Nhà Đẹp Quận 2", duration: 95, ads: 28, style: ["Hình thực tế", "Review", "Giá tốt"], avatar: "🏡" },
-      { name: "Capital House Group", duration: 88, ads: 25, style: ["Brand", "Concept", "Tiến độ"], avatar: "🏗️" },
-    ];
+    // Merge cached projects into suggestions
+    const allSuggestions = [...defaultSuggestions];
+    miProjects.forEach(p => {
+      if (!allSuggestions.find(s => s.name.toLowerCase() === p.project_name.toLowerCase())) {
+        allSuggestions.push({ name: p.project_name, location: p.location || "", heatIndex: p.heat_index, opportunityScore: p.opportunity_score });
+      } else {
+        const idx = allSuggestions.findIndex(s => s.name.toLowerCase() === p.project_name.toLowerCase());
+        if (idx >= 0) { allSuggestions[idx].heatIndex = p.heat_index; allSuggestions[idx].opportunityScore = p.opportunity_score; }
+      }
+    });
 
-    const [miSearch, setMiSearch] = useState("");
-    const [miSelected, setMiSelected] = useState(null);
-    const [miShowSuggest, setMiShowSuggest] = useState(false);
-    const miSearchRef = useRef(null);
+    // Load cached projects on mount
+    const loadMiProjects = async () => {
+      try { const r = await apiFetch(`${API}/market-intel/projects`); if (r.ok) setMiProjects(await r.json()); } catch {}
+    };
 
-    const filteredSuggestions = sampleProjects.filter(p => p.name.toLowerCase().includes(miSearch.toLowerCase()) || p.location.toLowerCase().includes(miSearch.toLowerCase()));
-    const activeProject = miSelected || sampleProjects[0];
+    // Analyze a project
+    const analyzeProject = async (projectName, location, refresh = false) => {
+      setMiLoading(true); setMiError("");
+      try {
+        const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}&refresh=${refresh ? "1" : "0"}`);
+        const data = await r.json();
+        if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
+        setMiData(data);
+        loadMiProjects(); // refresh project list
+      } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
+      setMiLoading(false);
+    };
+
+    const filteredSuggestions = allSuggestions.filter(p => p.name.toLowerCase().includes(miSearch.toLowerCase()) || (p.location || "").toLowerCase().includes(miSearch.toLowerCase()));
+
+    // Build active project from API data or defaults
+    const activeProject = miData ? {
+      name: miData.project_name,
+      location: miData.location,
+      heatIndex: miData.heat_index,
+      cplMin: miData.estimated_cpl_range.min,
+      cplMax: miData.estimated_cpl_range.max,
+      cplAvg: miData.estimated_cpl_range.avg,
+      districtAvg: miData.district_avg_cpl,
+      competitors: miData.competitor_count,
+      priceM2: miData.avg_price_m2,
+      opportunityScore: miData.opportunity_score,
+      trend: (miData.ad_trend_30d || []).length > 1 && miData.ad_trend_30d[29] > miData.ad_trend_30d[0] ? "up" : "down",
+      adTrend: miData.ad_trend_30d || [],
+      cplTrend: miData.cpl_trend_30d || [],
+      segment: miData.segment,
+      winningPages: miData.winning_pages || [],
+      cached: miData.cached,
+      scrapedAt: miData.scraped_at,
+    } : null;
 
     // Mini line chart SVG
     const MiniChart = ({ data, color, width = 280, height = 80, fill = true }) => {
@@ -3114,6 +3170,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 value={miSearch}
                 onChange={(e) => { setMiSearch(e.target.value); setMiShowSuggest(true); }}
                 onFocus={() => setMiShowSuggest(true)}
+                onKeyDown={(e) => { if (e.key === "Enter" && miSearch.trim()) { setMiShowSuggest(false); const match = filteredSuggestions[0]; analyzeProject(match ? match.name : miSearch.trim(), match ? match.location : ""); } }}
                 style={{
                   width: "100%", padding: "14px 16px 14px 46px", fontSize: 14, fontWeight: 500,
                   background: "rgba(30,41,59,0.9)", border: `1px solid ${neonBlue}40`, borderRadius: 14,
@@ -3128,7 +3185,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
             {miShowSuggest && miSearch && filteredSuggestions.length > 0 && (
               <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 6, background: "rgba(15,23,42,0.98)", border: `1px solid ${darkBorder}`, borderRadius: 12, boxShadow: "0 12px 40px rgba(0,0,0,.5)", overflow: "hidden", backdropFilter: "blur(20px)" }}>
                 {filteredSuggestions.map(p => (
-                  <div key={p.id} onClick={() => { setMiSelected(p); setMiSearch(p.name); setMiShowSuggest(false); }}
+                  <div key={p.name} onClick={() => { setMiSelected(p); setMiSearch(p.name); setMiShowSuggest(false); analyzeProject(p.name, p.location); }}
                     style={{ padding: "12px 16px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", transition: "background .15s", borderBottom: `1px solid ${darkBorder}` }}
                     onMouseEnter={(e) => e.currentTarget.style.background = "rgba(59,130,246,0.1)"} onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}>
                     <div>
@@ -3144,6 +3201,37 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               </div>
             )}
           </div>
+
+          {/* Loading State */}
+          {miLoading && (
+            <div style={{ ...glassCard, textAlign: "center", padding: 60 }}>
+              <div style={{ width: 40, height: 40, border: `3px solid ${neonBlue}30`, borderTop: `3px solid ${neonBlue}`, borderRadius: "50%", margin: "0 auto 16px", animation: "spin 1s linear infinite" }} />
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#f1f5f9" }}>Đang phân tích dự án...</div>
+              <div style={{ fontSize: 12, color: slate400, marginTop: 6 }}>Thu thập dữ liệu từ Facebook Ads Library & Batdongsan.com.vn</div>
+              <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+          )}
+
+          {/* Error State */}
+          {!miLoading && miError && (
+            <div style={{ ...glassCard, textAlign: "center", padding: 40, borderColor: `${rose}40` }}>
+              <AlertCircle size={36} color={rose} style={{ marginBottom: 12 }} />
+              <div style={{ fontSize: 14, fontWeight: 600, color: rose, marginBottom: 6 }}>{miError}</div>
+              <div style={{ fontSize: 12, color: slate400 }}>Vui lòng thử lại sau hoặc chọn dự án khác</div>
+            </div>
+          )}
+
+          {/* Empty / Welcome State */}
+          {!miLoading && !miError && !activeProject && (
+            <div style={{ ...glassCard, textAlign: "center", padding: isMobile ? 40 : 60 }}>
+              <Radar size={48} color={neonBlue} style={{ marginBottom: 16, opacity: 0.6 }} />
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>Chọn dự án để phân tích</div>
+              <div style={{ fontSize: 13, color: slate400, maxWidth: 400, margin: "0 auto" }}>Tìm kiếm tên dự án bất động sản ở thanh tìm kiếm phía trên để xem phân tích chi tiết về thị trường quảng cáo</div>
+            </div>
+          )}
+
+          {/* Project Data */}
+          {!miLoading && !miError && activeProject && (<>
 
           {/* Project Snapshot Header */}
           <div style={{ ...glassCard, marginBottom: 20, display: "flex", alignItems: isMobile ? "flex-start" : "center", gap: 16, flexWrap: "wrap", justifyContent: "space-between" }}>
@@ -3291,11 +3379,11 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>Bảng xếp hạng dự án</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {[...sampleProjects].sort((a, b) => b.opportunityScore - a.opportunityScore).map((p, i) => (
-                  <div key={p.id} onClick={() => { setMiSelected(p); setMiSearch(p.name); }}
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer", background: p.id === activeProject.id ? `${neonBlue}15` : "transparent", border: p.id === activeProject.id ? `1px solid ${neonBlue}30` : "1px solid transparent", transition: "all .2s" }}
-                    onMouseEnter={(e) => { if (p.id !== activeProject.id) e.currentTarget.style.background = "rgba(59,130,246,0.05)"; }}
-                    onMouseLeave={(e) => { if (p.id !== activeProject.id) e.currentTarget.style.background = "transparent"; }}>
+                {[...allSuggestions].filter(p => p.opportunityScore).sort((a, b) => (b.opportunityScore || 0) - (a.opportunityScore || 0)).map((p, i) => (
+                  <div key={p.name} onClick={() => { setMiSelected(p); setMiSearch(p.name); analyzeProject(p.name, p.location); }}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 10, cursor: "pointer", background: p.name === activeProject.name ? `${neonBlue}15` : "transparent", border: p.name === activeProject.name ? `1px solid ${neonBlue}30` : "1px solid transparent", transition: "all .2s" }}
+                    onMouseEnter={(e) => { if (p.name !== activeProject.name) e.currentTarget.style.background = "rgba(59,130,246,0.05)"; }}
+                    onMouseLeave={(e) => { if (p.name !== activeProject.name) e.currentTarget.style.background = "transparent"; }}>
                     <span style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 800, color: i < 3 ? darkBg : slate400, background: i === 0 ? "#fbbf24" : i === 1 ? "#94a3b8" : i === 2 ? "#cd7f32" : "rgba(71,85,105,0.3)", flexShrink: 0 }}>{i + 1}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "#f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
@@ -3321,7 +3409,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <span style={{ fontSize: 11, color: slate400 }}>Pages có QC chạy lâu nhất trên Ads Library</span>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-              {winningPages.map((page, i) => (
+              {(activeProject.winningPages || []).map((page, i) => (
                 <div key={i} style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer" }}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${neonBlue}50`; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,.3)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = darkBorder; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
@@ -3350,7 +3438,12 @@ function CampaignsPage({ leads, projects, isManager = false }) {
           <div style={{ textAlign: "center", marginTop: 20, fontSize: 11, color: slate500 }}>
             <Info size={12} style={{ verticalAlign: "middle", marginRight: 4 }} />
             Dữ liệu được tổng hợp từ Facebook Ads Library, Batdongsan.com.vn và các nguồn công khai · Cập nhật mỗi 24h
+            {activeProject.cached && activeProject.scrapedAt && (
+              <span> · Từ cache ({new Date(activeProject.scrapedAt).toLocaleString("vi-VN")})</span>
+            )}
           </div>
+
+          </>)}
         </div>
       </div>
     );
