@@ -2752,23 +2752,38 @@ function CampaignsPage({ leads, projects, isManager = false }) {
       const errors = [];
       await Promise.all(selectedAccounts.map(async (acctId) => {
         try {
-          const [insightsRes, campaignsRes] = await Promise.all([
+          const [insightsRes, campaignsRes, adsetsRes] = await Promise.all([
             apiFetch(`${API}/fb-ads/insights/${acctId}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}&level=campaign`),
-            apiFetch(`${API}/fb-ads/campaigns/${acctId}`)
+            apiFetch(`${API}/fb-ads/campaigns/${acctId}`),
+            apiFetch(`${API}/fb-ads/adsets/${acctId}`)
           ]);
           const insightsData = await insightsRes.json();
           if (!insightsRes.ok) { errors.push(insightsData.error || `Lỗi tài khoản ${acctId}`); }
           else {
             let statusMap = {};
+            let campBudgets = {};
             if (campaignsRes.ok) {
               const camps = await campaignsRes.json();
-              camps.forEach(c => { statusMap[c.id] = { status: c.status, objective: c.objective }; });
+              camps.forEach(c => {
+                statusMap[c.id] = { status: c.status, objective: c.objective };
+                if (c.daily_budget) campBudgets[c.id] = Number(c.daily_budget);
+              });
+            }
+            let budgetMap = { ...campBudgets };
+            if (adsetsRes.ok) {
+              const adsets = await adsetsRes.json();
+              adsets.forEach(a => {
+                if ((a.effective_status === "ACTIVE" || a.status === "ACTIVE") && a.daily_budget && !campBudgets[a.campaign_id]) {
+                  budgetMap[a.campaign_id] = (budgetMap[a.campaign_id] || 0) + Number(a.daily_budget);
+                }
+              });
             }
             allInsights.push(...insightsData.map(row => ({
               ...row,
               _accountId: acctId,
               status: statusMap[row.campaign_id]?.status || "",
-              objective: statusMap[row.campaign_id]?.objective || ""
+              objective: statusMap[row.campaign_id]?.objective || "",
+              _dailyBudget: budgetMap[row.campaign_id] || 0
             })));
           }
         } catch (e) { errors.push(`Lỗi tài khoản ${acctId}: ${e.message}`); }
@@ -2867,6 +2882,18 @@ function CampaignsPage({ leads, projects, isManager = false }) {
     return t;
   };
   const fbTotals = useMemo(() => calcFbTotals(fbInsights), [fbInsights]);
+
+  const calcDailyBudget = (rows) => {
+    const seen = new Set();
+    let total = 0;
+    rows.forEach(r => {
+      if (r.status === "ACTIVE" && r._dailyBudget && !seen.has(r.campaign_id)) {
+        seen.add(r.campaign_id);
+        total += r._dailyBudget;
+      }
+    });
+    return total;
+  };
 
   // Map insights to projects via fb_code matching + CRM lead campaign matching
   const fbProjectMap = useMemo(() => {
@@ -3130,6 +3157,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
           {scopedTotals && (
             <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
               <Card title="Tổng chi tiêu" value={fmtMoney(scopedTotals.spend)} color="#8b5cf6" compact />
+              <Card title="Ngân sách/ngày" value={fmtMoney(calcDailyBudget(scopedInsights))} sub={`${scopedInsights.filter(r => r.status === "ACTIVE").length} CD đang bật`} color="#dc2626" compact />
               <Card title="Lượt hiển thị" value={fmtNum(scopedTotals.impressions)} color="#3b82f6" compact />
               <Card title="Lượt tiếp cận" value={fmtNum(scopedTotals.reach)} color="#06b6d4" compact />
               <Card title="Số click" value={fmtNum(scopedTotals.clicks)} color="#f59e0b" compact />
@@ -3158,6 +3186,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                     <th style={{ ...thStyle, textAlign: "left", minWidth: 180 }}>Chiến dịch</th>
                     <th onClick={() => setCampSort(s => ({ col: "status", asc: s.col === "status" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "center", minWidth: 80, cursor: "pointer", userSelect: "none" }}>Trạng thái {campSort.col === "status" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
                     <th onClick={() => setCampSort(s => ({ col: "spend", asc: s.col === "spend" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "right", cursor: "pointer", userSelect: "none" }}>Chi phí {campSort.col === "spend" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>NS/ngày</th>
                     <th onClick={() => setCampSort(s => ({ col: "result", asc: s.col === "result" ? !s.asc : false }))} style={{ ...thStyle, textAlign: "right", cursor: "pointer", userSelect: "none" }}>Kết quả {campSort.col === "result" ? (campSort.asc ? "↑" : "↓") : "⇅"}</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>CP/KQ</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>CPM</th>
@@ -3193,6 +3222,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                           </span>
                         </td>
                         <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600, color: "#8b5cf6" }}>{fmtMoney(row.spend)}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>{row._dailyBudget ? fmtMoney(row._dailyBudget) : "—"}</td>
                         <td style={{ ...tdStyle, textAlign: "right", fontWeight: 600 }}>{resultCount || "—"}</td>
                         <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e", fontWeight: 600 }}>{resultCount ? fmtMoney(costPerResult) : "—"}</td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(row.cpm)}</td>
@@ -3210,6 +3240,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                       <td style={{ ...tdStyle, fontWeight: 700, fontSize: 13 }}>Tổng ({filteredInsights.length})</td>
                       <td style={tdStyle}></td>
                       <td style={{ ...tdStyle, textAlign: "right", color: "#8b5cf6" }}>{fmtMoney(filteredTotals.spend)}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", color: "#dc2626", fontWeight: 700 }}>{fmtMoney(calcDailyBudget(filteredInsights))}</td>
                       <td style={{ ...tdStyle, textAlign: "right" }}>{fmtNum(filteredTotals.leads)}</td>
                       <td style={{ ...tdStyle, textAlign: "right", color: "#e88a2e" }}>{filteredTotals.leads ? fmtMoney(filteredTotals.cpl) : "—"}</td>
                       <td style={{ ...tdStyle, textAlign: "right" }}>{fmtMoney(filteredTotals.cpm)}</td>
@@ -3426,6 +3457,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
             {fbTotals && (
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(150px, 1fr))", gap: 10, marginBottom: 16 }}>
                 <Card title="Tổng chi tiêu" value={fmtMoney(fbTotals.spend)} color="#8b5cf6" compact />
+                <Card title="Ngân sách/ngày" value={fmtMoney(calcDailyBudget(fbInsights))} sub={`${fbInsights.filter(r => r.status === "ACTIVE").length} CD đang bật`} color="#dc2626" compact />
                 <Card title="Lượt hiển thị" value={fmtNum(fbTotals.impressions)} color="#3b82f6" compact />
                 <Card title="Lượt tiếp cận" value={fmtNum(fbTotals.reach)} color="#06b6d4" compact />
                 <Card title="Số click" value={fmtNum(fbTotals.clicks)} color="#f59e0b" compact />
@@ -3454,6 +3486,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                   return s + (la ? Number(la.value) : 0);
                 }, 0);
                 const activeCount = rows.filter(r => r.status === "ACTIVE").length;
+                const pDailyBudget = calcDailyBudget(rows);
                 return (
                   <div key={pid} onClick={() => { setSelectedFbProject(Number(pid)); setCampSearch(""); setCampPage(1); setCampSort({ col: null, asc: true }); }}
                     onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,.12)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
@@ -3463,6 +3496,12 @@ function CampaignsPage({ leads, projects, isManager = false }) {
                       <span style={{ fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Building2 size={16} /> {pName}</span>
                       <span style={{ background: "#8b5cf622", color: "#8b5cf6", padding: "4px 12px", borderRadius: 8, fontWeight: 700, fontSize: 13 }}>{fmtMoney(pSpend)}</span>
                     </div>
+                    {pDailyBudget > 0 && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, fontSize: 12 }}>
+                        <span style={{ color: "#dc2626", fontWeight: 700 }}>NS/ngày:</span>
+                        <span style={{ background: "#dc262615", color: "#dc2626", padding: "2px 8px", borderRadius: 6, fontWeight: 700 }}>{fmtMoney(pDailyBudget)}</span>
+                      </div>
+                    )}
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 12 }}>
                       <span style={{ background: "#3b82f615", color: "#1d4ed8", padding: "3px 8px", borderRadius: 6 }}>{rows.length} chiến dịch</span>
                       <span style={{ background: "#16a34a15", color: "#16a34a", padding: "3px 8px", borderRadius: 6 }}>{activeCount} đang chạy</span>

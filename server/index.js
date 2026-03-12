@@ -2691,6 +2691,19 @@ app.get("/api/fb-ads/campaigns/:accountId", requireAuth, requireAdmin, async (re
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const acct = await get(db, "SELECT * FROM fb_ad_accounts WHERE account_id=? AND is_active=1", [req.params.accountId]);
+    if (!acct || !acct.access_token) return res.status(400).json({ error: "Ad account not found or no token" });
+    const fields = "id,name,campaign_id,daily_budget,lifetime_budget,status,effective_status";
+    const url = `https://graph.facebook.com/v22.0/act_${acct.account_id}/adsets?fields=${fields}&limit=500&access_token=${acct.access_token}`;
+    const fbRes = await fetch(url);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
+    res.json(data.data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // --- SPA fallback: serve index.html for non-API routes ---
 if (fs.existsSync(distPath)) {
   app.get(/^(?!\/api).*/, (_req, res) => {
