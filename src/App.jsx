@@ -1077,7 +1077,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             isAdminOnly={isAdminOnly}
           />
         )}
-        {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} />}
+        {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
@@ -2696,9 +2696,9 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
   );
 }
 
-function CampaignsPage({ leads, projects, isManager = false }) {
+function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false }) {
   const isMobile = useIsMobile();
-  const [tab, setTab] = useState("leads"); // "leads" | "fb_ads" | "settings"
+  const [tab, setTab] = useState(isAdminOnly ? "market_intel" : "leads"); // "leads" | "fb_ads" | "settings" | "market_intel"
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   const [expandedCampaigns, setExpandedCampaigns] = React.useState({});
   const [expandedAdsets, setExpandedAdsets] = React.useState({});
@@ -3010,7 +3010,7 @@ function CampaignsPage({ leads, projects, isManager = false }) {
   // Tabs
   const tabBar = (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16, flexWrap: "wrap" }}>
-      {tabBtn("market_intel", "Phân tích thị trường", <Radar size={15} />)}
+      {isAdminOnly && tabBtn("market_intel", "Phân tích thị trường", <Radar size={15} />)}
       {tabBtn("leads", "Lead theo chiến dịch", <Target size={15} />)}
       {tabBtn("fb_ads", "Hiệu quả quảng cáo FB", <Activity size={15} />)}
       {!isManager && tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
@@ -3351,8 +3351,8 @@ function CampaignsPage({ leads, projects, isManager = false }) {
               <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
               {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
               {activeProject.competitors === 0 && activeProject.apiError && (
-                <div style={{ fontSize: 9, color: rose, marginTop: 4, padding: "4px 6px", background: `${rose}15`, borderRadius: 6 }}>
-                  ⚠ API: {activeProject.apiError.length > 80 ? activeProject.apiError.substring(0, 80) + "…" : activeProject.apiError}
+                <div style={{ fontSize: 9, color: rose, marginTop: 4, padding: "4px 6px", background: `${rose}15`, borderRadius: 6, lineHeight: 1.4 }}>
+                  ⚠ {activeProject.apiError.includes("permission") ? "App chưa được cấp quyền Ad Library API. Vào developers.facebook.com → App Review → Bật quyền ads_read" : activeProject.apiError.length > 80 ? activeProject.apiError.substring(0, 80) + "…" : activeProject.apiError}
                 </div>
               )}
               <a href={`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(activeProject.name)}&media_type=all`} target="_blank" rel="noopener noreferrer"
