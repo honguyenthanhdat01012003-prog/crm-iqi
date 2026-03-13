@@ -2753,9 +2753,9 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
-  // NO artificial time limit — let it run until Vercel's hard 60s cutoff
-  // Only the scroll loop checks time to leave room for name resolution
+  // Safety limit: must return before Vercel kills at 60s
   const elapsed = () => Date.now() - startTime;
+  const mustStop = () => elapsed() > 58000; // 58s = absolute max, 2s buffer for response
   const pageSet = new Map();
   let adCount = 0;
   let apiError = null;
@@ -3008,8 +3008,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Scroll to load ALL results — MUST reach the absolute bottom of the page
         let prevHeight = 0;
         let noChangeCount = 0;
-        console.log(`[MI] Scroll starting, will scroll until absolute bottom (no time limit)`);
+        console.log(`[MI] Scroll starting, will scroll until absolute bottom`);
         for (let i = 0; i < 300; i++) { // 300 max safety limit
+          if (mustStop()) { console.log(`[MI] Scroll: must stop at ${(elapsed()/1000).toFixed(1)}s to return response`); break; }
           await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
           await new Promise(r => setTimeout(r, 1200)); // 1.2s between scrolls for content to load
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
@@ -3298,6 +3299,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     console.log(`[MI] Resolving ${needApiResolve.length} pages via per-page Ads API`);
     const BATCH_SIZE = 10;
     for (let i = 0; i < needApiResolve.length; i += BATCH_SIZE) {
+      if (mustStop()) { console.log(`[MI] Per-page API: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
       const batch = needApiResolve.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
         // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
@@ -3496,6 +3498,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
     const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
+      if (mustStop()) { console.log(`[MI] Browser fallback: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
       try {
         const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
         await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
@@ -3601,6 +3604,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     if (stillNoName.length > 0) {
       console.log(`[MI] Direct FB visit for ${stillNoName.length} pages still missing name`);
       for (const [pid, info] of stillNoName) {
+        if (mustStop()) { console.log(`[MI] Direct FB visit: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
         try {
           await bPage.goto(`https://www.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 6000 });
           await new Promise(r => setTimeout(r, 800));
