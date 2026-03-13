@@ -3169,160 +3169,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
     activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
 
-    // ===== RESOLVE PAGE DETAILS: Visit each page's Ads Library to get real name + ad count =====
-    if (pageSet.size > 0 && !isTimedOut()) {
-      activityLog.push(`Đang lấy chi tiết ${pageSet.size} pages...`);
-      const pagesToResolve = [...pageSet.entries()]
-        .sort((a, b) => b[1].adCount - a[1].adCount);
-
-      let resolveIdx = 0;
-      for (const [pid, info] of pagesToResolve) {
-        if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
-        // Always visit each page's Ads Library — browser is the most reliable source for dates
-        if (isTimedOut()) {
-          activityLog.push(`Hết thời gian — đã xử lý ${resolveIdx} pages.`);
-          console.log(`[MI] Time limit reached after ${resolveIdx} pages`);
-          break;
-        }
-        resolveIdx++;
-        try {
-          const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 10000 });
-          await new Promise(r => setTimeout(r, 2000));
-          // Scroll down to expose date text in ad cards
-          await page.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
-          await new Promise(r => setTimeout(r, 1000));
-
-          // Fast: get page title first (usually "PageName | Thư viện quảng cáo" or similar)
-          const rawTitle = await page.title().catch(() => '');
-          const titleClean = rawTitle.replace(/\s*[-–|·].*/g, '').trim();
-          const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry'];
-          const isTitleGood = titleClean && titleClean.length > 1 && titleClean.length < 80 && !/^\d+$/.test(titleClean) && !titleBad.some(b => titleClean.toLowerCase().includes(b.toLowerCase()));
-          if (isTitleGood) {
-            info.pageName = titleClean;
-            console.log(`[MI] Page ${pid} → "${titleClean}" (from title)`);
-          }
-
-          // Quick evaluate for ad count + dates + page name fallback
-          const pageDetails = await page.evaluate(() => {
-            const body = document.body.innerText || '';
-            let pageName = '';
-
-            // Try heading/link for page name if title didn't work
-            const badNames = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Quốc gia', 'Country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Không hoạt động', 'hoạt động', 'Trạng thái', 'Status', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Filters', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Thông tin', 'Info', 'About', 'Danh mục', 'Category', 'Transparency', 'Minh bạch', 'Xem chi tiết', 'See more', 'Report', 'Báo cáo', 'Đăng nhập', 'Log in', 'Sign up', 'Đăng ký', 'Tạo trang', 'Create', 'Chính sách', 'Policy', 'Quyền riêng tư', 'Privacy', 'Điều khoản', 'Terms', 'Trợ giúp', 'Help', 'Tiếng Việt', 'Vietnamese', 'English'];
-            const isBad = (txt) => !txt || txt.length <= 1 || txt.length > 80 || /^\d+$/.test(txt) || badNames.some(b => txt.toLowerCase().includes(b.toLowerCase()));
-
-            // Look for the prominent page name — try multiple selectors
-            // 1. Large heading or profile section at top of Ads Library page
-            for (const sel of ['h1', 'h2', '[role="heading"]']) {
-              const el = document.querySelector(sel);
-              const txt = el?.textContent?.trim();
-              if (txt && !isBad(txt) && txt.length > 2 && txt.length < 80) {
-                pageName = txt;
-                break;
-              }
-            }
-            // 2. Page name link (usually first visible link with the page name)
-            if (!pageName) {
-              const allLinks = document.querySelectorAll('a[href*="facebook.com/"]');
-              for (const a of allLinks) {
-                const href = a.href || '';
-                if (href.includes('/ads/library/') || href.includes('/ad_library/') || href.includes('/privacy') || href.includes('/policies')) continue;
-                const txt = a.textContent?.trim();
-                if (txt && !isBad(txt) && !txt.startsWith('http') && txt.length > 2) {
-                  pageName = txt;
-                  break;
-                }
-              }
-            }
-            // 3. Ad card sponsor names (e.g. "Được tài trợ" section shows page name)
-            if (!pageName) {
-              document.querySelectorAll('[role="article"] a, [data-testid] a').forEach(a => {
-                if (pageName) return;
-                const txt = a.textContent?.trim();
-                if (txt && !isBad(txt) && txt.length > 2 && !txt.startsWith('http')) {
-                  pageName = txt;
-                }
-              });
-            }
-
-            // Ad count (handles: "~10 kết quả", "Khoảng 25 kết quả", "10 results")
-            let realAdCount = 0;
-            const countMatch = body.match(/[~≈]?\s*(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
-            if (countMatch) realAdCount = parseInt(countMatch[1].replace(/[.,]/g, ''), 10);
-
-            // Extract dates for duration — multiple formats
-            let maxDays = 0;
-            const now = Date.now();
-            // Format: "Bắt đầu chạy vào ngày 15 tháng 3, 2025" or "Started running on Mar 15, 2025"
-            const monthsVi = {'1':0,'2':1,'3':2,'4':3,'5':4,'6':5,'7':6,'8':7,'9':8,'10':9,'11':10,'12':11};
-            const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
-
-            // Vietnamese: "DD Tháng M, YYYY" (e.g. "30 Tháng 1, 2026") — actual Ads Library format
-            const vnDates = body.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g);
-            for (const m of vnDates) {
-              const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-              if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-            }
-            // English: "Mon DD, YYYY" e.g. "Mar 15, 2025"
-            const enDates = body.matchAll(/(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),?\s+(\d{4})/gi);
-            for (const m of enDates) {
-              const monStr = m[0].substring(0, 3).toLowerCase();
-              const mon = monthsEn[monStr];
-              if (mon !== undefined) {
-                const d = new Date(parseInt(m[2]), mon, parseInt(m[1]));
-                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-              }
-            }
-            // DD/MM/YYYY or DD-MM-YYYY
-            const slashDates = body.matchAll(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/g);
-            for (const m of slashDates) {
-              const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
-              if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-            }
-
-            return { pageName, realAdCount, maxDays };
-          });
-
-          if (!isTitleGood && pageDetails.pageName) {
-            info.pageName = pageDetails.pageName;
-            console.log(`[MI] Page ${pid} → "${pageDetails.pageName}" (from evaluate)`);
-          }
-          if (pageDetails.realAdCount > 0) info.adCount = pageDetails.realAdCount;
-          if (pageDetails.maxDays > 0) info.maxDays = Math.max(info.maxDays, pageDetails.maxDays);
-
-          // Also extract dates from page HTML source (embedded JSON has ad_delivery_start_time)
-          {
-            try {
-              const pageHtml = await page.content();
-              const now = Date.now();
-              let maxDays = 0;
-              const jsonDates = pageHtml.matchAll(/"ad_delivery_start_time"\s*:\s*"(\d{4}-\d{2}-\d{2})"/g);
-              for (const m of jsonDates) {
-                const d = new Date(m[1]);
-                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-              }
-              // Also try unix timestamps: "creation_time":1234567890 or "start_time":1234567890
-              const tsDates = pageHtml.matchAll(/"(?:creation_time|start_time)"\s*:\s*(\d{10,13})/g);
-              for (const m of tsDates) {
-                const ts = parseInt(m[1]) * (m[1].length <= 10 ? 1000 : 1);
-                const d = new Date(ts);
-                if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
-              }
-              if (maxDays > 0) {
-                info.maxDays = maxDays;
-                console.log(`[MI] Page ${pid} duration: ${maxDays} days (from page HTML source)`);
-              }
-            } catch {}
-          }
-
-        } catch (err) {
-          console.log(`[MI] Failed to resolve page ${pid}: ${err.message}`);
-        }
-      }
-      activityLog.push(`Đã lấy chi tiết pages xong.`);
-    }
-
   } catch (err) {
     console.error(`[MI] Chromium error: ${err.message}`);
     activityLog.push(`Lỗi Chromium: ${err.message.substring(0, 100)}`);
@@ -3349,12 +3195,12 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const decodeUnicode = (s) => s.replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
   // Step 2: Per-page Ads API — THE PRIMARY SOURCE for both name + duration
-  // Run in batches of 5 to avoid rate limiting
+  // Run all pages via API (fast HTTP calls, no browser needed)
   const allPages = [...pageSet.entries()].filter(([pid]) => /^\d+$/.test(pid));
   if (allPages.length > 0 && fbToken) {
     activityLog.push(`Đang lấy tên + thời gian chạy QC cho ${allPages.length} pages...`);
     console.log(`[MI] Resolving ${allPages.length} pages via per-page Ads API`);
-    const BATCH_SIZE = 5;
+    const BATCH_SIZE = 10;
     for (let i = 0; i < allPages.length; i += BATCH_SIZE) {
       const batch = allPages.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
@@ -3367,7 +3213,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           if (data.data?.length > 0) {
             // Name from first ad
             const apiName = data.data[0].page_name;
-            if (apiName && isGoodName(apiName) && (!isGoodName(info.pageName))) {
+            if (apiName && isGoodName(apiName)) {
               info.pageName = apiName;
               console.log(`[MI] Page ${pid} → "${apiName}" (Ads API)`);
             }

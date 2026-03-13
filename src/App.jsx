@@ -3066,23 +3066,38 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       ]);
       const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 3000);
       const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích pages & đối thủ...`, time: new Date().toISOString() }]), 8000);
-      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang lấy tên chi tiết từng page...`, time: new Date().toISOString() }]), 15000);
-      const feedTimer4 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 30000);
-      const feedTimer5 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang tính toán CPL & benchmark...`, time: new Date().toISOString() }]), 40000);
-      try {
-        const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
-        const contentType = r.headers.get("content-type") || "";
-        if (!contentType.includes("application/json")) {
-          setMiError(r.status === 504 ? "Hết thời gian chờ — vui lòng thử lại" : `Lỗi server (${r.status})`);
-          setMiLoading(false); return;
+      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang lấy tên & ngày chạy QC qua API...`, time: new Date().toISOString() }]), 15000);
+      const feedTimer4 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 25000);
+      const feedTimer5 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang tính toán CPL & benchmark...`, time: new Date().toISOString() }]), 35000);
+      const allTimers = [feedTimer1, feedTimer2, feedTimer3, feedTimer4, feedTimer5];
+      const MAX_RETRIES = 2;
+      let lastErr = "";
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          if (attempt > 0) {
+            setMiActivityFeed(f => [...f, { msg: `Đang thử lại lần ${attempt}...`, time: new Date().toISOString() }]);
+          }
+          const r = await apiFetch(`${API}/market-intel/analyze?project=${encodeURIComponent(projectName)}&location=${encodeURIComponent(location || "")}`);
+          const contentType = r.headers.get("content-type") || "";
+          if (!contentType.includes("application/json")) {
+            if (r.status === 504 && attempt < MAX_RETRIES) { lastErr = "Server đang xử lý lâu — thử lại..."; continue; }
+            lastErr = r.status === 504 ? "Server đang xử lý lâu — vui lòng thử lại" : `Lỗi server (${r.status})`;
+            break;
+          }
+          const data = await r.json();
+          if (!r.ok) { lastErr = data.error || "Lỗi phân tích"; break; }
+          setMiData(data);
+          setMiWpPage(1);
+          setMiActivityFeed(data.activity_feed || []);
+          lastErr = "";
+          break;
+        } catch (e) {
+          if (attempt < MAX_RETRIES) { lastErr = e.message; continue; }
+          lastErr = "Lỗi kết nối: " + e.message;
         }
-        const data = await r.json();
-        if (!r.ok) { setMiError(data.error || "Lỗi phân tích"); setMiLoading(false); return; }
-        setMiData(data);
-        setMiWpPage(1);
-        setMiActivityFeed(data.activity_feed || []);
-      } catch (e) { setMiError("Lỗi kết nối: " + e.message); }
-      [feedTimer1, feedTimer2, feedTimer3, feedTimer4, feedTimer5].forEach(clearTimeout);
+      }
+      if (lastErr) setMiError(lastErr);
+      allTimers.forEach(clearTimeout);
       setMiLoading(false);
     };
 
