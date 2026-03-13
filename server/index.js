@@ -315,12 +315,14 @@ async function initDb() {
       created_at TEXT DEFAULT (datetime('now')),
       is_active INTEGER DEFAULT 1,
       last_processed_date TEXT DEFAULT '',
-      assignment_log TEXT DEFAULT '[]'
+      assignment_log TEXT DEFAULT '[]',
+      distribute_time TEXT DEFAULT '08:00'
     )`
   );
   // Migration: add new columns to lead_schedules if missing
   try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"); } catch {}
   try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN assignment_log TEXT DEFAULT '[]'"); } catch {}
+  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN distribute_time TEXT DEFAULT '08:00'"); } catch {}
 
   // Migration: add fb_code, fb_person columns to projects
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
@@ -1858,15 +1860,21 @@ function getTodayStr() {
   return d.toISOString().slice(0, 10);
 }
 
-// Process all active schedules - assign leads that are due today
+// Process all active schedules - assign leads that are due today at the scheduled time
 async function processSchedules(db, triggerUser) {
   const today = getTodayStr();
+  const now = new Date();
+  const nowHHMM = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
   const schedules = await all(db, "SELECT * FROM lead_schedules WHERE is_active = 1");
   let totalAssigned = 0;
 
   for (const sch of schedules) {
     // Skip if already processed today
     if (sch.last_processed_date === today) continue;
+
+    // Check if it's time to distribute (only process if current time >= distribute_time)
+    const distTime = sch.distribute_time || '08:00';
+    if (nowHHMM < distTime) continue;
 
     const saleList = JSON.parse(sch.sale_names || "[]");
     const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
@@ -1980,10 +1988,11 @@ async function processSchedules(db, triggerUser) {
 /* POST /api/leads/schedule-distribution - Create a new distribution schedule */
 app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds } = req.body;
+    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTime } = req.body;
     if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
     if (!startDate || !endDate) return res.status(400).json({ error: "Cần chọn ngày bắt đầu và ngày kết thúc" });
+    const distTime = distributeTime || '08:00';
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
 
@@ -2013,8 +2022,8 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     }
 
     await run(db,
-      `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log)
-       VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?)`,
+      `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log, distribute_time)
+       VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?, ?)`,
       [
         Number(projectId),
         statusFilter || "all",
@@ -2025,7 +2034,8 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
         JSON.stringify(uniqueLeadIds),
         uniqueLeadIds.length,
         req.user.displayName || req.user.username,
-        JSON.stringify([]), // assignment_log starts empty, filled as leads are actually assigned
+        JSON.stringify([]),
+        distTime,
       ]
     );
 
@@ -2085,6 +2095,7 @@ function formatSchedule(s) {
     isActive: Boolean(s.is_active),
     lastProcessedDate: s.last_processed_date || "",
     assignmentLog: JSON.parse(s.assignment_log || "[]"),
+    distributeTime: s.distribute_time || "08:00",
   };
 }
 
