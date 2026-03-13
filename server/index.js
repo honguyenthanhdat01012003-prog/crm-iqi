@@ -2753,7 +2753,7 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
-  const MAX_TIME = 50000; // 50s budget — leave 10s for price + response (accuracy > speed)
+  const MAX_TIME = 55000; // 55s budget — accuracy over speed, leave 5s for response
   const isTimedOut = () => Date.now() - startTime > MAX_TIME;
   const pageSet = new Map();
   let adCount = 0;
@@ -3109,8 +3109,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const cardText = card.innerText || '';
             let cardMaxDays = 0;
 
-            // Vietnamese: "ngày DD tháng M, YYYY" or "ngày DD tháng M năm YYYY"
-            const vnDates = cardText.matchAll(/ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})[\s,]+(?:năm\s+)?(\d{4})/gi);
+            // Vietnamese: "DD Tháng M, YYYY" (e.g. "30 Tháng 1, 2026") — with or without "ngày" prefix
+            const vnDates = cardText.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g);
             for (const m of vnDates) {
               const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
               if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > cardMaxDays && days > 0 && days < 3650) cardMaxDays = days; }
@@ -3178,9 +3178,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       let resolveIdx = 0;
       for (const [pid, info] of pagesToResolve) {
         if (!/^\d+$/.test(pid)) continue; // Only resolve numeric IDs
-        // Skip pages already fully resolved by API (have good name + duration)
-        const hasGoodName = info.pageName && info.pageName !== pid && !/^\d+$/.test(info.pageName) && info.pageName.length > 1;
-        if (hasGoodName && info.maxDays > 0) { console.log(`[MI] Skip ${pid} "${info.pageName}" — already resolved by API`); continue; }
+        // Always visit each page's Ads Library — browser is the most reliable source for dates
         if (isTimedOut()) {
           activityLog.push(`Hết thời gian — đã xử lý ${resolveIdx} pages.`);
           console.log(`[MI] Time limit reached after ${resolveIdx} pages`);
@@ -3189,11 +3187,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         resolveIdx++;
         try {
           const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 8000 });
-          await new Promise(r => setTimeout(r, 1500));
+          await page.goto(pageUrl, { waitUntil: "domcontentloaded", timeout: 10000 });
+          await new Promise(r => setTimeout(r, 2000));
           // Scroll down to expose date text in ad cards
-          await page.evaluate(() => window.scrollBy(0, 1000)).catch(() => {});
-          await new Promise(r => setTimeout(r, 500));
+          await page.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
+          await new Promise(r => setTimeout(r, 1000));
 
           // Fast: get page title first (usually "PageName | Thư viện quảng cáo" or similar)
           const rawTitle = await page.title().catch(() => '');
@@ -3214,21 +3212,43 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const badNames = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Quốc gia', 'Country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Không hoạt động', 'hoạt động', 'Trạng thái', 'Status', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Filters', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Thông tin', 'Info', 'About', 'Danh mục', 'Category', 'Transparency', 'Minh bạch', 'Xem chi tiết', 'See more', 'Report', 'Báo cáo', 'Đăng nhập', 'Log in', 'Sign up', 'Đăng ký', 'Tạo trang', 'Create', 'Chính sách', 'Policy', 'Quyền riêng tư', 'Privacy', 'Điều khoản', 'Terms', 'Trợ giúp', 'Help', 'Tiếng Việt', 'Vietnamese', 'English'];
             const isBad = (txt) => !txt || txt.length <= 1 || txt.length > 80 || /^\d+$/.test(txt) || badNames.some(b => txt.toLowerCase().includes(b.toLowerCase()));
 
-            // Look for the prominent page name link (usually first visible link with the page name)
-            const allLinks = document.querySelectorAll('a[href*="facebook.com/"]');
-            for (const a of allLinks) {
-              const href = a.href || '';
-              if (href.includes('/ads/library/') || href.includes('/ad_library/') || href.includes('/privacy') || href.includes('/policies')) continue;
-              const txt = a.textContent?.trim();
-              if (txt && !isBad(txt) && !txt.startsWith('http') && txt.length > 2) {
+            // Look for the prominent page name — try multiple selectors
+            // 1. Large heading or profile section at top of Ads Library page
+            for (const sel of ['h1', 'h2', '[role="heading"]']) {
+              const el = document.querySelector(sel);
+              const txt = el?.textContent?.trim();
+              if (txt && !isBad(txt) && txt.length > 2 && txt.length < 80) {
                 pageName = txt;
                 break;
               }
             }
+            // 2. Page name link (usually first visible link with the page name)
+            if (!pageName) {
+              const allLinks = document.querySelectorAll('a[href*="facebook.com/"]');
+              for (const a of allLinks) {
+                const href = a.href || '';
+                if (href.includes('/ads/library/') || href.includes('/ad_library/') || href.includes('/privacy') || href.includes('/policies')) continue;
+                const txt = a.textContent?.trim();
+                if (txt && !isBad(txt) && !txt.startsWith('http') && txt.length > 2) {
+                  pageName = txt;
+                  break;
+                }
+              }
+            }
+            // 3. Ad card sponsor names (e.g. "Được tài trợ" section shows page name)
+            if (!pageName) {
+              document.querySelectorAll('[role="article"] a, [data-testid] a').forEach(a => {
+                if (pageName) return;
+                const txt = a.textContent?.trim();
+                if (txt && !isBad(txt) && txt.length > 2 && !txt.startsWith('http')) {
+                  pageName = txt;
+                }
+              });
+            }
 
-            // Ad count
+            // Ad count (handles: "~10 kết quả", "Khoảng 25 kết quả", "10 results")
             let realAdCount = 0;
-            const countMatch = body.match(/(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
+            const countMatch = body.match(/[~≈]?\s*(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
             if (countMatch) realAdCount = parseInt(countMatch[1].replace(/[.,]/g, ''), 10);
 
             // Extract dates for duration — multiple formats
@@ -3238,8 +3258,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const monthsVi = {'1':0,'2':1,'3':2,'4':3,'5':4,'6':5,'7':6,'8':7,'9':8,'10':9,'11':10,'12':11};
             const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
 
-            // Vietnamese: "ngày DD tháng M, YYYY" or "ngày DD tháng M năm YYYY"
-            const vnDates = body.matchAll(/ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})[\s,]+(?:năm\s+)?(\d{4})/gi);
+            // Vietnamese: "DD Tháng M, YYYY" (e.g. "30 Tháng 1, 2026") — actual Ads Library format
+            const vnDates = body.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g);
             for (const m of vnDates) {
               const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
               if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
@@ -3272,7 +3292,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           if (pageDetails.maxDays > 0) info.maxDays = Math.max(info.maxDays, pageDetails.maxDays);
 
           // Also extract dates from page HTML source (embedded JSON has ad_delivery_start_time)
-          if (info.maxDays === 0) {
+          {
             try {
               const pageHtml = await page.content();
               const now = Date.now();
