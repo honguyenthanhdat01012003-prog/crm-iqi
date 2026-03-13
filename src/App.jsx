@@ -2378,7 +2378,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   </div>
                   {paged.map(sch => {
                     const projName = projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`;
-                    const pct = sch.totalCount ? Math.round(sch.assignedIndex / sch.totalCount * 100) : 0;
+                    const totalTours = sch.totalTours || sch.saleNames.length || 1;
+                    const curTour = sch.currentTour || 0;
+                    const overallDone = curTour * sch.totalCount + sch.assignedIndex;
+                    const overallTotal = totalTours * sch.totalCount;
+                    const pct = overallTotal ? Math.round(overallDone / overallTotal * 100) : 0;
                     return (
                       <div key={sch.id} style={{
                         background: sch.isActive ? "#fff" : "#f9fafb",
@@ -2413,7 +2417,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           <div style={{ background: sch.isActive ? "#22c55e" : "#9ca3af", height: "100%", width: `${pct}%`, transition: "width .3s" }} />
                         </div>
                         <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                          Đã chia: {sch.assignedIndex}/{sch.totalCount} ({pct}%)
+                          Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia: {overallDone}/{overallTotal} ({pct}%)
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
                       </div>
@@ -2454,6 +2458,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               {sch && sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
                               {sch && sch.distributeTime && ` | ⏰ ${sch.distributeTime}`}
                               {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
+                              {sch && sch.totalTours > 1 && ` | Tour ${Math.min((sch.currentTour || 0) + 1, sch.totalTours)}/${sch.totalTours}`}
                             </div>
                           </div>
                           <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); }}
@@ -2475,20 +2480,31 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                         const sNames = det.schedule.saleNames;
                         const perDay = det.schedule.leadsPerDay || 5;
+                        const currentTour = det.schedule.currentTour || 0;
+                        const totalTours = det.schedule.totalTours || sNames.length;
                         const pastEntries = log.map(e => ({ ...e, planned: false }));
-                        const remainingLeadIds = det.schedule.leadIds.slice(det.schedule.assignedIndex);
+
+                        // Build future plan for remaining leads across all remaining tours
                         const totalPerDay = perDay * sNames.length;
                         const futurePlan = [];
-                        if (remainingLeadIds.length > 0) {
-                          let futureDate = new Date();
-                          futureDate.setDate(futureDate.getDate() + 1);
+                        let futureDate = new Date();
+                        futureDate.setDate(futureDate.getDate() + 1);
+
+                        // Current tour remaining
+                        const allLeadIds = det.schedule.leadIds;
+                        let startTour = currentTour;
+                        let startIdx = det.schedule.assignedIndex;
+
+                        for (let tour = startTour; tour < totalTours; tour++) {
+                          const remaining = allLeadIds.slice(tour === startTour ? startIdx : 0);
+                          if (!remaining.length) continue;
                           let rIdx = 0;
-                          while (rIdx < remainingLeadIds.length) {
-                            const dayBatch = remainingLeadIds.slice(rIdx, rIdx + totalPerDay);
+                          while (rIdx < remaining.length) {
+                            const dayBatch = remaining.slice(rIdx, rIdx + totalPerDay);
                             const dateStr = futureDate.toISOString().slice(0, 10);
                             for (let i = 0; i < dayBatch.length; i++) {
-                              const saleIdx = Math.floor(i / perDay) % sNames.length;
-                              futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true });
+                              const saleIdx = (Math.floor(i / perDay) + tour) % sNames.length;
+                              futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true, tour });
                             }
                             rIdx += dayBatch.length;
                             futureDate.setDate(futureDate.getDate() + 1);

@@ -323,6 +323,7 @@ async function initDb() {
   try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"); } catch {}
   try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN assignment_log TEXT DEFAULT '[]'"); } catch {}
   try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN distribute_time TEXT DEFAULT '08:00'"); } catch {}
+  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN current_tour INTEGER DEFAULT 0"); } catch {}
 
   // Migration: add fb_code, fb_person columns to projects
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
@@ -1883,9 +1884,20 @@ async function processSchedules(db, triggerUser) {
     const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
     if (!saleList.length || !leadIdList.length) continue;
 
+    const currentTour = sch.current_tour || 0;
+    const totalTours = saleList.length; // mỗi sale đều nhận hết tất cả lead
+
     const remaining = leadIdList.slice(sch.assigned_index);
     if (!remaining.length) {
-      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
+      // Hết lead trong tour hiện tại - kiểm tra còn tour tiếp không
+      const nextTour = currentTour + 1;
+      if (nextTour >= totalTours) {
+        // Hết tất cả các tour → hoàn thành
+        await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
+      } else {
+        // Reset về đầu danh sách cho tour mới
+        await run(db, "UPDATE lead_schedules SET assigned_index = 0, current_tour = ? WHERE id = ?", [nextTour, sch.id]);
+      }
       continue;
     }
 
@@ -1899,13 +1911,14 @@ async function processSchedules(db, triggerUser) {
     const assignedLeads = []; // {leadId, saleName} for Telegram
     const logEntries = []; // for assignment_log
 
-    // Round-robin: assign perDay leads to each sale in order
+    // Round-robin with tour offset: mỗi tour shift sale assignment
     const processedLids = new Set();
     for (let i = 0; i < batch.length; i++) {
       const lid = batch[i];
-      if (processedLids.has(lid)) continue; // Skip duplicate
+      if (processedLids.has(lid)) continue;
       processedLids.add(lid);
-      const saleIdx = Math.floor(i / perDay) % saleList.length;
+      // Tour offset: tour 0 → S0,S1,S2; tour 1 → S1,S2,S0; tour 2 → S2,S0,S1
+      const saleIdx = (Math.floor(i / perDay) + currentTour) % saleList.length;
       const saleName = saleList[saleIdx];
 
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
@@ -1913,10 +1926,10 @@ async function processSchedules(db, triggerUser) {
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
         sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id}`, nextSeq],
+        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`, nextSeq],
       });
       assignedLeads.push({ leadId: lid, saleName });
-      logEntries.push({ leadId: lid, saleName, date: today });
+      logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour });
     }
 
     // Append to assignment_log
@@ -1924,10 +1937,20 @@ async function processSchedules(db, triggerUser) {
     const updatedLog = [...existingLog, ...logEntries];
 
     const newIndex = sch.assigned_index + batch.length;
-    const isDone = newIndex >= leadIdList.length;
+    let isDone = false;
+    let newTour = currentTour;
+    if (newIndex >= leadIdList.length) {
+      // Hết lead trong tour này
+      const nextTour = currentTour + 1;
+      if (nextTour >= totalTours) {
+        isDone = true; // Hoàn thành tất cả tour
+      } else {
+        newTour = nextTour; // Chuyển sang tour tiếp
+      }
+    }
     stmts.push({
-      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ?, assignment_log = ? WHERE id = ?",
-      args: [newIndex, today, isDone ? 0 : 1, JSON.stringify(updatedLog), sch.id],
+      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ?, assignment_log = ?, current_tour = ? WHERE id = ?",
+      args: [isDone ? newIndex : (newIndex >= leadIdList.length ? 0 : newIndex), today, isDone ? 0 : 1, JSON.stringify(updatedLog), newTour, sch.id],
     });
 
     await db.batch(stmts, "write");
@@ -1951,7 +1974,7 @@ async function processSchedules(db, triggerUser) {
             `📞 SĐT: \`${lead.phone || "-"}\``,
             `🔗 Nhu cầu: ${lead.product || "-"}`,
             `🕒 Nhận lúc: ${now}`,
-            `📋 Lịch chia tự động #${sch.id}`,
+            `📋 Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`,
             `--------------------------`,
             `📝 *FEEDBACK:*`,
             `Bấm nút bên dưới để cập nhật trạng thái.`,
@@ -2082,6 +2105,7 @@ app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, re
 });
 
 function formatSchedule(s) {
+  const saleNames = JSON.parse(s.sale_names || "[]");
   return {
     id: s.id,
     projectId: s.project_id,
@@ -2089,7 +2113,7 @@ function formatSchedule(s) {
     startDate: s.start_date || "",
     endDate: s.end_date,
     leadsPerDay: s.leads_per_day,
-    saleNames: JSON.parse(s.sale_names || "[]"),
+    saleNames,
     leadIds: JSON.parse(s.lead_ids || "[]"),
     assignedIndex: s.assigned_index,
     totalCount: s.total_count,
@@ -2099,6 +2123,8 @@ function formatSchedule(s) {
     lastProcessedDate: s.last_processed_date || "",
     assignmentLog: JSON.parse(s.assignment_log || "[]"),
     distributeTime: s.distribute_time || "08:00",
+    currentTour: s.current_tour || 0,
+    totalTours: saleNames.length,
   };
 }
 
