@@ -3009,17 +3009,45 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const card = link.closest('[role="article"]') || link.closest('div[class]');
             if (card) {
               // Try all text sources in the card to find the page name
+              // Check absolute links
               const allLinks = card.querySelectorAll('a[href*="facebook.com/"]');
               for (const a of allLinks) {
                 if (a.href.includes('/ads/library/') || a.href.includes('/ad_library/') || a.href.includes('fb.me') || a.href.includes('l.facebook.com/l.php')) continue;
                 const txt = a.textContent?.trim();
                 if (isValidName(txt)) { name = txt; break; }
               }
+              // Check relative links (Facebook often uses relative hrefs like /PageSlug)
+              if (!name) {
+                const relLinks = card.querySelectorAll('a[href^="/"]');
+                const skipPaths = ['/ads/', '/ad_library/', '/privacy', '/help', '/login', '/checkpoint', '/groups/', '/hashtag/', '/watch/'];
+                for (const a of relLinks) {
+                  const href = a.getAttribute('href') || '';
+                  if (skipPaths.some(s => href.includes(s)) || href === '/') continue;
+                  const txt = a.textContent?.trim();
+                  if (isValidName(txt)) { name = txt; break; }
+                }
+              }
+              // Check img alt text (FB puts page name in avatar alt)
+              if (!name) {
+                const imgs = card.querySelectorAll('img[alt]');
+                for (const img of imgs) {
+                  const alt = img.alt?.trim();
+                  if (alt && isValidName(alt) && alt.length < 60 && alt.toLowerCase() !== 'image' && alt.toLowerCase() !== 'photo' && !/logo|icon|avatar/i.test(alt)) { name = alt; break; }
+                }
+              }
               if (!name) {
                 for (const sel of ['h3', 'h4', 'h5', 'strong', '[dir="auto"] span', 'span[dir="auto"]']) {
                   const el = card.querySelector(sel);
                   const txt = el?.textContent?.trim();
                   if (isValidName(txt) && txt.length < 60) { name = txt; break; }
+                }
+              }
+              // Check aria-label on links
+              if (!name) {
+                const labelLinks = card.querySelectorAll('a[aria-label]');
+                for (const a of labelLinks) {
+                  const lbl = a.getAttribute('aria-label')?.trim();
+                  if (isValidName(lbl) && lbl.length < 60) { name = lbl; break; }
                 }
               }
             }
@@ -3273,11 +3301,19 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // ── Graph API: page name (if still missing) ──
         if (!isGoodName(info.pageName)) {
           try {
-            const resp = await fetch(`https://graph.facebook.com/v22.0/${pid}?fields=name&access_token=${encodeURIComponent(fbToken)}`, { signal: AbortSignal.timeout(5000) });
+            const resp = await fetch(`https://graph.facebook.com/v22.0/${pid}?fields=name,link&access_token=${encodeURIComponent(fbToken)}`, { signal: AbortSignal.timeout(5000) });
             const data = await resp.json();
             if (data.name && isGoodName(data.name)) {
               info.pageName = data.name;
               console.log(`[MI] Page ${pid} → "${data.name}" (Graph API)`);
+            } else if (data.link) {
+              // Derive name from page URL slug: https://www.facebook.com/SomeName/
+              const slugMatch = data.link.match(/facebook\.com\/([\w.]+)/i);
+              if (slugMatch && slugMatch[1].length > 1 && !/^\d+$/.test(slugMatch[1]) && !['pages','profile.php','people'].includes(slugMatch[1].toLowerCase())) {
+                const slugName = slugMatch[1].replace(/\./g, ' ');
+                info.pageName = slugName;
+                console.log(`[MI] Page ${pid} → "${slugName}" (Graph API slug)`);
+              }
             }
           } catch {}
         }
@@ -3434,6 +3470,30 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               if ((a.href||'').includes('/ads/library/') || (a.href||'').includes('/privacy') || (a.href||'').includes('fb.me') || (a.href||'').includes('l.facebook.com/l.php')) continue;
               const txt = a.textContent?.trim();
               if (txt && !isBad(txt) && !txt.startsWith('http')) { pageName = txt; break; }
+            }
+          }
+          // Check relative links
+          if (!pageName) {
+            const skipPaths = ['/ads/', '/ad_library/', '/privacy', '/help', '/login', '/checkpoint', '/groups/', '/hashtag/', '/watch/'];
+            for (const a of document.querySelectorAll('a[href^="/"]')) {
+              const href = a.getAttribute('href') || '';
+              if (skipPaths.some(s => href.includes(s)) || href === '/') continue;
+              const txt = a.textContent?.trim();
+              if (txt && !isBad(txt) && !txt.startsWith('http')) { pageName = txt; break; }
+            }
+          }
+          // Check img alt text
+          if (!pageName) {
+            for (const img of document.querySelectorAll('img[alt]')) {
+              const alt = img.alt?.trim();
+              if (alt && !isBad(alt) && alt.length < 60 && !/^(image|photo|logo|icon|avatar)$/i.test(alt)) { pageName = alt; break; }
+            }
+          }
+          // Check aria-labels
+          if (!pageName) {
+            for (const a of document.querySelectorAll('a[aria-label]')) {
+              const lbl = a.getAttribute('aria-label')?.trim();
+              if (lbl && !isBad(lbl) && lbl.length < 60) { pageName = lbl; break; }
             }
           }
           // Dates

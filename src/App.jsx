@@ -3546,7 +3546,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {wpSlice.map((page, i) => {
                 const globalIdx = (miWpPage - 1) * WP_PER_PAGE + i;
                 return (
-                <div key={globalIdx} style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer" }}
+                <a key={globalIdx} href={page.adsLibraryUrl || page.fbPageUrl || "#"} target="_blank" rel="noopener noreferrer"
+                  style={{ background: "rgba(15,23,42,0.6)", borderRadius: 14, padding: 16, border: `1px solid ${darkBorder}`, transition: "all .2s", cursor: "pointer", textDecoration: "none", display: "block" }}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${neonBlue}50`; e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,.3)"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = darkBorder; e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -3577,7 +3578,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                       <span key={pi} style={{ fontSize: 10, padding: "3px 8px", borderRadius: 6, background: `${emerald}15`, color: emerald, fontWeight: 600 }}>{plat}</span>
                     ))}
                   </div>
-                </div>
+                </a>
                 );
               })}
             </div>
