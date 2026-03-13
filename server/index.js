@@ -297,6 +297,26 @@ async function initDb() {
     )`
   );
 
+  /* ---------- Lead distribution schedules table ---------- */
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS lead_schedules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      status_filter TEXT DEFAULT 'all',
+      end_date TEXT NOT NULL,
+      leads_per_day INTEGER DEFAULT 5,
+      sale_names TEXT NOT NULL DEFAULT '[]',
+      lead_ids TEXT NOT NULL DEFAULT '[]',
+      assigned_index INTEGER DEFAULT 0,
+      total_count INTEGER DEFAULT 0,
+      created_by TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      is_active INTEGER DEFAULT 1,
+      last_processed_date TEXT DEFAULT ''
+    )`
+  );
+
   // Migration: add fb_code, fb_person columns to projects
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''"); } catch {}
@@ -1606,10 +1626,18 @@ app.get("/api/config", requireAuth, async (_req, res) => {
 
 app.get("/api/data", requireAuth, async (req, res) => {
   try {
+    // Auto-process pending distribution schedules
+    try { await processSchedules(db); } catch (e) { console.error("[schedule] process error:", e.message); }
     const config = await getConfig(db);
     const data = await readData(db);
     await filterDataForRole(data, req.user);
-    res.json({ ...config, ...data });
+    // Include active schedules for admin
+    let schedules = [];
+    if (req.user.role === "admin" || req.user.role === "manager") {
+      const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+      schedules = rows.map(formatSchedule);
+    }
+    res.json({ ...config, ...data, schedules });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -1816,6 +1844,211 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     res.status(500).json({ error: err.message || "Shuffle failed" });
   }
 });
+
+/* ===== Scheduled lead distribution (round-robin 5 lead/day/person) ===== */
+
+// Get today's date string YYYY-MM-DD
+function getTodayStr() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+
+// Process all active schedules - assign leads that are due today
+async function processSchedules(db, triggerUser) {
+  const today = getTodayStr();
+  const schedules = await all(db, "SELECT * FROM lead_schedules WHERE is_active = 1");
+  let totalAssigned = 0;
+
+  for (const sch of schedules) {
+    // Skip if already processed today
+    if (sch.last_processed_date === today) continue;
+
+    // Check if past end date
+    if (today > sch.end_date) {
+      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
+      continue;
+    }
+
+    const saleList = JSON.parse(sch.sale_names || "[]");
+    const leadIdList = JSON.parse(sch.lead_ids || "[]");
+    if (!saleList.length || !leadIdList.length) continue;
+
+    const remaining = leadIdList.slice(sch.assigned_index);
+    if (!remaining.length) {
+      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
+      continue;
+    }
+
+    // Calculate how many leads to assign today: leads_per_day * number of sales
+    const perDay = sch.leads_per_day || 5;
+    const totalToday = perDay * saleList.length;
+    const batch = remaining.slice(0, totalToday);
+
+    const now = new Date().toLocaleString("vi-VN");
+    const stmts = [];
+    const assignedLeads = []; // {leadId, saleName} for Telegram
+
+    // Round-robin: assign perDay leads to each sale in order
+    for (let i = 0; i < batch.length; i++) {
+      const lid = batch[i];
+      const saleIdx = Math.floor(i / perDay) % saleList.length;
+      const saleName = saleList[saleIdx];
+
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      stmts.push({
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id}`, nextSeq],
+      });
+      assignedLeads.push({ leadId: lid, saleName });
+    }
+
+    const newIndex = sch.assigned_index + batch.length;
+    const isDone = newIndex >= leadIdList.length;
+    stmts.push({
+      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ? WHERE id = ?",
+      args: [newIndex, today, isDone ? 0 : 1, sch.id],
+    });
+
+    await db.batch(stmts, "write");
+    totalAssigned += batch.length;
+
+    // Send Telegram notifications
+    try {
+      const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+      if (activeBot && activeBot.token) {
+        for (const { leadId, saleName } of assignedLeads) {
+          const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+          if (!saleUser || !saleUser.telegram_id) continue;
+          const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+          if (!lead) continue;
+          const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+          const msg = [
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `----------------------------------------------`,
+            `👤 Khách: *${lead.name || "N/A"}*`,
+            `📞 SĐT: \`${lead.phone || "-"}\``,
+            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🕒 Nhận lúc: ${now}`,
+            `📋 Lịch chia tự động #${sch.id}`,
+            `--------------------------`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
+          ].join("\n");
+          const statusList = [
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
+          ];
+          const keyboard = [];
+          for (let i = 0; i < statusList.length; i += 3) {
+            keyboard.push(statusList.slice(i, i + 3).map(([key, label]) => ({ text: label, callback_data: `st:${leadId}:${key}` })));
+          }
+          try {
+            const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+              method: "POST", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: saleUser.telegram_id, text: msg, parse_mode: "Markdown", reply_markup: { inline_keyboard: keyboard } }),
+            });
+            const teleJson = await teleRes.json();
+            const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
+            await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, leadId, sentMsgId]);
+          } catch (teleErr) {
+            console.error("[Telegram schedule] Send failed:", teleErr.message);
+          }
+        }
+      }
+    } catch (teleErr) {
+      console.error("[Telegram schedule] Error:", teleErr.message);
+    }
+  }
+  return totalAssigned;
+}
+
+/* POST /api/leads/schedule-distribution - Create a new distribution schedule */
+app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId, saleNames: sNames, statusFilter, endDate, leadsPerDay, leadIds } = req.body;
+    if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
+    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
+    if (!endDate) return res.status(400).json({ error: "Cần chọn ngày kết thúc" });
+
+    const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
+
+    await run(db,
+      `INSERT INTO lead_schedules(project_id, status_filter, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date)
+       VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '')`,
+      [
+        Number(projectId),
+        statusFilter || "all",
+        endDate,
+        perDay,
+        JSON.stringify(sNames),
+        JSON.stringify(leadIds),
+        leadIds.length,
+        req.user.displayName || req.user.username,
+      ]
+    );
+
+    // Process immediately for today
+    await processSchedules(db);
+
+    const data = await readData(db);
+    await filterDataForRole(data, req.user);
+    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({
+      msg: `Đã tạo lịch chia ${leadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người)`,
+      schedules: schedules.map(formatSchedule),
+      ...data,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Schedule creation failed" });
+  }
+});
+
+/* GET /api/leads/schedules - List all schedules */
+app.get("/api/leads/schedules", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    // Process pending schedules first
+    await processSchedules(db);
+    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({ schedules: schedules.map(formatSchedule) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to load schedules" });
+  }
+});
+
+/* DELETE /api/leads/schedules/:id - Cancel a schedule */
+app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [req.params.id]);
+    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({ msg: "Đã hủy lịch chia lead", schedules: schedules.map(formatSchedule) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to cancel schedule" });
+  }
+});
+
+function formatSchedule(s) {
+  return {
+    id: s.id,
+    projectId: s.project_id,
+    statusFilter: s.status_filter,
+    endDate: s.end_date,
+    leadsPerDay: s.leads_per_day,
+    saleNames: JSON.parse(s.sale_names || "[]"),
+    assignedIndex: s.assigned_index,
+    totalCount: s.total_count,
+    createdBy: s.created_by,
+    createdAt: s.created_at,
+    isActive: Boolean(s.is_active),
+    lastProcessedDate: s.last_processed_date || "",
+  };
+}
 
 /* ===== Lead updates ===== */
 function matchSaleName(leadSaleName, userDisplayName) {
