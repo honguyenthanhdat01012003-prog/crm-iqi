@@ -2906,7 +2906,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
         // Follow pagination to get MORE ads (and more unique pages)
         let nextUrl = data.paging?.next;
-        for (let pg = 0; pg < 3 && nextUrl; pg++) {
+        for (let pg = 0; pg < 10 && nextUrl && !isTimedOut(); pg++) {
           try {
             const pgResp = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
             const pgData = await pgResp.json();
@@ -3007,9 +3007,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Scroll to load ALL results — keep scrolling until no more new content
         let prevHeight = 0;
         let noChangeCount = 0;
-        const scrollBudget = Math.max(8000, MAX_TIME - (Date.now() - startTime) - 30000); // leave 30s for name resolution
+        const scrollBudget = Math.max(8000, MAX_TIME - (Date.now() - startTime) - 20000); // leave 20s for name resolution (API handles most)
         const scrollDeadline = Date.now() + scrollBudget;
-        const maxScrolls = 50; // safety limit
+        const maxScrolls = 100; // safety limit
         console.log(`[MI] Scroll budget: ${(scrollBudget / 1000).toFixed(1)}s`);
         for (let i = 0; i < maxScrolls; i++) {
           if (Date.now() > scrollDeadline) { console.log(`[MI] Scroll budget exhausted after ${i} scrolls`); break; }
@@ -3045,7 +3045,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const extractedPages = await bPage.evaluate(() => {
           const pages = {};
           const reserved = new Set(['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help', 'marketplace', 'gaming', 'stories', 'reels', 'hashtag', 'profile.php', 'people', 'search', 'policies', 'privacy', 'settings', 'notifications', 'messages', 'bookmarks', 'saved']);
-          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n) && !/fb\.me/i.test(n) && !/inbox|đăng ký ngay|nhận báo giá|khách hàng đã đăng ký|xem chi tiết|gửi tin nhắn|liên hệ ngay|tìm hiểu thêm|mua ngay|đặt lịch|tải xuống|sign up|learn more|shop now|send message|book now|get quote|subscribe|download|điều khoản|quyền riêng tư|chính sách|cookie|trợ giúp|cài đặt|đăng nhập|đăng xuất|trang chủ|giới thiệu|terms|privacy|policy|help center|settings|api thư viện|tạo quảng cáo|create ad|báo cáo|report|nội dung có thương hiệu|tiếng việt/i.test(n);
+          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n) && !/fb\.me/i.test(n) && !/inbox|đăng ký ngay|nhận báo giá|khách hàng đã đăng ký|xem chi tiết|gửi tin nhắn|liên hệ ngay|tìm hiểu thêm|mua ngay|đặt lịch|tải xuống|sign up|learn more|shop now|send message|book now|get quote|subscribe|download|điều khoản|quyền riêng tư|chính sách|cookie|trợ giúp|cài đặt|đăng nhập|đăng xuất|trang chủ|giới thiệu|terms|privacy|policy|help center|settings|api thư viện|tạo quảng cáo|create ad|báo cáo|report|nội dung có thương hiệu|tiếng việt|open navigation|close|navigation panel|menu|sidebar|see more|xem thêm|see all|xem tất cả|show more/i.test(n);
           const isValidSlug = (s) => s && s.length > 1 && s.length < 60 && !reserved.has(s.toLowerCase()) && !/^\d+$/.test(s);
 
           // Method 1: view_all_page_id links (most reliable — real page IDs)
@@ -3090,14 +3090,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
                   if (isValidName(txt) && txt.length < 60) { name = txt; break; }
                 }
               }
-              // Check aria-label on links
-              if (!name) {
-                const labelLinks = card.querySelectorAll('a[aria-label]');
-                for (const a of labelLinks) {
-                  const lbl = a.getAttribute('aria-label')?.trim();
-                  if (isValidName(lbl) && lbl.length < 60) { name = lbl; break; }
-                }
-              }
+
             }
             if (!pages[pid]) pages[pid] = { pageName: name || pid, pageId: pid, count: 0 };
             else if (isValidName(name) && !isValidName(pages[pid].pageName)) pages[pid].pageName = name;
@@ -3275,7 +3268,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   }
   console.log(`[MI] After Step 1 merge: ${pageSet.size} pages`);  
 
-  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country', 'fb.me', 'inbox', 'đăng ký ngay', 'nhận báo giá', 'khách hàng đã đăng ký', 'xem chi tiết', 'gửi tin nhắn', 'liên hệ ngay', 'tìm hiểu thêm', 'mua ngay', 'đặt lịch', 'tải xuống', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download', 'điều khoản', 'quyền riêng tư', 'chính sách', 'cookie', 'trợ giúp', 'cài đặt', 'đăng nhập', 'đăng xuất', 'trang chủ', 'giới thiệu', 'terms', 'privacy', 'policy', 'help center', 'settings', 'home', 'about', 'api thư viện', 'tạo quảng cáo', 'create ad', 'báo cáo', 'report', 'nội dung có thương hiệu', 'tiếng việt', 'english'];
+  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country', 'fb.me', 'inbox', 'đăng ký ngay', 'nhận báo giá', 'khách hàng đã đăng ký', 'xem chi tiết', 'gửi tin nhắn', 'liên hệ ngay', 'tìm hiểu thêm', 'mua ngay', 'đặt lịch', 'tải xuống', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download', 'điều khoản', 'quyền riêng tư', 'chính sách', 'cookie', 'trợ giúp', 'cài đặt', 'đăng nhập', 'đăng xuất', 'trang chủ', 'giới thiệu', 'terms', 'privacy', 'policy', 'help center', 'settings', 'home', 'about', 'api thư viện', 'tạo quảng cáo', 'create ad', 'báo cáo', 'report', 'nội dung có thương hiệu', 'tiếng việt', 'english', 'open navigation', 'close', 'navigation panel', 'menu', 'sidebar', 'see more', 'xem thêm', 'see all', 'xem tất cả', 'show more'];
   const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !/^Page \d+/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase())) && !/^[\p{Emoji}\s🔔🔗❗❌✅⚡🎁🏠💰📞📲]+/u.test(n);
   const decodeHtml = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
   const decodeUnicode = (s) => s.replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
@@ -3494,7 +3487,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   if (browserUnresolved.length > 0 && bPage) {
     console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
-    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu'];
+    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
       if (isTimedOut()) { console.log(`[MI] Browser fallback: time limit`); break; }
       try {
@@ -3518,7 +3511,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const det = await bPage.evaluate(() => {
           const body = document.body.innerText || '';
           let pageName = '';
-          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'khách hàng đã đăng ký', 'Xem chi tiết', 'Gửi tin nhắn', 'Liên hệ ngay', 'Tìm hiểu thêm', 'Mua ngay', 'Đặt lịch', 'Sign up', 'Learn more', 'Shop now', 'Send message', 'Book now', 'Get quote', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Cài đặt', 'Đăng xuất', 'Trang chủ', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Help Center', 'Settings', 'API Thư viện', 'Tạo quảng cáo', 'Create ad', 'Báo cáo', 'Report', 'Nội dung có thương hiệu', 'Tiếng Việt', 'English'];
+          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'khách hàng đã đăng ký', 'Xem chi tiết', 'Gửi tin nhắn', 'Liên hệ ngay', 'Tìm hiểu thêm', 'Mua ngay', 'Đặt lịch', 'Sign up', 'Learn more', 'Shop now', 'Send message', 'Book now', 'Get quote', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Cài đặt', 'Đăng xuất', 'Trang chủ', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Help Center', 'Settings', 'API Thư viện', 'Tạo quảng cáo', 'Create ad', 'Báo cáo', 'Report', 'Nội dung có thương hiệu', 'Tiếng Việt', 'English', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar', 'See more', 'Xem thêm', 'See all', 'Xem tất cả', 'Show more'];
           const isBad = (t) => !t || t.length <= 1 || t.length > 80 || /^\d+$/.test(t) || bad.some(b => t.toLowerCase().includes(b.toLowerCase()));
           for (const sel of ['h1', 'h2', '[role="heading"]']) {
             const el = document.querySelector(sel);
@@ -3549,13 +3542,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               if (alt && !isBad(alt) && alt.length < 60 && !/^(image|photo|logo|icon|avatar)$/i.test(alt)) { pageName = alt; break; }
             }
           }
-          // Check aria-labels
-          if (!pageName) {
-            for (const a of document.querySelectorAll('a[aria-label]')) {
-              const lbl = a.getAttribute('aria-label')?.trim();
-              if (lbl && !isBad(lbl) && lbl.length < 60) { pageName = lbl; break; }
-            }
-          }
+
           // Dates
           let maxDays = 0;
           const now = Date.now();
