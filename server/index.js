@@ -2753,7 +2753,7 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
-  const MAX_TIME = 55000; // 55s budget — accuracy over speed, leave 5s for response
+  const MAX_TIME = 57000; // 57s budget — maximize scraping time, leave 3s for response
   const isTimedOut = () => Date.now() - startTime > MAX_TIME;
   const pageSet = new Map();
   let adCount = 0;
@@ -3004,27 +3004,37 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
         console.log(`[MI] Content ready at ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
-        // Scroll to load ALL results — keep scrolling until no more new content
+        // Scroll to load ALL results — MUST reach the absolute bottom of the page
         let prevHeight = 0;
         let noChangeCount = 0;
-        const scrollBudget = Math.max(8000, MAX_TIME - (Date.now() - startTime) - 20000); // leave 20s for name resolution (API handles most)
-        const scrollDeadline = Date.now() + scrollBudget;
-        const maxScrolls = 100; // safety limit
-        console.log(`[MI] Scroll budget: ${(scrollBudget / 1000).toFixed(1)}s`);
-        for (let i = 0; i < maxScrolls; i++) {
-          if (Date.now() > scrollDeadline) { console.log(`[MI] Scroll budget exhausted after ${i} scrolls`); break; }
+        const SCROLL_RESERVE = 15000; // leave 15s for name resolution after scrolling
+        const scrollTimeLimit = () => Date.now() - startTime > MAX_TIME - SCROLL_RESERVE;
+        console.log(`[MI] Scroll starting, will scroll until bottom or ${((MAX_TIME - SCROLL_RESERVE) / 1000).toFixed(0)}s`);
+        for (let i = 0; i < 300; i++) { // 300 max safety limit (covers ~300 scroll positions)
+          if (scrollTimeLimit()) { console.log(`[MI] Scroll time limit after ${i} scrolls at ${((Date.now() - startTime) / 1000).toFixed(1)}s`); break; }
           await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-          await new Promise(r => setTimeout(r, 1000));
+          await new Promise(r => setTimeout(r, 1200)); // 1.2s between scrolls for content to load
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
           if (curHeight === prevHeight) {
             noChangeCount++;
-            if (noChangeCount >= 2) { console.log(`[MI] Scroll complete after ${i + 1} scrolls (no new content)`); break; }
-            // One more wait in case content is still loading
-            await new Promise(r => setTimeout(r, 1000));
+            if (noChangeCount >= 3) { console.log(`[MI] ✓ Reached bottom after ${i + 1} scrolls (no new content 3x)`); break; }
+            // Wait longer for lazy-loading content before concluding we're at bottom
+            await new Promise(r => setTimeout(r, 2000));
+            // Try clicking "See more" or "Xem thêm" buttons if they exist
+            await bPage.evaluate(() => {
+              const btns = document.querySelectorAll('button, [role="button"]');
+              for (const b of btns) {
+                const txt = (b.textContent || '').trim().toLowerCase();
+                if (txt === 'see more' || txt === 'xem thêm' || txt === 'see more results' || txt === 'xem thêm kết quả') {
+                  b.click(); break;
+                }
+              }
+            }).catch(() => {});
           } else {
             noChangeCount = 0;
           }
           prevHeight = curHeight;
+          if (i > 0 && i % 10 === 0) console.log(`[MI] Scroll #${i}, height=${curHeight}, elapsed=${((Date.now() - startTime) / 1000).toFixed(1)}s`);
         }
         console.log(`[MI] Scroll done at ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
@@ -3162,11 +3172,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
           }
-          // Also ADD API pages not in DOM — they are real pages running ads for this keyword
-          if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid)) {
-            pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
-            if (apiInfo.pageName) console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
-            else console.log(`[MI] Added API-only page: ${apiPid} (no name yet)`);
+          // Also ADD API pages not in DOM — only if they have a real name (avoid "Page XXXXX" entries)
+          if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid) && apiInfo.pageName && apiInfo.pageName.length > 1) {
+            pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+            console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
           }
         }
 
@@ -3261,9 +3270,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       }
       if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
       if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
-    } else if (/^\d+$/.test(apiPid)) {
-      // Add API-found pages not in DOM (browser may not have scrolled far enough)
-      pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+    } else if (/^\d+$/.test(apiPid) && apiInfo.pageName && apiInfo.pageName.length > 1) {
+      // Add API-found pages not in DOM — only if they have a real name
+      pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
     }
   }
   console.log(`[MI] After Step 1 merge: ${pageSet.size} pages`);  
@@ -3709,11 +3718,17 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push("Không lấy được số liệu QC — Facebook có thể chặn bot.");
   }
 
-  // Build pages info
+  // Build pages info — only include pages with resolved names (skip unresolved numeric IDs)
   const pagesInfo = [];
   pageSet.forEach((info, key) => {
     const pid = info.pageId || key;
     const isNumericId = /^\d+$/.test(pid);
+    const hasRealName = info.pageName && info.pageName.length > 1 && !/^\d+$/.test(info.pageName) && info.pageName !== pid;
+    // Skip pages that are just numeric IDs without real names (they show as "Page XXXXX")
+    if (isNumericId && !hasRealName) {
+      console.log(`[MI] Skipping unresolved page: ${pid} (no real name found)`);
+      return;
+    }
     pagesInfo.push({
       pageName: info.pageName || pid,
       pageId: pid,
