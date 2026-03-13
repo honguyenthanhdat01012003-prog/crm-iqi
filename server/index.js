@@ -3185,6 +3185,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         existing.pageName = apiInfo.pageName;
       }
       if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
+      if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
     }
   }
 
@@ -3262,43 +3263,12 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               info.maxDays = maxDays;
               console.log(`[MI] Page ${pid} duration: ${maxDays} days (from Ads API)`);
             }
+            // Use total ads count from ALL API as adCount if we don't have a better one
+            if (totalAdsCount > info.adCount) info.adCount = totalAdsCount;
           } else {
             console.log(`[MI] Ads API returned 0 ads for page ${pid}${data.error ? ': ' + data.error.message : ''}`);
           }
         } catch (err) { console.log(`[MI] Ads API failed for ${pid}: ${err.message}`); }
-
-        // ── Ads API ACTIVE only: get real active ad count ──
-        try {
-          let acUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name&access_token=${encodeURIComponent(fbToken)}&limit=500`;
-          let acResp = await fetch(acUrl, { signal: AbortSignal.timeout(8000) });
-          let acData = await acResp.json();
-          if (!acData.data?.length && !acData.error) {
-            acUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries%5B%5D=VN&fields=page_name&access_token=${encodeURIComponent(fbToken)}&limit=500`;
-            acResp = await fetch(acUrl, { signal: AbortSignal.timeout(6000) });
-            acData = await acResp.json();
-          }
-          if (acData.data?.length > 0) {
-            let activeCount = acData.data.length;
-            // Follow pagination for accurate count
-            let nxt = acData.paging?.next;
-            for (let pg = 0; pg < 5 && nxt; pg++) {
-              try {
-                const r2 = await fetch(nxt, { signal: AbortSignal.timeout(6000) });
-                const d2 = await r2.json();
-                if (!d2.data?.length) break;
-                activeCount += d2.data.length;
-                nxt = d2.paging?.next;
-              } catch { break; }
-            }
-            info.adCount = activeCount;
-            // Also get name from ACTIVE call if still missing
-            if (!isGoodName(info.pageName) && acData.data[0].page_name && isGoodName(acData.data[0].page_name)) {
-              info.pageName = acData.data[0].page_name;
-              console.log(`[MI] Page ${pid} → "${acData.data[0].page_name}" (ACTIVE API)`);
-            }
-            console.log(`[MI] Page ${pid} active ads: ${activeCount}`);
-          }
-        } catch {}
 
         // ── Graph API: page name (if still missing) ──
         if (!isGoodName(info.pageName)) {
@@ -3433,10 +3403,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       if (isTimedOut()) { console.log(`[MI] Browser fallback: time limit`); break; }
       try {
         const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
-        await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await new Promise(r => setTimeout(r, 1500));
+        await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+        await new Promise(r => setTimeout(r, 1000));
         await bPage.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 300));
 
         // Page name from title
         if (!isGoodName(info.pageName)) {
