@@ -2919,6 +2919,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
   // ===== STRATEGY 1: Headless Chromium =====
   let browser = null;
+  let bPage = null;
   let bestTerm = searchTerms[0];
   try {
     activityLog.push("Đang khởi tạo trình duyệt ảo (Headless Chromium)...");
@@ -2934,10 +2935,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       headless: chromium.headless ?? "new",
     });
 
-    const page = await browser.newPage();
-    await page.setUserAgent(ua);
-    await page.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8" });
-    await page.evaluateOnNewDocument(() => {
+    bPage = await browser.newPage();
+    await bPage.setUserAgent(ua);
+    await bPage.setExtraHTTPHeaders({ "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8" });
+    await bPage.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => false });
       Object.defineProperty(navigator, "plugins", { get: () => [1, 2, 3, 4, 5] });
       window.chrome = { runtime: {} };
@@ -2951,11 +2952,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       console.log(`[MI] Navigating to: ${searchUrl}`);
 
       try {
-        await page.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40000 });
+        await bPage.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40000 });
 
         // Handle cookie consent / login modals
         try {
-          const consentBtn = await page.$('button[data-cookiebanner="accept_button"], button[title="Cho phép tất cả cookie"], button[title="Allow all cookies"], [aria-label="Allow all cookies"], [aria-label="Cho phép tất cả cookie"]');
+          const consentBtn = await bPage.$('button[data-cookiebanner="accept_button"], button[title="Cho phép tất cả cookie"], button[title="Allow all cookies"], [aria-label="Allow all cookies"], [aria-label="Cho phép tất cả cookie"]');
           if (consentBtn) {
             await consentBtn.click();
             activityLog.push("Đã chấp nhận cookie consent.");
@@ -2965,7 +2966,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
         // Wait for content to render - look for key indicators
         try {
-          await page.waitForFunction(
+          await bPage.waitForFunction(
             () => document.body.innerText.includes("kết quả") || document.body.innerText.includes("results") || document.body.innerText.includes("Không có quảng cáo") || document.body.innerText.includes("No ads"),
             { timeout: 15000 }
           );
@@ -2975,13 +2976,13 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
         // Scroll to trigger lazy loading
         for (let i = 0; i < 3; i++) {
-          await page.evaluate(() => window.scrollBy(0, 3000));
+          await bPage.evaluate(() => window.scrollBy(0, 3000));
           await new Promise(r => setTimeout(r, 1500));
         }
 
         // Extract count
-        const bodyText = await page.evaluate(() => document.body.innerText);
-        const html = await page.content();
+        const bodyText = await bPage.evaluate(() => document.body.innerText);
+        const html = await bPage.content();
 
         // Debug: log first 200 chars of body text
         console.log(`[MI] Body text (first 300): ${bodyText.substring(0, 300).replace(/\n/g, " | ")}`);
@@ -2993,7 +2994,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
 
         // Extract pages from rendered DOM
-        const extractedPages = await page.evaluate(() => {
+        const extractedPages = await bPage.evaluate(() => {
           const pages = {};
           const reserved = new Set(['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help', 'marketplace', 'gaming', 'stories', 'reels', 'hashtag', 'profile.php', 'people', 'search', 'policies', 'privacy', 'settings', 'notifications', 'messages', 'bookmarks', 'saved']);
           const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
@@ -3096,7 +3097,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
 
         // Extract dates from search results for duration calculation
-        const dateExtraction = await page.evaluate(() => {
+        const dateExtraction = await bPage.evaluate(() => {
           const body = document.body.innerText || '';
           const now = Date.now();
           let globalMaxDays = 0;
@@ -3172,8 +3173,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   } catch (err) {
     console.error(`[MI] Chromium error: ${err.message}`);
     activityLog.push(`Lỗi Chromium: ${err.message.substring(0, 100)}`);
-  } finally {
-    if (browser) try { await browser.close(); } catch {}
   }
 
   // ===== RESOLVE ALL PAGES: NAME + DURATION (MANDATORY) =====
@@ -3379,6 +3378,97 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push(`Hoàn tất: ${finalNames}/${allPages.length} tên, ${finalDuration}/${allPages.length} có ngày.`);
     console.log(`[MI] Final resolve: ${finalNames}/${allPages.length} names, ${finalDuration}/${allPages.length} durations`);
   }
+
+  // Step 4: Browser fallback — visit each unresolved page's Ads Library for name + dates
+  const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
+  if (browserUnresolved.length > 0 && bPage) {
+    console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
+    activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
+    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry'];
+    for (const [pid, info] of browserUnresolved) {
+      if (isTimedOut()) { console.log(`[MI] Browser fallback: time limit`); break; }
+      try {
+        const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
+        await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await new Promise(r => setTimeout(r, 2000));
+        await bPage.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Page name from title
+        if (!isGoodName(info.pageName)) {
+          const rawTitle = await bPage.title().catch(() => '');
+          const titleClean = rawTitle.replace(/\s*[-–|·].*/g, '').trim();
+          if (titleClean && titleClean.length > 1 && titleClean.length < 80 && !/^\d+$/.test(titleClean) && !titleBad.some(b => titleClean.toLowerCase().includes(b.toLowerCase()))) {
+            info.pageName = titleClean;
+            console.log(`[MI] Page ${pid} → "${titleClean}" (browser title)`);
+          }
+        }
+
+        // Page name + dates from DOM
+        const det = await bPage.evaluate(() => {
+          const body = document.body.innerText || '';
+          let pageName = '';
+          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in'];
+          const isBad = (t) => !t || t.length <= 1 || t.length > 80 || /^\d+$/.test(t) || bad.some(b => t.toLowerCase().includes(b.toLowerCase()));
+          for (const sel of ['h1', 'h2', '[role="heading"]']) {
+            const el = document.querySelector(sel);
+            const txt = el?.textContent?.trim();
+            if (txt && !isBad(txt)) { pageName = txt; break; }
+          }
+          if (!pageName) {
+            for (const a of document.querySelectorAll('a[href*="facebook.com/"]')) {
+              if ((a.href||'').includes('/ads/library/') || (a.href||'').includes('/privacy')) continue;
+              const txt = a.textContent?.trim();
+              if (txt && !isBad(txt) && !txt.startsWith('http')) { pageName = txt; break; }
+            }
+          }
+          // Dates
+          let maxDays = 0;
+          const now = Date.now();
+          for (const m of body.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g)) {
+            const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
+            if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+          }
+          const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
+          for (const m of body.matchAll(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+(\d{1,2}),?\s+(\d{4})/gi)) {
+            const mon = monthsEn[m[1].substring(0,3).toLowerCase()];
+            if (mon !== undefined) { const d = new Date(parseInt(m[3]), mon, parseInt(m[2])); if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; } }
+          }
+          return { pageName, maxDays };
+        });
+
+        if (!isGoodName(info.pageName) && det.pageName) {
+          info.pageName = det.pageName;
+          console.log(`[MI] Page ${pid} → "${det.pageName}" (browser DOM)`);
+        }
+        if (det.maxDays > info.maxDays) {
+          info.maxDays = det.maxDays;
+          console.log(`[MI] Page ${pid} duration: ${det.maxDays} days (browser)`);
+        }
+
+        // Embedded JSON dates from HTML source
+        if (info.maxDays === 0) {
+          try {
+            const pgHtml = await bPage.content();
+            const now = Date.now();
+            let mx = 0;
+            for (const m of pgHtml.matchAll(/"ad_delivery_start_time"\s*:\s*"(\d{4}-\d{2}-\d{2})"/g)) {
+              const d = new Date(m[1]);
+              if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > mx && days > 0 && days < 3650) mx = days; }
+            }
+            if (mx > info.maxDays) { info.maxDays = mx; console.log(`[MI] Page ${pid} duration: ${mx} days (browser HTML)`); }
+          } catch {}
+        }
+      } catch (err) { console.log(`[MI] Browser fallback failed for ${pid}: ${err.message}`); }
+    }
+    const bNames = allPages.filter(([, info]) => isGoodName(info.pageName)).length;
+    const bDur = allPages.filter(([, info]) => info.maxDays > 0).length;
+    activityLog.push(`Browser: ${bNames}/${allPages.length} tên, ${bDur}/${allPages.length} có ngày.`);
+    console.log(`[MI] After browser fallback: ${bNames}/${allPages.length} names, ${bDur}/${allPages.length} durations`);
+  }
+
+  // Close browser
+  if (browser) try { await browser.close(); } catch {}
 
   // ===== STRATEGY 2: HTTP Fetch fallback (if Chromium failed) =====
   if (adCount === 0) {
