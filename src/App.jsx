@@ -1861,6 +1861,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleDetailId, setScheduleDetailId] = useState(null);
   const [scheduleDetailData, setScheduleDetailData] = useState(null);
   const [scheduleDetailLoading, setScheduleDetailLoading] = useState(false);
+  const [scheduleCalDay, setScheduleCalDay] = useState(null);
   const [allUsers, setAllUsers] = useState([]);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
@@ -2091,6 +2092,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const handleViewScheduleDetail = async (scheduleId) => {
     setScheduleDetailId(scheduleId);
     setScheduleDetailData(null);
+    setScheduleCalDay(null);
     setScheduleDetailLoading(true);
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/detail`);
@@ -2404,7 +2406,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               {/* Schedule Detail Modal - Calendar View */}
               {scheduleDetailId && (
                 <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); }}>
+                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); }}>
                   <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 900, maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden" }}
                     onClick={e => e.stopPropagation()}>
                     {/* Modal header */}
@@ -2424,7 +2426,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
                             </div>
                           </div>
-                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); }}
+                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); }}
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                             <X size={20} color="#6b7280" />
                           </button>
@@ -2443,11 +2445,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                         const sNames = det.schedule.saleNames;
                         const perDay = det.schedule.leadsPerDay || 5;
-
-                        // Build past entries from log
                         const pastEntries = log.map(e => ({ ...e, planned: false }));
-
-                        // Build future plan
                         const remainingLeadIds = det.schedule.leadIds.slice(det.schedule.assignedIndex);
                         const totalPerDay = perDay * sNames.length;
                         const futurePlan = [];
@@ -2466,17 +2464,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                             futureDate.setDate(futureDate.getDate() + 1);
                           }
                         }
-
                         const allEntries = [...pastEntries, ...futurePlan];
-
-                        // Group by date
                         const byDate = {};
                         allEntries.forEach(e => {
                           if (!byDate[e.date]) byDate[e.date] = [];
                           byDate[e.date].push(e);
                         });
 
-                        // Summary per sale
                         const saleSummary = {};
                         sNames.forEach(s => { saleSummary[s] = { done: 0, planned: 0 }; });
                         allEntries.forEach(e => {
@@ -2486,14 +2480,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           }
                         });
 
-                        // Calendar logic - find the month range
                         const allDates = Object.keys(byDate).sort();
                         const firstDate = allDates.length ? new Date(allDates[0] + "T00:00:00") : new Date();
                         const calMonth = firstDate.getMonth();
                         const calYear = firstDate.getFullYear();
-
-                        // Build calendar weeks
-                        const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
+                        const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
                         const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
                         const calWeeks = [];
                         let week = new Array(firstDayOfMonth).fill(null);
@@ -2506,15 +2497,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         const calDayNames = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
                         const calMonthNames = ["Tháng 1", "Tháng 2", "Tháng 3", "Tháng 4", "Tháng 5", "Tháng 6",
                           "Tháng 7", "Tháng 8", "Tháng 9", "Tháng 10", "Tháng 11", "Tháng 12"];
-
                         const todayStr = getTodayStr();
-
-                        // Sale color map
                         const saleColors = ["#059669", "#2563eb", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be185d", "#65a30d"];
 
                         return (
                           <div>
-                            {/* Summary cards */}
+                            {/* Summary badges */}
                             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
                               {sNames.map((name, si) => (
                                 <div key={name} style={{
@@ -2531,34 +2519,36 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                             {/* Calendar grid */}
                             <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden" }}>
-                              {/* Month header */}
                               <div style={{ padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", textAlign: "center", fontWeight: 700, fontSize: 14, color: "#374151" }}>
                                 {calMonthNames[calMonth]} {calYear}
                               </div>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
-                                {/* Day names header */}
                                 {calDayNames.map(d => (
                                   <div key={d} style={{ padding: "8px 4px", textAlign: "center", fontWeight: 700, fontSize: 11, color: d === "CN" ? "#ef4444" : "#6b7280", background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>{d}</div>
                                 ))}
-                                {/* Day cells */}
                                 {calWeeks.flat().map((day, i) => {
                                   const dateStr = day ? `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}` : null;
                                   const dayEntries = dateStr ? (byDate[dateStr] || []) : [];
                                   const isTodayCell = dateStr === todayStr;
+                                  const isSelected = dateStr === scheduleCalDay;
                                   const hasPast = dayEntries.some(e => !e.planned);
                                   const hasFuture = dayEntries.some(e => e.planned);
 
                                   return (
-                                    <div key={i} style={{
-                                      minHeight: isMobile ? 50 : 80, padding: 3,
-                                      borderBottom: "1px solid #f3f4f6", borderRight: "1px solid #f3f4f6",
-                                      background: isTodayCell ? "#fef6ee" : (day ? "#fff" : "#fafafa"),
-                                    }}>
+                                    <div key={i}
+                                      onClick={() => dayEntries.length > 0 && setScheduleCalDay(isSelected ? null : dateStr)}
+                                      style={{
+                                        minHeight: isMobile ? 50 : 80, padding: 3,
+                                        borderBottom: "1px solid #f3f4f6", borderRight: "1px solid #f3f4f6",
+                                        background: isSelected ? "#dbeafe" : isTodayCell ? "#fef6ee" : (day ? "#fff" : "#fafafa"),
+                                        cursor: dayEntries.length > 0 ? "pointer" : "default",
+                                        outline: isSelected ? "2px solid #3b82f6" : "none",
+                                        outlineOffset: -2,
+                                      }}>
                                       {day && (
                                         <>
                                           <div style={{ fontSize: 11, fontWeight: isTodayCell ? 700 : 400, color: isTodayCell ? "#e88a2e" : (i % 7 === 0 ? "#ef4444" : "#374151"), marginBottom: 1 }}>{day}</div>
                                           {dayEntries.length > 0 && (() => {
-                                            // Group by sale for this day
                                             const bySale = {};
                                             dayEntries.forEach(e => {
                                               if (!bySale[e.saleName]) bySale[e.saleName] = [];
@@ -2581,12 +2571,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                                       textOverflow: "ellipsis", whiteSpace: "nowrap",
                                                       fontWeight: 600, borderLeft: `2px solid ${color}`,
                                                     }}>
-                                                      {sale}: {entries.length} lead
+                                                      {sale}: {entries.length}
                                                     </div>
                                                   );
                                                 })}
                                                 {saleEntries.length > maxShow && (
-                                                  <div style={{ fontSize: 8, color: "#9ca3af" }}>+{saleEntries.length - maxShow} sale</div>
+                                                  <div style={{ fontSize: 8, color: "#9ca3af" }}>+{saleEntries.length - maxShow}</div>
                                                 )}
                                                 <div style={{ fontSize: 8, color: hasPast && hasFuture ? "#d97706" : hasPast ? "#059669" : "#d97706", marginTop: 1 }}>
                                                   {dayEntries.length} lead {hasPast && !hasFuture ? "✓" : hasFuture && !hasPast ? "⏳" : ""}
@@ -2602,74 +2592,71 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               </div>
                             </div>
 
-                            {/* Detailed list below calendar */}
-                            <div style={{ marginTop: 12 }}>
-                              <div style={{ fontWeight: 700, fontSize: 13, color: "#374151", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
-                                <ClipboardList size={14} /> Chi tiết theo ngày
-                              </div>
-                              {allDates.map(date => {
-                                const entries = byDate[date] || [];
-                                const isTodayRow = date === todayStr;
-                                const isPast = date < todayStr;
-                                // Group by sale
-                                const bySale = {};
-                                entries.forEach(e => {
-                                  if (!bySale[e.saleName]) bySale[e.saleName] = [];
-                                  bySale[e.saleName].push(e);
-                                });
-                                return (
-                                  <div key={date} style={{
-                                    marginBottom: 8, borderRadius: 8, border: isTodayRow ? "2px solid #93c5fd" : "1px solid #e5e7eb",
-                                    overflow: "hidden", background: "#fff",
+                            {/* Detail panel - only for clicked day */}
+                            {scheduleCalDay && byDate[scheduleCalDay] && (() => {
+                              const entries = byDate[scheduleCalDay];
+                              const isTodayRow = scheduleCalDay === todayStr;
+                              const isPast = scheduleCalDay < todayStr;
+                              const bySale = {};
+                              entries.forEach(e => {
+                                if (!bySale[e.saleName]) bySale[e.saleName] = [];
+                                bySale[e.saleName].push(e);
+                              });
+                              return (
+                                <div style={{ marginTop: 12, borderRadius: 8, border: isTodayRow ? "2px solid #93c5fd" : "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+                                  <div style={{
+                                    padding: "8px 12px", fontSize: 13, fontWeight: 700,
+                                    background: isTodayRow ? "#dbeafe" : isPast ? "#f0fdf4" : "#fefce8",
+                                    color: isTodayRow ? "#1d4ed8" : isPast ? "#065f46" : "#92400e",
+                                    display: "flex", justifyContent: "space-between", alignItems: "center",
                                   }}>
-                                    <div style={{
-                                      padding: "6px 10px", fontSize: 12, fontWeight: 700,
-                                      background: isTodayRow ? "#dbeafe" : isPast ? "#f0fdf4" : "#fefce8",
-                                      color: isTodayRow ? "#1d4ed8" : isPast ? "#065f46" : "#92400e",
-                                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                                    }}>
-                                      <span>📅 {date} {isTodayRow && "— Hôm nay"}</span>
-                                      <span style={{ fontSize: 11, fontWeight: 600 }}>{entries.length} lead</span>
-                                    </div>
-                                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sNames.length, isMobile ? 1 : 3)}, 1fr)`, gap: 0 }}>
-                                      {Object.entries(bySale).map(([sale, saleEntries]) => {
-                                        const si = sNames.indexOf(sale);
-                                        const color = saleColors[si >= 0 ? si % saleColors.length : 0];
-                                        return (
-                                          <div key={sale} style={{ borderRight: "1px solid #f3f4f6" }}>
-                                            <div style={{ padding: "4px 8px", fontSize: 11, fontWeight: 700, color, background: "#f9fafb", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 4 }}>
-                                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block" }} />
-                                              {sale} ({saleEntries.length})
-                                            </div>
-                                            {saleEntries.map((entry, ei) => {
-                                              const lead = leadMap[entry.leadId];
-                                              return (
-                                                <div key={ei} style={{
-                                                  padding: "3px 8px", fontSize: 11, borderBottom: "1px solid #f9fafb",
-                                                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                                                  background: entry.planned ? "#fffbeb" : "#fff",
-                                                }}>
-                                                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                                                    {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 10 }}>{lead.phone}</span></> : `#${entry.leadId}`}
-                                                  </span>
-                                                  <span style={{
-                                                    fontSize: 9, fontWeight: 600, padding: "1px 5px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
-                                                    background: entry.planned ? "#fef3c7" : "#d1fae5",
-                                                    color: entry.planned ? "#92400e" : "#065f46",
-                                                  }}>
-                                                    {entry.planned ? "Dự kiến" : "✓"}
-                                                  </span>
-                                                </div>
-                                              );
-                                            })}
-                                          </div>
-                                        );
-                                      })}
+                                    <span>📅 {scheduleCalDay} {isTodayRow && "— Hôm nay"}</span>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                      <span style={{ fontSize: 12, fontWeight: 600 }}>{entries.length} lead</span>
+                                      <button onClick={() => setScheduleCalDay(null)}
+                                        style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
+                                        <X size={14} color="#6b7280" />
+                                      </button>
                                     </div>
                                   </div>
-                                );
-                              })}
-                            </div>
+                                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(Object.keys(bySale).length, isMobile ? 1 : 3)}, 1fr)`, gap: 0 }}>
+                                    {Object.entries(bySale).map(([sale, saleEntries]) => {
+                                      const si = sNames.indexOf(sale);
+                                      const color = saleColors[si >= 0 ? si % saleColors.length : 0];
+                                      return (
+                                        <div key={sale} style={{ borderRight: "1px solid #f3f4f6" }}>
+                                          <div style={{ padding: "5px 10px", fontSize: 12, fontWeight: 700, color, background: "#f9fafb", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 4 }}>
+                                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block" }} />
+                                            {sale} ({saleEntries.length})
+                                          </div>
+                                          {saleEntries.map((entry, ei) => {
+                                            const lead = leadMap[entry.leadId];
+                                            return (
+                                              <div key={ei} style={{
+                                                padding: "4px 10px", fontSize: 12, borderBottom: "1px solid #f9fafb",
+                                                display: "flex", justifyContent: "space-between", alignItems: "center",
+                                                background: entry.planned ? "#fffbeb" : "#fff",
+                                              }}>
+                                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                                                  {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : `#${entry.leadId}`}
+                                                </span>
+                                                <span style={{
+                                                  fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
+                                                  background: entry.planned ? "#fef3c7" : "#d1fae5",
+                                                  color: entry.planned ? "#92400e" : "#065f46",
+                                                }}>
+                                                  {entry.planned ? "Dự kiến" : "✓ Đã chia"}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         );
                       })()}

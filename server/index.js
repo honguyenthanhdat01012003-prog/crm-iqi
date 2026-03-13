@@ -1873,7 +1873,7 @@ async function processSchedules(db, triggerUser) {
     if (sch.last_processed_date === today) continue;
 
     // Check if it's time to distribute (only process if current time >= distribute_time)
-    const distTime = sch.distribute_time || '08:00';
+    const distTime = (sch.distribute_time || '08:00').slice(0, 5); // normalize to HH:MM
     if (nowHHMM < distTime) continue;
 
     const saleList = JSON.parse(sch.sale_names || "[]");
@@ -2039,8 +2039,8 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
       ]
     );
 
-    // Process immediately for today
-    await processSchedules(db);
+    // Don't process immediately - let the scheduled time control when leads are distributed
+    // processSchedules will run on next API call when the time is right
 
     const data = await readData(db);
     await filterDataForRole(data, req.user);
