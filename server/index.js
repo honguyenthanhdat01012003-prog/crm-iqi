@@ -2753,8 +2753,9 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
-  const MAX_TIME = 57000; // 57s budget — maximize scraping time, leave 3s for response
-  const isTimedOut = () => Date.now() - startTime > MAX_TIME;
+  // NO artificial time limit — let it run until Vercel's hard 60s cutoff
+  // Only the scroll loop checks time to leave room for name resolution
+  const elapsed = () => Date.now() - startTime;
   const pageSet = new Map();
   let adCount = 0;
   let apiError = null;
@@ -2906,7 +2907,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
         // Follow pagination to get MORE ads (and more unique pages)
         let nextUrl = data.paging?.next;
-        for (let pg = 0; pg < 10 && nextUrl && !isTimedOut(); pg++) {
+        for (let pg = 0; pg < 20 && nextUrl; pg++) { // exhaust ALL API pages
           try {
             const pgResp = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
             const pgData = await pgResp.json();
@@ -3007,11 +3008,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Scroll to load ALL results — MUST reach the absolute bottom of the page
         let prevHeight = 0;
         let noChangeCount = 0;
-        const SCROLL_RESERVE = 15000; // leave 15s for name resolution after scrolling
-        const scrollTimeLimit = () => Date.now() - startTime > MAX_TIME - SCROLL_RESERVE;
-        console.log(`[MI] Scroll starting, will scroll until bottom or ${((MAX_TIME - SCROLL_RESERVE) / 1000).toFixed(0)}s`);
+        // Leave 12s for name resolution (API already has most names from bulk call)
+        const scrollHardLimit = () => elapsed() > 46000;
+        console.log(`[MI] Scroll starting, will scroll until absolute bottom`);
         for (let i = 0; i < 300; i++) { // 300 max safety limit (covers ~300 scroll positions)
-          if (scrollTimeLimit()) { console.log(`[MI] Scroll time limit after ${i} scrolls at ${((Date.now() - startTime) / 1000).toFixed(1)}s`); break; }
+          if (scrollHardLimit()) { console.log(`[MI] Scroll: Vercel time limit approaching after ${i} scrolls at ${(elapsed() / 1000).toFixed(1)}s`); break; }
           await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
           await new Promise(r => setTimeout(r, 1200)); // 1.2s between scrolls for content to load
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
@@ -3172,10 +3173,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
           }
-          // Also ADD API pages not in DOM — only if they have a real name (avoid "Page XXXXX" entries)
-          if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid) && apiInfo.pageName && apiInfo.pageName.length > 1) {
-            pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
-            console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
+          // Also ADD API pages not in DOM — they are real pages running ads for this keyword
+          if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid)) {
+            pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+            if (apiInfo.pageName) console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
+            else console.log(`[MI] Added API-only page: ${apiPid} (no name yet)`);
           }
         }
 
@@ -3270,9 +3272,9 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       }
       if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
       if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
-    } else if (/^\d+$/.test(apiPid) && apiInfo.pageName && apiInfo.pageName.length > 1) {
-      // Add API-found pages not in DOM — only if they have a real name
-      pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+    } else if (/^\d+$/.test(apiPid)) {
+      // Add API-found pages not in DOM
+      pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
     }
   }
   console.log(`[MI] After Step 1 merge: ${pageSet.size} pages`);  
@@ -3299,7 +3301,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     console.log(`[MI] Resolving ${needApiResolve.length} pages via per-page Ads API`);
     const BATCH_SIZE = 10;
     for (let i = 0; i < needApiResolve.length; i += BATCH_SIZE) {
-      if (isTimedOut()) { console.log(`[MI] Per-page API: time limit after ${i} pages`); break; }
+      if (elapsed() > 54000) { console.log(`[MI] Per-page API: approaching Vercel limit after ${i} pages`); break; }
       const batch = needApiResolve.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
         // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
@@ -3498,7 +3500,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
     const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
-      if (isTimedOut()) { console.log(`[MI] Browser fallback: time limit`); break; }
+      if (elapsed() > 55000) { console.log(`[MI] Browser fallback: approaching Vercel limit`); break; }
       try {
         const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
         await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
@@ -3604,7 +3606,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     if (stillNoName.length > 0) {
       console.log(`[MI] Direct FB visit for ${stillNoName.length} pages still missing name`);
       for (const [pid, info] of stillNoName) {
-        if (isTimedOut()) { console.log(`[MI] Direct FB visit: time limit`); break; }
+        if (elapsed() > 56000) { console.log(`[MI] Direct FB visit: approaching Vercel limit`); break; }
         try {
           await bPage.goto(`https://www.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 6000 });
           await new Promise(r => setTimeout(r, 800));
@@ -3718,17 +3720,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push("Không lấy được số liệu QC — Facebook có thể chặn bot.");
   }
 
-  // Build pages info — only include pages with resolved names (skip unresolved numeric IDs)
+  // Build pages info — include ALL pages found
   const pagesInfo = [];
   pageSet.forEach((info, key) => {
     const pid = info.pageId || key;
     const isNumericId = /^\d+$/.test(pid);
-    const hasRealName = info.pageName && info.pageName.length > 1 && !/^\d+$/.test(info.pageName) && info.pageName !== pid;
-    // Skip pages that are just numeric IDs without real names (they show as "Page XXXXX")
-    if (isNumericId && !hasRealName) {
-      console.log(`[MI] Skipping unresolved page: ${pid} (no real name found)`);
-      return;
-    }
     pagesInfo.push({
       pageName: info.pageName || pid,
       pageId: pid,
