@@ -2997,7 +2997,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const extractedPages = await bPage.evaluate(() => {
           const pages = {};
           const reserved = new Set(['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help', 'marketplace', 'gaming', 'stories', 'reels', 'hashtag', 'profile.php', 'people', 'search', 'policies', 'privacy', 'settings', 'notifications', 'messages', 'bookmarks', 'saved']);
-          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n);
+          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n) && !/fb\.me/i.test(n) && !/inbox|đăng ký ngay|nhận báo giá|khách hàng đã đăng ký|xem chi tiết|gửi tin nhắn|liên hệ ngay|tìm hiểu thêm|mua ngay|đặt lịch|tải xuống|sign up|learn more|shop now|send message|book now|get quote|subscribe|download/i.test(n);
           const isValidSlug = (s) => s && s.length > 1 && s.length < 60 && !reserved.has(s.toLowerCase()) && !/^\d+$/.test(s);
 
           // Method 1: view_all_page_id links (most reliable — real page IDs)
@@ -3011,7 +3011,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               // Try all text sources in the card to find the page name
               const allLinks = card.querySelectorAll('a[href*="facebook.com/"]');
               for (const a of allLinks) {
-                if (a.href.includes('/ads/library/') || a.href.includes('/ad_library/')) continue;
+                if (a.href.includes('/ads/library/') || a.href.includes('/ad_library/') || a.href.includes('fb.me') || a.href.includes('l.facebook.com/l.php')) continue;
                 const txt = a.textContent?.trim();
                 if (isValidName(txt)) { name = txt; break; }
               }
@@ -3034,7 +3034,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const sponsorLinks = card.querySelectorAll('a');
             for (const a of sponsorLinks) {
               const href = a.href || '';
-              if (!href.includes('facebook.com/') || href.includes('/ads/library/')) continue;
+              if (!href.includes('facebook.com/') || href.includes('/ads/library/') || href.includes('fb.me') || href.includes('l.facebook.com/l.php')) continue;
               const txt = a.textContent?.trim();
               if (!isValidName(txt)) continue;
               const slugMatch = href.match(/facebook\.com\/([\w.]+)/);
@@ -3188,10 +3188,18 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     }
   }
 
-  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country'];
-  const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase()));
+  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country', 'fb.me', 'inbox', 'đăng ký ngay', 'nhận báo giá', 'khách hàng đã đăng ký', 'xem chi tiết', 'gửi tin nhắn', 'liên hệ ngay', 'tìm hiểu thêm', 'mua ngay', 'đặt lịch', 'tải xuống', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download'];
+  const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !/^Page \d+/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase())) && !/^[\p{Emoji}\s🔔🔗❗❌✅⚡🎁🏠💰📞📲]+/u.test(n);
   const decodeHtml = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
   const decodeUnicode = (s) => s.replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+  // Clean up any CTA-like names already in pageSet (from initial DOM extraction)
+  for (const [pid, info] of pageSet) {
+    if (info.pageName && !isGoodName(info.pageName)) {
+      console.log(`[MI] Invalidating bad name for ${pid}: "${info.pageName}"`);
+      info.pageName = '';
+    }
+  }
 
   // Step 2: Per-page Ads API — THE PRIMARY SOURCE for both name + duration
   // Run all pages via API (fast HTTP calls, no browser needed)
@@ -3416,19 +3424,19 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   }
 
   // Step 4: Browser fallback — visit each page that still needs name, duration, or accurate ad count
-  const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0 || info.adCount <= 1);
+  const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
   if (browserUnresolved.length > 0 && bPage) {
     console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
-    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry'];
+    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn'];
     for (const [pid, info] of browserUnresolved) {
       if (isTimedOut()) { console.log(`[MI] Browser fallback: time limit`); break; }
       try {
         const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
         await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
         await bPage.evaluate(() => window.scrollBy(0, 1500)).catch(() => {});
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 500));
 
         // Page name from title
         if (!isGoodName(info.pageName)) {
@@ -3444,7 +3452,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const det = await bPage.evaluate(() => {
           const body = document.body.innerText || '';
           let pageName = '';
-          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in'];
+          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'khách hàng đã đăng ký', 'Xem chi tiết', 'Gửi tin nhắn', 'Liên hệ ngay', 'Tìm hiểu thêm', 'Mua ngay', 'Đặt lịch', 'Sign up', 'Learn more', 'Shop now', 'Send message', 'Book now', 'Get quote'];
           const isBad = (t) => !t || t.length <= 1 || t.length > 80 || /^\d+$/.test(t) || bad.some(b => t.toLowerCase().includes(b.toLowerCase()));
           for (const sel of ['h1', 'h2', '[role="heading"]']) {
             const el = document.querySelector(sel);
@@ -3453,7 +3461,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
           if (!pageName) {
             for (const a of document.querySelectorAll('a[href*="facebook.com/"]')) {
-              if ((a.href||'').includes('/ads/library/') || (a.href||'').includes('/privacy')) continue;
+              if ((a.href||'').includes('/ads/library/') || (a.href||'').includes('/privacy') || (a.href||'').includes('fb.me') || (a.href||'').includes('l.facebook.com/l.php')) continue;
               const txt = a.textContent?.trim();
               if (txt && !isBad(txt) && !txt.startsWith('http')) { pageName = txt; break; }
             }
