@@ -2978,7 +2978,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       console.log(`[MI] Navigating to: ${searchUrl}`);
 
       try {
-        await bPage.goto(searchUrl, { waitUntil: "networkidle2", timeout: 40000 });
+        await bPage.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+        // Short wait for initial JS to render content
+        await new Promise(r => setTimeout(r, 3000));
+        console.log(`[MI] Page loaded in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
         // Handle cookie consent / login modals
         try {
@@ -2993,21 +2996,25 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Wait for content to render - look for key indicators
         try {
           await bPage.waitForFunction(
-            () => document.body.innerText.includes("kết quả") || document.body.innerText.includes("results") || document.body.innerText.includes("Không có quảng cáo") || document.body.innerText.includes("No ads"),
-            { timeout: 15000 }
+            () => document.body.innerText.includes("kết quả") || document.body.innerText.includes("results") || document.body.innerText.includes("Không có quảng cáo") || document.body.innerText.includes("No ads") || document.querySelectorAll('[role="article"]').length > 0,
+            { timeout: 8000 }
           );
         } catch {
           // Timeout - page may not have rendered, continue anyway
         }
+        console.log(`[MI] Content ready at ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
         // Scroll to load ALL results — keep scrolling until no more new content
         let prevHeight = 0;
         let noChangeCount = 0;
-        const maxScrolls = 30; // safety limit
+        const scrollBudget = Math.max(10000, MAX_TIME - (Date.now() - startTime) - 25000); // leave 25s for resolution
+        const scrollDeadline = Date.now() + scrollBudget;
+        const maxScrolls = 50; // safety limit
+        console.log(`[MI] Scroll budget: ${(scrollBudget / 1000).toFixed(1)}s`);
         for (let i = 0; i < maxScrolls; i++) {
-          if (isTimedOut()) { console.log(`[MI] Scroll loop: time limit after ${i} scrolls`); break; }
+          if (Date.now() > scrollDeadline) { console.log(`[MI] Scroll budget exhausted after ${i} scrolls`); break; }
           await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-          await new Promise(r => setTimeout(r, 1200));
+          await new Promise(r => setTimeout(r, 1000));
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
           if (curHeight === prevHeight) {
             noChangeCount++;
@@ -3019,6 +3026,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
           prevHeight = curHeight;
         }
+        console.log(`[MI] Scroll done at ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
         // Extract count
         const bodyText = await bPage.evaluate(() => document.body.innerText);
@@ -3162,9 +3170,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
           }
           // Also ADD API pages not in DOM — they are real pages running ads for this keyword
-          if (!pageSet.has(apiPid) && apiInfo.pageName && /^\d+$/.test(apiPid)) {
-            pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
-            console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
+          if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid)) {
+            pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+            if (apiInfo.pageName) console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
+            else console.log(`[MI] Added API-only page: ${apiPid} (no name yet)`);
           }
         }
 
@@ -3241,6 +3250,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     }
 
     activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
+    console.log(`[MI] Search phase done at ${((Date.now() - startTime) / 1000).toFixed(1)}s, ${pageSet.size} pages`);
 
   } catch (err) {
     console.error(`[MI] Chromium error: ${err.message}`);
@@ -3258,8 +3268,12 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       }
       if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
       if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
+    } else if (/^\d+$/.test(apiPid)) {
+      // Add API-found pages not in DOM (browser may not have scrolled far enough)
+      pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
     }
   }
+  console.log(`[MI] After Step 1 merge: ${pageSet.size} pages`);  
 
   const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country', 'fb.me', 'inbox', 'đăng ký ngay', 'nhận báo giá', 'khách hàng đã đăng ký', 'xem chi tiết', 'gửi tin nhắn', 'liên hệ ngay', 'tìm hiểu thêm', 'mua ngay', 'đặt lịch', 'tải xuống', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download'];
   const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !/^Page \d+/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase())) && !/^[\p{Emoji}\s🔔🔗❗❌✅⚡🎁🏠💰📞📲]+/u.test(n);
