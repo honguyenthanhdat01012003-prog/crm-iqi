@@ -2041,8 +2041,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const totalPerDay = perDay * salesCount;
     const totalLeads = shuffleSelected.size;
     const daysNeeded = Math.ceil(totalLeads / totalPerDay);
-    const perPerson = Math.ceil(totalLeads / salesCount);
-    return { daysNeeded, totalPerDay, perPerson, perDay };
+    const perPersonPerTour = Math.ceil(totalLeads / salesCount);
+    const totalTours = salesCount;
+    const totalDays = daysNeeded * totalTours;
+    return { daysNeeded, totalPerDay, perPersonPerTour, perDay, totalTours, totalDays };
   }, [shuffleSelectedSales, shuffleSelected.size, shuffleLeadsPerDay]);
 
   const handleScheduleDistribution = async () => {
@@ -2293,13 +2295,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, color: "#374151" }}>
                         <div>👥 Số sale: <strong>{shuffleSelectedSales.length} người</strong></div>
                         <div>📊 Tổng lead: <strong>{shuffleSelected.size}</strong></div>
-                        <div>📅 Lead/ngày/người: <strong>{schedulePreview.perDay}</strong></div>
-                        <div>📅 Lead/ngày tổng: <strong>{schedulePreview.totalPerDay}</strong></div>
-                        <div>⏱️ Số ngày cần: <strong>{schedulePreview.daysNeeded} ngày</strong></div>
-                        <div>👤 Mỗi người nhận: <strong>~{schedulePreview.perPerson} lead</strong></div>
+                        <div>� Lead/ngày/người: <strong>{schedulePreview.perDay}</strong></div>
+                        <div>📝 Lead/ngày tổng: <strong>{schedulePreview.totalPerDay}</strong></div>
+                        <div>🔄 Số tour: <strong>{schedulePreview.totalTours} tour</strong> ({schedulePreview.daysNeeded} ngày/tour)</div>
+                        <div>⏱️ Tổng số ngày: <strong>{schedulePreview.totalDays} ngày</strong></div>
+                        <div>👤 Mỗi người nhận: <strong>tất cả {shuffleSelected.size} lead</strong> (qua {schedulePreview.totalTours} tour)</div>
                       </div>
                       <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
-                        Lead trong giai đoạn {shuffleStartDate} → {shuffleEndDate}. Chia bắt đầu từ hôm nay, {schedulePreview.perDay} lead/ngày/người xoay vòng đến khi hết.
+                        Lead trong giai đoạn {shuffleStartDate} → {shuffleEndDate}. Mỗi tour chia {schedulePreview.perPersonPerTour} lead/người, xoay vòng {schedulePreview.totalTours} tour để tất cả sale đều nhận đủ lead.
                       </div>
                     </div>
                   )}
