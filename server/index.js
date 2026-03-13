@@ -1869,7 +1869,7 @@ async function processSchedules(db, triggerUser) {
     if (sch.last_processed_date === today) continue;
 
     const saleList = JSON.parse(sch.sale_names || "[]");
-    const leadIdList = JSON.parse(sch.lead_ids || "[]");
+    const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
     if (!saleList.length || !leadIdList.length) continue;
 
     const remaining = leadIdList.slice(sch.assigned_index);
@@ -1889,8 +1889,11 @@ async function processSchedules(db, triggerUser) {
     const logEntries = []; // for assignment_log
 
     // Round-robin: assign perDay leads to each sale in order
+    const processedLids = new Set();
     for (let i = 0; i < batch.length; i++) {
       const lid = batch[i];
+      if (processedLids.has(lid)) continue; // Skip duplicate
+      processedLids.add(lid);
       const saleIdx = Math.floor(i / perDay) % saleList.length;
       const saleName = saleList[saleIdx];
 
@@ -1984,14 +1987,20 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
 
+    // Deduplicate leadIds to prevent double assignments
+    const uniqueLeadIds = [...new Set(leadIds)];
+    if (uniqueLeadIds.length !== leadIds.length) {
+      console.log(`[Schedule] Removed ${leadIds.length - uniqueLeadIds.length} duplicate lead IDs`);
+    }
+
     // Pre-calculate the full assignment plan
     const plan = [];
     const today = getTodayStr();
     let currentDate = today;
     let idx = 0;
     const totalPerDay = perDay * sNames.length;
-    while (idx < leadIds.length) {
-      const batch = leadIds.slice(idx, idx + totalPerDay);
+    while (idx < uniqueLeadIds.length) {
+      const batch = uniqueLeadIds.slice(idx, idx + totalPerDay);
       for (let i = 0; i < batch.length; i++) {
         const saleIdx = Math.floor(i / perDay) % sNames.length;
         plan.push({ leadId: batch[i], saleName: sNames[saleIdx], date: currentDate });
@@ -2013,8 +2022,8 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
         endDate,
         perDay,
         JSON.stringify(sNames),
-        JSON.stringify(leadIds),
-        leadIds.length,
+        JSON.stringify(uniqueLeadIds),
+        uniqueLeadIds.length,
         req.user.displayName || req.user.username,
         JSON.stringify([]), // assignment_log starts empty, filled as leads are actually assigned
       ]
@@ -2027,7 +2036,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     await filterDataForRole(data, req.user);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
-      msg: `Đã tạo lịch chia ${leadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người). Giai đoạn: ${startDate} → ${endDate}`,
+      msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người). Giai đoạn: ${startDate} → ${endDate}`,
       schedules: schedules.map(formatSchedule),
       ...data,
     });

@@ -2002,6 +2002,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         return d && d <= end;
       });
     }
+    // Deduplicate by phone to prevent assigning same customer twice
+    const seen = new Set();
+    list = list.filter(l => {
+      const key = (l.phone || '').trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     return list;
   }, [leads, shuffleProject, shuffleStatus, shuffleStartDate, shuffleEndDate]);
 
@@ -2079,8 +2087,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const handleViewScheduleDetail = async (scheduleId) => {
-    if (scheduleDetailId === scheduleId) { setScheduleDetailId(null); setScheduleDetailData(null); return; }
     setScheduleDetailId(scheduleId);
+    setScheduleDetailData(null);
     setScheduleDetailLoading(true);
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/detail`);
@@ -2342,7 +2350,6 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   {schedules.map(sch => {
                     const projName = projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`;
                     const pct = sch.totalCount ? Math.round(sch.assignedIndex / sch.totalCount * 100) : 0;
-                    const isExpanded = scheduleDetailId === sch.id;
                     return (
                       <div key={sch.id} style={{
                         background: sch.isActive ? "#fff" : "#f9fafb",
@@ -2351,7 +2358,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         opacity: sch.isActive ? 1 : 0.7,
                       }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                          <span style={{ fontWeight: 700, color: "#1f2937", cursor: "pointer" }} onClick={() => handleViewScheduleDetail(sch.id)}>
+                          <span style={{ fontWeight: 700, color: "#1f2937" }}>
                             #{sch.id} - {projName}
                             {sch.isActive ? (
                               <span style={{ background: "#dcfce7", color: "#166534", padding: "1px 6px", borderRadius: 8, fontSize: 10, marginLeft: 6 }}>Đang chạy</span>
@@ -2361,7 +2368,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           </span>
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <button onClick={() => handleViewScheduleDetail(sch.id)}
-                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#2563eb", fontWeight: 600 }}>{isExpanded ? "Ẩn" : "Xem chi tiết"}</button>
+                              style={{ background: "#2563eb", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 6 }}>Xem chi tiết</button>
                             {sch.isActive && (
                               <button onClick={() => handleCancelSchedule(sch.id)}
                                 style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>Hủy</button>
@@ -2380,108 +2387,177 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           Đã chia: {sch.assignedIndex}/{sch.totalCount} ({pct}%)
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
-
-                        {/* Detail view - expandable */}
-                        {isExpanded && (
-                          <div style={{ marginTop: 8, borderTop: "1px solid #e5e7eb", paddingTop: 8 }}>
-                            {scheduleDetailLoading && <div style={{ textAlign: "center", color: "#9ca3af", padding: 8 }}>Đang tải...</div>}
-                            {scheduleDetailData && scheduleDetailData.schedule && (() => {
-                              const det = scheduleDetailData;
-                              const log = det.schedule.assignmentLog || [];
-                              const leadMap = {};
-                              (det.leadDetails || []).forEach(l => { leadMap[l.id] = l; });
-
-                              // Group by sale
-                              const bySale = {};
-                              sch.saleNames.forEach(s => { bySale[s] = []; });
-                              log.forEach(entry => {
-                                if (!bySale[entry.saleName]) bySale[entry.saleName] = [];
-                                bySale[entry.saleName].push(entry);
-                              });
-
-                              // Group remaining (not yet assigned) by planned schedule
-                              const remainingLeadIds = det.schedule.leadIds.slice(det.schedule.assignedIndex);
-                              const perDay = det.schedule.leadsPerDay || 5;
-                              const sNames = det.schedule.saleNames;
-                              const totalPerDay = perDay * sNames.length;
-                              const futurePlan = [];
-                              let futureDate = new Date();
-                              futureDate.setDate(futureDate.getDate() + 1);
-                              let rIdx = 0;
-                              while (rIdx < remainingLeadIds.length) {
-                                const dayBatch = remainingLeadIds.slice(rIdx, rIdx + totalPerDay);
-                                const dateStr = futureDate.toISOString().slice(0, 10);
-                                for (let i = 0; i < dayBatch.length; i++) {
-                                  const saleIdx = Math.floor(i / perDay) % sNames.length;
-                                  futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true });
-                                }
-                                rIdx += dayBatch.length;
-                                futureDate.setDate(futureDate.getDate() + 1);
-                              }
-
-                              // Merge log + future for each sale
-                              const allEntries = [...log.map(e => ({ ...e, planned: false })), ...futurePlan];
-                              const bySaleFull = {};
-                              sNames.forEach(s => { bySaleFull[s] = []; });
-                              allEntries.forEach(entry => {
-                                if (!bySaleFull[entry.saleName]) bySaleFull[entry.saleName] = [];
-                                bySaleFull[entry.saleName].push(entry);
-                              });
-
-                              return (
-                                <div>
-                                  {sNames.map(saleName => {
-                                    const entries = bySaleFull[saleName] || [];
-                                    // Group by date
-                                    const byDate = {};
-                                    entries.forEach(e => {
-                                      if (!byDate[e.date]) byDate[e.date] = [];
-                                      byDate[e.date].push(e);
-                                    });
-                                    const dates = Object.keys(byDate).sort();
-                                    return (
-                                      <div key={saleName} style={{ marginBottom: 10 }}>
-                                        <div style={{ fontWeight: 700, fontSize: 12, color: "#1a3c20", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
-                                          <User size={12} /> {saleName} ({entries.length} lead)
-                                        </div>
-                                        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
-                                          {dates.map(date => (
-                                            <div key={date}>
-                                              <div style={{ background: "#f9fafb", padding: "4px 8px", fontSize: 10, fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb" }}>
-                                                📅 {date} {date === getTodayStr() && "(Hôm nay)"}
-                                              </div>
-                                              {byDate[date].map((entry, i) => {
-                                                const lead = leadMap[entry.leadId];
-                                                return (
-                                                  <div key={i} style={{
-                                                    padding: "3px 8px", fontSize: 11, borderBottom: "1px solid #f3f4f6",
-                                                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                                                    opacity: entry.planned ? 0.6 : 1,
-                                                    background: entry.planned ? "#fefce8" : "#fff",
-                                                  }}>
-                                                    <span>
-                                                      {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af" }}>{lead.phone}</span></> : `Lead #${entry.leadId}`}
-                                                    </span>
-                                                    <span style={{ fontSize: 10, color: entry.planned ? "#d97706" : "#059669", fontWeight: 600 }}>
-                                                      {entry.planned ? "Dự kiến" : "Đã chia"}
-                                                    </span>
-                                                  </div>
-                                                );
-                                              })}
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              );
-                            })()}
-                          </div>
-                        )}
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Schedule Detail Modal */}
+              {scheduleDetailId && (
+                <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); }}>
+                  <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 600, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden" }}
+                    onClick={e => e.stopPropagation()}>
+                    {/* Modal header */}
+                    {(() => {
+                      const sch = schedules.find(s => s.id === scheduleDetailId);
+                      const projName = sch ? (projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`) : "";
+                      return (
+                        <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
+                          <div>
+                            <div style={{ fontWeight: 700, fontSize: 15, color: "#1f2937" }}>Chi tiết lịch chia #{scheduleDetailId}</div>
+                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                              {projName} {sch && sch.startDate && `| ${sch.startDate} → ${sch.endDate}`}
+                            </div>
+                          </div>
+                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); }}
+                            style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                            <X size={20} color="#6b7280" />
+                          </button>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Modal body */}
+                    <div style={{ overflow: "auto", padding: 16, flex: 1 }}>
+                      {scheduleDetailLoading && <div style={{ textAlign: "center", color: "#9ca3af", padding: 32 }}>Đang tải...</div>}
+                      {scheduleDetailData && scheduleDetailData.schedule && (() => {
+                        const det = scheduleDetailData;
+                        const log = det.schedule.assignmentLog || [];
+                        const leadMap = {};
+                        (det.leadDetails || []).forEach(l => { leadMap[l.id] = l; });
+                        const sch = schedules.find(s => s.id === scheduleDetailId);
+
+                        const sNames = det.schedule.saleNames;
+                        const perDay = det.schedule.leadsPerDay || 5;
+
+                        // Build past entries from log
+                        const pastEntries = log.map(e => ({ ...e, planned: false }));
+
+                        // Build future plan
+                        const remainingLeadIds = det.schedule.leadIds.slice(det.schedule.assignedIndex);
+                        const totalPerDay = perDay * sNames.length;
+                        const futurePlan = [];
+                        if (remainingLeadIds.length > 0) {
+                          let futureDate = new Date();
+                          futureDate.setDate(futureDate.getDate() + 1);
+                          let rIdx = 0;
+                          while (rIdx < remainingLeadIds.length) {
+                            const dayBatch = remainingLeadIds.slice(rIdx, rIdx + totalPerDay);
+                            const dateStr = futureDate.toISOString().slice(0, 10);
+                            for (let i = 0; i < dayBatch.length; i++) {
+                              const saleIdx = Math.floor(i / perDay) % sNames.length;
+                              futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true });
+                            }
+                            rIdx += dayBatch.length;
+                            futureDate.setDate(futureDate.getDate() + 1);
+                          }
+                        }
+
+                        const allEntries = [...pastEntries, ...futurePlan];
+
+                        // Group by date first, then by sale within each date
+                        const byDate = {};
+                        allEntries.forEach(e => {
+                          if (!byDate[e.date]) byDate[e.date] = {};
+                          if (!byDate[e.date][e.saleName]) byDate[e.date][e.saleName] = [];
+                          byDate[e.date][e.saleName].push(e);
+                        });
+                        const dates = Object.keys(byDate).sort();
+
+                        // Summary per sale
+                        const saleSummary = {};
+                        sNames.forEach(s => { saleSummary[s] = { done: 0, planned: 0 }; });
+                        allEntries.forEach(e => {
+                          if (saleSummary[e.saleName]) {
+                            if (e.planned) saleSummary[e.saleName].planned++;
+                            else saleSummary[e.saleName].done++;
+                          }
+                        });
+
+                        return (
+                          <div>
+                            {/* Summary cards */}
+                            <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sNames.length, 3)}, 1fr)`, gap: 8, marginBottom: 16 }}>
+                              {sNames.map(name => (
+                                <div key={name} style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
+                                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}><User size={10} /> {name}</div>
+                                  <div style={{ fontSize: 18, fontWeight: 700, color: "#166534" }}>{saleSummary[name].done}</div>
+                                  <div style={{ fontSize: 10, color: "#9ca3af" }}>Đã chia{saleSummary[name].planned > 0 && ` + ${saleSummary[name].planned} dự kiến`}</div>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Timeline by date */}
+                            {dates.map(date => {
+                              const isToday = date === getTodayStr();
+                              const isPast = date < getTodayStr();
+                              return (
+                                <div key={date} style={{ marginBottom: 12 }}>
+                                  <div style={{
+                                    display: "flex", alignItems: "center", gap: 6, marginBottom: 6,
+                                    padding: "5px 10px", borderRadius: 6,
+                                    background: isToday ? "#dbeafe" : isPast ? "#f9fafb" : "#fefce8",
+                                    border: isToday ? "1px solid #93c5fd" : "1px solid #e5e7eb",
+                                  }}>
+                                    <Calendar size={12} color={isToday ? "#2563eb" : "#9ca3af"} />
+                                    <span style={{ fontWeight: 700, fontSize: 12, color: isToday ? "#1d4ed8" : "#374151" }}>
+                                      {date} {isToday && "— Hôm nay"}
+                                    </span>
+                                    <span style={{ fontSize: 10, color: "#9ca3af", marginLeft: "auto" }}>
+                                      {Object.values(byDate[date]).flat().length} lead
+                                    </span>
+                                  </div>
+
+                                  {/* Sale columns for this date */}
+                                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(sNames.length, 2)}, 1fr)`, gap: 6 }}>
+                                    {sNames.map(saleName => {
+                                      const entries = (byDate[date][saleName] || []);
+                                      if (!entries.length) return null;
+                                      return (
+                                        <div key={saleName} style={{ border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
+                                          <div style={{
+                                            padding: "4px 8px", fontSize: 11, fontWeight: 700,
+                                            background: entries[0].planned ? "#fef9c3" : "#ecfdf5",
+                                            color: entries[0].planned ? "#92400e" : "#065f46",
+                                            borderBottom: "1px solid #e5e7eb",
+                                          }}>
+                                            {saleName} ({entries.length})
+                                          </div>
+                                          {entries.map((entry, i) => {
+                                            const lead = leadMap[entry.leadId];
+                                            return (
+                                              <div key={i} style={{
+                                                padding: "4px 8px", fontSize: 11, borderBottom: i < entries.length - 1 ? "1px solid #f3f4f6" : "none",
+                                                background: entry.planned ? "#fffbeb" : "#fff",
+                                                display: "flex", justifyContent: "space-between", alignItems: "center",
+                                              }}>
+                                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70%" }}>
+                                                  {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 10 }}>{lead.phone}</span></> : `Lead #${entry.leadId}`}
+                                                </span>
+                                                <span style={{
+                                                  fontSize: 9, fontWeight: 600, padding: "1px 5px", borderRadius: 4,
+                                                  background: entry.planned ? "#fef3c7" : "#d1fae5",
+                                                  color: entry.planned ? "#92400e" : "#065f46",
+                                                }}>
+                                                  {entry.planned ? "Dự kiến" : "Đã chia"}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
                 </div>
               )}
 
