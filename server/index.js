@@ -3008,11 +3008,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Scroll to load ALL results — MUST reach the absolute bottom of the page
         let prevHeight = 0;
         let noChangeCount = 0;
-        // Leave 12s for name resolution (API already has most names from bulk call)
-        const scrollHardLimit = () => elapsed() > 46000;
-        console.log(`[MI] Scroll starting, will scroll until absolute bottom`);
-        for (let i = 0; i < 300; i++) { // 300 max safety limit (covers ~300 scroll positions)
-          if (scrollHardLimit()) { console.log(`[MI] Scroll: Vercel time limit approaching after ${i} scrolls at ${(elapsed() / 1000).toFixed(1)}s`); break; }
+        console.log(`[MI] Scroll starting, will scroll until absolute bottom (no time limit)`);
+        for (let i = 0; i < 300; i++) { // 300 max safety limit
           await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
           await new Promise(r => setTimeout(r, 1200)); // 1.2s between scrolls for content to load
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
@@ -3301,7 +3298,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     console.log(`[MI] Resolving ${needApiResolve.length} pages via per-page Ads API`);
     const BATCH_SIZE = 10;
     for (let i = 0; i < needApiResolve.length; i += BATCH_SIZE) {
-      if (elapsed() > 54000) { console.log(`[MI] Per-page API: approaching Vercel limit after ${i} pages`); break; }
       const batch = needApiResolve.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
         // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
@@ -3500,7 +3496,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
     const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
-      if (elapsed() > 55000) { console.log(`[MI] Browser fallback: approaching Vercel limit`); break; }
       try {
         const pageUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
         await bPage.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
@@ -3606,7 +3601,6 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     if (stillNoName.length > 0) {
       console.log(`[MI] Direct FB visit for ${stillNoName.length} pages still missing name`);
       for (const [pid, info] of stillNoName) {
-        if (elapsed() > 56000) { console.log(`[MI] Direct FB visit: approaching Vercel limit`); break; }
         try {
           await bPage.goto(`https://www.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 6000 });
           await new Promise(r => setTimeout(r, 800));
