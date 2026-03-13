@@ -1862,6 +1862,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleDetailData, setScheduleDetailData] = useState(null);
   const [scheduleDetailLoading, setScheduleDetailLoading] = useState(false);
   const [scheduleCalDay, setScheduleCalDay] = useState(null);
+  const [scheduleCalMonth, setScheduleCalMonth] = useState(null); // {month, year}
+  const [scheduleHistoryPage, setScheduleHistoryPage] = useState(1);
+  const [scheduleHistorySearch, setScheduleHistorySearch] = useState("");
   const [allUsers, setAllUsers] = useState([]);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
@@ -2093,6 +2096,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     setScheduleDetailId(scheduleId);
     setScheduleDetailData(null);
     setScheduleCalDay(null);
+    setScheduleCalMonth(null);
     setScheduleDetailLoading(true);
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/detail`);
@@ -2352,12 +2356,27 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               )}
 
               {/* Active schedules list */}
-              {schedules && schedules.length > 0 && (
+              {schedules && schedules.length > 0 && (() => {
+                const filtered = schedules.filter(sch => {
+                  if (!scheduleHistorySearch.trim()) return true;
+                  const q = scheduleHistorySearch.toLowerCase();
+                  const projName = projects.find(p => p.id === sch.projectId)?.name || "";
+                  return projName.toLowerCase().includes(q) || sch.saleNames.some(s => s.toLowerCase().includes(q)) || String(sch.id).includes(q);
+                });
+                const perPage = 5;
+                const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+                const safePage = Math.min(scheduleHistoryPage, totalPages);
+                const paged = filtered.slice((safePage - 1) * perPage, safePage * perPage);
+                return (
                 <div style={{ marginTop: 16, borderTop: "1px solid #fed7aa", paddingTop: 12 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: "#9a3412", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
-                    <CalendarCheck size={14} /> Lịch sử chia lead
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: "#9a3412", display: "flex", alignItems: "center", gap: 4 }}>
+                      <CalendarCheck size={14} /> Lịch sử chia lead ({filtered.length})
+                    </div>
+                    <input value={scheduleHistorySearch} onChange={e => { setScheduleHistorySearch(e.target.value); setScheduleHistoryPage(1); }}
+                      placeholder="Tìm lịch sử..." style={{ ...inputStyle, width: 160, fontSize: 11, padding: "4px 8px" }} />
                   </div>
-                  {schedules.map(sch => {
+                  {paged.map(sch => {
                     const projName = projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`;
                     const pct = sch.totalCount ? Math.round(sch.assignedIndex / sch.totalCount * 100) : 0;
                     return (
@@ -2400,13 +2419,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       </div>
                     );
                   })}
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, marginTop: 8 }}>
+                      <button onClick={() => setScheduleHistoryPage(p => Math.max(1, p - 1))} disabled={safePage <= 1}
+                        style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 6, padding: "3px 10px", fontSize: 12, cursor: safePage <= 1 ? "default" : "pointer", color: safePage <= 1 ? "#d1d5db" : "#374151" }}>←</button>
+                      <span style={{ fontSize: 12, color: "#6b7280" }}>Trang {safePage}/{totalPages}</span>
+                      <button onClick={() => setScheduleHistoryPage(p => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}
+                        style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 6, padding: "3px 10px", fontSize: 12, cursor: safePage >= totalPages ? "default" : "pointer", color: safePage >= totalPages ? "#d1d5db" : "#374151" }}>→</button>
+                    </div>
+                  )}
                 </div>
-              )}
+                );
+              })()}
 
               {/* Schedule Detail Modal - Calendar View */}
               {scheduleDetailId && (
                 <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); }}>
+                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); }}>
                   <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 900, maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden" }}
                     onClick={e => e.stopPropagation()}>
                     {/* Modal header */}
@@ -2426,7 +2456,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
                             </div>
                           </div>
-                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); }}
+                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); }}
                             style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                             <X size={20} color="#6b7280" />
                           </button>
@@ -2482,8 +2512,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                         const allDates = Object.keys(byDate).sort();
                         const firstDate = allDates.length ? new Date(allDates[0] + "T00:00:00") : new Date();
-                        const calMonth = firstDate.getMonth();
-                        const calYear = firstDate.getFullYear();
+                        const lastDate = allDates.length ? new Date(allDates[allDates.length - 1] + "T00:00:00") : new Date();
+                        const defaultMonth = firstDate.getMonth();
+                        const defaultYear = firstDate.getFullYear();
+                        const calMonth = scheduleCalMonth ? scheduleCalMonth.month : defaultMonth;
+                        const calYear = scheduleCalMonth ? scheduleCalMonth.year : defaultYear;
+                        const minMonth = firstDate.getFullYear() * 12 + firstDate.getMonth();
+                        const maxMonth = lastDate.getFullYear() * 12 + lastDate.getMonth();
+                        const curMonth = calYear * 12 + calMonth;
+                        const canPrev = curMonth > minMonth;
+                        const canNext = curMonth < maxMonth;
                         const firstDayOfMonth = new Date(calYear, calMonth, 1).getDay();
                         const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
                         const calWeeks = [];
@@ -2519,8 +2557,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                             {/* Calendar grid */}
                             <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden" }}>
-                              <div style={{ padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", textAlign: "center", fontWeight: 700, fontSize: 14, color: "#374151" }}>
-                                {calMonthNames[calMonth]} {calYear}
+                              <div style={{ padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                <button onClick={() => { if (canPrev) { const p = curMonth - 1; setScheduleCalMonth({ month: p % 12, year: Math.floor(p / 12) }); setScheduleCalDay(null); } }}
+                                  disabled={!canPrev} style={{ background: "none", border: "none", cursor: canPrev ? "pointer" : "default", padding: "4px 8px", fontSize: 16, color: canPrev ? "#374151" : "#d1d5db" }}>◀</button>
+                                <span style={{ fontWeight: 700, fontSize: 14, color: "#374151" }}>{calMonthNames[calMonth]} {calYear}</span>
+                                <button onClick={() => { if (canNext) { const n = curMonth + 1; setScheduleCalMonth({ month: n % 12, year: Math.floor(n / 12) }); setScheduleCalDay(null); } }}
+                                  disabled={!canNext} style={{ background: "none", border: "none", cursor: canNext ? "pointer" : "default", padding: "4px 8px", fontSize: 16, color: canNext ? "#374151" : "#d1d5db" }}>▶</button>
                               </div>
                               <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
                                 {calDayNames.map(d => (

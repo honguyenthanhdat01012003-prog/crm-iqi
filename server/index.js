@@ -1,4 +1,4 @@
-﻿import { createClient } from "@libsql/client";
+import { createClient } from "@libsql/client";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
@@ -39,7 +39,7 @@ function foldText(value = "") {
   return String(value)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[Ä‘Ä]/g, "d")
+    .replace(/[đĐ]/g, "d")
     .replace(/_/g, " ")
     .toLowerCase();
 }
@@ -364,7 +364,7 @@ async function initDb() {
     if (scCount.cnt === 0) {
       const legacy = await get(db, "SELECT value FROM settings WHERE key='sheet_script_url'");
       if (legacy?.value) {
-        await run(db, "INSERT INTO sheet_configs(name, script_url) VALUES(?, ?)", ["Máº·c Ä‘á»‹nh", legacy.value]);
+        await run(db, "INSERT INTO sheet_configs(name, script_url) VALUES(?, ?)", ["Mặc định", legacy.value]);
       }
     }
   }
@@ -533,17 +533,17 @@ function extractSaleBlocks(rawHeaders) {
   const usedNhanLead = new Set();
 
   for (let i = 0; i < rawHeaders.length; i++) {
-    // Pattern 1: "TÃªn Sale Feedback KhÃ¡ch"
+    // Pattern 1: "Tên Sale Feedback Khách"
     const m = foldedH[i].match(/^(.+?)\s*feedback\s*khach/);
-    // Pattern 2: "Feedback KhÃ¡ch TÃªn Sale"
+    // Pattern 2: "Feedback Khách Tên Sale"
     const m2 = !m ? foldedH[i].match(/^feedback\s*khach\s+(.+)/) : null;
     if (!m && !m2) continue;
     const nameNorm = (m ? m[1] : m2[1]).trim();
     if (!nameNorm || ["status", "ngay", "nhan lead"].includes(nameNorm)) continue;
 
     const origName = m
-      ? rawHeaders[i].replace(/\s*[Ff]eedback\s*[Kk]h[Ã¡a]ch.*$/i, "").trim()
-      : rawHeaders[i].replace(/^.*?[Ff]eedback\s*[Kk]h[Ã¡a]ch\s*/i, "").trim();
+      ? rawHeaders[i].replace(/\s*[Ff]eedback\s*[Kk]h[áa]ch.*$/i, "").trim()
+      : rawHeaders[i].replace(/^.*?[Ff]eedback\s*[Kk]h[áa]ch\s*/i, "").trim();
     if (!origName) continue;
 
     let nhanLeadIdx = -1;
@@ -587,7 +587,7 @@ function pickSaleInfo(rawCols, saleBlocks) {
         if (statusText) bestStatus = statusText;
       }
     } else {
-      // Block without Nháº­n Lead column â€” check feedback column for data
+      // Block without Nhận Lead column — check feedback column for data
       const fb = (rawCols[block.feedbackIdx] || "").trim();
       if (fb) {
         currentSale = block.name;
@@ -626,7 +626,7 @@ function extractSaleHistory(rawCols, saleBlocks) {
       const feedback = (rawCols[block.feedbackIdx] || "").trim();
       history.push({ saleName: block.name, action, date: dateText, status: statusText, feedback });
     } else {
-      // Block without Nháº­n Lead â€” use feedback column only
+      // Block without Nhận Lead — use feedback column only
       const feedback = (rawCols[block.feedbackIdx] || "").trim();
       if (feedback) {
         history.push({ saleName: block.name, action: "Chia lead", date: "", status: "", feedback });
@@ -650,9 +650,9 @@ function parseLeadDate(createdAt) {
 }
 
 function calcIsHot(createdAt, saleName) {
-  // Hot = â‰¤7 days AND not assigned to any sale
+  // Hot = ≤7 days AND not assigned to any sale
   // Cold = assigned to sale OR >7 days old
-  const hasSale = saleName && saleName !== "ChÆ°a chia" && saleName.trim() !== "";
+  const hasSale = saleName && saleName !== "Chưa chia" && saleName.trim() !== "";
   if (hasSale) return false;
   const dt = parseLeadDate(createdAt);
   if (!dt) return false;
@@ -716,7 +716,7 @@ function detectColumnIndices(rawRows) {
 function mapLeads(rows, headers, rawRows, rawHeaders) {
   const saleBlocks = rawHeaders ? extractSaleBlocks(rawHeaders) : [];
 
-  // Column R: system-recorded date â€” right after lead_status, often has empty header
+  // Column R: system-recorded date — right after lead_status, often has empty header
   const lsIdx = rawHeaders ? rawHeaders.findIndex((h) => foldText(h).includes("lead status")) : -1;
   const dateColIdx = lsIdx >= 0 ? lsIdx + 1 : -1;
 
@@ -778,7 +778,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         inboxUrl,
         isHot: calcIsHot(createdAt, saleName),
         saleId: 0,
-        saleName: saleName || "ChÆ°a chia",
+        saleName: saleName || "Chưa chia",
         saleHistory,
         source: "Facebook",
         budget: budget || "-",
@@ -846,7 +846,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         inboxUrl,
         isHot: calcIsHot(createdAt, saleName),
         saleId: 0,
-        saleName: saleName || "ChÆ°a chia",
+        saleName: saleName || "Chưa chia",
         saleHistory,
         source: "Facebook",
         budget: "-",
@@ -905,9 +905,9 @@ function sanitizeSheetUrl(raw) {
   let url = String(raw).trim();
   // decode HTML entities
   url = url.replace(/&amp;/g, "&");
-  // convert /pubhtml â†’ /pub
+  // convert /pubhtml → /pub
   url = url.replace(/\/pubhtml\b/, "/pub");
-  // convert /edit urls â†’ /pub
+  // convert /edit urls → /pub
   url = url.replace(/\/edit(#.*)?$/, "/pub");
   // strip widget / headers params
   url = url.replace(/[?&]widget=[^&]*/g, "").replace(/[?&]headers=[^&]*/g, "");
@@ -959,11 +959,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const prev = existingMap.get(key);
 
     if (prev) {
-      // Lead exists â€” UPDATE non-editable fields + sync status/sale from sheet
+      // Lead exists — UPDATE non-editable fields + sync status/sale from sheet
       const sheetStatus = normalizeStatus(l.rawStatus);
       const sheetSale = l.saleName || "";
-      // Update sale_name from sheet only if DB has no assignment (empty or "ChÆ°a chia")
-      const newSale = (!prev.sale_name || prev.sale_name === "ChÆ°a chia") && sheetSale && sheetSale !== "ChÆ°a chia"
+      // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
+      const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
         ? sheetSale : prev.sale_name;
       // Update status from sheet only if DB status is still default ("new"/empty) or sheet has a more specific status
       // If CRM/Telegram already updated status (not "new"), keep the DB value
@@ -1001,7 +1001,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         }
       }
     } else {
-      // New lead â€” INSERT
+      // New lead — INSERT
       const status = l.status;
       const rawStatus = l.rawStatus;
       const notes = l.notes || "";
@@ -1293,7 +1293,7 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
     const validRole = ["admin", "manager", "sale"].includes(role) ? role : "sale";
     // Manager can only create sale accounts
     if (req.user.role === "manager" && validRole !== "sale") {
-      return res.status(403).json({ error: "Quáº£n lÃ½ chá»‰ Ä‘Æ°á»£c táº¡o tÃ i khoáº£n Sale" });
+      return res.status(403).json({ error: "Quản lý chỉ được tạo tài khoản Sale" });
     }
     const { hash, salt } = hashPassword(String(password));
     const result = await run(
@@ -1325,7 +1325,7 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (role && ["admin", "manager", "sale"].includes(role)) {
       // Manager cannot set role to admin or manager
       if (req.user.role === "manager" && (role === "admin" || role === "manager")) {
-        return res.status(403).json({ error: "Quáº£n lÃ½ chá»‰ Ä‘Æ°á»£c Ä‘áº·t quyá»n Sale" });
+        return res.status(403).json({ error: "Quản lý chỉ được đặt quyền Sale" });
       }
       await run(db, "UPDATE users SET role = ? WHERE id = ?", [role, id]);
     }
@@ -1365,7 +1365,7 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     if (req.user.role === "manager") {
       const target = await get(db, "SELECT role FROM users WHERE id = ?", [id]);
       if (target && (target.role === "admin" || target.role === "manager")) {
-        return res.status(403).json({ error: "Quáº£n lÃ½ chá»‰ Ä‘Æ°á»£c xÃ³a tÃ i khoáº£n Sale" });
+        return res.status(403).json({ error: "Quản lý chỉ được xóa tài khoản Sale" });
       }
     }
     await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
@@ -1380,7 +1380,7 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
 /* ---------- Auto-create sale accounts from lead data ---------- */
 app.post("/api/users/auto-create-sales", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const leadsRows = await all(db, "SELECT DISTINCT sale_name FROM leads WHERE sale_name IS NOT NULL AND sale_name != '' AND sale_name != 'ChÆ°a chia'");
+    const leadsRows = await all(db, "SELECT DISTINCT sale_name FROM leads WHERE sale_name IS NOT NULL AND sale_name != '' AND sale_name != 'Chưa chia'");
     const existingUsers = await all(db, "SELECT username, display_name FROM users");
     const existingDisplayNames = new Set(existingUsers.map(u => foldText(u.display_name)));
     const existingUsernames = new Set(existingUsers.map(u => u.username));
@@ -1398,7 +1398,7 @@ app.post("/api/users/auto-create-sales", requireAuth, requireAdmin, async (req, 
       if (words.length < 2) continue; // Skip single-word names
 
       const lastTwo = words.slice(-2).map(w =>
-        w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[Ä‘Ä]/g, "d").toLowerCase()
+        w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase()
       ).join("");
 
       // Skip if username already exists
@@ -1407,7 +1407,7 @@ app.post("/api/users/auto-create-sales", requireAuth, requireAdmin, async (req, 
 
       // Default password = last word (no diacritics) + 123
       const lastWord = words[words.length - 1]
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[Ä‘Ä]/g, "d").toLowerCase();
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase();
       const defaultPwd = lastWord + "123";
 
       const { hash, salt } = hashPassword(defaultPwd);
@@ -1464,7 +1464,7 @@ app.put("/api/change-password", requireAuth, async (req, res) => {
     // Validate password strength
     const pwdRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]).{8,}$/;
     if (!pwdRegex.test(newPassword)) {
-      return res.status(400).json({ error: "Máº­t kháº©u pháº£i cÃ³ Ã­t nháº¥t 8 kÃ½ tá»±, bao gá»“m: chá»¯ hoa, chá»¯ thÆ°á»ng, sá»‘ vÃ  kÃ½ tá»± Ä‘áº·c biá»‡t" });
+      return res.status(400).json({ error: "Mật khẩu phải có ít nhất 8 ký tự, bao gồm: chữ hoa, chữ thường, số và ký tự đặc biệt" });
     }
 
     const user = await get(db, "SELECT * FROM users WHERE id = ?", [id]);
@@ -1474,7 +1474,7 @@ app.put("/api/change-password", requireAuth, async (req, res) => {
     if (!user.must_change_password) {
       if (!currentPassword) return res.status(400).json({ error: "Current password required" });
       if (!verifyPassword(String(currentPassword), user.password_hash, user.salt)) {
-        return res.status(400).json({ error: "Máº­t kháº©u hiá»‡n táº¡i khÃ´ng Ä‘Ãºng" });
+        return res.status(400).json({ error: "Mật khẩu hiện tại không đúng" });
       }
     }
 
@@ -1521,7 +1521,7 @@ app.get("/api/telegram-bots", requireAuth, requireAdmin, async (_req, res) => {
 app.post("/api/telegram-bots", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, token } = req.body;
-    if (!name || !token) return res.status(400).json({ error: "TÃªn bot vÃ  token báº¯t buá»™c" });
+    if (!name || !token) return res.status(400).json({ error: "Tên bot và token bắt buộc" });
     await run(db, "INSERT INTO telegram_bots(name, token) VALUES(?, ?)", [String(name).trim(), String(token).trim()]);
     const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
     res.json(bots.map(mapBot));
@@ -1684,7 +1684,7 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     const { name, leadUrl, costUrl, fbCode, fbPerson } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "Name required" });
     const existing = await get(db, "SELECT id FROM projects WHERE name = ?", [String(name).trim()]);
-    if (existing) return res.status(409).json({ error: "Dá»± Ã¡n Ä‘Ã£ tá»“n táº¡i" });
+    if (existing) return res.status(409).json({ error: "Dự án đã tồn tại" });
     const cleanLead = sanitizeSheetUrl(leadUrl);
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
@@ -1744,12 +1744,12 @@ app.delete("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) 
   }
 });
 
-/* ===== Bulk assign leads to a sale â€” Admin only ===== */
+/* ===== Bulk assign leads to a sale — Admin only ===== */
 app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { saleName, leadIds } = req.body;
-    if (!saleName) return res.status(400).json({ error: "Cáº§n chá»n sale" });
-    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cáº§n chá»n Ã­t nháº¥t 1 lead" });
+    if (!saleName) return res.status(400).json({ error: "Cần chọn sale" });
+    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     for (const lid of leadIds) {
@@ -1774,24 +1774,24 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
           if (!lead) continue;
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
-            `ðŸ”” *Báº N CÃ“ LEAD Má»šI*`,
-            `Dá»± Ã¡n: *${projectRow ? projectRow.name : "-"}*`,
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
             `----------------------------------------------`,
-            `ðŸ‘¤ KhÃ¡ch: *${lead.name || "N/A"}*`,
-            `ðŸ“ž SÄT: \`${lead.phone || "-"}\``,
-            `ðŸ”— Nhu cáº§u: ${lead.product || "-"}`,
-            `ðŸ•’ Nháº­n lÃºc: ${now}`,
+            `👤 Khách: *${lead.name || "N/A"}*`,
+            `📞 SĐT: \`${lead.phone || "-"}\``,
+            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🕒 Nhận lúc: ${now}`,
             `--------------------------`,
-            `ðŸ“ *FEEDBACK:*`,
-            `Báº¥m nÃºt bÃªn dÆ°á»›i Ä‘á»ƒ cáº­p nháº­t tráº¡ng thÃ¡i.`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
           ].join("\n");
           const statusList = [
-            ["called", "ÄÃ£ gá»i"], ["interested", "Quan tÃ¢m"], ["low_interest", "QT há»i há»£t"],
-            ["other_project", "QT DA khÃ¡c"], ["appointment", "Háº¹n xem"], ["booked", "Giá»¯ chá»—"],
-            ["closed", "Chá»‘t"], ["not_interested", "KhÃ´ng QT"], ["spam", "PhÃ¡/rÃ¡c"],
-            ["weak_finance", "TC yáº¿u"], ["unreachable", "ChÆ°a LLÄ"], ["callback", "Gá»i láº¡i sau"],
-            ["wrong_number", "Sai sá»‘"], ["blocked", "Cháº·n"], ["has_sale", "CÃ³ sale khÃ¡c"],
-            ["lost", "Máº¥t"],
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -1812,24 +1812,24 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
 
     const data = await readData(db);
     await filterDataForRole(data, req.user);
-    res.json({ msg: `ÄÃ£ chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
+    res.json({ msg: `Đã chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message || "Assign failed" });
   }
 });
 
-/* ===== Lead shuffle (round-robin) â€” Admin only ===== */
+/* ===== Lead shuffle (round-robin) — Admin only ===== */
 app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { projectId, saleNames } = req.body;
-    if (!saleNames || !saleNames.length) return res.status(400).json({ error: "Cáº§n chá»n Ã­t nháº¥t 1 sale" });
+    if (!saleNames || !saleNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     const pid = Number(projectId) || 1;
-    // Get unassigned leads (sale_name is empty or 'ChÆ°a chia')
+    // Get unassigned leads (sale_name is empty or 'Chưa chia')
     const leads = await all(db,
-      "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'ChÆ°a chia' OR sale_name IS NULL) ORDER BY id ASC",
+      "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL) ORDER BY id ASC",
       [pid]
     );
-    if (!leads.length) return res.json({ msg: "KhÃ´ng cÃ³ lead nÃ o cáº§n xÃ¡o", assigned: 0 });
+    if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     for (let i = 0; i < leads.length; i++) {
@@ -1840,13 +1840,13 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
         sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xÃ¡o lead`, nextSeq],
+        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq],
       });
     }
     await db.batch(stmts, "write");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
-    res.json({ msg: `ÄÃ£ xÃ¡o ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
+    res.json({ msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message || "Shuffle failed" });
   }
@@ -1861,8 +1861,7 @@ function getTodayStr() {
 
 // Get current HH:MM in Vietnam timezone
 function getNowHHMM() {
-  const parts = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false });
-  return parts; // "HH:MM"
+  return new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 // Process all active schedules - assign leads that are due today at the scheduled time
@@ -1914,7 +1913,7 @@ async function processSchedules(db, triggerUser) {
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
         sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [lid, saleName, "Chia lead", now, "", `Lá»‹ch chia tá»± Ä‘á»™ng #${sch.id}`, nextSeq],
+        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id}`, nextSeq],
       });
       assignedLeads.push({ leadId: lid, saleName });
       logEntries.push({ leadId: lid, saleName, date: today });
@@ -1945,25 +1944,25 @@ async function processSchedules(db, triggerUser) {
           if (!lead) continue;
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
-            `ðŸ”” *Báº N CÃ“ LEAD Má»šI*`,
-            `Dá»± Ã¡n: *${projectRow ? projectRow.name : "-"}*`,
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
             `----------------------------------------------`,
-            `ðŸ‘¤ KhÃ¡ch: *${lead.name || "N/A"}*`,
-            `ðŸ“ž SÄT: \`${lead.phone || "-"}\``,
-            `ðŸ”— Nhu cáº§u: ${lead.product || "-"}`,
-            `ðŸ•’ Nháº­n lÃºc: ${now}`,
-            `ðŸ“‹ Lá»‹ch chia tá»± Ä‘á»™ng #${sch.id}`,
+            `👤 Khách: *${lead.name || "N/A"}*`,
+            `📞 SĐT: \`${lead.phone || "-"}\``,
+            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🕒 Nhận lúc: ${now}`,
+            `📋 Lịch chia tự động #${sch.id}`,
             `--------------------------`,
-            `ðŸ“ *FEEDBACK:*`,
-            `Báº¥m nÃºt bÃªn dÆ°á»›i Ä‘á»ƒ cáº­p nháº­t tráº¡ng thÃ¡i.`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
           ].join("\n");
           const statusList = [
-            ["called", "ÄÃ£ gá»i"], ["interested", "Quan tÃ¢m"], ["low_interest", "QT há»i há»£t"],
-            ["other_project", "QT DA khÃ¡c"], ["appointment", "Háº¹n xem"], ["booked", "Giá»¯ chá»—"],
-            ["closed", "Chá»‘t"], ["not_interested", "KhÃ´ng QT"], ["spam", "PhÃ¡/rÃ¡c"],
-            ["weak_finance", "TC yáº¿u"], ["unreachable", "ChÆ°a LLÄ"], ["callback", "Gá»i láº¡i sau"],
-            ["wrong_number", "Sai sá»‘"], ["blocked", "Cháº·n"], ["has_sale", "CÃ³ sale khÃ¡c"],
-            ["lost", "Máº¥t"],
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -1993,9 +1992,9 @@ async function processSchedules(db, triggerUser) {
 app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTime } = req.body;
-    if (!sNames || !sNames.length) return res.status(400).json({ error: "Cáº§n chá»n Ã­t nháº¥t 1 sale" });
-    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cáº§n chá»n Ã­t nháº¥t 1 lead" });
-    if (!startDate || !endDate) return res.status(400).json({ error: "Cáº§n chá»n ngÃ y báº¯t Ä‘áº§u vÃ  ngÃ y káº¿t thÃºc" });
+    if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
+    if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
+    if (!startDate || !endDate) return res.status(400).json({ error: "Cần chọn ngày bắt đầu và ngày kết thúc" });
     const distTime = distributeTime || '08:00';
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
@@ -2050,7 +2049,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     await filterDataForRole(data, req.user);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
-      msg: `ÄÃ£ táº¡o lá»‹ch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngÃ y/ngÆ°á»i). Giai Ä‘oáº¡n: ${startDate} â†’ ${endDate}`,
+      msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người). Giai đoạn: ${startDate} → ${endDate}`,
       schedules: schedules.map(formatSchedule),
       ...data,
     });
@@ -2076,7 +2075,7 @@ app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, re
   try {
     await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [req.params.id]);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: "ÄÃ£ há»§y lá»‹ch chia lead", schedules: schedules.map(formatSchedule) });
+    res.json({ msg: "Đã hủy lịch chia lead", schedules: schedules.map(formatSchedule) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to cancel schedule" });
   }
@@ -2126,7 +2125,7 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
 function matchSaleName(leadSaleName, userDisplayName) {
   const sn = (leadSaleName || "").toLowerCase().trim();
   const dn = (userDisplayName || "").toLowerCase().trim();
-  if (!sn || sn === "chÆ°a chia") return false;
+  if (!sn || sn === "chưa chia") return false;
   if (sn === dn) return true;
   const dnWords = dn.split(/\s+/).filter(Boolean);
   return dnWords.every(w => sn.includes(w));
@@ -2189,7 +2188,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
-        // Reset status to "new" (ChÆ°a feedback) when reassigning to a new sale
+        // Reset status to "new" (Chưa feedback) when reassigning to a new sale
         if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
@@ -2231,29 +2230,29 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const msg = [
-            `ðŸ”” *Báº N CÃ“ LEAD Má»šI*`,
-            `Dá»± Ã¡n: *${projectRow ? projectRow.name : "-"}*`,
+            `🔔 *BẠN CÓ LEAD MỚI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
             `----------------------------------------------`,
-            `ðŸ‘¤ KhÃ¡ch: *${lead ? lead.name : "N/A"}*`,
-            `ðŸ“ž SÄT: \`${lead ? lead.phone || "-" : "-"}\``,
-            `ðŸ”— Nhu cáº§u: ${lead ? lead.product || "-" : "-"}`,
-            `ðŸ•’ Nháº­n lÃºc: ${now}`,
+            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+            `📞 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
+            `🔗 Nhu cầu: ${lead ? lead.product || "-" : "-"}`,
+            `🕒 Nhận lúc: ${now}`,
             `--------------------------`,
-            `ðŸ“ *FEEDBACK:*`,
-            `Báº¥m nÃºt bÃªn dÆ°á»›i Ä‘á»ƒ cáº­p nháº­t tráº¡ng thÃ¡i.`,
-            `Sau Ä‘Ã³ nháº¯n tin feedback cho bot.`,
+            `📝 *FEEDBACK:*`,
+            `Bấm nút bên dưới để cập nhật trạng thái.`,
+            `Sau đó nhắn tin feedback cho bot.`,
             ``,
-            `â³ _LÆ°u Ã½: Báº¡n cÃ³ 30 phÃºt Ä‘á»ƒ cáº­p nháº­t tráº¡ng thÃ¡i!_`,
+            `⏳ _Lưu ý: Bạn có 30 phút để cập nhật trạng thái!_`,
           ].join("\n");
 
           // Build inline keyboard with status buttons (3 per row)
           const statusList = [
-            ["called", "ÄÃ£ gá»i"], ["interested", "Quan tÃ¢m"], ["low_interest", "QT há»i há»£t"],
-            ["other_project", "QT DA khÃ¡c"], ["appointment", "Háº¹n xem"], ["booked", "Giá»¯ chá»—"],
-            ["closed", "Chá»‘t"], ["not_interested", "KhÃ´ng QT"], ["spam", "PhÃ¡/rÃ¡c"],
-            ["weak_finance", "TC yáº¿u"], ["unreachable", "ChÆ°a LLÄ"], ["callback", "Gá»i láº¡i sau"],
-            ["wrong_number", "Sai sá»‘"], ["blocked", "Cháº·n"], ["has_sale", "CÃ³ sale khÃ¡c"],
-            ["lost", "Máº¥t"],
+            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
+            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
+            ["lost", "Mất"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -2316,7 +2315,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-      [leadId, saleName, "Cáº­p nháº­t", now, status || "", feedback || "", nextSeq]
+      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq]
     );
 
     // Also update lead status if provided
@@ -2344,7 +2343,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
     const leadId = Number(req.params.id);
     const histId = Number(req.params.histId);
 
-    // Check if this was a "Chia lead" entry â€” if so, also undo the sale assignment
+    // Check if this was a "Chia lead" entry — if so, also undo the sale assignment
     const hist = await get(db, "SELECT action, sale_name FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
     if (hist && hist.action === "Chia lead") {
       const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
@@ -2367,13 +2366,13 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
           // Send recall notification
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const recallMsg = [
-            `ðŸš« *LEAD ÄÃƒ Bá»Š THU Há»’I*`,
-            `Dá»± Ã¡n: *${projectRow ? projectRow.name : "-"}*`,
+            `🚫 *LEAD ĐÃ BỊ THU HỒI*`,
+            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
             `----------------------------------------------`,
-            `ðŸ‘¤ KhÃ¡ch: *${lead ? lead.name : "N/A"}*`,
+            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
             ``,
-            `âŒ _Lead nÃ y Ä‘Ã£ Ä‘Æ°á»£c Admin thu há»“i._`,
-            `_Báº¡n khÃ´ng cáº§n liÃªn há»‡ khÃ¡ch hÃ ng nÃ y ná»¯a._`,
+            `❌ _Lead này đã được Admin thu hồi._`,
+            `_Bạn không cần liên hệ khách hàng này nữa._`,
           ].join("\n");
 
           await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
@@ -2399,7 +2398,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         // Revert to previous sale
         await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [prev.sale_name, leadId]);
       } else {
-        // No prior assignment â€” clear sale
+        // No prior assignment — clear sale
         await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
       }
 
@@ -2408,7 +2407,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
       if (prevHist && prevHist.status) {
         await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [normalizeStatus(prevHist.status), prevHist.status, leadId]);
       } else {
-        // No previous status â€” reset to empty
+        // No previous status — reset to empty
         await run(db, "UPDATE leads SET status = '', raw_status = '' WHERE id = ?", [leadId]);
       }
     }
@@ -2424,10 +2423,10 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 
 /* ===== Telegram Bot Webhook ===== */
 const TELE_STATUS_LABELS = {
-  new: "ChÆ°a feedback", called: "ÄÃ£ gá»i", interested: "Quan tÃ¢m", low_interest: "QT há»i há»£t",
-  other_project: "QT DA khÃ¡c", appointment: "Háº¹n xem", booked: "Giá»¯ chá»—", closed: "Chá»‘t",
-  not_interested: "KhÃ´ng QT", spam: "PhÃ¡/rÃ¡c", weak_finance: "TC yáº¿u", unreachable: "ChÆ°a LLÄ",
-  callback: "Gá»i láº¡i sau", wrong_number: "Sai sá»‘", blocked: "Cháº·n", has_sale: "CÃ³ sale khÃ¡c", lost: "Máº¥t",
+  new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
+  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Giữ chỗ", closed: "Chốt",
+  not_interested: "Không QT", spam: "Phá/rác", weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
+  callback: "Gọi lại sau", wrong_number: "Sai số", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
 };
 
 app.post("/api/telegram-webhook", async (req, res) => {
@@ -2465,12 +2464,12 @@ app.post("/api/telegram-webhook", async (req, res) => {
         // Update pending with chosen status
         await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, ?)", [chatId, leadId, statusKey]);
 
-        await answerCb(callback_query.id, `âœ… ÄÃ£ chá»n: ${statusLabel}`);
+        await answerCb(callback_query.id, `✅ Đã chọn: ${statusLabel}`);
         await sendTg(chatId, [
-          `âœ… Tráº¡ng thÃ¡i: *${statusLabel}*`,
+          `✅ Trạng thái: *${statusLabel}*`,
           ``,
-          `ðŸ’¬ BÃ¢y giá» hÃ£y nháº¯n tin feedback vá» khÃ¡ch hÃ ng nÃ y.`,
-          `VD: _"KhÃ¡ch quan tÃ¢m cÄƒn 2PN, háº¹n xem thá»© 7"_`,
+          `💬 Bây giờ hãy nhắn tin feedback về khách hàng này.`,
+          `VD: _"Khách quan tâm căn 2PN, hẹn xem thứ 7"_`,
         ].join("\n"));
       }
       return res.json({ ok: true });
@@ -2486,12 +2485,12 @@ app.post("/api/telegram-webhook", async (req, res) => {
 
       const pending = await get(db, "SELECT lead_id, status FROM telegram_pending WHERE telegram_id = ?", [chatId]);
       if (!pending) {
-        await sendTg(chatId, "âš ï¸ KhÃ´ng cÃ³ lead nÃ o Ä‘ang chá» feedback.\nHÃ£y báº¥m nÃºt tráº¡ng thÃ¡i tá»« thÃ´ng bÃ¡o lead trÆ°á»›c.");
+        await sendTg(chatId, "⚠️ Không có lead nào đang chờ feedback.\nHãy bấm nút trạng thái từ thông báo lead trước.");
         return res.json({ ok: true });
       }
 
       if (!pending.status) {
-        await sendTg(chatId, "âš ï¸ Báº¡n chÆ°a chá»n tráº¡ng thÃ¡i.\nHÃ£y báº¥m nÃºt tráº¡ng thÃ¡i tá»« thÃ´ng bÃ¡o lead trÆ°á»›c, sau Ä‘Ã³ nháº¯n feedback.");
+        await sendTg(chatId, "⚠️ Bạn chưa chọn trạng thái.\nHãy bấm nút trạng thái từ thông báo lead trước, sau đó nhắn feedback.");
         return res.json({ ok: true });
       }
 
@@ -2510,7 +2509,7 @@ app.post("/api/telegram-webhook", async (req, res) => {
       await run(
         db,
         "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [leadId, saleName, "Cáº­p nháº­t (Telegram)", now, statusLabel, feedbackText, nextSeq]
+        [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq]
       );
 
       // Update lead status
@@ -2522,14 +2521,14 @@ app.post("/api/telegram-webhook", async (req, res) => {
       // Get lead info for confirmation
       const lead = await get(db, "SELECT name, phone FROM leads WHERE id = ?", [leadId]);
       await sendTg(chatId, [
-        `âœ… *ÄÃ£ lÆ°u feedback thÃ nh cÃ´ng!*`,
+        `✅ *Đã lưu feedback thành công!*`,
         ``,
-        `ðŸ‘¤ KhÃ¡ch: *${lead ? lead.name : "N/A"}*`,
-        `ðŸ“Š Tráº¡ng thÃ¡i: *${statusLabel}*`,
-        `ðŸ’¬ Feedback: _${feedbackText}_`,
-        `â° LÃºc: ${now}`,
+        `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+        `📊 Trạng thái: *${statusLabel}*`,
+        `💬 Feedback: _${feedbackText}_`,
+        `⏰ Lúc: ${now}`,
         ``,
-        `ðŸ“‹ Feedback Ä‘Ã£ Ä‘Æ°á»£c lÆ°u vÃ o lá»‹ch sá»­ liÃªn há»‡ trÃªn CRM.`,
+        `📋 Feedback đã được lưu vào lịch sử liên hệ trên CRM.`,
       ].join("\n"));
 
       return res.json({ ok: true });
@@ -2546,7 +2545,7 @@ app.post("/api/telegram-webhook", async (req, res) => {
 app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, res) => {
   try {
     const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
-    if (!activeBot) return res.status(400).json({ error: "KhÃ´ng cÃ³ bot nÃ o Ä‘ang hoáº¡t Ä‘á»™ng" });
+    if (!activeBot) return res.status(400).json({ error: "Không có bot nào đang hoạt động" });
     const webhookUrl = `https://crm-iqi.id.vn/api/telegram-webhook`;
     const r = await fetch(`https://api.telegram.org/bot${activeBot.token}/setWebhook`, {
       method: "POST",
@@ -2555,9 +2554,9 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, 
     });
     const data = await r.json();
     if (data.ok) {
-      res.json({ ok: true, msg: `Webhook Ä‘Ã£ Ä‘Æ°á»£c cÃ i Ä‘áº·t: ${webhookUrl}` });
+      res.json({ ok: true, msg: `Webhook đã được cài đặt: ${webhookUrl}` });
     } else {
-      res.status(400).json({ error: data.description || "CÃ i Ä‘áº·t webhook tháº¥t báº¡i" });
+      res.status(400).json({ error: data.description || "Cài đặt webhook thất bại" });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2578,7 +2577,7 @@ app.get("/api/sheet/configs", requireAuth, requireAdmin, async (_req, res) => {
 app.post("/api/sheet/configs", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { projectName, scriptUrl } = req.body;
-    if (!projectName || !scriptUrl) return res.status(400).json({ error: "Thiáº¿u tÃªn dá»± Ã¡n hoáº·c URL" });
+    if (!projectName || !scriptUrl) return res.status(400).json({ error: "Thiếu tên dự án hoặc URL" });
     await run(db, "INSERT INTO sheet_configs(name, script_url) VALUES(?, ?)", [String(projectName), String(scriptUrl)]);
     const rows = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
     res.json(rows);
@@ -2598,16 +2597,16 @@ app.delete("/api/sheet/configs/:id", requireAuth, requireAdminOnly, async (req, 
 app.get("/api/sheet/test/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const cfg = await get(db, "SELECT * FROM sheet_configs WHERE id = ?", [Number(req.params.id)]);
-    if (!cfg) return res.status(404).json({ error: "KhÃ´ng tÃ¬m tháº¥y cáº¥u hÃ¬nh" });
+    if (!cfg) return res.status(404).json({ error: "Không tìm thấy cấu hình" });
     const r = await fetch(cfg.script_url, { redirect: "follow" });
     if (!r.ok) {
-      if (r.status === 403) return res.status(502).json({ error: "Google Sheet tá»« chá»‘i truy cáº­p (403). HÃ£y má»Ÿ Apps Script â†’ chá»n hÃ m doGet â†’ báº¥m â–¶ Cháº¡y â†’ Cáº¥p quyá»n." });
-      return res.status(502).json({ error: `Google Sheet tráº£ vá» lá»—i ${r.status}` });
+      if (r.status === 403) return res.status(502).json({ error: "Google Sheet từ chối truy cập (403). Hãy mở Apps Script → chọn hàm doGet → bấm ▶ Chạy → Cấp quyền." });
+      return res.status(502).json({ error: `Google Sheet trả về lỗi ${r.status}` });
     }
     const text = await r.text();
     let data;
-    try { data = JSON.parse(text); } catch { return res.status(502).json({ error: "Apps Script tráº£ vá» dá»¯ liá»‡u khÃ´ng há»£p lá»‡" }); }
-    if (!data.success) return res.status(502).json({ error: data.error || "Lá»—i tá»« Google Sheet" });
+    try { data = JSON.parse(text); } catch { return res.status(502).json({ error: "Apps Script trả về dữ liệu không hợp lệ" }); }
+    if (!data.success) return res.status(502).json({ error: data.error || "Lỗi từ Google Sheet" });
     res.json({ ok: true, count: (data.data || []).length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -2622,7 +2621,7 @@ app.get("/api/sheet/posts", requireAuth, async (req, res) => {
     } else {
       configs = await all(db, "SELECT * FROM sheet_configs ORDER BY id ASC");
     }
-    if (configs.length === 0) return res.status(400).json({ error: "ChÆ°a cáº¥u hÃ¬nh Google Sheet. VÃ o Cáº¥u hÃ¬nh Sheet Ä‘á»ƒ thiáº¿t láº­p." });
+    if (configs.length === 0) return res.status(400).json({ error: "Chưa cấu hình Google Sheet. Vào Cấu hình Sheet để thiết lập." });
 
     let allPosts = [];
     let allHeaders = [];
@@ -2647,7 +2646,7 @@ app.get("/api/sheet/posts", requireAuth, async (req, res) => {
 app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { row, status, configId } = req.body;
-    if (!row || !status) return res.status(400).json({ error: "Thiáº¿u row hoáº·c status" });
+    if (!row || !status) return res.status(400).json({ error: "Thiếu row hoặc status" });
     let scriptUrl;
     if (configId) {
       const cfg = await get(db, "SELECT * FROM sheet_configs WHERE id = ?", [Number(configId)]);
@@ -2658,8 +2657,8 @@ app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) 
       const cfg = await get(db, "SELECT * FROM sheet_configs ORDER BY id ASC LIMIT 1");
       scriptUrl = cfg?.script_url;
     }
-    if (!scriptUrl) return res.status(400).json({ error: "ChÆ°a cáº¥u hÃ¬nh Google Sheet" });
-    // Google Apps Script 302 redirect converts POSTâ†’GET, follow redirect with GET
+    if (!scriptUrl) return res.status(400).json({ error: "Chưa cấu hình Google Sheet" });
+    // Google Apps Script 302 redirect converts POST→GET, follow redirect with GET
     const r1 = await fetch(scriptUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2669,12 +2668,12 @@ app.post("/api/sheet/posts/status", requireAuth, requireAdmin, async (req, res) 
     let r;
     if (r1.status >= 300 && r1.status < 400) {
       const loc = r1.headers.get("location");
-      if (!loc) return res.status(502).json({ error: "Google Apps Script redirect thiáº¿u location" });
+      if (!loc) return res.status(502).json({ error: "Google Apps Script redirect thiếu location" });
       r = await fetch(loc, { redirect: "follow" });
     } else {
       r = r1;
     }
-    if (!r.ok) return res.status(502).json({ error: `KhÃ´ng cáº­p nháº­t Ä‘Æ°á»£c Google Sheet (${r.status})` });
+    if (!r.ok) return res.status(502).json({ error: `Không cập nhật được Google Sheet (${r.status})` });
     const text = await r.text();
     let data;
     try { data = JSON.parse(text); } catch { return res.json({ success: true }); }
@@ -2696,7 +2695,7 @@ app.get("/api/fb-pages", requireAuth, async (_req, res) => {
 app.post("/api/fb-pages", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { name, pageId, accessToken, avatarUrl } = req.body;
-    if (!name) return res.status(400).json({ error: "TÃªn Page lÃ  báº¯t buá»™c" });
+    if (!name) return res.status(400).json({ error: "Tên Page là bắt buộc" });
     await run(db, "INSERT INTO fb_pages(name, page_id, access_token, avatar_url) VALUES(?,?,?,?)",
       [name, pageId || "", accessToken || "", avatarUrl || ""]);
     const pages = await all(db, "SELECT * FROM fb_pages ORDER BY id ASC");
@@ -2752,7 +2751,7 @@ app.get("/api/fb-posts", requireAuth, async (req, res) => {
 app.post("/api/fb-posts", requireAuth, async (req, res) => {
   try {
     const { title, content, images, projectId, pageIds, status, scheduleAt, link } = req.body;
-    if (!content && !title) return res.status(400).json({ error: "TiÃªu Ä‘á» hoáº·c ná»™i dung lÃ  báº¯t buá»™c" });
+    if (!content && !title) return res.status(400).json({ error: "Tiêu đề hoặc nội dung là bắt buộc" });
     const now = new Date().toISOString();
     await run(db,
       `INSERT INTO fb_posts(title, content, images, project_id, page_ids, status, schedule_at, link, created_at, updated_at)
@@ -2813,7 +2812,7 @@ app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res
   try {
     const id = Number(req.params.id);
     const post = await get(db, "SELECT * FROM fb_posts WHERE id=?", [id]);
-    if (!post) return res.status(404).json({ error: "BÃ i Ä‘Äƒng khÃ´ng tá»“n táº¡i" });
+    if (!post) return res.status(404).json({ error: "Bài đăng không tồn tại" });
 
     const pageIds = JSON.parse(post.page_ids || "[]");
     const pages = await all(db, "SELECT * FROM fb_pages WHERE id IN (" + pageIds.map(() => "?").join(",") + ")", pageIds);
@@ -2822,7 +2821,7 @@ app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res
     let firstFbPostId = "";
 
     for (const page of pages) {
-      if (!page.access_token) { errors.push(`${page.name}: Thiáº¿u Access Token`); continue; }
+      if (!page.access_token) { errors.push(`${page.name}: Thiếu Access Token`); continue; }
       try {
         const images = JSON.parse(post.images || "[]");
         let fbRes;
@@ -2837,7 +2836,7 @@ app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res
             });
             const photoData = await photoRes.json();
             if (photoData.id) photoIds.push(photoData.id);
-            else errors.push(`${page.name}: Lá»—i upload áº£nh - ${photoData.error?.message || "Unknown"}`);
+            else errors.push(`${page.name}: Lỗi upload ảnh - ${photoData.error?.message || "Unknown"}`);
           }
           if (photoIds.length > 0) {
             const body = { message: post.content || "", access_token: page.access_token };
@@ -2859,7 +2858,7 @@ app.post("/api/fb-posts/:id/publish", requireAuth, requireAdmin, async (req, res
         if (fbRes) {
           const fbData = await fbRes.json();
           if (fbData.id) { if (!firstFbPostId) firstFbPostId = fbData.id; }
-          else errors.push(`${page.name}: ${fbData.error?.message || "ÄÄƒng tháº¥t báº¡i"}`);
+          else errors.push(`${page.name}: ${fbData.error?.message || "Đăng thất bại"}`);
         }
       } catch (e) { errors.push(`${page.name}: ${e.message}`); }
     }
@@ -3055,7 +3054,7 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 
 // ========== MARKET INTELLIGENCE ENGINE ==========
 
-// Module 1: Ad Library Scraper â€” Headless Browser (Puppeteer + Stealth)
+// Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
   // Safety limit: must return before Vercel kills at 60s
@@ -3068,13 +3067,13 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const topAdDurations = [];
 
   // Extract meaningful search keywords from project name
-  // e.g. "Salacia VillThe global city" â†’ try "the global city", "Salacia Vill"
-  // e.g. "Masterise Homes" â†’ try "Masterise Homes"
-  const stopWords = new Set(["dá»±","Ã¡n","khu","Ä‘Ã´","thá»‹","cÄƒn","há»™","nhÃ ","phá»‘","biá»‡t","thá»±"]);
+  // e.g. "Salacia VillThe global city" → try "the global city", "Salacia Vill"
+  // e.g. "Masterise Homes" → try "Masterise Homes"
+  const stopWords = new Set(["dự","án","khu","đô","thị","căn","hộ","nhà","phố","biệt","thự"]);
   function buildSearchTerms(name) {
     const terms = [name]; // always try full name first
     // Split on common separators and try sub-phrases
-    const parts = name.split(/[-â€“â€”|,;/\\]/).map(s => s.trim()).filter(s => s.length > 2);
+    const parts = name.split(/[-–—|,;/\\]/).map(s => s.trim()).filter(s => s.length > 2);
     if (parts.length > 1) parts.forEach(p => terms.push(p));
     // Remove stop words and try remaining
     const words = name.split(/\s+/).filter(w => !stopWords.has(w.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")));
@@ -3087,7 +3086,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     return [...new Map(terms.map(t => [t.toLowerCase(), t])).values()];
   }
 
-  // Search with exactly the user's input â€” no modifications
+  // Search with exactly the user's input — no modifications
   const searchTerms = [projectName];
   const userAgents = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -3174,10 +3173,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
   // ===== PRE-FETCH: Bulk Ads Library API (gets ALL pages + names + dates in one call) =====
   const fbToken = _adAccountRows?.[0]?.access_token || '';
-  const apiPagesMap = new Map(); // pid â†’ { pageName, maxDays, adCount }
+  const apiPagesMap = new Map(); // pid → { pageName, maxDays, adCount }
   if (fbToken) {
     try {
-      activityLog.push("Äang truy váº¥n Facebook Ads Library API...");
+      activityLog.push("Đang truy vấn Facebook Ads Library API...");
       console.log(`[MI] Bulk API call for "${projectName}" with token`);
       const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_terms=${encodeURIComponent(projectName)}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,page_id,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
       const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(12000) });
@@ -3254,7 +3253,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   let bPage = null;
   let bestTerm = searchTerms[0];
   try {
-    activityLog.push("Äang khá»Ÿi táº¡o trÃ¬nh duyá»‡t áº£o (Headless Chromium)...");
+    activityLog.push("Đang khởi tạo trình duyệt ảo (Headless Chromium)...");
     console.log("[MI] Launching headless Chromium...");
 
     const chromium = (await import("@sparticuz/chromium")).default;
@@ -3280,7 +3279,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     for (const term of searchTerms) {
       if (adCount > 0) break;
       const searchUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&q=${encodeURIComponent(term)}&search_type=keyword_unordered`;
-      activityLog.push(`Äang tÃ¬m kiáº¿m: "${term}"...`);
+      activityLog.push(`Đang tìm kiếm: "${term}"...`);
       console.log(`[MI] Navigating to: ${searchUrl}`);
 
       try {
@@ -3291,10 +3290,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
         // Handle cookie consent / login modals
         try {
-          const consentBtn = await bPage.$('button[data-cookiebanner="accept_button"], button[title="Cho phÃ©p táº¥t cáº£ cookie"], button[title="Allow all cookies"], [aria-label="Allow all cookies"], [aria-label="Cho phÃ©p táº¥t cáº£ cookie"]');
+          const consentBtn = await bPage.$('button[data-cookiebanner="accept_button"], button[title="Cho phép tất cả cookie"], button[title="Allow all cookies"], [aria-label="Allow all cookies"], [aria-label="Cho phép tất cả cookie"]');
           if (consentBtn) {
             await consentBtn.click();
-            activityLog.push("ÄÃ£ cháº¥p nháº­n cookie consent.");
+            activityLog.push("Đã chấp nhận cookie consent.");
             await new Promise(r => setTimeout(r, 2000));
           }
         } catch {}
@@ -3302,7 +3301,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Wait for content to render - look for key indicators
         try {
           await bPage.waitForFunction(
-            () => document.body.innerText.includes("káº¿t quáº£") || document.body.innerText.includes("results") || document.body.innerText.includes("KhÃ´ng cÃ³ quáº£ng cÃ¡o") || document.body.innerText.includes("No ads") || document.querySelectorAll('[role="article"]').length > 0,
+            () => document.body.innerText.includes("kết quả") || document.body.innerText.includes("results") || document.body.innerText.includes("Không có quảng cáo") || document.body.innerText.includes("No ads") || document.querySelectorAll('[role="article"]').length > 0,
             { timeout: 8000 }
           );
         } catch {
@@ -3310,7 +3309,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
         console.log(`[MI] Content ready at ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 
-        // Scroll to load ALL results â€” MUST reach the absolute bottom of the page
+        // Scroll to load ALL results — MUST reach the absolute bottom of the page
         let prevHeight = 0;
         let noChangeCount = 0;
         console.log(`[MI] Scroll starting, will scroll until absolute bottom`);
@@ -3321,15 +3320,15 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
           if (curHeight === prevHeight) {
             noChangeCount++;
-            if (noChangeCount >= 3) { console.log(`[MI] âœ“ Reached bottom after ${i + 1} scrolls (no new content 3x)`); break; }
+            if (noChangeCount >= 3) { console.log(`[MI] ✓ Reached bottom after ${i + 1} scrolls (no new content 3x)`); break; }
             // Wait longer for lazy-loading content before concluding we're at bottom
             await new Promise(r => setTimeout(r, 2000));
-            // Try clicking "See more" or "Xem thÃªm" buttons if they exist
+            // Try clicking "See more" or "Xem thêm" buttons if they exist
             await bPage.evaluate(() => {
               const btns = document.querySelectorAll('button, [role="button"]');
               for (const b of btns) {
                 const txt = (b.textContent || '').trim().toLowerCase();
-                if (txt === 'see more' || txt === 'xem thÃªm' || txt === 'see more results' || txt === 'xem thÃªm káº¿t quáº£') {
+                if (txt === 'see more' || txt === 'xem thêm' || txt === 'see more results' || txt === 'xem thêm kết quả') {
                   b.click(); break;
                 }
               }
@@ -3359,10 +3358,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const extractedPages = await bPage.evaluate(() => {
           const pages = {};
           const reserved = new Set(['ads', 'www', 'groups', 'pages', 'events', 'photo', 'video', 'watch', 'reel', 'share', 'sharer', 'login', 'help', 'marketplace', 'gaming', 'stories', 'reels', 'hashtag', 'profile.php', 'people', 'search', 'policies', 'privacy', 'settings', 'notifications', 'messages', 'bookmarks', 'saved']);
-          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n) && !/fb\.me/i.test(n) && !/inbox|Ä‘Äƒng kÃ½ ngay|nháº­n bÃ¡o giÃ¡|khÃ¡ch hÃ ng Ä‘Ã£ Ä‘Äƒng kÃ½|xem chi tiáº¿t|gá»­i tin nháº¯n|liÃªn há»‡ ngay|tÃ¬m hiá»ƒu thÃªm|mua ngay|Ä‘áº·t lá»‹ch|táº£i xuá»‘ng|sign up|learn more|shop now|send message|book now|get quote|subscribe|download|Ä‘iá»u khoáº£n|quyá»n riÃªng tÆ°|chÃ­nh sÃ¡ch|cookie|trá»£ giÃºp|cÃ i Ä‘áº·t|Ä‘Äƒng nháº­p|Ä‘Äƒng xuáº¥t|trang chá»§|giá»›i thiá»‡u|terms|privacy|policy|help center|settings|api thÆ° viá»‡n|táº¡o quáº£ng cÃ¡o|create ad|bÃ¡o cÃ¡o|report|ná»™i dung cÃ³ thÆ°Æ¡ng hiá»‡u|tiáº¿ng viá»‡t|open navigation|close|navigation panel|menu|sidebar|see more|xem thÃªm|see all|xem táº¥t cáº£|show more/i.test(n);
+          const isValidName = (n) => n && n.length > 1 && n.length < 80 && !n.startsWith('http') && !n.includes('://') && !/[\w.-]+\.[a-z]{2,}/i.test(n) && !/^\d+$/.test(n) && !/fb\.me/i.test(n) && !/inbox|đăng ký ngay|nhận báo giá|khách hàng đã đăng ký|xem chi tiết|gửi tin nhắn|liên hệ ngay|tìm hiểu thêm|mua ngay|đặt lịch|tải xuống|sign up|learn more|shop now|send message|book now|get quote|subscribe|download|điều khoản|quyền riêng tư|chính sách|cookie|trợ giúp|cài đặt|đăng nhập|đăng xuất|trang chủ|giới thiệu|terms|privacy|policy|help center|settings|api thư viện|tạo quảng cáo|create ad|báo cáo|report|nội dung có thương hiệu|tiếng việt|open navigation|close|navigation panel|menu|sidebar|see more|xem thêm|see all|xem tất cả|show more/i.test(n);
           const isValidSlug = (s) => s && s.length > 1 && s.length < 60 && !reserved.has(s.toLowerCase()) && !/^\d+$/.test(s);
 
-          // Method 1: view_all_page_id links (most reliable â€” real page IDs)
+          // Method 1: view_all_page_id links (most reliable — real page IDs)
           document.querySelectorAll('a[href*="view_all_page_id="]').forEach(link => {
             const m = link.href.match(/view_all_page_id=(\d+)/);
             if (!m) return;
@@ -3476,10 +3475,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
           }
-          // Also ADD API pages not in DOM â€” they are real pages running ads for this keyword
+          // Also ADD API pages not in DOM — they are real pages running ads for this keyword
           if (!pageSet.has(apiPid) && /^\d+$/.test(apiPid)) {
             pageSet.set(apiPid, { pageName: apiInfo.pageName || apiPid, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
-            if (apiInfo.pageName) console.log(`[MI] Added API-only page: ${apiPid} â†’ "${apiInfo.pageName}"`);
+            if (apiInfo.pageName) console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
             else console.log(`[MI] Added API-only page: ${apiPid} (no name yet)`);
           }
         }
@@ -3489,7 +3488,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const body = document.body.innerText || '';
           const now = Date.now();
           let globalMaxDays = 0;
-          const pageDays = {}; // pageId â†’ maxDays
+          const pageDays = {}; // pageId → maxDays
 
           const monthsEn = {'jan':0,'feb':1,'mar':2,'apr':3,'may':4,'jun':5,'jul':6,'aug':7,'sep':8,'oct':9,'nov':10,'dec':11};
 
@@ -3498,8 +3497,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const cardText = card.innerText || '';
             let cardMaxDays = 0;
 
-            // Vietnamese: "DD ThÃ¡ng M, YYYY" (e.g. "30 ThÃ¡ng 1, 2026") â€” with or without "ngÃ y" prefix
-            const vnDates = cardText.matchAll(/(\d{1,2})\s+[Tt]hÃ¡ng\s+(\d{1,2}),?\s+(\d{4})/g);
+            // Vietnamese: "DD Tháng M, YYYY" (e.g. "30 Tháng 1, 2026") — with or without "ngày" prefix
+            const vnDates = cardText.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g);
             for (const m of vnDates) {
               const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
               if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > cardMaxDays && days > 0 && days < 3650) cardMaxDays = days; }
@@ -3547,8 +3546,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         console.log(`[MI] Date extraction: globalMax=${dateExtraction.globalMaxDays}, pages with dates=${Object.keys(dateExtraction.pageDays).length}`);
 
         // Check for "no results" message
-        if (bodyText.includes("KhÃ´ng cÃ³ quáº£ng cÃ¡o") || bodyText.includes("No ads")) {
-          activityLog.push(`KhÃ´ng cÃ³ quáº£ng cÃ¡o cho "${term}".`);
+        if (bodyText.includes("Không có quảng cáo") || bodyText.includes("No ads")) {
+          activityLog.push(`Không có quảng cáo cho "${term}".`);
           console.log(`[MI] No ads for "${term}"`);
         }
       } catch (navErr) {
@@ -3556,12 +3555,12 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       }
     }
 
-    activityLog.push(`Káº¿t quáº£ tá»‘t nháº¥t: "${bestTerm}" â€” ${adCount.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })} QC, ${pageSet.size} pages.`);
+    activityLog.push(`Kết quả tốt nhất: "${bestTerm}" — ${adCount.toLocaleString("vi-VN")} QC, ${pageSet.size} pages.`);
     console.log(`[MI] Search phase done at ${((Date.now() - startTime) / 1000).toFixed(1)}s, ${pageSet.size} pages`);
 
   } catch (err) {
     console.error(`[MI] Chromium error: ${err.message}`);
-    activityLog.push(`Lá»—i Chromium: ${err.message.substring(0, 100)}`);
+    activityLog.push(`Lỗi Chromium: ${err.message.substring(0, 100)}`);
   }
 
   // ===== RESOLVE ALL PAGES: NAME + DURATION (MANDATORY) =====
@@ -3582,8 +3581,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   }
   console.log(`[MI] After Step 1 merge: ${pageSet.size} pages`);  
 
-  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'khÃ´ng tÃ¬m tháº¥y', 'khÃ´ng kháº£ dá»¥ng', 'thÆ° viá»‡n', 'ad library', 'ads library', 'chá»n quá»‘c gia', 'select country', 'fb.me', 'inbox', 'Ä‘Äƒng kÃ½ ngay', 'nháº­n bÃ¡o giÃ¡', 'khÃ¡ch hÃ ng Ä‘Ã£ Ä‘Äƒng kÃ½', 'xem chi tiáº¿t', 'gá»­i tin nháº¯n', 'liÃªn há»‡ ngay', 'tÃ¬m hiá»ƒu thÃªm', 'mua ngay', 'Ä‘áº·t lá»‹ch', 'táº£i xuá»‘ng', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download', 'Ä‘iá»u khoáº£n', 'quyá»n riÃªng tÆ°', 'chÃ­nh sÃ¡ch', 'cookie', 'trá»£ giÃºp', 'cÃ i Ä‘áº·t', 'Ä‘Äƒng nháº­p', 'Ä‘Äƒng xuáº¥t', 'trang chá»§', 'giá»›i thiá»‡u', 'terms', 'privacy', 'policy', 'help center', 'settings', 'home', 'about', 'api thÆ° viá»‡n', 'táº¡o quáº£ng cÃ¡o', 'create ad', 'bÃ¡o cÃ¡o', 'report', 'ná»™i dung cÃ³ thÆ°Æ¡ng hiá»‡u', 'tiáº¿ng viá»‡t', 'english', 'open navigation', 'close', 'navigation panel', 'menu', 'sidebar', 'see more', 'xem thÃªm', 'see all', 'xem táº¥t cáº£', 'show more'];
-  const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !/^Page \d+/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase())) && !/^[\p{Emoji}\sðŸ””ðŸ”—â—âŒâœ…âš¡ðŸŽðŸ ðŸ’°ðŸ“žðŸ“²]+/u.test(n);
+  const badNames = ['facebook', 'meta', 'log in', 'error', 'page not found', 'content not found', 'sorry', 'this content', 'không tìm thấy', 'không khả dụng', 'thư viện', 'ad library', 'ads library', 'chọn quốc gia', 'select country', 'fb.me', 'inbox', 'đăng ký ngay', 'nhận báo giá', 'khách hàng đã đăng ký', 'xem chi tiết', 'gửi tin nhắn', 'liên hệ ngay', 'tìm hiểu thêm', 'mua ngay', 'đặt lịch', 'tải xuống', 'sign up', 'learn more', 'shop now', 'book now', 'send message', 'contact us', 'get quote', 'subscribe', 'download', 'điều khoản', 'quyền riêng tư', 'chính sách', 'cookie', 'trợ giúp', 'cài đặt', 'đăng nhập', 'đăng xuất', 'trang chủ', 'giới thiệu', 'terms', 'privacy', 'policy', 'help center', 'settings', 'home', 'about', 'api thư viện', 'tạo quảng cáo', 'create ad', 'báo cáo', 'report', 'nội dung có thương hiệu', 'tiếng việt', 'english', 'open navigation', 'close', 'navigation panel', 'menu', 'sidebar', 'see more', 'xem thêm', 'see all', 'xem tất cả', 'show more'];
+  const isGoodName = (n) => n && n.length > 1 && n.length < 80 && !/^\d+$/.test(n) && !/^Page \d+/.test(n) && !badNames.some(b => n.toLowerCase().includes(b.toLowerCase())) && !/^[\p{Emoji}\s🔔🔗❗❌✅⚡🎁🏠💰📞📲]+/u.test(n);
   const decodeHtml = (s) => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&#(\d+);/g, (_, c) => String.fromCharCode(c));
   const decodeUnicode = (s) => s.replace(/\\u([\da-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 
@@ -3595,19 +3594,19 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     }
   }
 
-  // Step 2: Per-page Ads API â€” only for pages that STILL need name or duration
+  // Step 2: Per-page Ads API — only for pages that STILL need name or duration
   const allPages = [...pageSet.entries()].filter(([pid]) => /^\d+$/.test(pid));
   const needApiResolve = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
   console.log(`[MI] Step 2: ${allPages.length} total pages, ${needApiResolve.length} need API resolve (at ${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
   if (needApiResolve.length > 0 && fbToken) {
-    activityLog.push(`Äang láº¥y tÃªn + thá»i gian cháº¡y QC cho ${needApiResolve.length}/${allPages.length} pages...`);
+    activityLog.push(`Đang lấy tên + thời gian chạy QC cho ${needApiResolve.length}/${allPages.length} pages...`);
     console.log(`[MI] Resolving ${needApiResolve.length} pages via per-page Ads API`);
     const BATCH_SIZE = 10;
     for (let i = 0; i < needApiResolve.length; i += BATCH_SIZE) {
       if (mustStop()) { console.log(`[MI] Per-page API: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
       const batch = needApiResolve.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
-        // â”€â”€ Ads Library API: search_page_ids (gets name + ad_delivery_start_time) â”€â”€
+        // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
         try {
           // ad_reached_countries is REQUIRED by Facebook Ads Archive API
           let apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
@@ -3626,7 +3625,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const apiName = data.data[0].page_name;
             if (apiName && isGoodName(apiName)) {
               info.pageName = apiName;
-              console.log(`[MI] Page ${pid} â†’ "${apiName}" (Ads API)`);
+              console.log(`[MI] Page ${pid} → "${apiName}" (Ads API)`);
             }
             // Total ad count from ALL status (includes inactive)
             let totalAdsCount = data.data.length;
@@ -3665,21 +3664,21 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
         } catch (err) { console.log(`[MI] Ads API failed for ${pid}: ${err.message}`); }
 
-        // â”€â”€ Graph API: page name (if still missing) â”€â”€
+        // ── Graph API: page name (if still missing) ──
         if (!isGoodName(info.pageName)) {
           try {
             const resp = await fetch(`https://graph.facebook.com/v22.0/${pid}?fields=name,link&access_token=${encodeURIComponent(fbToken)}`, { signal: AbortSignal.timeout(5000) });
             const data = await resp.json();
             if (data.name && isGoodName(data.name)) {
               info.pageName = data.name;
-              console.log(`[MI] Page ${pid} â†’ "${data.name}" (Graph API)`);
+              console.log(`[MI] Page ${pid} → "${data.name}" (Graph API)`);
             } else if (data.link) {
               // Derive name from page URL slug: https://www.facebook.com/SomeName/
               const slugMatch = data.link.match(/facebook\.com\/([\w.]+)/i);
               if (slugMatch && slugMatch[1].length > 1 && !/^\d+$/.test(slugMatch[1]) && !['pages','profile.php','people'].includes(slugMatch[1].toLowerCase())) {
                 const slugName = slugMatch[1].replace(/\./g, ' ');
                 info.pageName = slugName;
-                console.log(`[MI] Page ${pid} â†’ "${slugName}" (Graph API slug)`);
+                console.log(`[MI] Page ${pid} → "${slugName}" (Graph API slug)`);
               }
             }
           } catch {}
@@ -3689,7 +3688,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     const namesResolved = allPages.filter(([, info]) => isGoodName(info.pageName)).length;
     const durationResolved = allPages.filter(([, info]) => info.maxDays > 0).length;
     console.log(`[MI] After API: ${namesResolved}/${allPages.length} names, ${durationResolved}/${allPages.length} durations`);
-    activityLog.push(`API: ${namesResolved} tÃªn, ${durationResolved} cÃ³ ngÃ y.`);
+    activityLog.push(`API: ${namesResolved} tên, ${durationResolved} có ngày.`);
   }
 
   // Step 3: HTTP fallback for pages still missing name or duration
@@ -3699,7 +3698,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push(`HTTP fallback cho ${stillNeedResolve.length} pages...`);
 
     await Promise.all(stillNeedResolve.map(async ([pid, info]) => {
-      // â”€â”€ HTTP fetch Ads Library page (embedded JSON in HTML) â”€â”€
+      // ── HTTP fetch Ads Library page (embedded JSON in HTML) ──
       try {
         const adsUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=VN&search_type=page&view_all_page_id=${pid}`;
         const resp = await fetch(adsUrl, {
@@ -3712,15 +3711,15 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const jsonNames = html.matchAll(/"page_name"\s*:\s*"([^"]{2,80})"/g);
           for (const m of jsonNames) {
             const decoded = decodeUnicode(m[1]);
-            if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} â†’ "${decoded}" (HTML JSON)`); break; }
+            if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (HTML JSON)`); break; }
           }
         }
         // Name from <title>
         if (!isGoodName(info.pageName)) {
           const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
           if (titleMatch) {
-            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-â€“|Â·]\s*(Facebook|Meta|ThÆ° viá»‡n|Ad Library|Ads Library|FB).*$/i, '').trim();
-            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} â†’ "${cleaned}" (HTML title)`); }
+            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-–|·]\s*(Facebook|Meta|Thư viện|Ad Library|Ads Library|FB).*$/i, '').trim();
+            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (HTML title)`); }
           }
         }
         // Duration from embedded JSON dates
@@ -3736,7 +3735,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
       } catch (err) { console.log(`[MI] HTML fetch failed for ${pid}: ${err.message}`); }
 
-      // â”€â”€ Fetch facebook.com/{pid} for name â”€â”€
+      // ── Fetch facebook.com/{pid} for name ──
       if (!isGoodName(info.pageName)) {
         try {
           const resp = await fetch(`https://www.facebook.com/${pid}`, {
@@ -3747,26 +3746,26 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const jsonName = html.match(/"name"\s*:\s*"([^"]{2,80})"/);
           if (jsonName) {
             const decoded = decodeUnicode(jsonName[1]);
-            if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} â†’ "${decoded}" (FB JSON)`); }
+            if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (FB JSON)`); }
           }
           if (!isGoodName(info.pageName)) {
             const ogMatch = html.match(/<meta\s+(?:property="og:title"\s+content|content)="([^"]+)"(?:\s+property="og:title")?/i);
             if (ogMatch) {
-              const cleaned = decodeHtml(ogMatch[1]).replace(/\s*[-â€“|Â·].*$/g, '').trim();
-              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} â†’ "${cleaned}" (FB og:title)`); }
+              const cleaned = decodeHtml(ogMatch[1]).replace(/\s*[-–|·].*$/g, '').trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (FB og:title)`); }
             }
           }
           if (!isGoodName(info.pageName)) {
             const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
             if (titleMatch) {
-              const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-â€“|Â·]\s*(Facebook|Meta|FB).*$/i, '').trim();
-              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} â†’ "${cleaned}" (FB title)`); }
+              const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
+              if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (FB title)`); }
             }
           }
         } catch {}
       }
 
-      // â”€â”€ Mobile Facebook fallback for name â”€â”€
+      // ── Mobile Facebook fallback for name ──
       if (!isGoodName(info.pageName)) {
         try {
           const resp = await fetch(`https://m.facebook.com/${pid}`, {
@@ -3776,14 +3775,14 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           const html = await resp.text();
           const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
           if (titleMatch) {
-            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-â€“|Â·]\s*(Facebook|Meta|FB).*$/i, '').trim();
-            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} â†’ "${cleaned}" (mFB)`); }
+            const cleaned = decodeHtml(titleMatch[1]).replace(/\s*[-–|·]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            if (isGoodName(cleaned)) { info.pageName = cleaned; console.log(`[MI] Page ${pid} → "${cleaned}" (mFB)`); }
           }
           if (!isGoodName(info.pageName)) {
             const jsonName = html.match(/"name"\s*:\s*"([^"]{2,80})"/);
             if (jsonName) {
               const decoded = decodeUnicode(jsonName[1]);
-              if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} â†’ "${decoded}" (mFB JSON)`); }
+              if (isGoodName(decoded)) { info.pageName = decoded; console.log(`[MI] Page ${pid} → "${decoded}" (mFB JSON)`); }
             }
           }
         } catch {}
@@ -3792,16 +3791,16 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
     const finalNames = allPages.filter(([, info]) => isGoodName(info.pageName)).length;
     const finalDuration = allPages.filter(([, info]) => info.maxDays > 0).length;
-    activityLog.push(`HoÃ n táº¥t: ${finalNames}/${allPages.length} tÃªn, ${finalDuration}/${allPages.length} cÃ³ ngÃ y.`);
+    activityLog.push(`Hoàn tất: ${finalNames}/${allPages.length} tên, ${finalDuration}/${allPages.length} có ngày.`);
     console.log(`[MI] Final resolve: ${finalNames}/${allPages.length} names, ${finalDuration}/${allPages.length} durations`);
   }
 
-  // Step 4: Browser fallback â€” visit each page that still needs name, duration, or accurate ad count
+  // Step 4: Browser fallback — visit each page that still needs name, duration, or accurate ad count
   const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
   if (browserUnresolved.length > 0 && bPage) {
     console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
-    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'ThÆ° viá»‡n', 'Ad Library', 'Chá»n quá»‘c gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'Ä‘Äƒng kÃ½ ngay', 'Nháº­n bÃ¡o giÃ¡', 'Xem chi tiáº¿t', 'Gá»­i tin nháº¯n', 'Äiá»u khoáº£n', 'Quyá»n riÃªng tÆ°', 'ChÃ­nh sÃ¡ch', 'Cookie', 'Trá»£ giÃºp', 'ÄÄƒng nháº­p', 'Giá»›i thiá»‡u', 'Terms', 'Privacy', 'Policy', 'Tiáº¿ng Viá»‡t', 'API ThÆ° viá»‡n', 'BÃ¡o cÃ¡o', 'Ná»™i dung cÃ³ thÆ°Æ¡ng hiá»‡u', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
+    const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
       if (mustStop()) { console.log(`[MI] Browser fallback: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
       try {
@@ -3814,10 +3813,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         // Page name from title
         if (!isGoodName(info.pageName)) {
           const rawTitle = await bPage.title().catch(() => '');
-          const titleClean = rawTitle.replace(/\s*[-â€“|Â·].*/g, '').trim();
+          const titleClean = rawTitle.replace(/\s*[-–|·].*/g, '').trim();
           if (titleClean && titleClean.length > 1 && titleClean.length < 80 && !/^\d+$/.test(titleClean) && !titleBad.some(b => titleClean.toLowerCase().includes(b.toLowerCase()))) {
             info.pageName = titleClean;
-            console.log(`[MI] Page ${pid} â†’ "${titleClean}" (browser title)`);
+            console.log(`[MI] Page ${pid} → "${titleClean}" (browser title)`);
           }
         }
 
@@ -3825,7 +3824,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         const det = await bPage.evaluate(() => {
           const body = document.body.innerText || '';
           let pageName = '';
-          const bad = ['ThÆ° viá»‡n', 'Ad Library', 'ads_library', 'Chá»n quá»‘c gia', 'Select country', 'Facebook', 'Meta', 'Táº¥t cáº£', 'All', 'Active', 'Inactive', 'Äang hoáº¡t Ä‘á»™ng', 'Quáº£ng cÃ¡o', 'Ads', 'Bá»™ lá»c', 'Filter', 'TÃ¬m kiáº¿m', 'Search', 'Káº¿t quáº£', 'Results', 'Trang', 'Page', 'ÄÄƒng nháº­p', 'Log in', 'FB.ME', 'INBOX', 'Ä‘Äƒng kÃ½ ngay', 'Nháº­n bÃ¡o giÃ¡', 'khÃ¡ch hÃ ng Ä‘Ã£ Ä‘Äƒng kÃ½', 'Xem chi tiáº¿t', 'Gá»­i tin nháº¯n', 'LiÃªn há»‡ ngay', 'TÃ¬m hiá»ƒu thÃªm', 'Mua ngay', 'Äáº·t lá»‹ch', 'Sign up', 'Learn more', 'Shop now', 'Send message', 'Book now', 'Get quote', 'Äiá»u khoáº£n', 'Quyá»n riÃªng tÆ°', 'ChÃ­nh sÃ¡ch', 'Cookie', 'Trá»£ giÃºp', 'CÃ i Ä‘áº·t', 'ÄÄƒng xuáº¥t', 'Trang chá»§', 'Giá»›i thiá»‡u', 'Terms', 'Privacy', 'Policy', 'Help Center', 'Settings', 'API ThÆ° viá»‡n', 'Táº¡o quáº£ng cÃ¡o', 'Create ad', 'BÃ¡o cÃ¡o', 'Report', 'Ná»™i dung cÃ³ thÆ°Æ¡ng hiá»‡u', 'Tiáº¿ng Viá»‡t', 'English', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar', 'See more', 'Xem thÃªm', 'See all', 'Xem táº¥t cáº£', 'Show more'];
+          const bad = ['Thư viện', 'Ad Library', 'ads_library', 'Chọn quốc gia', 'Select country', 'Facebook', 'Meta', 'Tất cả', 'All', 'Active', 'Inactive', 'Đang hoạt động', 'Quảng cáo', 'Ads', 'Bộ lọc', 'Filter', 'Tìm kiếm', 'Search', 'Kết quả', 'Results', 'Trang', 'Page', 'Đăng nhập', 'Log in', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'khách hàng đã đăng ký', 'Xem chi tiết', 'Gửi tin nhắn', 'Liên hệ ngay', 'Tìm hiểu thêm', 'Mua ngay', 'Đặt lịch', 'Sign up', 'Learn more', 'Shop now', 'Send message', 'Book now', 'Get quote', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Cài đặt', 'Đăng xuất', 'Trang chủ', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Help Center', 'Settings', 'API Thư viện', 'Tạo quảng cáo', 'Create ad', 'Báo cáo', 'Report', 'Nội dung có thương hiệu', 'Tiếng Việt', 'English', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar', 'See more', 'Xem thêm', 'See all', 'Xem tất cả', 'Show more'];
           const isBad = (t) => !t || t.length <= 1 || t.length > 80 || /^\d+$/.test(t) || bad.some(b => t.toLowerCase().includes(b.toLowerCase()));
           for (const sel of ['h1', 'h2', '[role="heading"]']) {
             const el = document.querySelector(sel);
@@ -3860,7 +3859,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           // Dates
           let maxDays = 0;
           const now = Date.now();
-          for (const m of body.matchAll(/(\d{1,2})\s+[Tt]hÃ¡ng\s+(\d{1,2}),?\s+(\d{4})/g)) {
+          for (const m of body.matchAll(/(\d{1,2})\s+[Tt]háng\s+(\d{1,2}),?\s+(\d{4})/g)) {
             const d = new Date(parseInt(m[3]), parseInt(m[2]) - 1, parseInt(m[1]));
             if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
           }
@@ -3871,14 +3870,14 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           }
           // Ad count from DOM
           let adCount = 0;
-          const countMatch = body.match(/[~â‰ˆ]?\s*(?:Khoáº£ng\s+)?(\d[\d.,]*)\s*(?:káº¿t quáº£|quáº£ng cÃ¡o|results?|ads?)/i);
+          const countMatch = body.match(/[~≈]?\s*(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
           if (countMatch) adCount = parseInt(countMatch[1].replace(/[.,]/g, ''), 10);
           return { pageName, maxDays, adCount };
         });
 
         if (!isGoodName(info.pageName) && det.pageName) {
           info.pageName = det.pageName;
-          console.log(`[MI] Page ${pid} â†’ "${det.pageName}" (browser DOM)`);
+          console.log(`[MI] Page ${pid} → "${det.pageName}" (browser DOM)`);
         }
         if (det.maxDays > info.maxDays) {
           info.maxDays = det.maxDays;
@@ -3915,10 +3914,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           await new Promise(r => setTimeout(r, 800));
           // Title is usually "PageName | Facebook" or "PageName - Facebook"
           const rawTitle = await bPage.title().catch(() => '');
-          const titleClean = rawTitle.replace(/\s*[|â€“-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+          const titleClean = rawTitle.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
           if (titleClean && isGoodName(titleClean)) {
             info.pageName = titleClean;
-            console.log(`[MI] Page ${pid} â†’ "${titleClean}" (direct FB visit)`);
+            console.log(`[MI] Page ${pid} → "${titleClean}" (direct FB visit)`);
           }
           // Also try og:title or page name from DOM
           if (!isGoodName(info.pageName)) {
@@ -3929,10 +3928,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               if (h1?.textContent?.trim()) return h1.textContent.trim();
               return '';
             }).catch(() => '');
-            const cleaned = domName.replace(/\s*[|â€“-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            const cleaned = domName.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
             if (cleaned && isGoodName(cleaned)) {
               info.pageName = cleaned;
-              console.log(`[MI] Page ${pid} â†’ "${cleaned}" (direct FB DOM)`);
+              console.log(`[MI] Page ${pid} → "${cleaned}" (direct FB DOM)`);
             }
           }
           // Try m.facebook.com if still no name
@@ -3940,10 +3939,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             await bPage.goto(`https://m.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
             await new Promise(r => setTimeout(r, 500));
             const mTitle = await bPage.title().catch(() => '');
-            const mClean = mTitle.replace(/\s*[|â€“-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            const mClean = mTitle.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
             if (mClean && isGoodName(mClean)) {
               info.pageName = mClean;
-              console.log(`[MI] Page ${pid} â†’ "${mClean}" (m.facebook)`);
+              console.log(`[MI] Page ${pid} → "${mClean}" (m.facebook)`);
             }
           }
         } catch (err) { console.log(`[MI] Direct FB visit failed for ${pid}: ${err.message}`); }
@@ -3952,7 +3951,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
     const bNames = allPages.filter(([, info]) => isGoodName(info.pageName)).length;
     const bDur = allPages.filter(([, info]) => info.maxDays > 0).length;
-    activityLog.push(`Browser: ${bNames}/${allPages.length} tÃªn, ${bDur}/${allPages.length} cÃ³ ngÃ y.`);
+    activityLog.push(`Browser: ${bNames}/${allPages.length} tên, ${bDur}/${allPages.length} có ngày.`);
     console.log(`[MI] After browser fallback: ${bNames}/${allPages.length} names, ${bDur}/${allPages.length} durations`);
   }
 
@@ -3961,7 +3960,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 
   // ===== STRATEGY 2: HTTP Fetch fallback (if Chromium failed) =====
   if (adCount === 0) {
-    activityLog.push("Chromium khÃ´ng láº¥y Ä‘Æ°á»£c dá»¯ liá»‡u â€” thá»­ HTTP fetch fallback...");
+    activityLog.push("Chromium không lấy được dữ liệu — thử HTTP fetch fallback...");
     for (const term of searchTerms.slice(0, 3)) {
       if (adCount > 0) break;
       try {
@@ -4010,7 +4009,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         });
 
         if (adCount > 0) {
-          activityLog.push(`HTTP fetch: "${term}" â€” ${adCount} QC.`);
+          activityLog.push(`HTTP fetch: "${term}" — ${adCount} QC.`);
         }
       } catch (err) {
         console.log(`[MI] Fetch error for "${term}": ${err.message}`);
@@ -4019,11 +4018,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   }
 
   if (adCount === 0) {
-    apiError = "KhÃ´ng thá»ƒ láº¥y dá»¯ liá»‡u tá»« Ads Library. Facebook cÃ³ thá»ƒ Ä‘ang cháº·n truy cáº­p tá»± Ä‘á»™ng.";
-    activityLog.push("KhÃ´ng láº¥y Ä‘Æ°á»£c sá»‘ liá»‡u QC â€” Facebook cÃ³ thá»ƒ cháº·n bot.");
+    apiError = "Không thể lấy dữ liệu từ Ads Library. Facebook có thể đang chặn truy cập tự động.";
+    activityLog.push("Không lấy được số liệu QC — Facebook có thể chặn bot.");
   }
 
-  // Build pages info â€” include ALL pages found
+  // Build pages info — include ALL pages found
   const pagesInfo = [];
   pageSet.forEach((info, key) => {
     const pid = info.pageId || key;
@@ -4047,7 +4046,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     ? topAdDurations.reduce((s, d) => s + d.days, 0) / topAdDurations.length
     : 0;
 
-  activityLog.push("HoÃ n táº¥t thu tháº­p dá»¯ liá»‡u Ads Library.");
+  activityLog.push("Hoàn tất thu thập dữ liệu Ads Library.");
   console.log(`[MI] Final: totalAds=${adCount}, pages=${pagesInfo.length}, bestTerm="${bestTerm}" for "${projectName}"`);
 
   return {
@@ -4064,69 +4063,69 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   };
 }
 
-// Module 2: Market Price Estimator - SEPARATE cao táº§ng and tháº¥p táº§ng + project info
+// Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng + project info
 async function scrapeMarketPrice(projectName, location) {
-  let highRisePrice = 0; // Cao táº§ng (chung cÆ°, cÄƒn há»™)
-  let lowRisePrice = 0; // Tháº¥p táº§ng (nhÃ  phá»‘, biá»‡t thá»±, shophouse)
+  let highRisePrice = 0; // Cao tầng (chung cư, căn hộ)
+  let lowRisePrice = 0; // Thấp tầng (nhà phố, biệt thự, shophouse)
   let highRiseCount = 0;
   let lowRiseCount = 0;
   let newListings7d = 0;
   const leadPriceSources = [];
-  let officialPrice = ""; // GiÃ¡ bÃ¡n chÃ­nh thá»©c
-  let projectPhase = ""; // Giai Ä‘oáº¡n dá»± Ã¡n
+  let officialPrice = ""; // Giá bán chính thức
+  let projectPhase = ""; // Giai đoạn dự án
   let projectType = ""; // cao_tang, thap_tang, or both
-  let projectStatus = ""; // Äang má»Ÿ bÃ¡n, Sáº¯p má»Ÿ bÃ¡n, etc.
+  let projectStatus = ""; // Đang mở bán, Sắp mở bán, etc.
 
   const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
   // Helper: extract prices from HTML text
   const extractPricesFromHtml = (html) => {
-    const priceMatches = html.match(/(\d+[.,]?\d*)\s*(tá»·|triá»‡u|tr)\s*\/?\s*m/gi) || [];
+    const priceMatches = html.match(/(\d+[.,]?\d*)\s*(tỷ|triệu|tr)\s*\/?\s*m/gi) || [];
     return priceMatches.map(p => {
       const num = parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0");
-      if (/tá»·/i.test(p)) return num * 1e9;
-      if (/triá»‡u|tr/i.test(p)) return num * 1e6;
+      if (/tỷ/i.test(p)) return num * 1e9;
+      if (/triệu|tr/i.test(p)) return num * 1e6;
       return num;
     }).filter(p => p > 5e6 && p < 5e9);
   };
 
   // Helper: extract project phase from text
   const extractPhase = (text) => {
-    const phaseMatch = text.match(/giai\s*Ä‘oáº¡n\s*(\d+)/i) || text.match(/phase\s*(\d+)/i);
-    if (phaseMatch) return `Giai Ä‘oáº¡n ${phaseMatch[1]}`;
-    const phaseMatch2 = text.match(/GÄ\s*(\d+)/i);
-    if (phaseMatch2) return `Giai Ä‘oáº¡n ${phaseMatch2[1]}`;
+    const phaseMatch = text.match(/giai\s*đoạn\s*(\d+)/i) || text.match(/phase\s*(\d+)/i);
+    if (phaseMatch) return `Giai đoạn ${phaseMatch[1]}`;
+    const phaseMatch2 = text.match(/GĐ\s*(\d+)/i);
+    if (phaseMatch2) return `Giai đoạn ${phaseMatch2[1]}`;
     return "";
   };
 
   // Helper: extract project status
   const extractStatus = (text) => {
-    if (/Ä‘ang\s*má»Ÿ\s*bÃ¡n|hiá»‡n\s*Ä‘ang\s*bÃ¡n|má»Ÿ\s*bÃ¡n/i.test(text)) return "Äang má»Ÿ bÃ¡n";
-    if (/sáº¯p\s*má»Ÿ\s*bÃ¡n|chuáº©n\s*bá»‹\s*má»Ÿ|sáº¯p\s*ra\s*máº¯t/i.test(text)) return "Sáº¯p má»Ÿ bÃ¡n";
-    if (/Ä‘Ã£\s*bÃ n\s*giao|Ä‘Ã£\s*hoÃ n\s*thÃ nh/i.test(text)) return "ÄÃ£ bÃ n giao";
-    if (/Ä‘ang\s*xÃ¢y\s*dá»±ng|Ä‘ang\s*thi\s*cÃ´ng/i.test(text)) return "Äang xÃ¢y dá»±ng";
-    if (/chÆ°a\s*má»Ÿ\s*bÃ¡n/i.test(text)) return "ChÆ°a má»Ÿ bÃ¡n";
+    if (/đang\s*mở\s*bán|hiện\s*đang\s*bán|mở\s*bán/i.test(text)) return "Đang mở bán";
+    if (/sắp\s*mở\s*bán|chuẩn\s*bị\s*mở|sắp\s*ra\s*mắt/i.test(text)) return "Sắp mở bán";
+    if (/đã\s*bàn\s*giao|đã\s*hoàn\s*thành/i.test(text)) return "Đã bàn giao";
+    if (/đang\s*xây\s*dựng|đang\s*thi\s*công/i.test(text)) return "Đang xây dựng";
+    if (/chưa\s*mở\s*bán/i.test(text)) return "Chưa mở bán";
     return "";
   };
 
   // Helper: extract official price
   const extractOfficialPrice = (text) => {
-    // Look for "GiÃ¡ tá»« X tá»·" or "GiÃ¡ X triá»‡u/mÂ²" patterns
-    const m = text.match(/giÃ¡\s*(?:tá»«|chá»‰\s*tá»«|khá»Ÿi\s*Ä‘iá»ƒm)?\s*(\d+[.,]?\d*)\s*(tá»·|triá»‡u)/i);
+    // Look for "Giá từ X tỷ" or "Giá X triệu/m²" patterns
+    const m = text.match(/giá\s*(?:từ|chỉ\s*từ|khởi\s*điểm)?\s*(\d+[.,]?\d*)\s*(tỷ|triệu)/i);
     if (m) {
       const num = parseFloat(m[1].replace(/,/g, "."));
-      const unit = /tá»·/i.test(m[2]) ? "tá»·" : "triá»‡u";
-      return `Tá»« ${num} ${unit}`;
+      const unit = /tỷ/i.test(m[2]) ? "tỷ" : "triệu";
+      return `Từ ${num} ${unit}`;
     }
-    const m2 = text.match(/(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(tá»·|triá»‡u)/i);
+    const m2 = text.match(/(\d+[.,]?\d*)\s*-\s*(\d+[.,]?\d*)\s*(tỷ|triệu)/i);
     if (m2) {
-      return `${m2[1].replace(/,/g, ".")} - ${m2[2].replace(/,/g, ".")} ${/tá»·/i.test(m2[3]) ? "tá»·" : "triá»‡u"}`;
+      return `${m2[1].replace(/,/g, ".")} - ${m2[2].replace(/,/g, ".")} ${/tỷ/i.test(m2[3]) ? "tỷ" : "triệu"}`;
     }
     return "";
   };
 
-  // Try scraping batdongsan.com.vn â€” search for project
+  // Try scraping batdongsan.com.vn — search for project
   try {
     const searchUrl = `https://batdongsan.com.vn/nha-dat-ban/tim-kiem?keyword=${encodeURIComponent(projectName)}`;
     const res = await fetch(searchUrl, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
@@ -4138,15 +4137,15 @@ async function scrapeMarketPrice(projectName, location) {
       if (!officialPrice) officialPrice = extractOfficialPrice(html);
 
       // Detect project type from content
-      const hasHighRise = /cÄƒn\s*há»™|chung\s*cÆ°|apartment|cao\s*táº§ng/i.test(html);
-      const hasLowRise = /nhÃ \s*phá»‘|biá»‡t\s*thá»±|shophouse|villa|tháº¥p\s*táº§ng|liá»n\s*ká»/i.test(html);
+      const hasHighRise = /căn\s*hộ|chung\s*cư|apartment|cao\s*tầng/i.test(html);
+      const hasLowRise = /nhà\s*phố|biệt\s*thự|shophouse|villa|thấp\s*tầng|liền\s*kề/i.test(html);
       if (hasHighRise && hasLowRise) projectType = "both";
       else if (hasHighRise) projectType = "cao_tang";
       else if (hasLowRise) projectType = "thap_tang";
     }
   } catch {}
 
-  // Try scraping batdongsan.com.vn for HIGH-RISE (cÄƒn há»™ chung cÆ°)
+  // Try scraping batdongsan.com.vn for HIGH-RISE (căn hộ chung cư)
   try {
     const bdURL = `https://batdongsan.com.vn/ban-can-ho-chung-cu-${slug}`;
     const res = await fetch(bdURL, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
@@ -4159,7 +4158,7 @@ async function scrapeMarketPrice(projectName, location) {
         newListings7d += Math.min(prices.length, 30);
       }
       // Total price per unit fallback
-      const totalPriceMatches = html.match(/(\d+[.,]?\d*)\s*tá»·(?!\s*\/)/gi) || [];
+      const totalPriceMatches = html.match(/(\d+[.,]?\d*)\s*tỷ(?!\s*\/)/gi) || [];
       if (totalPriceMatches.length > 0) {
         const totals = totalPriceMatches.map(p => parseFloat(p.replace(/,/g, ".").match(/[\d.]+/)?.[0] || "0") * 1e9).filter(p => p > 1e9 && p < 100e9);
         if (totals.length > 0 && highRisePrice === 0) {
@@ -4173,7 +4172,7 @@ async function scrapeMarketPrice(projectName, location) {
     }
   } catch {}
 
-  // Try scraping for LOW-RISE (nhÃ  phá»‘, biá»‡t thá»±)
+  // Try scraping for LOW-RISE (nhà phố, biệt thự)
   try {
     const bdURL2 = `https://batdongsan.com.vn/ban-nha-biet-thu-lien-ke-${slug}`;
     const res2 = await fetch(bdURL2, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
@@ -4199,7 +4198,7 @@ async function scrapeMarketPrice(projectName, location) {
       if (ctData.ads && ctData.ads.length > 0) {
         const ctPrices = ctData.ads.filter(a => a.price && a.price > 1e8).map(a => a.price);
         if (ctPrices.length > 0) {
-          leadPriceSources.push({ source: "Chá»£ Tá»‘t", count: ctPrices.length, avgPrice: Math.round(ctPrices.reduce((a, b) => a + b, 0) / ctPrices.length) });
+          leadPriceSources.push({ source: "Chợ Tốt", count: ctPrices.length, avgPrice: Math.round(ctPrices.reduce((a, b) => a + b, 0) / ctPrices.length) });
         }
       }
     }
@@ -4208,12 +4207,12 @@ async function scrapeMarketPrice(projectName, location) {
   // Fallback estimates
   const locationUpper = (location || projectName).toUpperCase();
   if (highRisePrice === 0 && (projectType !== "thap_tang")) {
-    if (/QU[áº¬A]N\s*1|QU[áº¬A]N\s*3|PH[ÃšU]\s*NHU[áº¬A]N/i.test(locationUpper)) highRisePrice = 150000000;
-    else if (/QU[áº¬A]N\s*2|TH[á»¦U]\s*[ÄD][á»¨U]C|AN\s*PH[ÃšU]/i.test(locationUpper)) highRisePrice = 90000000;
-    else if (/QU[áº¬A]N\s*7|B[ÃŒI]NH\s*TH[áº A]NH/i.test(locationUpper)) highRisePrice = 70000000;
-    else if (/QU[áº¬A]N\s*9/i.test(locationUpper)) highRisePrice = 55000000;
-    else if (/NH[Ã€A]\s*B[ÃˆE]|B[ÃŒI]NH\s*D[Æ¯U][Æ O]NG/i.test(locationUpper)) highRisePrice = 30000000;
-    else if (/V[Å¨U]NG\s*T[Ã€A]U|B[Ã€A]\s*R[á»ŠI]A/i.test(locationUpper)) highRisePrice = 45000000;
+    if (/QU[ẬA]N\s*1|QU[ẬA]N\s*3|PH[ÚU]\s*NHU[ẬA]N/i.test(locationUpper)) highRisePrice = 150000000;
+    else if (/QU[ẬA]N\s*2|TH[ỦU]\s*[ĐD][ỨU]C|AN\s*PH[ÚU]/i.test(locationUpper)) highRisePrice = 90000000;
+    else if (/QU[ẬA]N\s*7|B[ÌI]NH\s*TH[ẠA]NH/i.test(locationUpper)) highRisePrice = 70000000;
+    else if (/QU[ẬA]N\s*9/i.test(locationUpper)) highRisePrice = 55000000;
+    else if (/NH[ÀA]\s*B[ÈE]|B[ÌI]NH\s*D[ƯU][ƠO]NG/i.test(locationUpper)) highRisePrice = 30000000;
+    else if (/V[ŨU]NG\s*T[ÀA]U|B[ÀA]\s*R[ỊI]A/i.test(locationUpper)) highRisePrice = 45000000;
     else highRisePrice = 55000000;
   }
   if (lowRisePrice === 0 && projectType !== "cao_tang" && highRisePrice > 0) {
@@ -4244,7 +4243,7 @@ async function scrapeMarketPrice(projectName, location) {
   };
 }
 
-// Module 3: Calculation Engine â€” CPL formula based on BÄS market tiers
+// Module 3: Calculation Engine — CPL formula based on BĐS market tiers
 function estimateCpl(adCount, pricePerM2) {
   const baseCpl = 250000; // 250K VND base
   const priceInTrieu = pricePerM2 / 1000000;
@@ -4270,7 +4269,7 @@ function estimateCpl(adCount, pricePerM2) {
   return { cplMin, cplMax, cplAvg, segment };
 }
 
-// Calculate heat index and opportunity score â€” calibrated for BÄS
+// Calculate heat index and opportunity score — calibrated for BĐS
 function calcMarketMetrics(adCount, avgLongevity, pricePerM2, cplAvg, districtAvgCpl) {
   const priceInTrieu = pricePerM2 / 1000000;
 
@@ -4327,7 +4326,7 @@ function compareWithRegion(currentCpl, location) {
   if (!regionAvg || !currentCpl) return { diff: 0, percent: 0, label: "N/A", district };
   const diff = currentCpl - regionAvg;
   const percent = Math.round((diff / regionAvg) * 100);
-  return { diff, percent, label: percent <= 0 ? `Tháº¥p hÆ¡n ${Math.abs(percent)}%` : `Cao hÆ¡n ${percent}%`, district };
+  return { diff, percent, label: percent <= 0 ? `Thấp hơn ${Math.abs(percent)}%` : `Cao hơn ${percent}%`, district };
 }
 
 // Benchmark: compare CPL with center area (HCM Q1-Q3 benchmark: 500K-800K)
@@ -4336,28 +4335,28 @@ function compareWithCenter(currentCpl, centerMin = 500000, centerMax = 800000) {
   if (!currentCpl) return { diff: 0, percent: 0, label: "N/A", centerAvg };
   const diff = currentCpl - centerAvg;
   const percent = Math.round((diff / centerAvg) * 100);
-  return { diff, percent, label: percent <= 0 ? `Tháº¥p hÆ¡n ${Math.abs(percent)}%` : `Cao hÆ¡n ${percent}%`, centerAvg };
+  return { diff, percent, label: percent <= 0 ? `Thấp hơn ${Math.abs(percent)}%` : `Cao hơn ${percent}%`, centerAvg };
 }
 
-// District average CPL lookup â€” calibrated for base_cpl=250K
+// District average CPL lookup — calibrated for base_cpl=250K
 function getDistrictAvgCpl(location) {
   const loc = (location || "").toUpperCase();
-  if (/QU[áº¬A]N\s*1/i.test(loc)) return { cpl: 800000, district: "Quáº­n 1" };
-  if (/QU[áº¬A]N\s*3/i.test(loc)) return { cpl: 600000, district: "Quáº­n 3" };
-  if (/QU[áº¬A]N\s*2|TH[á»¦U]\s*[ÄD][á»¨U]C|AN\s*PH[ÃšU]/i.test(loc)) return { cpl: 350000, district: "TP. Thá»§ Äá»©c" };
-  if (/QU[áº¬A]N\s*7/i.test(loc)) return { cpl: 450000, district: "Quáº­n 7" };
-  if (/QU[áº¬A]N\s*9/i.test(loc)) return { cpl: 300000, district: "Quáº­n 9" };
-  if (/B[ÃŒI]NH\s*TH[áº A]NH/i.test(loc)) return { cpl: 380000, district: "BÃ¬nh Tháº¡nh" };
-  if (/PH[ÃšU]\s*NHU[áº¬A]N/i.test(loc)) return { cpl: 420000, district: "PhÃº Nhuáº­n" };
-  if (/T[Ã‚A]N\s*B[ÃŒI]NH/i.test(loc)) return { cpl: 300000, district: "TÃ¢n BÃ¬nh" };
-  if (/B[ÃŒI]NH\s*T[Ã‚A]N/i.test(loc)) return { cpl: 220000, district: "BÃ¬nh TÃ¢n" };
-  if (/QU[áº¬A]N\s*12/i.test(loc)) return { cpl: 200000, district: "Quáº­n 12" };
-  if (/NH[Ã€A]\s*B[ÃˆE]/i.test(loc)) return { cpl: 180000, district: "NhÃ  BÃ¨" };
-  if (/B[ÃŒI]NH\s*D[Æ¯U][Æ O]NG/i.test(loc)) return { cpl: 200000, district: "BÃ¬nh DÆ°Æ¡ng" };
-  if (/V[Å¨U]NG\s*T[Ã€A]U|B[Ã€A]\s*R[á»ŠI]A/i.test(loc)) return { cpl: 280000, district: "VÅ©ng TÃ u" };
+  if (/QU[ẬA]N\s*1/i.test(loc)) return { cpl: 800000, district: "Quận 1" };
+  if (/QU[ẬA]N\s*3/i.test(loc)) return { cpl: 600000, district: "Quận 3" };
+  if (/QU[ẬA]N\s*2|TH[ỦU]\s*[ĐD][ỨU]C|AN\s*PH[ÚU]/i.test(loc)) return { cpl: 350000, district: "TP. Thủ Đức" };
+  if (/QU[ẬA]N\s*7/i.test(loc)) return { cpl: 450000, district: "Quận 7" };
+  if (/QU[ẬA]N\s*9/i.test(loc)) return { cpl: 300000, district: "Quận 9" };
+  if (/B[ÌI]NH\s*TH[ẠA]NH/i.test(loc)) return { cpl: 380000, district: "Bình Thạnh" };
+  if (/PH[ÚU]\s*NHU[ẬA]N/i.test(loc)) return { cpl: 420000, district: "Phú Nhuận" };
+  if (/T[ÂA]N\s*B[ÌI]NH/i.test(loc)) return { cpl: 300000, district: "Tân Bình" };
+  if (/B[ÌI]NH\s*T[ÂA]N/i.test(loc)) return { cpl: 220000, district: "Bình Tân" };
+  if (/QU[ẬA]N\s*12/i.test(loc)) return { cpl: 200000, district: "Quận 12" };
+  if (/NH[ÀA]\s*B[ÈE]/i.test(loc)) return { cpl: 180000, district: "Nhà Bè" };
+  if (/B[ÌI]NH\s*D[ƯU][ƠO]NG/i.test(loc)) return { cpl: 200000, district: "Bình Dương" };
+  if (/V[ŨU]NG\s*T[ÀA]U|B[ÀA]\s*R[ỊI]A/i.test(loc)) return { cpl: 280000, district: "Vũng Tàu" };
   if (/LONG\s*AN/i.test(loc)) return { cpl: 180000, district: "Long An" };
-  if (/[ÄD][á»’Ã”]NG\s*NAI/i.test(loc)) return { cpl: 220000, district: "Äá»“ng Nai" };
-  return { cpl: 300000, district: "Khu vá»±c chung" };
+  if (/[ĐD][ỒÔ]NG\s*NAI/i.test(loc)) return { cpl: 220000, district: "Đồng Nai" };
+  return { cpl: 300000, district: "Khu vực chung" };
 }
 
 // Winning pages aggregator - with real page names and links
@@ -4438,7 +4437,7 @@ app.get("/api/market-intel/test-ads-api", requireAuth, async (req, res) => {
       query: q,
       token_check: tokenCheck?.id ? { id: tokenCheck.id, name: tokenCheck.name } : { error: tokenCheck?.error?.message || "Token invalid" },
       results,
-      help: "If permission error: App Dashboard â†’ Add Product â†’ Marketing API â†’ Accept Terms. Then test endpoint in Graph API Explorer: /ads_archive?search_terms=test&ad_reached_countries=[\"VN\"]&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5. Also make sure token in CRM matches the one from Graph API Explorer."
+      help: "If permission error: App Dashboard → Add Product → Marketing API → Accept Terms. Then test endpoint in Graph API Explorer: /ads_archive?search_terms=test&ad_reached_countries=[\"VN\"]&ad_active_status=ACTIVE&fields=id,page_name,page_id&limit=5. Also make sure token in CRM matches the one from Graph API Explorer."
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -4482,12 +4481,12 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Build activity feed
     const activityFeed = (adData.activityLog || []).map(msg => ({ time: new Date().toISOString(), msg }));
     activityFeed.push(
-      { time: new Date().toISOString(), msg: `Cáº­p nháº­t giÃ¡ sÃ n ${districtName}: cao táº§ng ${Math.round(priceData.highRisePrice / 1e6)}tr/mÂ², tháº¥p táº§ng ${Math.round(priceData.lowRisePrice / 1e6)}tr/mÂ²` },
-      { time: new Date().toISOString(), msg: `HoÃ n táº¥t tÃ­nh toÃ¡n: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K â€” TB Quáº­n: ${(districtAvgCpl / 1000).toFixed(0)}K` },
+      { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${districtName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
+      { time: new Date().toISOString(), msg: `Hoàn tất tính toán: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
     );
     if (priceData.leadPriceSources.length > 0) {
       priceData.leadPriceSources.forEach(s => {
-        activityFeed.push({ time: new Date().toISOString(), msg: `${s.source}: ${s.count} tin Ä‘Äƒng, giÃ¡ TB ${(s.avgPrice / 1e9).toFixed(1)} tá»·` });
+        activityFeed.push({ time: new Date().toISOString(), msg: `${s.source}: ${s.count} tin đăng, giá TB ${(s.avgPrice / 1e9).toFixed(1)} tỷ` });
       });
     }
 
