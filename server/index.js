@@ -2904,7 +2904,33 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             }
           }
         }
-        activityLog.push(`API: ${apiPagesMap.size} pages, ${ads.length} ads.`);
+        // Follow pagination to get MORE ads (and more unique pages)
+        let nextUrl = data.paging?.next;
+        for (let pg = 0; pg < 3 && nextUrl; pg++) {
+          try {
+            const pgResp = await fetch(nextUrl, { signal: AbortSignal.timeout(10000) });
+            const pgData = await pgResp.json();
+            if (!pgData.data?.length) break;
+            console.log(`[MI] API page ${pg + 2}: ${pgData.data.length} more ads`);
+            for (const ad of pgData.data) {
+              const pid = ad.page_id;
+              if (!pid) continue;
+              if (!apiPagesMap.has(pid)) apiPagesMap.set(pid, { pageName: '', maxDays: 0, adCount: 0 });
+              const entry = apiPagesMap.get(pid);
+              entry.adCount++;
+              if (ad.page_name && ad.page_name.length > 1) entry.pageName = ad.page_name;
+              if (ad.ad_delivery_start_time) {
+                const d = new Date(ad.ad_delivery_start_time);
+                if (!isNaN(d)) {
+                  const days = Math.floor((now - d.getTime()) / 86400000);
+                  if (days > entry.maxDays && days > 0 && days < 3650) entry.maxDays = days;
+                }
+              }
+            }
+            nextUrl = pgData.paging?.next;
+          } catch { break; }
+        }
+        activityLog.push(`API: ${apiPagesMap.size} pages, ${ads.length}+ ads.`);
         console.log(`[MI] API found ${apiPagesMap.size} unique pages`);
       } else if (data.error) {
         console.log(`[MI] API error: ${data.error.message}`);
@@ -2974,10 +3000,24 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
           // Timeout - page may not have rendered, continue anyway
         }
 
-        // Scroll to trigger lazy loading
-        for (let i = 0; i < 3; i++) {
-          await bPage.evaluate(() => window.scrollBy(0, 3000));
-          await new Promise(r => setTimeout(r, 1500));
+        // Scroll to load ALL results — keep scrolling until no more new content
+        let prevHeight = 0;
+        let noChangeCount = 0;
+        const maxScrolls = 30; // safety limit
+        for (let i = 0; i < maxScrolls; i++) {
+          if (isTimedOut()) { console.log(`[MI] Scroll loop: time limit after ${i} scrolls`); break; }
+          await bPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await new Promise(r => setTimeout(r, 1200));
+          const curHeight = await bPage.evaluate(() => document.body.scrollHeight);
+          if (curHeight === prevHeight) {
+            noChangeCount++;
+            if (noChangeCount >= 2) { console.log(`[MI] Scroll complete after ${i + 1} scrolls (no new content)`); break; }
+            // One more wait in case content is still loading
+            await new Promise(r => setTimeout(r, 1000));
+          } else {
+            noChangeCount = 0;
+          }
+          prevHeight = curHeight;
         }
 
         // Extract count
@@ -3121,7 +3161,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             if (apiInfo.maxDays > existing.maxDays) existing.maxDays = apiInfo.maxDays;
             if (apiInfo.adCount > existing.adCount) existing.adCount = apiInfo.adCount;
           }
-          // API pages NOT in DOM are ignored — only browser-found pages are kept
+          // Also ADD API pages not in DOM — they are real pages running ads for this keyword
+          if (!pageSet.has(apiPid) && apiInfo.pageName && /^\d+$/.test(apiPid)) {
+            pageSet.set(apiPid, { pageName: apiInfo.pageName, pageId: apiPid, adCount: apiInfo.adCount, maxDays: apiInfo.maxDays, platforms: new Set(["facebook"]) });
+            console.log(`[MI] Added API-only page: ${apiPid} → "${apiInfo.pageName}"`);
+          }
         }
 
         // Extract dates from search results for duration calculation
@@ -3238,6 +3282,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     console.log(`[MI] Resolving ${allPages.length} pages via per-page Ads API`);
     const BATCH_SIZE = 10;
     for (let i = 0; i < allPages.length; i += BATCH_SIZE) {
+      if (isTimedOut()) { console.log(`[MI] Per-page API: time limit after ${i} pages`); break; }
       const batch = allPages.slice(i, i + BATCH_SIZE);
       await Promise.all(batch.map(async ([pid, info]) => {
         // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
