@@ -3224,6 +3224,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               info.pageName = apiName;
               console.log(`[MI] Page ${pid} → "${apiName}" (Ads API)`);
             }
+            // Total ad count from ALL status (includes inactive)
+            let totalAdsCount = data.data.length;
             // Duration: find oldest ad_delivery_start_time
             for (const ad of data.data) {
               if (ad.ad_delivery_start_time) {
@@ -3231,13 +3233,14 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
                 if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
               }
             }
-            // Follow pagination to find older ads (up to 2 more pages)
+            // Follow pagination to find older ads + count total
             let nextUrl = data.paging?.next;
             for (let pg = 0; pg < 2 && nextUrl; pg++) {
               try {
                 const pgResp = await fetch(nextUrl, { signal: AbortSignal.timeout(8000) });
                 const pgData = await pgResp.json();
                 if (!pgData.data?.length) break;
+                totalAdsCount += pgData.data.length;
                 for (const ad of pgData.data) {
                   if (ad.ad_delivery_start_time) {
                     const d = new Date(ad.ad_delivery_start_time);
@@ -3255,6 +3258,39 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             console.log(`[MI] Ads API returned 0 ads for page ${pid}${data.error ? ': ' + data.error.message : ''}`);
           }
         } catch (err) { console.log(`[MI] Ads API failed for ${pid}: ${err.message}`); }
+
+        // ── Ads API ACTIVE only: get real active ad count ──
+        try {
+          let acUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+          let acResp = await fetch(acUrl, { signal: AbortSignal.timeout(8000) });
+          let acData = await acResp.json();
+          if (!acData.data?.length && !acData.error) {
+            acUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ACTIVE&ad_reached_countries%5B%5D=VN&fields=page_name&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+            acResp = await fetch(acUrl, { signal: AbortSignal.timeout(6000) });
+            acData = await acResp.json();
+          }
+          if (acData.data?.length > 0) {
+            let activeCount = acData.data.length;
+            // Follow pagination for accurate count
+            let nxt = acData.paging?.next;
+            for (let pg = 0; pg < 5 && nxt; pg++) {
+              try {
+                const r2 = await fetch(nxt, { signal: AbortSignal.timeout(6000) });
+                const d2 = await r2.json();
+                if (!d2.data?.length) break;
+                activeCount += d2.data.length;
+                nxt = d2.paging?.next;
+              } catch { break; }
+            }
+            info.adCount = activeCount;
+            // Also get name from ACTIVE call if still missing
+            if (!isGoodName(info.pageName) && acData.data[0].page_name && isGoodName(acData.data[0].page_name)) {
+              info.pageName = acData.data[0].page_name;
+              console.log(`[MI] Page ${pid} → "${acData.data[0].page_name}" (ACTIVE API)`);
+            }
+            console.log(`[MI] Page ${pid} active ads: ${activeCount}`);
+          }
+        } catch {}
 
         // ── Graph API: page name (if still missing) ──
         if (!isGoodName(info.pageName)) {
@@ -3379,8 +3415,8 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     console.log(`[MI] Final resolve: ${finalNames}/${allPages.length} names, ${finalDuration}/${allPages.length} durations`);
   }
 
-  // Step 4: Browser fallback — visit each unresolved page's Ads Library for name + dates
-  const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
+  // Step 4: Browser fallback — visit each page that still needs name, duration, or accurate ad count
+  const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0 || info.adCount <= 1);
   if (browserUnresolved.length > 0 && bPage) {
     console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
     activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
@@ -3434,7 +3470,11 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
             const mon = monthsEn[m[1].substring(0,3).toLowerCase()];
             if (mon !== undefined) { const d = new Date(parseInt(m[3]), mon, parseInt(m[2])); if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; } }
           }
-          return { pageName, maxDays };
+          // Ad count from DOM
+          let adCount = 0;
+          const countMatch = body.match(/[~≈]?\s*(?:Khoảng\s+)?(\d[\d.,]*)\s*(?:kết quả|quảng cáo|results?|ads?)/i);
+          if (countMatch) adCount = parseInt(countMatch[1].replace(/[.,]/g, ''), 10);
+          return { pageName, maxDays, adCount };
         });
 
         if (!isGoodName(info.pageName) && det.pageName) {
@@ -3444,6 +3484,10 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         if (det.maxDays > info.maxDays) {
           info.maxDays = det.maxDays;
           console.log(`[MI] Page ${pid} duration: ${det.maxDays} days (browser)`);
+        }
+        if (det.adCount > 0 && det.adCount > info.adCount) {
+          info.adCount = det.adCount;
+          console.log(`[MI] Page ${pid} ad count: ${det.adCount} (browser)`);
         }
 
         // Embedded JSON dates from HTML source
