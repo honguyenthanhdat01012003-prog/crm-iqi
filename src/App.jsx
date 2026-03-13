@@ -180,6 +180,10 @@ function parseLeadDate(str) {
   return isNaN(iso.getTime()) ? null : iso;
 }
 
+function getTodayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 const ElapsedTimer = ({ estimatedTime }) => {
   const [elapsed, setElapsed] = React.useState(0);
   React.useEffect(() => {
@@ -1850,8 +1854,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleMsg, setShuffleMsg] = useState("");
   const [shuffleSaleFocused, setShuffleSaleFocused] = useState(false);
   const [shuffleSelectedSales, setShuffleSelectedSales] = useState([]);
+  const [shuffleStartDate, setShuffleStartDate] = useState("");
   const [shuffleEndDate, setShuffleEndDate] = useState("");
   const [shuffleLeadsPerDay, setShuffleLeadsPerDay] = useState(5);
+  const [scheduleDetailId, setScheduleDetailId] = useState(null);
+  const [scheduleDetailData, setScheduleDetailData] = useState(null);
+  const [scheduleDetailLoading, setScheduleDetailLoading] = useState(false);
   const [allUsers, setAllUsers] = useState([]);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
@@ -1979,8 +1987,23 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       if (shuffleStatus === "unassigned") list = list.filter(l => !l.saleName || l.saleName === "Chưa chia");
       else list = list.filter(l => l.status === shuffleStatus);
     }
+    // Filter by date range (lead createdAt within startDate..endDate)
+    if (shuffleStartDate) {
+      const start = new Date(shuffleStartDate + "T00:00:00");
+      list = list.filter(l => {
+        const d = parseLeadDate(l.createdAt);
+        return d && d >= start;
+      });
+    }
+    if (shuffleEndDate) {
+      const end = new Date(shuffleEndDate + "T23:59:59");
+      list = list.filter(l => {
+        const d = parseLeadDate(l.createdAt);
+        return d && d <= end;
+      });
+    }
     return list;
-  }, [leads, shuffleProject, shuffleStatus]);
+  }, [leads, shuffleProject, shuffleStatus, shuffleStartDate, shuffleEndDate]);
 
   // Auto-select based on pick count
   useEffect(() => {
@@ -1994,8 +2017,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     }
   }, [shufflePickCount, shuffleFilteredLeads]);
 
-  // Reset when project/status changes
-  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus]);
+  // Reset when project/status/date changes
+  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus, shuffleStartDate, shuffleEndDate]);
 
   // Calculate schedule preview
   const schedulePreview = useMemo(() => {
@@ -2013,7 +2036,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     if (!shuffleSelectedSales.length) return;
     const ids = [...shuffleSelected];
     if (!ids.length) return;
-    if (!shuffleEndDate) { setShuffleMsg("[ERR] Cần chọn ngày kết thúc"); return; }
+    if (!shuffleStartDate || !shuffleEndDate) { setShuffleMsg("[ERR] Cần chọn ngày bắt đầu và ngày kết thúc"); return; }
     setShuffling(true);
     setShuffleMsg("");
     try {
@@ -2023,6 +2046,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           projectId: shuffleProject,
           saleNames: shuffleSelectedSales,
           statusFilter: shuffleStatus,
+          startDate: shuffleStartDate,
           endDate: shuffleEndDate,
           leadsPerDay: shuffleLeadsPerDay,
           leadIds: ids,
@@ -2051,6 +2075,21 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       setShuffleMsg("[OK] " + (data.msg || "Đã hủy"));
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
+    }
+  };
+
+  const handleViewScheduleDetail = async (scheduleId) => {
+    if (scheduleDetailId === scheduleId) { setScheduleDetailId(null); setScheduleDetailData(null); return; }
+    setScheduleDetailId(scheduleId);
+    setScheduleDetailLoading(true);
+    try {
+      const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/detail`);
+      const data = await r.json();
+      setScheduleDetailData(data);
+    } catch (e) {
+      setScheduleDetailData(null);
+    } finally {
+      setScheduleDetailLoading(false);
     }
   };
 
@@ -2178,7 +2217,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 )}
               </div>
 
-              {/* Row 3: Trạng thái + Ngày kết thúc + Số lượng */}
+              {/* Row 3: Trạng thái + Giai đoạn ngày + Số lượng */}
               {shuffleProject && shuffleSelectedSales.length > 0 && (
                 <>
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12, alignItems: "flex-end" }}>
@@ -2191,14 +2230,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
                     </div>
-                    <div style={{ minWidth: 160 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Chia lead đến ngày</label>
+                    <div style={{ minWidth: 145 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Ngày bắt đầu có khách</label>
+                      <input type="date" value={shuffleStartDate} onChange={(e) => setShuffleStartDate(e.target.value)}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
+                    </div>
+                    <div style={{ minWidth: 145 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>5. Ngày ngừng nhận lead</label>
                       <input type="date" value={shuffleEndDate} onChange={(e) => setShuffleEndDate(e.target.value)}
-                        min={new Date().toISOString().slice(0, 10)}
+                        min={shuffleStartDate || undefined}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
                     </div>
                     <div style={{ minWidth: 150 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>5. Chọn số lượng lead</label>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>6. Chọn số lượng lead</label>
                       <select value={shufflePickCount} onChange={(e) => setShufflePickCount(e.target.value)}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
                         <option value="all">Tất cả ({shuffleFilteredLeads.length})</option>
@@ -2211,8 +2255,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     </div>
                   </div>
 
+                  {/* Date range info */}
+                  {shuffleStartDate && shuffleEndDate && (
+                    <div style={{ background: "#fefce8", border: "1px solid #fde68a", borderRadius: 8, padding: 8, marginBottom: 10, fontSize: 11, color: "#92400e" }}>
+                      📅 Giai đoạn nhận khách: <strong>{shuffleStartDate}</strong> → <strong>{shuffleEndDate}</strong>
+                      &nbsp;| Lead trong giai đoạn: <strong>{shuffleFilteredLeads.length}</strong>
+                      &nbsp;| Chia bắt đầu từ hôm nay, 5 lead/ngày/người xoay vòng đến hết.
+                    </div>
+                  )}
+
                   {/* Schedule info box */}
-                  {schedulePreview && shuffleEndDate && (
+                  {schedulePreview && shuffleStartDate && shuffleEndDate && (
                     <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12 }}>
                       <div style={{ fontWeight: 700, color: "#1e40af", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}><Info size={14} /> Thông tin lịch chia lead</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, color: "#374151" }}>
@@ -2224,7 +2277,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         <div>👤 Mỗi người nhận: <strong>~{schedulePreview.perPerson} lead</strong></div>
                       </div>
                       <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
-                        Hệ thống sẽ tự động chia {schedulePreview.perDay} lead/ngày cho mỗi sale, xoay vòng đến khi hết lead hoặc đến ngày {shuffleEndDate}.
+                        Lead trong giai đoạn {shuffleStartDate} → {shuffleEndDate}. Chia bắt đầu từ hôm nay, {schedulePreview.perDay} lead/ngày/người xoay vòng đến khi hết.
                       </div>
                     </div>
                   )}
@@ -2272,8 +2325,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                   {/* Action button */}
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button onClick={handleScheduleDistribution} disabled={shuffling || !shuffleSelected.size || !shuffleSelectedSales.length || !shuffleEndDate}
-                      style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling || !shuffleSelectedSales.length || !shuffleEndDate) ? 0.5 : 1 }}>
+                    <button onClick={handleScheduleDistribution} disabled={shuffling || !shuffleSelected.size || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate}
+                      style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate) ? 0.5 : 1 }}>
                       {shuffling ? "Đang tạo lịch..." : <><Share2 size={14} /> Tạo lịch chia {shuffleSelected.size} lead cho {shuffleSelectedSales.length} sale</>}
                     </button>
                   </div>
@@ -2284,11 +2337,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               {schedules && schedules.length > 0 && (
                 <div style={{ marginTop: 16, borderTop: "1px solid #fed7aa", paddingTop: 12 }}>
                   <div style={{ fontWeight: 700, fontSize: 13, color: "#9a3412", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}>
-                    <CalendarCheck size={14} /> Lịch chia lead đang hoạt động
+                    <CalendarCheck size={14} /> Lịch sử chia lead
                   </div>
                   {schedules.map(sch => {
                     const projName = projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`;
                     const pct = sch.totalCount ? Math.round(sch.assignedIndex / sch.totalCount * 100) : 0;
+                    const isExpanded = scheduleDetailId === sch.id;
                     return (
                       <div key={sch.id} style={{
                         background: sch.isActive ? "#fff" : "#f9fafb",
@@ -2297,7 +2351,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         opacity: sch.isActive ? 1 : 0.7,
                       }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                          <span style={{ fontWeight: 700, color: "#1f2937" }}>
+                          <span style={{ fontWeight: 700, color: "#1f2937", cursor: "pointer" }} onClick={() => handleViewScheduleDetail(sch.id)}>
                             #{sch.id} - {projName}
                             {sch.isActive ? (
                               <span style={{ background: "#dcfce7", color: "#166534", padding: "1px 6px", borderRadius: 8, fontSize: 10, marginLeft: 6 }}>Đang chạy</span>
@@ -2305,13 +2359,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               <span style={{ background: "#f3f4f6", color: "#6b7280", padding: "1px 6px", borderRadius: 8, fontSize: 10, marginLeft: 6 }}>Hoàn thành</span>
                             )}
                           </span>
-                          {sch.isActive && (
-                            <button onClick={() => handleCancelSchedule(sch.id)}
-                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>Hủy</button>
-                          )}
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <button onClick={() => handleViewScheduleDetail(sch.id)}
+                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#2563eb", fontWeight: 600 }}>{isExpanded ? "Ẩn" : "Xem chi tiết"}</button>
+                            {sch.isActive && (
+                              <button onClick={() => handleCancelSchedule(sch.id)}
+                                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>Hủy</button>
+                            )}
+                          </div>
                         </div>
                         <div style={{ color: "#6b7280", marginBottom: 4 }}>
-                          Sale: {sch.saleNames.join(", ")} | {sch.leadsPerDay} lead/ngày/người | Đến: {sch.endDate}
+                          Sale: {sch.saleNames.join(", ")} | {sch.leadsPerDay} lead/ngày/người
+                          {sch.startDate && ` | Giai đoạn: ${sch.startDate} → ${sch.endDate}`}
+                          {!sch.startDate && sch.endDate && ` | Đến: ${sch.endDate}`}
                         </div>
                         <div style={{ background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 2 }}>
                           <div style={{ background: sch.isActive ? "#22c55e" : "#9ca3af", height: "100%", width: `${pct}%`, transition: "width .3s" }} />
@@ -2320,6 +2380,105 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           Đã chia: {sch.assignedIndex}/{sch.totalCount} ({pct}%)
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
+
+                        {/* Detail view - expandable */}
+                        {isExpanded && (
+                          <div style={{ marginTop: 8, borderTop: "1px solid #e5e7eb", paddingTop: 8 }}>
+                            {scheduleDetailLoading && <div style={{ textAlign: "center", color: "#9ca3af", padding: 8 }}>Đang tải...</div>}
+                            {scheduleDetailData && scheduleDetailData.schedule && (() => {
+                              const det = scheduleDetailData;
+                              const log = det.schedule.assignmentLog || [];
+                              const leadMap = {};
+                              (det.leadDetails || []).forEach(l => { leadMap[l.id] = l; });
+
+                              // Group by sale
+                              const bySale = {};
+                              sch.saleNames.forEach(s => { bySale[s] = []; });
+                              log.forEach(entry => {
+                                if (!bySale[entry.saleName]) bySale[entry.saleName] = [];
+                                bySale[entry.saleName].push(entry);
+                              });
+
+                              // Group remaining (not yet assigned) by planned schedule
+                              const remainingLeadIds = det.schedule.leadIds.slice(det.schedule.assignedIndex);
+                              const perDay = det.schedule.leadsPerDay || 5;
+                              const sNames = det.schedule.saleNames;
+                              const totalPerDay = perDay * sNames.length;
+                              const futurePlan = [];
+                              let futureDate = new Date();
+                              futureDate.setDate(futureDate.getDate() + 1);
+                              let rIdx = 0;
+                              while (rIdx < remainingLeadIds.length) {
+                                const dayBatch = remainingLeadIds.slice(rIdx, rIdx + totalPerDay);
+                                const dateStr = futureDate.toISOString().slice(0, 10);
+                                for (let i = 0; i < dayBatch.length; i++) {
+                                  const saleIdx = Math.floor(i / perDay) % sNames.length;
+                                  futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true });
+                                }
+                                rIdx += dayBatch.length;
+                                futureDate.setDate(futureDate.getDate() + 1);
+                              }
+
+                              // Merge log + future for each sale
+                              const allEntries = [...log.map(e => ({ ...e, planned: false })), ...futurePlan];
+                              const bySaleFull = {};
+                              sNames.forEach(s => { bySaleFull[s] = []; });
+                              allEntries.forEach(entry => {
+                                if (!bySaleFull[entry.saleName]) bySaleFull[entry.saleName] = [];
+                                bySaleFull[entry.saleName].push(entry);
+                              });
+
+                              return (
+                                <div>
+                                  {sNames.map(saleName => {
+                                    const entries = bySaleFull[saleName] || [];
+                                    // Group by date
+                                    const byDate = {};
+                                    entries.forEach(e => {
+                                      if (!byDate[e.date]) byDate[e.date] = [];
+                                      byDate[e.date].push(e);
+                                    });
+                                    const dates = Object.keys(byDate).sort();
+                                    return (
+                                      <div key={saleName} style={{ marginBottom: 10 }}>
+                                        <div style={{ fontWeight: 700, fontSize: 12, color: "#1a3c20", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                                          <User size={12} /> {saleName} ({entries.length} lead)
+                                        </div>
+                                        <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, overflow: "hidden" }}>
+                                          {dates.map(date => (
+                                            <div key={date}>
+                                              <div style={{ background: "#f9fafb", padding: "4px 8px", fontSize: 10, fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb" }}>
+                                                📅 {date} {date === getTodayStr() && "(Hôm nay)"}
+                                              </div>
+                                              {byDate[date].map((entry, i) => {
+                                                const lead = leadMap[entry.leadId];
+                                                return (
+                                                  <div key={i} style={{
+                                                    padding: "3px 8px", fontSize: 11, borderBottom: "1px solid #f3f4f6",
+                                                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                                                    opacity: entry.planned ? 0.6 : 1,
+                                                    background: entry.planned ? "#fefce8" : "#fff",
+                                                  }}>
+                                                    <span>
+                                                      {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af" }}>{lead.phone}</span></> : `Lead #${entry.leadId}`}
+                                                    </span>
+                                                    <span style={{ fontSize: 10, color: entry.planned ? "#d97706" : "#059669", fontWeight: 600 }}>
+                                                      {entry.planned ? "Dự kiến" : "Đã chia"}
+                                                    </span>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
                       </div>
                     );
                   })}

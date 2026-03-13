@@ -304,6 +304,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id INTEGER NOT NULL,
       status_filter TEXT DEFAULT 'all',
+      start_date TEXT NOT NULL DEFAULT '',
       end_date TEXT NOT NULL,
       leads_per_day INTEGER DEFAULT 5,
       sale_names TEXT NOT NULL DEFAULT '[]',
@@ -313,9 +314,13 @@ async function initDb() {
       created_by TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       is_active INTEGER DEFAULT 1,
-      last_processed_date TEXT DEFAULT ''
+      last_processed_date TEXT DEFAULT '',
+      assignment_log TEXT DEFAULT '[]'
     )`
   );
+  // Migration: add new columns to lead_schedules if missing
+  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"); } catch {}
+  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN assignment_log TEXT DEFAULT '[]'"); } catch {}
 
   // Migration: add fb_code, fb_person columns to projects
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
@@ -1863,12 +1868,6 @@ async function processSchedules(db, triggerUser) {
     // Skip if already processed today
     if (sch.last_processed_date === today) continue;
 
-    // Check if past end date
-    if (today > sch.end_date) {
-      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
-      continue;
-    }
-
     const saleList = JSON.parse(sch.sale_names || "[]");
     const leadIdList = JSON.parse(sch.lead_ids || "[]");
     if (!saleList.length || !leadIdList.length) continue;
@@ -1887,6 +1886,7 @@ async function processSchedules(db, triggerUser) {
     const now = new Date().toLocaleString("vi-VN");
     const stmts = [];
     const assignedLeads = []; // {leadId, saleName} for Telegram
+    const logEntries = []; // for assignment_log
 
     // Round-robin: assign perDay leads to each sale in order
     for (let i = 0; i < batch.length; i++) {
@@ -1902,13 +1902,18 @@ async function processSchedules(db, triggerUser) {
         args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id}`, nextSeq],
       });
       assignedLeads.push({ leadId: lid, saleName });
+      logEntries.push({ leadId: lid, saleName, date: today });
     }
+
+    // Append to assignment_log
+    const existingLog = JSON.parse(sch.assignment_log || "[]");
+    const updatedLog = [...existingLog, ...logEntries];
 
     const newIndex = sch.assigned_index + batch.length;
     const isDone = newIndex >= leadIdList.length;
     stmts.push({
-      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ? WHERE id = ?",
-      args: [newIndex, today, isDone ? 0 : 1, sch.id],
+      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ?, assignment_log = ? WHERE id = ?",
+      args: [newIndex, today, isDone ? 0 : 1, JSON.stringify(updatedLog), sch.id],
     });
 
     await db.batch(stmts, "write");
@@ -1972,25 +1977,46 @@ async function processSchedules(db, triggerUser) {
 /* POST /api/leads/schedule-distribution - Create a new distribution schedule */
 app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { projectId, saleNames: sNames, statusFilter, endDate, leadsPerDay, leadIds } = req.body;
+    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds } = req.body;
     if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
-    if (!endDate) return res.status(400).json({ error: "Cần chọn ngày kết thúc" });
+    if (!startDate || !endDate) return res.status(400).json({ error: "Cần chọn ngày bắt đầu và ngày kết thúc" });
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
 
+    // Pre-calculate the full assignment plan
+    const plan = [];
+    const today = getTodayStr();
+    let currentDate = today;
+    let idx = 0;
+    const totalPerDay = perDay * sNames.length;
+    while (idx < leadIds.length) {
+      const batch = leadIds.slice(idx, idx + totalPerDay);
+      for (let i = 0; i < batch.length; i++) {
+        const saleIdx = Math.floor(i / perDay) % sNames.length;
+        plan.push({ leadId: batch[i], saleName: sNames[saleIdx], date: currentDate });
+      }
+      idx += batch.length;
+      // Next day
+      const d = new Date(currentDate + "T00:00:00");
+      d.setDate(d.getDate() + 1);
+      currentDate = d.toISOString().slice(0, 10);
+    }
+
     await run(db,
-      `INSERT INTO lead_schedules(project_id, status_filter, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date)
-       VALUES(?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '')`,
+      `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log)
+       VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?)`,
       [
         Number(projectId),
         statusFilter || "all",
+        startDate,
         endDate,
         perDay,
         JSON.stringify(sNames),
         JSON.stringify(leadIds),
         leadIds.length,
         req.user.displayName || req.user.username,
+        JSON.stringify([]), // assignment_log starts empty, filled as leads are actually assigned
       ]
     );
 
@@ -2001,7 +2027,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     await filterDataForRole(data, req.user);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
-      msg: `Đã tạo lịch chia ${leadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người)`,
+      msg: `Đã tạo lịch chia ${leadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người). Giai đoạn: ${startDate} → ${endDate}`,
       schedules: schedules.map(formatSchedule),
       ...data,
     });
@@ -2038,17 +2064,39 @@ function formatSchedule(s) {
     id: s.id,
     projectId: s.project_id,
     statusFilter: s.status_filter,
+    startDate: s.start_date || "",
     endDate: s.end_date,
     leadsPerDay: s.leads_per_day,
     saleNames: JSON.parse(s.sale_names || "[]"),
+    leadIds: JSON.parse(s.lead_ids || "[]"),
     assignedIndex: s.assigned_index,
     totalCount: s.total_count,
     createdBy: s.created_by,
     createdAt: s.created_at,
     isActive: Boolean(s.is_active),
     lastProcessedDate: s.last_processed_date || "",
+    assignmentLog: JSON.parse(s.assignment_log || "[]"),
   };
 }
+
+/* GET /api/leads/schedules/:id/detail - Get schedule detail with lead info */
+app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
+    if (!sch) return res.status(404).json({ error: "Schedule not found" });
+    const formatted = formatSchedule(sch);
+    // Get lead details for all leads in this schedule
+    const leadIds = formatted.leadIds;
+    const leadDetails = [];
+    for (const lid of leadIds) {
+      const lead = await get(db, "SELECT id, name, phone, status, sale_name, created_at FROM leads WHERE id = ?", [lid]);
+      if (lead) leadDetails.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, saleName: lead.sale_name, createdAt: lead.created_at });
+    }
+    res.json({ schedule: formatted, leadDetails });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to get schedule detail" });
+  }
+});
 
 /* ===== Lead updates ===== */
 function matchSaleName(leadSaleName, userDisplayName) {
