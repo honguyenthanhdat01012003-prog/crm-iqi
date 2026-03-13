@@ -3206,10 +3206,18 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
       await Promise.all(batch.map(async ([pid, info]) => {
         // ── Ads Library API: search_page_ids (gets name + ad_delivery_start_time) ──
         try {
-          // No country filter — page already confirmed from VN search. ALL status for oldest date.
-          const apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=200`;
-          const resp = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
-          const data = await resp.json();
+          // ad_reached_countries is REQUIRED by Facebook Ads Archive API
+          let apiUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries=${encodeURIComponent('["VN"]')}&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+          let resp = await fetch(apiUrl, { signal: AbortSignal.timeout(10000) });
+          let data = await resp.json();
+          // If first format fails, try bracket format
+          if (!data.data?.length && !data.error) {
+            const altUrl = `https://graph.facebook.com/v22.0/ads_archive?search_page_ids=${pid}&ad_active_status=ALL&ad_reached_countries%5B%5D=VN&fields=page_name,ad_delivery_start_time&access_token=${encodeURIComponent(fbToken)}&limit=500`;
+            resp = await fetch(altUrl, { signal: AbortSignal.timeout(8000) });
+            data = await resp.json();
+          }
+          const now = Date.now();
+          let maxDays = 0;
           if (data.data?.length > 0) {
             // Name from first ad
             const apiName = data.data[0].page_name;
@@ -3218,17 +3226,31 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
               console.log(`[MI] Page ${pid} → "${apiName}" (Ads API)`);
             }
             // Duration: find oldest ad_delivery_start_time
-            const now = Date.now();
-            let maxDays = 0;
             for (const ad of data.data) {
               if (ad.ad_delivery_start_time) {
                 const d = new Date(ad.ad_delivery_start_time);
                 if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
               }
             }
+            // Follow pagination to find older ads (up to 2 more pages)
+            let nextUrl = data.paging?.next;
+            for (let pg = 0; pg < 2 && nextUrl; pg++) {
+              try {
+                const pgResp = await fetch(nextUrl, { signal: AbortSignal.timeout(8000) });
+                const pgData = await pgResp.json();
+                if (!pgData.data?.length) break;
+                for (const ad of pgData.data) {
+                  if (ad.ad_delivery_start_time) {
+                    const d = new Date(ad.ad_delivery_start_time);
+                    if (!isNaN(d)) { const days = Math.floor((now - d.getTime()) / 86400000); if (days > maxDays && days > 0 && days < 3650) maxDays = days; }
+                  }
+                }
+                nextUrl = pgData.paging?.next;
+              } catch { break; }
+            }
             if (maxDays > info.maxDays) {
               info.maxDays = maxDays;
-              console.log(`[MI] Page ${pid} duration: ${maxDays} days (${data.data.length} ads)`);
+              console.log(`[MI] Page ${pid} duration: ${maxDays} days (from Ads API)`);
             }
           } else {
             console.log(`[MI] Ads API returned 0 ads for page ${pid}${data.error ? ': ' + data.error.message : ''}`);
