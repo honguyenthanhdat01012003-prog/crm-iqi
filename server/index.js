@@ -3483,6 +3483,52 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
         }
       } catch (err) { console.log(`[MI] Browser fallback failed for ${pid}: ${err.message}`); }
     }
+    // Step 4b: Visit facebook.com/{pid} directly for pages STILL missing name
+    const stillNoName = allPages.filter(([, info]) => !isGoodName(info.pageName));
+    if (stillNoName.length > 0) {
+      console.log(`[MI] Direct FB visit for ${stillNoName.length} pages still missing name`);
+      for (const [pid, info] of stillNoName) {
+        if (isTimedOut()) { console.log(`[MI] Direct FB visit: time limit`); break; }
+        try {
+          await bPage.goto(`https://www.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 6000 });
+          await new Promise(r => setTimeout(r, 800));
+          // Title is usually "PageName | Facebook" or "PageName - Facebook"
+          const rawTitle = await bPage.title().catch(() => '');
+          const titleClean = rawTitle.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+          if (titleClean && isGoodName(titleClean)) {
+            info.pageName = titleClean;
+            console.log(`[MI] Page ${pid} → "${titleClean}" (direct FB visit)`);
+          }
+          // Also try og:title or page name from DOM
+          if (!isGoodName(info.pageName)) {
+            const domName = await bPage.evaluate(() => {
+              const og = document.querySelector('meta[property="og:title"]');
+              if (og?.content) return og.content;
+              const h1 = document.querySelector('h1');
+              if (h1?.textContent?.trim()) return h1.textContent.trim();
+              return '';
+            }).catch(() => '');
+            const cleaned = domName.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            if (cleaned && isGoodName(cleaned)) {
+              info.pageName = cleaned;
+              console.log(`[MI] Page ${pid} → "${cleaned}" (direct FB DOM)`);
+            }
+          }
+          // Try m.facebook.com if still no name
+          if (!isGoodName(info.pageName)) {
+            await bPage.goto(`https://m.facebook.com/${pid}`, { waitUntil: 'domcontentloaded', timeout: 5000 });
+            await new Promise(r => setTimeout(r, 500));
+            const mTitle = await bPage.title().catch(() => '');
+            const mClean = mTitle.replace(/\s*[|–-]\s*(Facebook|Meta|FB).*$/i, '').trim();
+            if (mClean && isGoodName(mClean)) {
+              info.pageName = mClean;
+              console.log(`[MI] Page ${pid} → "${mClean}" (m.facebook)`);
+            }
+          }
+        } catch (err) { console.log(`[MI] Direct FB visit failed for ${pid}: ${err.message}`); }
+      }
+    }
+
     const bNames = allPages.filter(([, info]) => isGoodName(info.pageName)).length;
     const bDur = allPages.filter(([, info]) => info.maxDays > 0).length;
     activityLog.push(`Browser: ${bNames}/${allPages.length} tên, ${bDur}/${allPages.length} có ngày.`);
