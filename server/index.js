@@ -4334,7 +4334,7 @@ async function scrapeMarketPrice(projectName, location) {
     else highRisePrice = 55000000;
   }
   if (lowRisePrice === 0 && projectType !== "cao_tang" && highRisePrice > 0) {
-    lowRisePrice = Math.round(highRisePrice * 1.8);
+    lowRisePrice = Math.round(highRisePrice * 1.4);
   }
   if (!projectType) {
     if (highRiseCount > 0 && lowRiseCount > 0) projectType = "both";
@@ -4355,14 +4355,14 @@ async function scrapeMarketPrice(projectName, location) {
     productTypes.push({ name: "1PN", category: "cao_tang", priceM2: pm2, typicalArea: 50, totalPrice: round1(pm2 * 50 / 1e9) });
     productTypes.push({ name: "2PN", category: "cao_tang", priceM2: pm2, typicalArea: 70, totalPrice: round1(pm2 * 70 / 1e9) });
     productTypes.push({ name: "3PN", category: "cao_tang", priceM2: pm2, typicalArea: 100, totalPrice: round1(pm2 * 100 / 1e9) });
-    productTypes.push({ name: "Penthouse", category: "cao_tang", priceM2: Math.round(pm2 * 1.3), typicalArea: 180, totalPrice: round1(pm2 * 1.3 * 180 / 1e9) });
+    productTypes.push({ name: "Penthouse", category: "cao_tang", priceM2: Math.round(pm2 * 1.15), typicalArea: 180, totalPrice: round1(pm2 * 1.15 * 180 / 1e9) });
   }
   if (projectType !== "cao_tang" && lowRisePrice > 0) {
     const pm2L = lowRisePrice;
     productTypes.push({ name: "Nhà phố", category: "thap_tang", priceM2: pm2L, typicalArea: 100, totalPrice: round1(pm2L * 100 / 1e9) });
-    productTypes.push({ name: "Song lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.15), typicalArea: 150, totalPrice: round1(pm2L * 1.15 * 150 / 1e9) });
-    productTypes.push({ name: "Biệt thự đơn lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.3), typicalArea: 250, totalPrice: round1(pm2L * 1.3 * 250 / 1e9) });
-    productTypes.push({ name: "Shophouse", category: "thap_tang", priceM2: Math.round(pm2L * 1.2), typicalArea: 120, totalPrice: round1(pm2L * 1.2 * 120 / 1e9) });
+    productTypes.push({ name: "Song lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.05), typicalArea: 150, totalPrice: round1(pm2L * 1.05 * 150 / 1e9) });
+    productTypes.push({ name: "Biệt thự đơn lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.12), typicalArea: 250, totalPrice: round1(pm2L * 1.12 * 250 / 1e9) });
+    productTypes.push({ name: "Shophouse", category: "thap_tang", priceM2: Math.round(pm2L * 1.08), typicalArea: 120, totalPrice: round1(pm2L * 1.08 * 120 / 1e9) });
   }
 
   return {
@@ -4668,9 +4668,14 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
 
-    // Benchmark comparisons
-    const regionBenchmark = compareWithRegion(cplResult.cplAvg, effectiveLocation);
-    const centerBenchmark = compareWithCenter(cplResult.cplAvg);
+    // Primary CPL: use segment-appropriate value (thấp tầng CPL for villa projects)
+    const primaryCpl = (priceData.projectType === "thap_tang" && cplByType.find(c => c.category === "thap_tang"))
+      ? cplByType.find(c => c.category === "thap_tang").cplAvg
+      : cplResult.cplAvg;
+
+    // Benchmark comparisons — use primaryCpl so villa projects compare with villa CPL
+    const regionBenchmark = compareWithRegion(primaryCpl, effectiveLocation);
+    const centerBenchmark = compareWithCenter(primaryCpl);
 
     // Trends
     const adTrend = generateTrend30d(adData.activeAds, 0.08, adData.activeAds > 80 ? "up" : "stable");

@@ -4174,6 +4174,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                   ))}
                 </div>
               )}
+              {activeProject.heatIndex >= 70 && activeProject.opportunityScore <= 30 && (
+                <div style={{ fontSize: 9, color: amber, marginTop: 6, padding: "4px 6px", borderRadius: 6, background: `${amber}08`, border: `1px solid ${amber}15`, lineHeight: 1.4 }}>
+                  💡 Sức nóng cao do đối thủ cạnh tranh quá nhiều, dẫn đến chi phí lead đắt — cơ hội thấp cho nhà quảng cáo mới.
+                </div>
+              )}
             </div>
           </div>
 
@@ -4208,8 +4213,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — {activeProject.districtName}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "center" }}>
-                <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
+                <CplCompareChart projectCpl={activeProject.projectType === "thap_tang" && activeProject.cplByType.find(c => c.category === "thap_tang") ? activeProject.cplByType.find(c => c.category === "thap_tang").cplAvg : activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
               </div>
+              {activeProject.projectType === "thap_tang" && activeProject.cplByType.find(c => c.category === "thap_tang") && (
+                <div style={{ fontSize: 9, color: amber, textAlign: "center", marginTop: 4, fontWeight: 600 }}>⚠ So sánh theo CPL Thấp tầng (Nhà phố/Biệt thự)</div>
+              )}
               {/* Benchmark cards */}
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 100, padding: "8px 10px", borderRadius: 10, background: activeProject.regionBenchmark.percent <= 0 ? `${emerald}10` : `${rose}10`, border: `1px solid ${activeProject.regionBenchmark.percent <= 0 ? emerald : rose}25` }}>
