@@ -980,8 +980,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       // If sale gave feedback text but normalizeStatus couldn't categorize it, fallback to "called"
       if (sheetStatus === "new" && l.saleStatus) sheetStatus = "called";
       const sheetSale = l.saleName || "";
-      // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
-      const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
+      // Always use sale from sheet if it has a meaningful value
+      // This ensures reassignments (after recalls) are synced correctly
+      const newSale = sheetSale && sheetSale !== "Chưa chia"
         ? sheetSale : prev.sale_name;
       // Update status from sheet: if sheet has meaningful status (not "new"), always use it
       // This ensures sale feedback from Google Sheets is synced to CRM
