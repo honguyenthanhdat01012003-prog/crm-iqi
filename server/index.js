@@ -966,10 +966,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
       const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
         ? sheetSale : prev.sale_name;
-      // Update status from sheet only if DB status is still default ("new"/empty) or sheet has a more specific status
-      // If CRM/Telegram already updated status (not "new"), keep the DB value
+      // Update status from sheet: if sheet has meaningful status (not "new"), always use it
+      // This ensures sale feedback from Google Sheets is synced to CRM
+      // Only keep DB status if sheet status is "new"/empty (don't revert meaningful status)
       const dbStatus = prev.status || "new";
-      const newStatus = (dbStatus === "new" || !dbStatus) && sheetStatus && sheetStatus !== "new"
+      const newStatus = sheetStatus && sheetStatus !== "new"
         ? sheetStatus : dbStatus;
       stmts.push({
         sql: `UPDATE leads SET campaign = ?, adset_name = ?, ad_name = ?, form_name = ?,
