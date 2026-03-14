@@ -4154,70 +4154,74 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// AI Module — Gemini integration for intelligent data processing
+// AI Module — Perplexity Sonar for real-time project verification
 // ═══════════════════════════════════════════════════════════════════
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY || "";
 
-async function callGeminiAI(prompt, maxTokens = 1024) {
-  if (!GEMINI_API_KEY) return null;
+async function callPerplexityAI(prompt, maxTokens = 800) {
+  if (!PERPLEXITY_API_KEY) return null;
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 },
-        }),
-        signal: AbortSignal.timeout(15000),
-      }
-    );
+    const res = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "sonar",
+        messages: [
+          { role: "system", content: "Bạn là chuyên gia phân tích dự án bất động sản Việt Nam. Luôn tìm kiếm thông tin thực tế trên internet để xác minh dữ liệu. Trả lời bằng JSON thuần, không markdown." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.1,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
     if (!res.ok) return null;
     const data = await res.json();
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    return data?.choices?.[0]?.message?.content || null;
   } catch { return null; }
 }
 
-// AI analysis: filter listings, detect location, classify products, generate insight
-async function aiAnalyzeProject(projectName, scrapedHtml, priceData, adData, cplResult, districtAvgCpl) {
-  // Build a concise snippet from scraped HTML (first 3000 chars max)
-  const htmlSnippet = (scrapedHtml || "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
+// AI verification: search internet to confirm project type, location, products
+async function aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl) {
+  const prompt = `Tìm kiếm thông tin thực tế về dự án bất động sản "${projectName}" tại Việt Nam.
 
-  const prompt = `Bạn là chuyên gia phân tích thị trường bất động sản Việt Nam. Phân tích dự án "${projectName}".
-
-DỮ LIỆU ĐÃ CÀO:
-- Nội dung trang web: "${htmlSnippet}"
-- Giá cao tầng: ${priceData.highRisePrice ? (priceData.highRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có"}
-- Giá thấp tầng: ${priceData.lowRisePrice ? (priceData.lowRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có"}
-- Số tin cao tầng: ${priceData.highRiseCount}, Số tin thấp tầng: ${priceData.lowRiseCount}
-- Loại dự án hiện tại: ${priceData.projectType}
+DỮ LIỆU HỆ THỐNG ĐÃ CÀO (cần thẩm định):
+- Loại dự án crawler phát hiện: ${priceData.projectType}
+- Giá cao tầng: ${priceData.highRisePrice ? (priceData.highRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có dữ liệu"}
+- Giá thấp tầng: ${priceData.lowRisePrice ? (priceData.lowRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có dữ liệu"}
+- Số tin cao tầng: ${priceData.highRiseCount}, thấp tầng: ${priceData.lowRiseCount}
 - Vị trí phát hiện: ${priceData.detectedLocation || "chưa rõ"}
-- CPL ước tính: ${cplResult.cplAvg / 1000}K, CPL TB khu vực: ${districtAvgCpl / 1000}K
-- Số quảng cáo đang chạy: ${adData.activeAds}
-- Phân khúc: ${cplResult.segment}
+- CPL ước tính: ${cplResult.cplAvg / 1000}K, TB khu vực: ${districtAvgCpl / 1000}K
+- Số quảng cáo: ${adData.activeAds}, Phân khúc: ${cplResult.segment}
 
-TRẢ LỜI BẰNG JSON THUẦN (không markdown, không backtick):
+HÃY TRẢ LỜI JSON THUẦN (không backtick, không markdown):
 {
   "confirmedType": "cao_tang" hoặc "thap_tang" hoặc "both",
-  "confirmedTypeReason": "giải thích ngắn gọn tại sao",
-  "location": "Quận/Huyện, Tỉnh/TP chính xác nhất" hoặc null nếu không xác định được,
-  "productTypes": ["Studio","1PN","2PN","3PN","Penthouse","Nhà phố","Song lập","Biệt thự đơn lập","Shophouse"],
-  "filteredPriceNote": "ghi chú nếu phát hiện tin đăng sai loại hình hoặc giá bất thường" hoặc null,
-  "marketInsight": "1-2 câu nhận xét chuyên nghiệp bằng tiếng Việt về cơ hội quảng cáo dựa trên CPL, mức cạnh tranh và giá"
+  "confirmedTypeReason": "lý do ngắn gọn dựa trên thông tin thực tế",
+  "location": "Quận/Huyện, Tỉnh/TP chính xác" hoặc null,
+  "productTypes": ["chỉ liệt kê sản phẩm THỰC SỰ CÓ tại dự án"],
+  "filteredPriceNote": "ghi chú nếu crawler lấy nhầm dữ liệu" hoặc null,
+  "marketInsight": "1-2 câu nhận xét chuyên nghiệp tiếng Việt về cơ hội quảng cáo"
 }
 
-QUY TẮC:
-- confirmedType: CHỈ giữ loại hình thực sự tồn tại ở dự án. Ví dụ Salacia Villas là thap_tang.
-- productTypes: CHỈ liệt kê các loại sản phẩm thực sự có ở dự án đó. Không bịa thêm.
-- location: Trả về vị trí chính xác nhất có thể. Ví dụ "Phú Mỹ, Bà Rịa - Vũng Tàu".
-- marketInsight: Viết chuyên nghiệp, ngắn gọn, có giá trị cho nhà quảng cáo BĐS.`;
+QUY TẮC BẮT BUỘC:
+- confirmedType: Xác minh thực tế. VD: "Lapura" nếu chỉ có căn hộ thì là "cao_tang", nếu chỉ có villas thì là "thap_tang".
+- productTypes: CHỈ CÁC LOẠI THẬT SỰ TỒN TẠI. Chọn từ: Studio, 1PN, 2PN, 3PN, Penthouse, Nhà phố, Song lập, Biệt thự đơn lập, Shophouse.
+- location: Vị trí chính xác nhất. VD: "Nhơn Trạch, Đồng Nai" hoặc "Phú Mỹ, Bà Rịa - Vũng Tàu".
+- filteredPriceNote: Nếu crawler lấy nhầm tin chung cư vào dự án villas (hoặc ngược lại), ghi rõ.
+- marketInsight: Phân tích giá trị cho nhà quảng cáo BĐS, dựa trên CPL và mức cạnh tranh thực tế.`;
 
-  const raw = await callGeminiAI(prompt, 600);
+  const raw = await callPerplexityAI(prompt, 600);
   if (!raw) return null;
   try {
     const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
-    return JSON.parse(cleaned);
+    // Find the JSON object in the response
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]);
   } catch { return null; }
 }
 
@@ -4724,10 +4728,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     const districtName = districtInfo.district;
     const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, effectiveLocation);
 
-    // Module 4: AI Analysis (non-blocking — runs in parallel with downstream calcs)
+    // Module 4: AI Verification via Perplexity (search internet to confirm project data)
     let aiResult = null;
-    const aiPromise = GEMINI_API_KEY
-      ? aiAnalyzeProject(projectName, priceData.scrapedHtml, priceData, adData, cplResult, districtAvgCpl)
+    const aiPromise = PERPLEXITY_API_KEY
+      ? aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl)
       : Promise.resolve(null);
 
     // CPL by product type — will be refined by AI below
@@ -4866,7 +4870,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       ai_confirmed_type_reason: aiResult?.confirmedTypeReason || "",
       ai_filtered_note: aiFilteredNote,
       ai_location: aiResult?.location || null,
-      ai_enabled: !!GEMINI_API_KEY,
+      ai_enabled: !!PERPLEXITY_API_KEY,
       winning_pages: winningPages,
       ad_trend_30d: adTrend,
       cpl_trend_30d: cplTrend,

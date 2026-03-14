@@ -4000,12 +4000,12 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </div>
               {activeProject.aiConfirmedType && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                  <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: `${neonBlue}15`, color: neonBlue, fontWeight: 600, border: `1px solid ${neonBlue}25` }}>🤖 AI xác nhận: {activeProject.aiConfirmedType === "cao_tang" ? "Cao tầng" : activeProject.aiConfirmedType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}</span>
+                  <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: `${neonBlue}15`, color: neonBlue, fontWeight: 600, border: `1px solid ${neonBlue}25` }}>🤖 Perplexity xác nhận: {activeProject.aiConfirmedType === "cao_tang" ? "Cao tầng" : activeProject.aiConfirmedType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}</span>
                   {activeProject.aiConfirmedTypeReason && <span style={{ fontSize: 9, color: slate500, fontStyle: "italic" }}>{activeProject.aiConfirmedTypeReason}</span>}
                 </div>
               )}
               {activeProject.aiFilteredNote && (
-                <div style={{ fontSize: 9, color: amber, marginTop: 3 }}>⚠ AI: {activeProject.aiFilteredNote}</div>
+                <div style={{ fontSize: 9, color: amber, marginTop: 3 }}>⚠ Perplexity: {activeProject.aiFilteredNote}</div>
               )}
             </div>
             <div style={{ textAlign: "center", minWidth: 120 }}>
@@ -4196,7 +4196,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {activeProject.aiInsight && (
                 <div style={{ fontSize: 10, color: "#e2e8f0", marginTop: 8, padding: "6px 8px", borderRadius: 8, background: `${neonBlue}08`, border: `1px solid ${neonBlue}20`, lineHeight: 1.5 }}>
                   <div style={{ fontSize: 9, color: neonBlue, fontWeight: 700, marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
-                    <Sparkles size={10} /> AI Insight
+                    <Sparkles size={10} /> Perplexity AI Insight
                   </div>
                   {activeProject.aiInsight}
                 </div>
