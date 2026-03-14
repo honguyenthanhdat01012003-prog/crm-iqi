@@ -508,22 +508,22 @@ function findVal(obj, candidates) {
 
 function normalizeStatus(raw = "") {
   const v = foldText(raw);
-  if (!v || v === "created" || v.includes("chua xu ly")) return "new";
+  if (!v || v === "created" || v === "duplicate" || v.includes("chua xu ly")) return "new";
   if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
   if (v.includes("giu cho") || v.includes("coc") || v.includes("book")) return "booked";
   if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha") || v.includes("hen gap") || v.includes("hen xem")) return "appointment";
   if (v.includes("pha") || v.includes("rac") || v.includes("spam")) return "spam";
-  if (v.includes("tai chinh yeu") || v.includes("tai chinh")) return "weak_finance";
+  if (v.includes("tai chinh yeu") || v.includes("tai chinh") || v === "tcy") return "weak_finance";
   if (v.includes("thue bao") || v.includes("sai so") || v.includes("sai")) return "wrong_number";
-  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("tat may") || v.includes("unreachable")) return "unreachable";
+  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("tat may") || v.includes("unreachable") || v === "kll") return "unreachable";
   if (v.includes("lien lac lai") || v.includes("goi lai")) return "callback";
   if (v.includes("chan kb") || v.includes("chan zalo") || (v.includes("chan") && !v.includes("chien"))) return "blocked";
-  if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested")) return "not_interested";
-  if (v.includes("quan tam hoi hot") || v.includes("hoi hot")) return "low_interest";
-  if (v.includes("quan tam du an khac") || v.includes("du an khac")) return "other_project";
+  if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested") || v === "kqt") return "not_interested";
+  if (v.includes("quan tam hoi hot") || v.includes("hoi hot") || v === "qthh") return "low_interest";
+  if (v.includes("quan tam du an khac") || v.includes("du an khac") || v === "qtdak") return "other_project";
   if (v.includes("sale khac") || v.includes("co sale")) return "has_sale";
-  if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested")) return "interested";
-  if (v.includes("goi") || v.includes("lien he") || v.includes("called") || v.includes("zalo")) return "called";
+  if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested") || v === "qt") return "interested";
+  if (v.includes("goi") || v.includes("lien he") || v.includes("called") || v.includes("zalo") || v.includes("nhan") || v.includes("da lien")) return "called";
   if (v.includes("mat") || v.includes("lost") || v.includes("huy")) return "lost";
   return "new";
 }
@@ -761,6 +761,9 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         : [];
 
       const rawStatus = saleStatus || fbStatus;
+      // If sale gave feedback but normalizeStatus can't categorize it, default to "called"
+      let status = normalizeStatus(rawStatus);
+      if (status === "new" && saleStatus) status = "called";
 
       return {
         id: i + 1,
@@ -774,7 +777,8 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         formName: formName || "-",
         product: product || "-",
         rawStatus,
-        status: normalizeStatus(rawStatus),
+        saleStatus: saleStatus || "",
+        status,
         createdAt: createdAt || "-",
         inboxUrl,
         isHot: calcIsHot(createdAt, saleName),
@@ -824,6 +828,8 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
       const { saleName, saleStatus } = pickSaleInfo(rawCols, saleBlocks);
       const saleHistory = extractSaleHistory(rawCols, saleBlocks);
       const rawStatus = saleStatus || fbStatus;
+      let status = normalizeStatus(rawStatus);
+      if (status === "new" && saleStatus) status = "called";
 
       // fallback: try to get adset/ad from raw columns 3 and 5
       const adName = rawCols[3] ? rawCols[3].trim() : "-";
@@ -842,7 +848,8 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         formName,
         product: product || "-",
         rawStatus,
-        status: normalizeStatus(rawStatus),
+        saleStatus: saleStatus || "",
+        status,
         createdAt: createdAt || "-",
         inboxUrl,
         isHot: calcIsHot(createdAt, saleName),
@@ -961,7 +968,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
     if (prev) {
       // Lead exists — UPDATE non-editable fields + sync status/sale from sheet
-      const sheetStatus = normalizeStatus(l.rawStatus);
+      let sheetStatus = normalizeStatus(l.rawStatus);
+      // If sale gave feedback text but normalizeStatus couldn't categorize it, fallback to "called"
+      if (sheetStatus === "new" && l.saleStatus) sheetStatus = "called";
       const sheetSale = l.saleName || "";
       // Update sale_name from sheet only if DB has no assignment (empty or "Chưa chia")
       const newSale = (!prev.sale_name || prev.sale_name === "Chưa chia") && sheetSale && sheetSale !== "Chưa chia"
