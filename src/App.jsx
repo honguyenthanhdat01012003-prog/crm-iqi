@@ -3798,6 +3798,12 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       scrapedAt: miData.scraped_at,
       apiFetchedAds: miData.api_fetched_ads || 0,
       apiError: miData.api_error || null,
+      aiInsight: miData.ai_insight || "",
+      aiConfirmedType: miData.ai_confirmed_type || null,
+      aiConfirmedTypeReason: miData.ai_confirmed_type_reason || "",
+      aiFilteredNote: miData.ai_filtered_note || "",
+      aiLocation: miData.ai_location || null,
+      aiEnabled: miData.ai_enabled || false,
     } : null;
 
     // Mini line chart SVG
@@ -3990,9 +3996,17 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
-                <MapPin size={14} /> {activeProject.location || activeProject.districtName}
+                <MapPin size={14} /> {activeProject.aiLocation || activeProject.location || activeProject.districtName}
               </div>
-
+              {activeProject.aiConfirmedType && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                  <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: `${neonBlue}15`, color: neonBlue, fontWeight: 600, border: `1px solid ${neonBlue}25` }}>🤖 AI xác nhận: {activeProject.aiConfirmedType === "cao_tang" ? "Cao tầng" : activeProject.aiConfirmedType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}</span>
+                  {activeProject.aiConfirmedTypeReason && <span style={{ fontSize: 9, color: slate500, fontStyle: "italic" }}>{activeProject.aiConfirmedTypeReason}</span>}
+                </div>
+              )}
+              {activeProject.aiFilteredNote && (
+                <div style={{ fontSize: 9, color: amber, marginTop: 3 }}>⚠ AI: {activeProject.aiFilteredNote}</div>
+              )}
             </div>
             <div style={{ textAlign: "center", minWidth: 120 }}>
               <div style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 4 }}>Market Heat Index</div>
@@ -4177,6 +4191,14 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {activeProject.heatIndex >= 70 && activeProject.opportunityScore <= 30 && (
                 <div style={{ fontSize: 9, color: amber, marginTop: 6, padding: "4px 6px", borderRadius: 6, background: `${amber}08`, border: `1px solid ${amber}15`, lineHeight: 1.4 }}>
                   💡 Sức nóng cao do đối thủ cạnh tranh quá nhiều, dẫn đến chi phí lead đắt — cơ hội thấp cho nhà quảng cáo mới.
+                </div>
+              )}
+              {activeProject.aiInsight && (
+                <div style={{ fontSize: 10, color: "#e2e8f0", marginTop: 8, padding: "6px 8px", borderRadius: 8, background: `${neonBlue}08`, border: `1px solid ${neonBlue}20`, lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 9, color: neonBlue, fontWeight: 700, marginBottom: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                    <Sparkles size={10} /> AI Insight
+                  </div>
+                  {activeProject.aiInsight}
                 </div>
               )}
             </div>

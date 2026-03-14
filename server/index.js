@@ -4153,6 +4153,74 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// AI Module — Gemini integration for intelligent data processing
+// ═══════════════════════════════════════════════════════════════════
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+
+async function callGeminiAI(prompt, maxTokens = 1024) {
+  if (!GEMINI_API_KEY) return null;
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.3 },
+        }),
+        signal: AbortSignal.timeout(15000),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+  } catch { return null; }
+}
+
+// AI analysis: filter listings, detect location, classify products, generate insight
+async function aiAnalyzeProject(projectName, scrapedHtml, priceData, adData, cplResult, districtAvgCpl) {
+  // Build a concise snippet from scraped HTML (first 3000 chars max)
+  const htmlSnippet = (scrapedHtml || "").replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 3000);
+
+  const prompt = `Bạn là chuyên gia phân tích thị trường bất động sản Việt Nam. Phân tích dự án "${projectName}".
+
+DỮ LIỆU ĐÃ CÀO:
+- Nội dung trang web: "${htmlSnippet}"
+- Giá cao tầng: ${priceData.highRisePrice ? (priceData.highRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có"}
+- Giá thấp tầng: ${priceData.lowRisePrice ? (priceData.lowRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có"}
+- Số tin cao tầng: ${priceData.highRiseCount}, Số tin thấp tầng: ${priceData.lowRiseCount}
+- Loại dự án hiện tại: ${priceData.projectType}
+- Vị trí phát hiện: ${priceData.detectedLocation || "chưa rõ"}
+- CPL ước tính: ${cplResult.cplAvg / 1000}K, CPL TB khu vực: ${districtAvgCpl / 1000}K
+- Số quảng cáo đang chạy: ${adData.activeAds}
+- Phân khúc: ${cplResult.segment}
+
+TRẢ LỜI BẰNG JSON THUẦN (không markdown, không backtick):
+{
+  "confirmedType": "cao_tang" hoặc "thap_tang" hoặc "both",
+  "confirmedTypeReason": "giải thích ngắn gọn tại sao",
+  "location": "Quận/Huyện, Tỉnh/TP chính xác nhất" hoặc null nếu không xác định được,
+  "productTypes": ["Studio","1PN","2PN","3PN","Penthouse","Nhà phố","Song lập","Biệt thự đơn lập","Shophouse"],
+  "filteredPriceNote": "ghi chú nếu phát hiện tin đăng sai loại hình hoặc giá bất thường" hoặc null,
+  "marketInsight": "1-2 câu nhận xét chuyên nghiệp bằng tiếng Việt về cơ hội quảng cáo dựa trên CPL, mức cạnh tranh và giá"
+}
+
+QUY TẮC:
+- confirmedType: CHỈ giữ loại hình thực sự tồn tại ở dự án. Ví dụ Salacia Villas là thap_tang.
+- productTypes: CHỈ liệt kê các loại sản phẩm thực sự có ở dự án đó. Không bịa thêm.
+- location: Trả về vị trí chính xác nhất có thể. Ví dụ "Phú Mỹ, Bà Rịa - Vũng Tàu".
+- marketInsight: Viết chuyên nghiệp, ngắn gọn, có giá trị cho nhà quảng cáo BĐS.`;
+
+  const raw = await callGeminiAI(prompt, 600);
+  if (!raw) return null;
+  try {
+    const cleaned = raw.replace(/```json\s*/gi, "").replace(/```/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch { return null; }
+}
+
 // Module 2: Market Price Estimator - SEPARATE cao tầng and thấp tầng + project info
 async function scrapeMarketPrice(projectName, location) {
   let highRisePrice = 0; // Cao tầng (chung cư, căn hộ)
@@ -4166,6 +4234,7 @@ async function scrapeMarketPrice(projectName, location) {
   let projectType = ""; // cao_tang, thap_tang, or both
   let projectStatus = ""; // Đang mở bán, Sắp mở bán, etc.
   let detectedLocation = ""; // Tỉnh/thành phố cào được từ HTML
+  let scrapedHtml = ""; // Raw HTML for AI analysis
 
   const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
@@ -4248,6 +4317,7 @@ async function scrapeMarketPrice(projectName, location) {
     const res = await fetch(searchUrl, { headers: { "User-Agent": ua }, redirect: "follow", signal: AbortSignal.timeout(10000) });
     if (res.ok) {
       const html = await res.text();
+      scrapedHtml = html; // Capture for AI analysis
       // Extract project info
       if (!projectPhase) projectPhase = extractPhase(html);
       if (!projectStatus) projectStatus = extractStatus(html);
@@ -4379,6 +4449,7 @@ async function scrapeMarketPrice(projectName, location) {
     projectStatus,
     detectedLocation,
     productTypes,
+    scrapedHtml,
   };
 }
 
@@ -4653,33 +4724,90 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     const districtName = districtInfo.district;
     const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, effectiveLocation);
 
-    // CPL by product type
+    // Module 4: AI Analysis (non-blocking — runs in parallel with downstream calcs)
+    let aiResult = null;
+    const aiPromise = GEMINI_API_KEY
+      ? aiAnalyzeProject(projectName, priceData.scrapedHtml, priceData, adData, cplResult, districtAvgCpl)
+      : Promise.resolve(null);
+
+    // CPL by product type — will be refined by AI below
     const cplByType = [];
-    const hasCaoTang = priceData.projectType !== "thap_tang";
-    const hasThapTang = priceData.projectType !== "cao_tang";
+    let aiProjectType = priceData.projectType;
+    let aiLocation = effectiveLocation;
+    let aiInsight = "";
+    let aiFilteredNote = "";
+    let aiConfirmedProducts = null;
+
+    // Await AI result (with safety timeout already in callGeminiAI)
+    try { aiResult = await aiPromise; } catch { aiResult = null; }
+
+    // Apply AI overrides if available
+    if (aiResult) {
+      // AI-confirmed project type
+      if (aiResult.confirmedType && ["cao_tang", "thap_tang", "both"].includes(aiResult.confirmedType)) {
+        aiProjectType = aiResult.confirmedType;
+      }
+      // AI-detected location
+      if (aiResult.location && aiResult.location.length > 3) {
+        aiLocation = aiResult.location;
+      }
+      // AI market insight
+      if (aiResult.marketInsight) aiInsight = aiResult.marketInsight;
+      // AI filtered price note
+      if (aiResult.filteredPriceNote) aiFilteredNote = aiResult.filteredPriceNote;
+      // AI confirmed product types
+      if (aiResult.productTypes && Array.isArray(aiResult.productTypes) && aiResult.productTypes.length > 0) {
+        aiConfirmedProducts = aiResult.productTypes;
+      }
+    }
+
+    // Re-evaluate location factor if AI detected better location
+    let finalCplResult = cplResult;
+    if (aiLocation !== effectiveLocation && aiLocation) {
+      finalCplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, aiLocation);
+    }
+
+    // Build CPL by type using AI-confirmed project type
+    const hasCaoTang = aiProjectType !== "thap_tang";
+    const hasThapTang = aiProjectType !== "cao_tang";
     if (hasCaoTang) {
-      cplByType.push({ type: "Căn hộ", category: "cao_tang", cplAvg: cplResult.cplAvg, cplMin: cplResult.cplMin, cplMax: cplResult.cplMax, note: "Dành cho Căn hộ" });
+      cplByType.push({ type: "Căn hộ", category: "cao_tang", cplAvg: finalCplResult.cplAvg, cplMin: finalCplResult.cplMin, cplMax: finalCplResult.cplMax, note: "Dành cho Căn hộ" });
     }
     if (hasThapTang) {
-      const ltCpl = Math.round(cplResult.cplAvg * 2.2 / 1000) * 1000;
+      const ltCpl = Math.round(finalCplResult.cplAvg * 2.2 / 1000) * 1000;
       cplByType.push({ type: "Nhà phố / Biệt thự", category: "thap_tang", cplAvg: ltCpl, cplMin: Math.round(ltCpl * 0.8 / 1000) * 1000, cplMax: Math.round(ltCpl * 1.2 / 1000) * 1000, note: "Dành cho Villas" });
     }
 
+    // Filter productTypes by AI confirmation
+    let finalProductTypes = priceData.productTypes || [];
+    if (aiConfirmedProducts) {
+      finalProductTypes = finalProductTypes.filter(pt => aiConfirmedProducts.includes(pt.name));
+      // Also filter by AI project type
+      if (aiProjectType === "cao_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "cao_tang");
+      else if (aiProjectType === "thap_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "thap_tang");
+    }
+
+    // Use AI location for district lookup if better
+    const finalLocation = aiLocation || effectiveLocation;
+    const finalDistrictInfo = (finalLocation !== effectiveLocation) ? getDistrictAvgCpl(finalLocation) : districtInfo;
+    const finalDistrictAvg = finalDistrictInfo.cpl;
+    const finalDistrictName = finalDistrictInfo.district;
+
     // Metrics
-    const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
+    const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, finalCplResult.cplAvg, finalDistrictAvg);
 
     // Primary CPL: use segment-appropriate value (thấp tầng CPL for villa projects)
-    const primaryCpl = (priceData.projectType === "thap_tang" && cplByType.find(c => c.category === "thap_tang"))
+    const primaryCpl = (aiProjectType === "thap_tang" && cplByType.find(c => c.category === "thap_tang"))
       ? cplByType.find(c => c.category === "thap_tang").cplAvg
-      : cplResult.cplAvg;
+      : finalCplResult.cplAvg;
 
     // Benchmark comparisons — use primaryCpl so villa projects compare with villa CPL
-    const regionBenchmark = compareWithRegion(primaryCpl, effectiveLocation);
+    const regionBenchmark = compareWithRegion(primaryCpl, finalLocation);
     const centerBenchmark = compareWithCenter(primaryCpl);
 
     // Trends
     const adTrend = generateTrend30d(adData.activeAds, 0.08, adData.activeAds > 80 ? "up" : "stable");
-    const cplTrend = generateTrend30d(cplResult.cplAvg / 1000, 0.06, cplResult.cplAvg < districtAvgCpl ? "down" : "up");
+    const cplTrend = generateTrend30d(finalCplResult.cplAvg / 1000, 0.06, finalCplResult.cplAvg < finalDistrictAvg ? "down" : "up");
 
     // Winning pages - real page data
     const winningPages = buildWinningPages(adData.pagesInfo || []);
@@ -4687,9 +4815,13 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Build activity feed
     const activityFeed = (adData.activityLog || []).map(msg => ({ time: new Date().toISOString(), msg }));
     activityFeed.push(
-      { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${districtName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
-      { time: new Date().toISOString(), msg: `Hoàn tất tính toán: CPL ${(cplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(districtAvgCpl / 1000).toFixed(0)}K` },
+      { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${finalDistrictName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
+      { time: new Date().toISOString(), msg: `Hoàn tất tính toán: CPL ${(finalCplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(finalDistrictAvg / 1000).toFixed(0)}K` },
     );
+    if (aiResult) {
+      activityFeed.push({ time: new Date().toISOString(), msg: `🤖 AI xác nhận: ${aiProjectType === "cao_tang" ? "Cao tầng" : aiProjectType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}${aiResult.confirmedTypeReason ? " — " + aiResult.confirmedTypeReason : ""}` });
+      if (aiFilteredNote) activityFeed.push({ time: new Date().toISOString(), msg: `🤖 AI lọc tin: ${aiFilteredNote}` });
+    }
     if (priceData.leadPriceSources.length > 0) {
       priceData.leadPriceSources.forEach(s => {
         activityFeed.push({ time: new Date().toISOString(), msg: `${s.source}: ${s.count} tin đăng, giá TB ${(s.avgPrice / 1e9).toFixed(1)} tỷ` });
@@ -4698,10 +4830,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     res.json({
       project_name: projectName,
-      location: effectiveLocation || priceData.detectedLocation || location,
-      estimated_cpl_range: { min: cplResult.cplMin, max: cplResult.cplMax, avg: cplResult.cplAvg },
-      district_avg_cpl: districtAvgCpl,
-      district_name: districtName,
+      location: finalLocation || priceData.detectedLocation || location,
+      estimated_cpl_range: { min: finalCplResult.cplMin, max: finalCplResult.cplMax, avg: finalCplResult.cplAvg },
+      district_avg_cpl: finalDistrictAvg,
+      district_name: finalDistrictName,
       market_heat_level: metrics.heatLevel,
       heat_index: metrics.heatIndex,
       competitor_count: adData.totalAds,
@@ -4718,17 +4850,23 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       new_listings_7d: priceData.newListings7d,
       lead_price_sources: priceData.leadPriceSources,
       opportunity_score: metrics.opportunityScore,
-      segment: cplResult.segment,
-      location_factor: cplResult.locationFactor,
-      location_tier: cplResult.locationTier,
-      segment_factor: cplResult.segmentFactor,
-      competition_multiplier: cplResult.competitionMultiplier,
-      competition_level: cplResult.competitionLevel,
+      segment: finalCplResult.segment,
+      location_factor: finalCplResult.locationFactor,
+      location_tier: finalCplResult.locationTier,
+      segment_factor: finalCplResult.segmentFactor,
+      competition_multiplier: finalCplResult.competitionMultiplier,
+      competition_level: finalCplResult.competitionLevel,
       cpl_by_type: cplByType,
-      product_types: priceData.productTypes || [],
+      product_types: finalProductTypes,
       opportunity_label: metrics.opportunityLabel,
       opportunity_reasons: metrics.opportunityReasons,
       opportunity_summary: metrics.opportunitySummary,
+      ai_insight: aiInsight,
+      ai_confirmed_type: aiResult ? aiProjectType : null,
+      ai_confirmed_type_reason: aiResult?.confirmedTypeReason || "",
+      ai_filtered_note: aiFilteredNote,
+      ai_location: aiResult?.location || null,
+      ai_enabled: !!GEMINI_API_KEY,
       winning_pages: winningPages,
       ad_trend_30d: adTrend,
       cpl_trend_30d: cplTrend,
@@ -4737,7 +4875,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       search_term: adData.searchTerm || projectName,
       official_price: priceData.officialPrice || "",
       project_phase: priceData.projectPhase || "",
-      project_type: priceData.projectType || "both",
+      project_type: aiProjectType || priceData.projectType || "both",
       project_status: priceData.projectStatus || "",
       region_benchmark: regionBenchmark,
       center_benchmark: centerBenchmark,
