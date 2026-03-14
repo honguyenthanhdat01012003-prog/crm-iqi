@@ -4722,58 +4722,65 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Use scraped location if user didn't provide one
     const effectiveLocation = location || priceData.detectedLocation || "";
 
-    // Module 3: CPL Calculation
+    // Module 3: CPL Calculation (preliminary — will be refined after AI)
     const districtInfo = getDistrictAvgCpl(effectiveLocation);
     const districtAvgCpl = districtInfo.cpl;
     const districtName = districtInfo.district;
     const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, effectiveLocation);
 
-    // Module 4: AI Verification via Perplexity (search internet to confirm project data)
+    // ═══════════════════════════════════════════════════════════════
+    // Module 4: AI VERIFICATION — Perplexity searches internet FIRST
+    // before we decide what CPL/prices to show
+    // ═══════════════════════════════════════════════════════════════
     let aiResult = null;
-    const aiPromise = PERPLEXITY_API_KEY
-      ? aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl)
-      : Promise.resolve(null);
+    try {
+      aiResult = PERPLEXITY_API_KEY
+        ? await aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl)
+        : null;
+    } catch { aiResult = null; }
 
-    // CPL by product type — will be refined by AI below
-    const cplByType = [];
-    let aiProjectType = priceData.projectType;
-    let aiLocation = effectiveLocation;
+    // Determine verified project type
+    let verifiedType = priceData.projectType; // crawler's guess as fallback
+    let verifiedLocation = effectiveLocation;
     let aiInsight = "";
     let aiFilteredNote = "";
     let aiConfirmedProducts = null;
+    const aiVerified = !!aiResult;
 
-    // Await AI result (with safety timeout already in callGeminiAI)
-    try { aiResult = await aiPromise; } catch { aiResult = null; }
-
-    // Apply AI overrides if available
     if (aiResult) {
-      // AI-confirmed project type
+      // AI-confirmed project type overrides crawler
       if (aiResult.confirmedType && ["cao_tang", "thap_tang", "both"].includes(aiResult.confirmedType)) {
-        aiProjectType = aiResult.confirmedType;
+        verifiedType = aiResult.confirmedType;
       }
-      // AI-detected location
+      // AI-detected location overrides crawler
       if (aiResult.location && aiResult.location.length > 3) {
-        aiLocation = aiResult.location;
+        verifiedLocation = aiResult.location;
       }
-      // AI market insight
       if (aiResult.marketInsight) aiInsight = aiResult.marketInsight;
-      // AI filtered price note
       if (aiResult.filteredPriceNote) aiFilteredNote = aiResult.filteredPriceNote;
-      // AI confirmed product types
       if (aiResult.productTypes && Array.isArray(aiResult.productTypes) && aiResult.productTypes.length > 0) {
         aiConfirmedProducts = aiResult.productTypes;
       }
     }
 
-    // Re-evaluate location factor if AI detected better location
-    let finalCplResult = cplResult;
-    if (aiLocation !== effectiveLocation && aiLocation) {
-      finalCplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, aiLocation);
-    }
+    // ═══════════════════════════════════════════════════════════════
+    // Module 5: BUILD FINAL DATA — only for verified categories
+    // ═══════════════════════════════════════════════════════════════
 
-    // Build CPL by type using AI-confirmed project type
-    const hasCaoTang = aiProjectType !== "thap_tang";
-    const hasThapTang = aiProjectType !== "cao_tang";
+    // Recalculate CPL with verified location
+    const finalCplResult = (verifiedLocation !== effectiveLocation && verifiedLocation)
+      ? estimateCpl(adData.activeAds, priceData.avgPriceM2, verifiedLocation)
+      : cplResult;
+
+    // District info with verified location
+    const finalDistrictInfo = (verifiedLocation !== effectiveLocation) ? getDistrictAvgCpl(verifiedLocation) : districtInfo;
+    const finalDistrictAvg = finalDistrictInfo.cpl;
+    const finalDistrictName = finalDistrictInfo.district;
+
+    // CPL by type — ONLY for verified categories
+    const cplByType = [];
+    const hasCaoTang = verifiedType !== "thap_tang";
+    const hasThapTang = verifiedType !== "cao_tang";
     if (hasCaoTang) {
       cplByType.push({ type: "Căn hộ", category: "cao_tang", cplAvg: finalCplResult.cplAvg, cplMin: finalCplResult.cplMin, cplMax: finalCplResult.cplMax, note: "Dành cho Căn hộ" });
     }
@@ -4782,31 +4789,30 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       cplByType.push({ type: "Nhà phố / Biệt thự", category: "thap_tang", cplAvg: ltCpl, cplMin: Math.round(ltCpl * 0.8 / 1000) * 1000, cplMax: Math.round(ltCpl * 1.2 / 1000) * 1000, note: "Dành cho Villas" });
     }
 
-    // Filter productTypes by AI confirmation
+    // Product types — ONLY for verified categories + AI-confirmed products
     let finalProductTypes = priceData.productTypes || [];
+    // First: filter by verified type
+    if (verifiedType === "cao_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "cao_tang");
+    else if (verifiedType === "thap_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "thap_tang");
+    // Second: filter by AI-confirmed product list
     if (aiConfirmedProducts) {
       finalProductTypes = finalProductTypes.filter(pt => aiConfirmedProducts.includes(pt.name));
-      // Also filter by AI project type
-      if (aiProjectType === "cao_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "cao_tang");
-      else if (aiProjectType === "thap_tang") finalProductTypes = finalProductTypes.filter(pt => pt.category === "thap_tang");
     }
 
-    // Use AI location for district lookup if better
-    const finalLocation = aiLocation || effectiveLocation;
-    const finalDistrictInfo = (finalLocation !== effectiveLocation) ? getDistrictAvgCpl(finalLocation) : districtInfo;
-    const finalDistrictAvg = finalDistrictInfo.cpl;
-    const finalDistrictName = finalDistrictInfo.district;
+    // Prices — zero out categories that don't exist
+    const finalHighRisePrice = hasCaoTang ? priceData.highRisePrice : 0;
+    const finalLowRisePrice = hasThapTang ? priceData.lowRisePrice : 0;
 
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, finalCplResult.cplAvg, finalDistrictAvg);
 
     // Primary CPL: use segment-appropriate value (thấp tầng CPL for villa projects)
-    const primaryCpl = (aiProjectType === "thap_tang" && cplByType.find(c => c.category === "thap_tang"))
+    const primaryCpl = (verifiedType === "thap_tang" && cplByType.find(c => c.category === "thap_tang"))
       ? cplByType.find(c => c.category === "thap_tang").cplAvg
       : finalCplResult.cplAvg;
 
     // Benchmark comparisons — use primaryCpl so villa projects compare with villa CPL
-    const regionBenchmark = compareWithRegion(primaryCpl, finalLocation);
+    const regionBenchmark = compareWithRegion(primaryCpl, verifiedLocation);
     const centerBenchmark = compareWithCenter(primaryCpl);
 
     // Trends
@@ -4818,14 +4824,15 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     // Build activity feed
     const activityFeed = (adData.activityLog || []).map(msg => ({ time: new Date().toISOString(), msg }));
-    activityFeed.push(
-      { time: new Date().toISOString(), msg: `Cập nhật giá sàn ${finalDistrictName}: cao tầng ${Math.round(priceData.highRisePrice / 1e6)}tr/m², thấp tầng ${Math.round(priceData.lowRisePrice / 1e6)}tr/m²` },
-      { time: new Date().toISOString(), msg: `Hoàn tất tính toán: CPL ${(finalCplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(finalDistrictAvg / 1000).toFixed(0)}K` },
-    );
-    if (aiResult) {
-      activityFeed.push({ time: new Date().toISOString(), msg: `🤖 AI xác nhận: ${aiProjectType === "cao_tang" ? "Cao tầng" : aiProjectType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}${aiResult.confirmedTypeReason ? " — " + aiResult.confirmedTypeReason : ""}` });
-      if (aiFilteredNote) activityFeed.push({ time: new Date().toISOString(), msg: `🤖 AI lọc tin: ${aiFilteredNote}` });
+    if (aiVerified) {
+      activityFeed.push({ time: new Date().toISOString(), msg: `🔍 Perplexity đang xác minh dự án "${projectName}" trên internet...` });
+      activityFeed.push({ time: new Date().toISOString(), msg: `✅ Xác nhận: ${verifiedType === "cao_tang" ? "Chỉ bán Cao tầng (Căn hộ)" : verifiedType === "thap_tang" ? "Chỉ bán Thấp tầng (Villas)" : "Phức hợp (Cả Cao tầng + Thấp tầng)"}${aiResult.confirmedTypeReason ? " — " + aiResult.confirmedTypeReason : ""}` });
+      if (aiFilteredNote) activityFeed.push({ time: new Date().toISOString(), msg: `⚠️ Lọc dữ liệu: ${aiFilteredNote}` });
     }
+    activityFeed.push(
+      { time: new Date().toISOString(), msg: `Giá sàn ${finalDistrictName}: ${hasCaoTang ? "cao tầng " + Math.round(finalHighRisePrice / 1e6) + "tr/m²" : ""}${hasCaoTang && hasThapTang ? ", " : ""}${hasThapTang ? "thấp tầng " + Math.round(finalLowRisePrice / 1e6) + "tr/m²" : ""}` },
+      { time: new Date().toISOString(), msg: `CPL ${(finalCplResult.cplAvg / 1000).toFixed(0)}K — TB Quận: ${(finalDistrictAvg / 1000).toFixed(0)}K` },
+    );
     if (priceData.leadPriceSources.length > 0) {
       priceData.leadPriceSources.forEach(s => {
         activityFeed.push({ time: new Date().toISOString(), msg: `${s.source}: ${s.count} tin đăng, giá TB ${(s.avgPrice / 1e9).toFixed(1)} tỷ` });
@@ -4834,7 +4841,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     res.json({
       project_name: projectName,
-      location: finalLocation || priceData.detectedLocation || location,
+      location: verifiedLocation || priceData.detectedLocation || location,
       estimated_cpl_range: { min: finalCplResult.cplMin, max: finalCplResult.cplMax, avg: finalCplResult.cplAvg },
       district_avg_cpl: finalDistrictAvg,
       district_name: finalDistrictName,
@@ -4847,10 +4854,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       page_count: adData.pagesInfo?.length || 0,
       avg_ad_longevity_days: Math.round(adData.avgLongevity),
       avg_price_m2: priceData.avgPriceM2,
-      high_rise_price: priceData.highRisePrice,
-      low_rise_price: priceData.lowRisePrice,
-      high_rise_count: priceData.highRiseCount,
-      low_rise_count: priceData.lowRiseCount,
+      high_rise_price: finalHighRisePrice,
+      low_rise_price: finalLowRisePrice,
+      high_rise_count: hasCaoTang ? priceData.highRiseCount : 0,
+      low_rise_count: hasThapTang ? priceData.lowRiseCount : 0,
       new_listings_7d: priceData.newListings7d,
       lead_price_sources: priceData.leadPriceSources,
       opportunity_score: metrics.opportunityScore,
@@ -4866,10 +4873,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       opportunity_reasons: metrics.opportunityReasons,
       opportunity_summary: metrics.opportunitySummary,
       ai_insight: aiInsight,
-      ai_confirmed_type: aiResult ? aiProjectType : null,
+      ai_confirmed_type: aiVerified ? verifiedType : null,
       ai_confirmed_type_reason: aiResult?.confirmedTypeReason || "",
       ai_filtered_note: aiFilteredNote,
       ai_location: aiResult?.location || null,
+      ai_verified: aiVerified,
       ai_enabled: !!PERPLEXITY_API_KEY,
       winning_pages: winningPages,
       ad_trend_30d: adTrend,
@@ -4879,7 +4887,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       search_term: adData.searchTerm || projectName,
       official_price: priceData.officialPrice || "",
       project_phase: priceData.projectPhase || "",
-      project_type: aiProjectType || priceData.projectType || "both",
+      project_type: verifiedType || priceData.projectType || "both",
       project_status: priceData.projectStatus || "",
       region_benchmark: regionBenchmark,
       center_benchmark: centerBenchmark,

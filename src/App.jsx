@@ -3803,6 +3803,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       aiConfirmedTypeReason: miData.ai_confirmed_type_reason || "",
       aiFilteredNote: miData.ai_filtered_note || "",
       aiLocation: miData.ai_location || null,
+      aiVerified: miData.ai_verified || false,
       aiEnabled: miData.ai_enabled || false,
     } : null;
 
@@ -3998,14 +3999,19 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
                 <MapPin size={14} /> {activeProject.aiLocation || activeProject.location || activeProject.districtName}
               </div>
-              {activeProject.aiConfirmedType && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
-                  <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: `${neonBlue}15`, color: neonBlue, fontWeight: 600, border: `1px solid ${neonBlue}25` }}>🤖 Perplexity xác nhận: {activeProject.aiConfirmedType === "cao_tang" ? "Cao tầng" : activeProject.aiConfirmedType === "thap_tang" ? "Thấp tầng" : "Phức hợp"}</span>
-                  {activeProject.aiConfirmedTypeReason && <span style={{ fontSize: 9, color: slate500, fontStyle: "italic" }}>{activeProject.aiConfirmedTypeReason}</span>}
+              {activeProject.aiVerified && activeProject.aiConfirmedType && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: `${emerald}15`, color: emerald, fontWeight: 700, border: `1px solid ${emerald}30`, display: "inline-flex", alignItems: "center", gap: 3 }}>
+                    ✅ Perplexity đã xác minh: {activeProject.aiConfirmedType === "cao_tang" ? "Chỉ bán Cao tầng" : activeProject.aiConfirmedType === "thap_tang" ? "Chỉ bán Thấp tầng" : "Phức hợp (Cao tầng + Thấp tầng)"}
+                  </span>
+                  {activeProject.aiConfirmedTypeReason && <span style={{ fontSize: 9, color: slate400, fontStyle: "italic" }}>{activeProject.aiConfirmedTypeReason}</span>}
                 </div>
               )}
+              {!activeProject.aiVerified && activeProject.aiEnabled && (
+                <div style={{ fontSize: 9, color: slate500, marginTop: 4, fontStyle: "italic" }}>⏳ Chưa xác minh được qua AI — hiển thị dữ liệu từ crawler</div>
+              )}
               {activeProject.aiFilteredNote && (
-                <div style={{ fontSize: 9, color: amber, marginTop: 3 }}>⚠ Perplexity: {activeProject.aiFilteredNote}</div>
+                <div style={{ fontSize: 9, color: amber, marginTop: 3, padding: "2px 6px", borderRadius: 4, background: `${amber}08` }}>⚠ {activeProject.aiFilteredNote}</div>
               )}
             </div>
             <div style={{ textAlign: "center", minWidth: 120 }}>
