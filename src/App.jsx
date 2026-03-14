@@ -3201,13 +3201,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         });
 
         // Add sale history events
+        // Track unique sales to number them (Sale 1, Sale 2, etc.)
+        const saleOrder = [];
         let chiaCount = 0;
         history.forEach((h, idx) => {
           const isChia = (h.action || "").toLowerCase().includes("chia");
-          if (isChia) chiaCount++;
+          if (isChia) {
+            chiaCount++;
+            const sName = h.saleName || "";
+            if (sName && !saleOrder.includes(sName)) saleOrder.push(sName);
+          }
+          const saleNum = (h.saleName && saleOrder.includes(h.saleName)) ? saleOrder.indexOf(h.saleName) + 1 : null;
           timelineItems.push({
             type: "history", date: h.date || "", sortDate: h.date || "",
-            histEntry: h, histIdx: idx, chiaNum: isChia ? chiaCount : null,
+            histEntry: h, histIdx: idx, chiaNum: isChia ? chiaCount : null, saleNum,
           });
         });
 
@@ -3265,6 +3272,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13 }}>
                         {isChia ? `📝 Liên hệ lần ${item.chiaNum}` : `📝 ${item.histIdx + 1}.`} {h.saleName}
+                        {item.saleNum && <span style={{ marginLeft: 4, fontSize: 9, padding: "1px 5px", borderRadius: 6, background: "#dbeafe", color: "#1e40af", fontWeight: 700 }}>Sale {item.saleNum}</span>}
                         <span style={{
                           marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
                           background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#f0faf1",

@@ -1074,7 +1074,18 @@ async function readData(db) {
   const historyMap = {};
   for (const h of historyRows) {
     if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source: h.source || "" });
+    // Backfill source for old records without source
+    let source = h.source || "";
+    if (!source) {
+      const act = (h.action || "").toLowerCase();
+      const fb = (h.feedback || "").toLowerCase();
+      if (act.includes("telegram")) source = "telegram";
+      else if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) source = "schedule";
+      else if (fb.includes("admin") || fb.includes("xáo lead")) source = "admin";
+      else if (act.includes("chia") && !fb) source = "sheet";
+      else if (act.includes("cập nhật") && !act.includes("telegram")) source = "admin";
+    }
+    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source });
   }
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
