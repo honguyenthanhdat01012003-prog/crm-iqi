@@ -1082,8 +1082,8 @@ async function readData(db) {
       if (act.includes("telegram")) source = "telegram";
       else if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) source = "schedule";
       else if (fb.includes("admin") || fb.includes("xáo lead")) source = "admin";
-      else if (act.includes("chia") && !fb) source = "sheet";
-      else if (act.includes("cập nhật") && !act.includes("telegram")) source = "admin";
+      else if (act.includes("cập nhật")) source = "admin";
+      else source = "sheet";
     }
     historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source });
   }
