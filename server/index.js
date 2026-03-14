@@ -510,18 +510,22 @@ function normalizeStatus(raw = "") {
   const v = foldText(raw);
   if (!v || v === "created" || v === "duplicate" || v.includes("chua xu ly")) return "new";
   if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
+  if (v.includes("booking san khac") || v.includes("book san khac") || v.includes("booking sp khac")) return "booking_other";
   if (v.includes("giu cho") || v.includes("coc") || v.includes("book")) return "booked";
-  if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha") || v.includes("hen gap") || v.includes("hen xem")) return "appointment";
+  if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha") || v.includes("hen gap") || v.includes("hen xem") || v.includes("xem du an")) return "appointment";
   if (v.includes("pha") || v.includes("rac") || v.includes("spam")) return "spam";
   if (v.includes("tai chinh yeu") || v.includes("tai chinh") || v === "tcy") return "weak_finance";
-  if (v.includes("thue bao") || v.includes("sai so") || v.includes("sai")) return "wrong_number";
-  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("tat may") || v.includes("unreachable") || v === "kll") return "unreachable";
+  if (v.includes("thue bao")) return "wrong_phone";
+  if (v.includes("sai so") || v.includes("sai")) return "wrong_number";
+  if (v.includes("tat may ngang") || v.includes("tat may")) return "hung_up";
+  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("unreachable") || v === "kll") return "unreachable";
   if (v.includes("lien lac lai") || v.includes("goi lai")) return "callback";
   if (v.includes("chan kb") || v.includes("chan zalo") || (v.includes("chan") && !v.includes("chien"))) return "blocked";
   if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested") || v === "kqt") return "not_interested";
   if (v.includes("quan tam hoi hot") || v.includes("hoi hot") || v === "qthh") return "low_interest";
   if (v.includes("quan tam du an khac") || v.includes("du an khac") || v === "qtdak") return "other_project";
-  if (v.includes("sale khac") || v.includes("co sale")) return "has_sale";
+  if (v.includes("dang co sale") || v.includes("sale khac cham") || v.includes("co sale")) return "has_sale";
+  if (v === "sale" || (v.includes("sale") && !v.includes("khac") && !v.includes("cham"))) return "sale";
   if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested") || v === "qt") return "interested";
   if (v.includes("goi") || v.includes("lien he") || v.includes("called") || v.includes("zalo") || v.includes("nhan") || v.includes("da lien")) return "called";
   if (v.includes("mat") || v.includes("lost") || v.includes("huy")) return "lost";
@@ -2492,9 +2496,11 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 /* ===== Telegram Bot Webhook ===== */
 const TELE_STATUS_LABELS = {
   new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
-  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Giữ chỗ", closed: "Chốt",
-  not_interested: "Không QT", spam: "Phá/rác", weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
-  callback: "Gọi lại sau", wrong_number: "Sai số", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
+  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Booking/Cọc", booking_other: "Booking sản khác",
+  closed: "Chốt", not_interested: "Không QT", spam: "Phá/rác", sale: "Sale",
+  weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
+  callback: "Gọi lại sau", wrong_phone: "Thuê bao", wrong_number: "Sai số",
+  hung_up: "Tắt máy ngang", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
 };
 
 app.post("/api/telegram-webhook", async (req, res) => {
