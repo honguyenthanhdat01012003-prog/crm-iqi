@@ -3773,6 +3773,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       opportunityScore: miData.opportunity_score,
       opportunityLabel: miData.opportunity_label || "",
       opportunityReasons: miData.opportunity_reasons || [],
+      opportunitySummary: miData.opportunity_summary || "",
       pageCount: miData.page_count || 0,
       searchTerm: miData.search_term || miData.project_name,
       officialPrice: miData.official_price || "",
@@ -4111,8 +4112,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <div style={{ width: "100%", height: 6, borderRadius: 3, background: "rgba(71,85,105,0.3)", marginTop: 8 }}>
                 <div style={{ width: `${activeProject.opportunityScore}%`, height: "100%", borderRadius: 3, background: `linear-gradient(90deg, ${opportunityColor(activeProject.opportunityScore)}, ${opportunityColor(activeProject.opportunityScore)}80)`, transition: "width .8s ease" }} />
               </div>
+              {activeProject.opportunitySummary && (
+                <div style={{ fontSize: 9, color: opportunityColor(activeProject.opportunityScore), marginTop: 6, fontWeight: 600, fontStyle: "italic", borderTop: `1px solid ${darkBorder}`, paddingTop: 4 }}>
+                  {activeProject.opportunitySummary}
+                </div>
+              )}
               {activeProject.opportunityReasons && activeProject.opportunityReasons.length > 0 && (
-                <div style={{ fontSize: 9, color: slate500, marginTop: 6, lineHeight: 1.5, borderTop: `1px solid ${darkBorder}`, paddingTop: 4 }}>
+                <div style={{ fontSize: 9, color: slate500, marginTop: 4, lineHeight: 1.5 }}>
                   {activeProject.opportunityReasons.slice(0, 3).map((r, i) => (
                     <div key={i}>• {r}</div>
                   ))}

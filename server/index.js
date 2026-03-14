@@ -3889,7 +3889,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const browserUnresolved = allPages.filter(([, info]) => !isGoodName(info.pageName) || info.maxDays === 0);
   if (browserUnresolved.length > 0 && bPage) {
     console.log(`[MI] Browser fallback for ${browserUnresolved.length} unresolved pages`);
-    activityLog.push(`Browser fallback cho ${browserUnresolved.length} pages...`);
+    activityLog.push(`Đang xác thực dữ liệu từ ${browserUnresolved.length} Fanpage chủ chốt của dự án...`);
     const titleBad = ['Facebook', 'Meta', 'Ads Library', 'Thư viện', 'Ad Library', 'Chọn quốc gia', 'Select country', 'Error', 'Page not found', 'Content not found', 'Sorry', 'FB.ME', 'INBOX', 'đăng ký ngay', 'Nhận báo giá', 'Xem chi tiết', 'Gửi tin nhắn', 'Điều khoản', 'Quyền riêng tư', 'Chính sách', 'Cookie', 'Trợ giúp', 'Đăng nhập', 'Giới thiệu', 'Terms', 'Privacy', 'Policy', 'Tiếng Việt', 'API Thư viện', 'Báo cáo', 'Nội dung có thương hiệu', 'Open navigation', 'Close', 'Navigation panel', 'Menu', 'Sidebar'];
     for (const [pid, info] of browserUnresolved) {
       if (mustStop()) { console.log(`[MI] Browser fallback: must stop at ${(elapsed()/1000).toFixed(1)}s`); break; }
@@ -4165,6 +4165,7 @@ async function scrapeMarketPrice(projectName, location) {
   let projectPhase = ""; // Giai đoạn dự án
   let projectType = ""; // cao_tang, thap_tang, or both
   let projectStatus = ""; // Đang mở bán, Sắp mở bán, etc.
+  let detectedLocation = ""; // Tỉnh/thành phố cào được từ HTML
 
   const slug = projectName.replace(/\s+/g, "-").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
@@ -4199,6 +4200,32 @@ async function scrapeMarketPrice(projectName, location) {
     return "";
   };
 
+  // Helper: extract location (tỉnh/thành phố) from HTML
+  const extractLocation = (html) => {
+    // Pattern: "tại Quận X, TP Y" or "Phường X, Quận Y, Thành phố Z"
+    const m1 = html.match(/(?:tại|thuộc|ở)\s+([^,<]{2,30}),\s*([^,<]{2,40})/i);
+    if (m1) {
+      const district = m1[1].trim();
+      const city = m1[2].trim().replace(/^(Thành phố|TP\.?|Tỉnh)\s*/i, "");
+      if (city && !/javascript|function|var |const |let /i.test(city)) return `${district}, ${city}`;
+    }
+    // Breadcrumb pattern: "Hồ Chí Minh" or province names
+    const provinces = ["Hồ Chí Minh","Hà Nội","Đà Nẵng","Bình Dương","Đồng Nai","Long An","Bà Rịa - Vũng Tàu","Bà Rịa Vũng Tàu","Khánh Hòa","Quảng Ninh","Hải Phòng","Cần Thơ","Lâm Đồng","Thanh Hóa","Nghệ An","Bắc Ninh","Hưng Yên","Thừa Thiên Huế"];
+    for (const prov of provinces) {
+      const re = new RegExp(prov.replace(/[-]/g, "[\\s-]*"), "i");
+      if (re.test(html)) {
+        // Try to find district before province
+        const m2 = html.match(new RegExp("([^,<>]{2,25}),\\s*" + prov.replace(/[-]/g, "[\\s-]*"), "i"));
+        if (m2) {
+          const dist = m2[1].trim();
+          if (dist.length > 1 && !/javascript|function|var\s/i.test(dist)) return `${dist}, ${prov}`;
+        }
+        return prov;
+      }
+    }
+    return "";
+  };
+
   // Helper: extract official price
   const extractOfficialPrice = (text) => {
     // Look for "Giá từ X tỷ" or "Giá X triệu/m²" patterns
@@ -4225,6 +4252,7 @@ async function scrapeMarketPrice(projectName, location) {
       if (!projectPhase) projectPhase = extractPhase(html);
       if (!projectStatus) projectStatus = extractStatus(html);
       if (!officialPrice) officialPrice = extractOfficialPrice(html);
+      if (!detectedLocation) detectedLocation = extractLocation(html);
 
       // Detect project type from content
       const hasHighRise = /căn\s*hộ|chung\s*cư|apartment|cao\s*tầng/i.test(html);
@@ -4330,6 +4358,7 @@ async function scrapeMarketPrice(projectName, location) {
     projectPhase,
     projectType,
     projectStatus,
+    detectedLocation,
   };
 }
 
@@ -4432,21 +4461,27 @@ function calcMarketMetrics(adCount, avgLongevity, pricePerM2, cplAvg, districtAv
     opportunityScore,
     opportunityLabel: oppLabel,
     opportunityReasons: reasons,
+    opportunitySummary: reasons.length > 0 ? `Lý do: ${reasons.slice(0, 2).join(" & ")}` : "",
   };
 }
 
-// Generate trend data (30 days)
+// Generate trend data (30 days) — dates use Vietnam timezone
 function generateTrend30d(baseValue, volatility = 0.1, trend = "stable") {
   const data = [];
   let val = baseValue * (0.8 + Math.random() * 0.2);
-  const now = new Date();
+  // Use Vietnam timezone for accurate date display
+  const vnStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }); // YYYY-MM-DD
+  const now = new Date(vnStr + "T12:00:00"); // noon to avoid DST edge cases
   for (let i = 0; i < 30; i++) {
     const change = val * volatility * (Math.random() - 0.45);
     const trendFactor = trend === "up" ? val * 0.008 : trend === "down" ? -val * 0.005 : 0;
     val = Math.max(baseValue * 0.3, val + change + trendFactor);
     const d = new Date(now);
     d.setDate(d.getDate() - (29 - i));
-    data.push({ value: Math.round(val), date: d.toISOString().slice(0, 10), label: `${d.getDate()}/${d.getMonth() + 1}` });
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    data.push({ value: Math.round(val), date: `${yyyy}-${mm}-${dd}`, label: `${d.getDate()}/${d.getMonth() + 1}` });
   }
   return data;
 }
@@ -4589,17 +4624,20 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Module 2: Market Price
     const priceData = await scrapeMarketPrice(projectName, location);
 
+    // Use scraped location if user didn't provide one
+    const effectiveLocation = location || priceData.detectedLocation || "";
+
     // Module 3: CPL Calculation
-    const districtInfo = getDistrictAvgCpl(location);
+    const districtInfo = getDistrictAvgCpl(effectiveLocation);
     const districtAvgCpl = districtInfo.cpl;
     const districtName = districtInfo.district;
-    const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, location);
+    const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, effectiveLocation);
 
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
 
     // Benchmark comparisons
-    const regionBenchmark = compareWithRegion(cplResult.cplAvg, location);
+    const regionBenchmark = compareWithRegion(cplResult.cplAvg, effectiveLocation);
     const centerBenchmark = compareWithCenter(cplResult.cplAvg);
 
     // Trends
@@ -4623,7 +4661,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
 
     res.json({
       project_name: projectName,
-      location,
+      location: effectiveLocation || priceData.detectedLocation || location,
       estimated_cpl_range: { min: cplResult.cplMin, max: cplResult.cplMax, avg: cplResult.cplAvg },
       district_avg_cpl: districtAvgCpl,
       district_name: districtName,
@@ -4651,6 +4689,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       competition_level: cplResult.competitionLevel,
       opportunity_label: metrics.opportunityLabel,
       opportunity_reasons: metrics.opportunityReasons,
+      opportunity_summary: metrics.opportunitySummary,
       winning_pages: winningPages,
       ad_trend_30d: adTrend,
       cpl_trend_30d: cplTrend,
