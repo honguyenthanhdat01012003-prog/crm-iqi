@@ -3282,6 +3282,17 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     </div>
                     {h.status && <div style={{ fontSize: 12, marginBottom: 2 }}>Trạng thái: <b>{h.status}</b></div>}
                     {h.feedback && <div style={{ fontSize: 12, color: "#6b7280" }}>Feedback: {h.feedback}</div>}
+                    {h.source && (
+                      <div style={{ marginTop: 3 }}>
+                        <span style={{
+                          fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600, letterSpacing: 0.3,
+                          background: h.source === "telegram" ? "#dbeafe" : h.source === "sheet" ? "#fef9c3" : h.source === "schedule" ? "#f3e8ff" : "#e0e7ff",
+                          color: h.source === "telegram" ? "#1d4ed8" : h.source === "sheet" ? "#a16207" : h.source === "schedule" ? "#7c3aed" : "#4338ca",
+                        }}>
+                          {h.source === "telegram" ? "📱 Telegram" : h.source === "sheet" ? "📊 Google Sheet" : h.source === "schedule" ? "⏰ Lịch tự động" : "👤 Admin"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

@@ -146,7 +146,8 @@ async function initDb() {
       contact_date TEXT DEFAULT '',
       status TEXT DEFAULT '',
       feedback TEXT DEFAULT '',
-      seq INTEGER DEFAULT 0
+      seq INTEGER DEFAULT 0,
+      source TEXT DEFAULT ''
     )`
   );
 
@@ -328,6 +329,9 @@ async function initDb() {
   // Migration: add fb_code, fb_person columns to projects
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
   try { await run(db, "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''"); } catch {}
+
+  // Migration: add source column to lead_history
+  try { await run(db, "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''"); } catch {}
 
   // Market Intelligence cache table (aggregate data only - no raw leads or personal ad account IDs)
   await run(
@@ -1008,8 +1012,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           const key = `${sh.saleName}||${sh.action}||${sh.date}`;
           if (!existingSet.has(key)) {
             stmts.push({
-              sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-              args: [prev.id, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, nextSeq++],
+              sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+              args: [prev.id, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, nextSeq++, "sheet"],
             });
             existingSet.add(key);
           }
@@ -1042,8 +1046,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         for (let si = 0; si < l.saleHistory.length; si++) {
           const sh = l.saleHistory[si];
           stmts.push({
-            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?)",
-            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si],
+            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
+            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si, "sheet"],
           });
         }
       }
@@ -1070,7 +1074,7 @@ async function readData(db) {
   const historyMap = {};
   for (const h of historyRows) {
     if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback });
+    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source: h.source || "" });
   }
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
@@ -1805,8 +1809,8 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [lid, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq],
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [lid, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"],
       });
     }
     await db.batch(stmts, "write");
@@ -1886,8 +1890,8 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [l.id]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq],
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq, "admin"],
       });
     }
     await db.batch(stmts, "write");
@@ -1971,8 +1975,8 @@ async function processSchedules(db, triggerUser) {
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`, nextSeq],
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`, nextSeq, "schedule"],
       });
       assignedLeads.push({ leadId: lid, saleName });
       logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour });
@@ -2291,8 +2295,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       await run(
         db,
-        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [leadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq]
+        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        [leadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"]
       );
 
       // Send Telegram notification with inline keyboard
@@ -2386,8 +2390,8 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
 
     await run(
       db,
-      "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq]
+      "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq, "admin"]
     );
 
     // Also update lead status if provided
@@ -2582,8 +2586,8 @@ app.post("/api/telegram-webhook", async (req, res) => {
       const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
       await run(
         db,
-        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq) VALUES(?, ?, ?, ?, ?, ?, ?)",
-        [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq]
+        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq, "telegram"]
       );
 
       // Update lead status
