@@ -4346,6 +4346,25 @@ async function scrapeMarketPrice(projectName, location) {
 
   const avgPriceM2 = highRiseCount > 0 ? highRisePrice : lowRiseCount > 0 ? lowRisePrice : highRisePrice;
 
+  // Build product types detail list
+  const productTypes = [];
+  const round1 = (n) => Math.round(n * 10) / 10;
+  if (projectType !== "thap_tang" && highRisePrice > 0) {
+    const pm2 = highRisePrice;
+    productTypes.push({ name: "Studio", category: "cao_tang", priceM2: pm2, typicalArea: 30, totalPrice: round1(pm2 * 30 / 1e9) });
+    productTypes.push({ name: "1PN", category: "cao_tang", priceM2: pm2, typicalArea: 50, totalPrice: round1(pm2 * 50 / 1e9) });
+    productTypes.push({ name: "2PN", category: "cao_tang", priceM2: pm2, typicalArea: 70, totalPrice: round1(pm2 * 70 / 1e9) });
+    productTypes.push({ name: "3PN", category: "cao_tang", priceM2: pm2, typicalArea: 100, totalPrice: round1(pm2 * 100 / 1e9) });
+    productTypes.push({ name: "Penthouse", category: "cao_tang", priceM2: Math.round(pm2 * 1.3), typicalArea: 180, totalPrice: round1(pm2 * 1.3 * 180 / 1e9) });
+  }
+  if (projectType !== "cao_tang" && lowRisePrice > 0) {
+    const pm2L = lowRisePrice;
+    productTypes.push({ name: "Nhà phố", category: "thap_tang", priceM2: pm2L, typicalArea: 100, totalPrice: round1(pm2L * 100 / 1e9) });
+    productTypes.push({ name: "Song lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.15), typicalArea: 150, totalPrice: round1(pm2L * 1.15 * 150 / 1e9) });
+    productTypes.push({ name: "Biệt thự đơn lập", category: "thap_tang", priceM2: Math.round(pm2L * 1.3), typicalArea: 250, totalPrice: round1(pm2L * 1.3 * 250 / 1e9) });
+    productTypes.push({ name: "Shophouse", category: "thap_tang", priceM2: Math.round(pm2L * 1.2), typicalArea: 120, totalPrice: round1(pm2L * 1.2 * 120 / 1e9) });
+  }
+
   return {
     avgPriceM2: Math.round(avgPriceM2),
     highRisePrice: Math.round(highRisePrice),
@@ -4359,6 +4378,7 @@ async function scrapeMarketPrice(projectName, location) {
     projectType,
     projectStatus,
     detectedLocation,
+    productTypes,
   };
 }
 
@@ -4633,6 +4653,18 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     const districtName = districtInfo.district;
     const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, effectiveLocation);
 
+    // CPL by product type
+    const cplByType = [];
+    const hasCaoTang = priceData.projectType !== "thap_tang";
+    const hasThapTang = priceData.projectType !== "cao_tang";
+    if (hasCaoTang) {
+      cplByType.push({ type: "Căn hộ", category: "cao_tang", cplAvg: cplResult.cplAvg, cplMin: cplResult.cplMin, cplMax: cplResult.cplMax, note: "Dành cho Căn hộ" });
+    }
+    if (hasThapTang) {
+      const ltCpl = Math.round(cplResult.cplAvg * 2.2 / 1000) * 1000;
+      cplByType.push({ type: "Nhà phố / Biệt thự", category: "thap_tang", cplAvg: ltCpl, cplMin: Math.round(ltCpl * 0.8 / 1000) * 1000, cplMax: Math.round(ltCpl * 1.2 / 1000) * 1000, note: "Dành cho Villas" });
+    }
+
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
 
@@ -4687,6 +4719,8 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       segment_factor: cplResult.segmentFactor,
       competition_multiplier: cplResult.competitionMultiplier,
       competition_level: cplResult.competitionLevel,
+      cpl_by_type: cplByType,
+      product_types: priceData.productTypes || [],
       opportunity_label: metrics.opportunityLabel,
       opportunity_reasons: metrics.opportunityReasons,
       opportunity_summary: metrics.opportunitySummary,

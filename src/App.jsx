@@ -3785,6 +3785,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       segmentFactor: miData.segment_factor || 1.0,
       competitionMultiplier: miData.competition_multiplier || 1.0,
       competitionLevel: miData.competition_level || "low",
+      cplByType: miData.cpl_by_type || [],
+      productTypes: miData.product_types || [],
       regionBenchmark: miData.region_benchmark || { percent: 0, label: "N/A", district: "" },
       centerBenchmark: miData.center_benchmark || { percent: 0, label: "N/A", centerAvg: 650000 },
       trend: (() => { const t = miData.ad_trend_30d || []; if (t.length < 2) return "down"; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return last > first ? "up" : "down"; })(),
@@ -4011,19 +4013,38 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
 
           {/* Golden Metric Cards */}
           <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
-            {/* CPL Card */}
+            {/* CPL Card — segmented by product type */}
             <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${neonBlue}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><DollarSign size={16} color={neonBlue} /></div>
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>CPL Ước tính</span>
               </div>
-              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: neonBlue, marginBottom: 4 }}>{fmtShort(activeProject.cplAvg)}</div>
-              <div style={{ fontSize: 11, color: slate400 }}>
-                <span style={{ color: emerald }}>{fmtShort(activeProject.cplMin)}</span> — <span style={{ color: rose }}>{fmtShort(activeProject.cplMax)}</span>
-              </div>
-              <div style={{ fontSize: 9, color: slate500, marginTop: 6, lineHeight: 1.5, borderTop: `1px solid ${darkBorder}`, paddingTop: 6 }}>
-                <div>Base 250K × Segment {activeProject.segmentFactor}</div>
-                <div>× Location {activeProject.locationFactor} × Comp {activeProject.competitionMultiplier}</div>
+              {activeProject.cplByType.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {activeProject.cplByType.map((ct, ci) => (
+                    <div key={ci} style={{ padding: "6px 8px", borderRadius: 8, background: ct.category === "cao_tang" ? `${neonBlue}08` : `${amber}08`, border: `1px solid ${ct.category === "cao_tang" ? neonBlue : amber}15` }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: ct.category === "cao_tang" ? neonBlue : amber }}>{ct.category === "cao_tang" ? "🏢" : "🏠"} {ct.type}</span>
+                        <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: ct.category === "cao_tang" ? neonBlue : amber }}>{fmtShort(ct.cplAvg)}</span>
+                      </div>
+                      <div style={{ fontSize: 10, color: slate400 }}>
+                        <span style={{ color: emerald }}>{fmtShort(ct.cplMin)}</span> — <span style={{ color: rose }}>{fmtShort(ct.cplMax)}</span>
+                      </div>
+                      <div style={{ fontSize: 9, color: slate500, marginTop: 2, fontStyle: "italic" }}>{ct.note}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: neonBlue, marginBottom: 4 }}>{fmtShort(activeProject.cplAvg)}</div>
+                  <div style={{ fontSize: 11, color: slate400 }}>
+                    <span style={{ color: emerald }}>{fmtShort(activeProject.cplMin)}</span> — <span style={{ color: rose }}>{fmtShort(activeProject.cplMax)}</span>
+                  </div>
+                </>
+              )}
+              <div style={{ fontSize: 9, color: slate500, marginTop: 6, lineHeight: 1.5, borderTop: `1px solid ${darkBorder}`, paddingTop: 4 }}>
+                <div>Base 250K × Seg {activeProject.segmentFactor} × Loc {activeProject.locationFactor} × Comp {activeProject.competitionMultiplier}</div>
+                {activeProject.cplByType.length > 1 && <div>Thấp tầng = Cao tầng × 2.2</div>}
               </div>
             </div>
 
@@ -4059,43 +4080,72 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </div>
             </div>
 
-            {/* Property Price - Separated cao tầng / thấp tầng */}
+            {/* Property Price — Detailed Product List */}
             <div style={glassCard} onMouseEnter={(e) => { e.currentTarget.style.transform = glassCardHover.transform; e.currentTarget.style.boxShadow = glassCardHover.boxShadow; }} onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${emerald}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Building size={16} color={emerald} /></div>
-                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Giá TB/m²</span>
+                <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Bảng giá chi tiết</span>
               </div>
-              {activeProject.projectType === "cao_tang" ? (
-                <div>
-                  <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
-                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "Chưa mở bán"}</div>
-                  {activeProject.highRiseCount > 0 && <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>{activeProject.highRiseCount} tin rao</div>}
-                </div>
-              ) : activeProject.projectType === "thap_tang" ? (
-                <div>
-                  <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
-                  <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "Chưa mở bán"}</div>
-                  {activeProject.lowRiseCount > 0 && <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>{activeProject.lowRiseCount} tin rao</div>}
+              {activeProject.productTypes && activeProject.productTypes.length > 0 ? (
+                <div style={{ fontSize: 10 }}>
+                  {/* Table header */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, padding: "4px 0", borderBottom: `1px solid ${darkBorder}`, marginBottom: 4 }}>
+                    <span style={{ color: slate400, fontWeight: 700, fontSize: 9 }}>Loại hình</span>
+                    <span style={{ color: slate400, fontWeight: 700, fontSize: 9, textAlign: "right" }}>triệu/m²</span>
+                    <span style={{ color: slate400, fontWeight: 700, fontSize: 9, textAlign: "right" }}>Giá tổng (tỷ)</span>
+                  </div>
+                  {/* Cao tầng section */}
+                  {(() => {
+                    const ct = activeProject.productTypes.filter(p => p.category === "cao_tang");
+                    if (ct.length === 0) return null;
+                    return (<>
+                      <div style={{ fontSize: 9, color: neonBlue, fontWeight: 700, padding: "3px 0", marginTop: 2 }}>🏢 CAO TẦNG</div>
+                      {ct.map((p, i) => (
+                        <div key={`ct-${i}`} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, padding: "2px 0", borderBottom: `1px solid ${darkBorder}30` }}>
+                          <span style={{ color: slate300, fontSize: 10 }}>{p.name} <span style={{ color: slate500, fontSize: 8 }}>({p.typicalArea}m²)</span></span>
+                          <span style={{ color: emerald, fontSize: 10, textAlign: "right", fontWeight: 600 }}>{(p.priceM2 / 1e6).toFixed(1)}</span>
+                          <span style={{ color: "#f1f5f9", fontSize: 10, textAlign: "right", fontWeight: 700 }}>{p.totalPrice.toFixed(1)}</span>
+                        </div>
+                      ))}
+                    </>);
+                  })()}
+                  {/* Thấp tầng section */}
+                  {(() => {
+                    const tt = activeProject.productTypes.filter(p => p.category === "thap_tang");
+                    if (tt.length === 0) return null;
+                    return (<>
+                      <div style={{ fontSize: 9, color: amber, fontWeight: 700, padding: "3px 0", marginTop: 4 }}>🏠 THẤP TẦNG</div>
+                      {tt.map((p, i) => (
+                        <div key={`tt-${i}`} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 4, padding: "2px 0", borderBottom: `1px solid ${darkBorder}30` }}>
+                          <span style={{ color: slate300, fontSize: 10 }}>{p.name} <span style={{ color: slate500, fontSize: 8 }}>({p.typicalArea}m²)</span></span>
+                          <span style={{ color: amber, fontSize: 10, textAlign: "right", fontWeight: 600 }}>{(p.priceM2 / 1e6).toFixed(1)}</span>
+                          <span style={{ color: "#f1f5f9", fontSize: 10, textAlign: "right", fontWeight: 700 }}>{p.totalPrice.toFixed(1)}</span>
+                        </div>
+                      ))}
+                    </>);
+                  })()}
                 </div>
               ) : (
-                <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "N/A"}</div>
-                    {activeProject.highRiseCount > 0 && <div style={{ fontSize: 9, color: slate500 }}>{activeProject.highRiseCount} tin</div>}
-                  </div>
-                  <div style={{ width: 1, background: darkBorder }} />
-                  <div>
-                    <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "N/A"}</div>
-                    {activeProject.lowRiseCount > 0 && <div style={{ fontSize: 9, color: slate500 }}>{activeProject.lowRiseCount} tin</div>}
-                  </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {activeProject.projectType !== "thap_tang" && (
+                    <div>
+                      <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
+                      <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "N/A"}</div>
+                    </div>
+                  )}
+                  {activeProject.projectType === "both" && <div style={{ width: 1, background: darkBorder }} />}
+                  {activeProject.projectType !== "cao_tang" && (
+                    <div>
+                      <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
+                      <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "N/A"}</div>
+                    </div>
+                  )}
                 </div>
               )}
               {activeProject.officialPrice && (
                 <div style={{ fontSize: 10, color: neonBlue, marginTop: 4, fontWeight: 600 }}>🏷️ Giá chính thức: {activeProject.officialPrice}</div>
               )}
-              <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>Batdongsan · Chợ Tốt</div>
+              <div style={{ fontSize: 9, color: slate500, marginTop: 3 }}>Batdongsan · Chợ Tốt · DT phổ biến</div>
             </div>
 
             {/* Opportunity Score */}
