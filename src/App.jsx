@@ -3710,13 +3710,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const analyzeProject = async (projectName, location) => {
       setMiLoading(true); setMiError(""); setMiData(null);
       setMiActivityFeed([
-        { msg: `Đang kết nối Facebook Ads Library...`, time: new Date().toISOString() },
+        { msg: `🔗 Đang kết nối Facebook Ads Library API...`, time: new Date().toISOString() },
       ]);
-      const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 3000);
-      const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang phân tích pages & đối thủ...`, time: new Date().toISOString() }]), 8000);
-      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang lấy tên & ngày chạy QC qua API...`, time: new Date().toISOString() }]), 15000);
-      const feedTimer4 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang thu thập giá từ Batdongsan.com.vn...`, time: new Date().toISOString() }]), 25000);
-      const feedTimer5 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `Đang tính toán CPL & benchmark...`, time: new Date().toISOString() }]), 35000);
+      const feedTimer1 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `🔍 Đang quét quảng cáo của "${projectName}"...`, time: new Date().toISOString() }]), 3000);
+      const feedTimer2 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `📊 Đang bóc tách dữ liệu pages & đối thủ...`, time: new Date().toISOString() }]), 8000);
+      const feedTimer3 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `📋 Đang lấy tên page & thời gian chạy QC qua API...`, time: new Date().toISOString() }]), 15000);
+      const feedTimer4 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `🏠 Đang thu thập giá từ Batdongsan.com.vn & Chợ Tốt...`, time: new Date().toISOString() }]), 25000);
+      const feedTimer5 = setTimeout(() => setMiActivityFeed(f => [...f, { msg: `🧮 Đang tính toán CPL Pro 2026 & benchmark khu vực...`, time: new Date().toISOString() }]), 35000);
       const allTimers = [feedTimer1, feedTimer2, feedTimer3, feedTimer4, feedTimer5];
       const MAX_RETRIES = 2;
       let lastErr = "";
@@ -3771,12 +3771,19 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
       lowRiseCount: miData.low_rise_count || 0,
       leadPriceSources: miData.lead_price_sources || [],
       opportunityScore: miData.opportunity_score,
+      opportunityLabel: miData.opportunity_label || "",
+      opportunityReasons: miData.opportunity_reasons || [],
       pageCount: miData.page_count || 0,
       searchTerm: miData.search_term || miData.project_name,
       officialPrice: miData.official_price || "",
       projectPhase: miData.project_phase || "",
       projectType: miData.project_type || "both",
       projectStatus: miData.project_status || "",
+      locationFactor: miData.location_factor || 1.0,
+      locationTier: miData.location_tier || "suburban",
+      segmentFactor: miData.segment_factor || 1.0,
+      competitionMultiplier: miData.competition_multiplier || 1.0,
+      competitionLevel: miData.competition_level || "low",
       regionBenchmark: miData.region_benchmark || { percent: 0, label: "N/A", district: "" },
       centerBenchmark: miData.center_benchmark || { percent: 0, label: "N/A", centerAvg: 650000 },
       trend: (() => { const t = miData.ad_trend_30d || []; if (t.length < 2) return "down"; const last = typeof t[t.length-1] === "object" ? t[t.length-1].value : t[t.length-1]; const first = typeof t[0] === "object" ? t[0].value : t[0]; return last > first ? "up" : "down"; })(),
@@ -3890,17 +3897,24 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
           {miActivityFeed.length > 0 && (
             <div style={{
               position: "fixed", bottom: isMobile ? 12 : 20, right: isMobile ? 12 : 20,
-              width: isMobile ? "calc(100% - 24px)" : 360, maxHeight: 220, zIndex: 50,
+              width: isMobile ? "calc(100% - 24px)" : 360, maxHeight: 260, zIndex: 50,
               background: "rgba(15,23,42,0.95)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
               border: `1px solid ${darkBorder}`, borderRadius: 14, padding: "12px 14px",
               boxShadow: "0 10px 40px rgba(0,0,0,.5)", overflow: "hidden",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                <div style={{ width: 8, height: 8, borderRadius: "50%", background: emerald, boxShadow: `0 0 8px ${emerald}`, animation: "pulse 2s infinite" }} />
-                <span style={{ fontSize: 11, fontWeight: 700, color: emerald, letterSpacing: "0.05em", textTransform: "uppercase" }}>Live Activity</span>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: miLoading ? amber : emerald, boxShadow: `0 0 8px ${miLoading ? amber : emerald}`, animation: "pulse 2s infinite" }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: miLoading ? amber : emerald, letterSpacing: "0.05em", textTransform: "uppercase" }}>{miLoading ? "Đang phân tích..." : "Live Activity"}</span>
                 <style>{`@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 170, overflowY: "auto" }}>
+              {/* Progress bar during loading */}
+              {miLoading && (
+                <div style={{ width: "100%", height: 3, borderRadius: 2, background: "rgba(71,85,105,0.3)", marginBottom: 8, overflow: "hidden" }}>
+                  <div style={{ width: "100%", height: "100%", borderRadius: 2, background: `linear-gradient(90deg, transparent, ${neonBlue}, transparent)`, animation: "progressSlide 2s infinite linear" }} />
+                  <style>{`@keyframes progressSlide { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }`}</style>
+                </div>
+              )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 200, overflowY: "auto" }}>
                 {miActivityFeed.slice(-6).map((evt, i) => (
                   <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11, color: slate300, padding: "3px 0", borderBottom: `1px solid ${darkBorder}30`, animation: "fadeIn .3s ease" }}>
                     <span style={{ color: slate500, fontSize: 10, flexShrink: 0, marginTop: 1 }}>{new Date(evt.time).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
@@ -3949,10 +3963,31 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <Building2 size={20} color={neonBlue} />
                 <h3 style={{ margin: 0, fontSize: isMobile ? 18 : 22, fontWeight: 800, color: "#f1f5f9" }}>{activeProject.name}</h3>
               </div>
+              {/* Tag badges */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                {activeProject.projectType === "thap_tang" && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${amber}20`, color: amber, fontWeight: 700, border: `1px solid ${amber}30` }}>🏠 Thấp tầng</span>
+                )}
+                {activeProject.projectType === "cao_tang" && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${neonBlue}20`, color: neonBlue, fontWeight: 700, border: `1px solid ${neonBlue}30` }}>🏢 Cao tầng</span>
+                )}
+                {activeProject.projectType === "both" && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${emerald}20`, color: emerald, fontWeight: 700, border: `1px solid ${emerald}30` }}>🏘️ Phức hợp</span>
+                )}
+                {activeProject.projectStatus && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: activeProject.projectStatus === "Chưa mở bán" ? `${rose}20` : `${emerald}20`, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, fontWeight: 700, border: `1px solid ${activeProject.projectStatus === "Chưa mở bán" ? rose : emerald}30` }}>● {activeProject.projectStatus}</span>
+                )}
+                {activeProject.projectPhase && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: `${neonBlue}20`, color: neonBlue, fontWeight: 700, border: `1px solid ${neonBlue}30` }}>📅 {activeProject.projectPhase}</span>
+                )}
+                {activeProject.segment && (
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: "rgba(148,163,184,0.15)", color: slate300, fontWeight: 600 }}>
+                    {activeProject.segment === "ultra_luxury" ? "💎 Ultra Luxury" : activeProject.segment === "luxury" ? "✨ Luxury" : activeProject.segment === "mid_high" ? "🏙️ Mid-High" : activeProject.segment === "mid" ? "📊 Mid" : "🏡 Affordable"}
+                  </span>
+                )}
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: slate400 }}>
-                <MapPin size={14} /> {activeProject.location}
-                {activeProject.projectPhase && <span style={{ fontSize: 11, color: amber, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectPhase}</span>}
-                {activeProject.projectStatus && <span style={{ fontSize: 11, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, fontWeight: 600, marginLeft: 4 }}>· {activeProject.projectStatus}</span>}
+                <MapPin size={14} /> {activeProject.location || activeProject.districtName}
               </div>
 
             </div>
@@ -3985,7 +4020,10 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <div style={{ fontSize: 11, color: slate400 }}>
                 <span style={{ color: emerald }}>{fmtShort(activeProject.cplMin)}</span> — <span style={{ color: rose }}>{fmtShort(activeProject.cplMax)}</span>
               </div>
-              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>Min — Max range</div>
+              <div style={{ fontSize: 9, color: slate500, marginTop: 6, lineHeight: 1.5, borderTop: `1px solid ${darkBorder}`, paddingTop: 6 }}>
+                <div>Base 250K × Segment {activeProject.segmentFactor}</div>
+                <div>× Location {activeProject.locationFactor} × Comp {activeProject.competitionMultiplier}</div>
+              </div>
             </div>
 
             {/* Competition Density */}
@@ -3994,7 +4032,12 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <div style={{ width: 32, height: 32, borderRadius: 10, background: `${amber}20`, display: "flex", alignItems: "center", justifyContent: "center" }}><Crosshair size={16} color={amber} /></div>
                 <span style={{ fontSize: 11, color: slate400, fontWeight: 600, letterSpacing: "0.03em" }}>Mật độ cạnh tranh</span>
               </div>
-              <div style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber, marginBottom: 4 }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: amber }}>{activeProject.competitors > 100 ? `~${activeProject.competitors}` : activeProject.competitors}</span>
+                <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, fontWeight: 700, background: activeProject.competitionLevel === "high" ? `${rose}20` : activeProject.competitionLevel === "medium" ? `${amber}20` : `${emerald}20`, color: activeProject.competitionLevel === "high" ? rose : activeProject.competitionLevel === "medium" ? amber : emerald }}>
+                  {activeProject.competitionLevel === "high" ? "Cao" : activeProject.competitionLevel === "medium" ? "Vừa" : "Thấp"}
+                </span>
+              </div>
               <div style={{ fontSize: 11, color: slate400 }}>QC đang hoạt động trên Ads Library</div>
               {activeProject.pageCount > 0 && <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>{activeProject.pageCount} pages đang chạy QC</div>}
               {activeProject.competitors === 0 && activeProject.apiError && (
@@ -4025,33 +4068,31 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
                   <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "Chưa mở bán"}</div>
+                  {activeProject.highRiseCount > 0 && <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>{activeProject.highRiseCount} tin rao</div>}
                 </div>
               ) : activeProject.projectType === "thap_tang" ? (
                 <div>
                   <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
                   <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "Chưa mở bán"}</div>
+                  {activeProject.lowRiseCount > 0 && <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>{activeProject.lowRiseCount} tin rao</div>}
                 </div>
               ) : (
                 <div style={{ display: "flex", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏢 Cao tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "Chưa mở bán"}</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.highRisePrice ? emerald : slate400 }}>{activeProject.highRisePrice ? fmtShort(activeProject.highRisePrice) : "N/A"}</div>
+                    {activeProject.highRiseCount > 0 && <div style={{ fontSize: 9, color: slate500 }}>{activeProject.highRiseCount} tin</div>}
                   </div>
                   <div style={{ width: 1, background: darkBorder }} />
                   <div>
                     <div style={{ fontSize: 9, color: slate500, fontWeight: 600, marginBottom: 2 }}>🏠 Thấp tầng</div>
-                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "Chưa mở bán"}</div>
+                    <div style={{ fontSize: isMobile ? 14 : 16, fontWeight: 800, color: activeProject.lowRisePrice ? amber : slate400 }}>{activeProject.lowRisePrice ? fmtShort(activeProject.lowRisePrice) : "N/A"}</div>
+                    {activeProject.lowRiseCount > 0 && <div style={{ fontSize: 9, color: slate500 }}>{activeProject.lowRiseCount} tin</div>}
                   </div>
                 </div>
               )}
               {activeProject.officialPrice && (
                 <div style={{ fontSize: 10, color: neonBlue, marginTop: 4, fontWeight: 600 }}>🏷️ Giá chính thức: {activeProject.officialPrice}</div>
-              )}
-              {activeProject.projectPhase && (
-                <div style={{ fontSize: 10, color: amber, marginTop: 2 }}>📅 {activeProject.projectPhase}</div>
-              )}
-              {activeProject.projectStatus && (
-                <div style={{ fontSize: 10, color: activeProject.projectStatus === "Chưa mở bán" ? rose : emerald, marginTop: 2 }}>● {activeProject.projectStatus}</div>
               )}
               <div style={{ fontSize: 10, color: slate500, marginTop: 2 }}>Batdongsan · Chợ Tốt</div>
             </div>
@@ -4065,11 +4106,18 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                 <span style={{ fontSize: isMobile ? 16 : 20, fontWeight: 800, color: opportunityColor(activeProject.opportunityScore) }}>{activeProject.opportunityScore}</span>
                 <span style={{ fontSize: 12, color: slate400 }}>/100</span>
+                {activeProject.opportunityLabel && <span style={{ fontSize: 10, color: opportunityColor(activeProject.opportunityScore), fontWeight: 600 }}>· {activeProject.opportunityLabel}</span>}
               </div>
               <div style={{ width: "100%", height: 6, borderRadius: 3, background: "rgba(71,85,105,0.3)", marginTop: 8 }}>
                 <div style={{ width: `${activeProject.opportunityScore}%`, height: "100%", borderRadius: 3, background: `linear-gradient(90deg, ${opportunityColor(activeProject.opportunityScore)}, ${opportunityColor(activeProject.opportunityScore)}80)`, transition: "width .8s ease" }} />
               </div>
-              <div style={{ fontSize: 10, color: slate500, marginTop: 4 }}>AI-calculated score</div>
+              {activeProject.opportunityReasons && activeProject.opportunityReasons.length > 0 && (
+                <div style={{ fontSize: 9, color: slate500, marginTop: 6, lineHeight: 1.5, borderTop: `1px solid ${darkBorder}`, paddingTop: 4 }}>
+                  {activeProject.opportunityReasons.slice(0, 3).map((r, i) => (
+                    <div key={i}>• {r}</div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -4101,7 +4149,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             <div style={glassCard}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
                 <BarChart2 size={16} color={neonBlue} />
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — TB {activeProject.districtName}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>So sánh CPL — {activeProject.districtName}</span>
               </div>
               <div style={{ display: "flex", justifyContent: "center" }}>
                 <CplCompareChart projectCpl={activeProject.cplAvg} districtAvg={activeProject.districtAvg} districtLabel={`TB ${activeProject.districtName}`} width={isMobile ? 260 : 320} height={130} />
@@ -4109,19 +4157,28 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {/* Benchmark cards */}
               <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 100, padding: "8px 10px", borderRadius: 10, background: activeProject.regionBenchmark.percent <= 0 ? `${emerald}10` : `${rose}10`, border: `1px solid ${activeProject.regionBenchmark.percent <= 0 ? emerald : rose}25` }}>
-                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với khu vực</div>
+                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với {activeProject.districtName}</div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: activeProject.regionBenchmark.percent <= 0 ? emerald : rose }}>
                     {activeProject.regionBenchmark.percent <= 0 ? "" : "+"}{activeProject.regionBenchmark.percent}%
                   </div>
-                  <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>TB {activeProject.districtName}: {fmtShort(activeProject.districtAvg)}</div>
+                  <div style={{ fontSize: 9, color: activeProject.regionBenchmark.percent <= 0 ? emerald : rose, marginTop: 2, fontWeight: 600 }}>
+                    {activeProject.regionBenchmark.percent <= 0 ? "✓ Chi phí tốt" : "⚠ Chi phí cao"}
+                  </div>
+                  <div style={{ fontSize: 9, color: slate500, marginTop: 1 }}>TB: {fmtShort(activeProject.districtAvg)}</div>
                 </div>
                 <div style={{ flex: 1, minWidth: 100, padding: "8px 10px", borderRadius: 10, background: activeProject.centerBenchmark.percent <= 0 ? `${emerald}10` : `${rose}10`, border: `1px solid ${activeProject.centerBenchmark.percent <= 0 ? emerald : rose}25` }}>
-                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với trung tâm</div>
+                  <div style={{ fontSize: 9, color: slate400, fontWeight: 600, marginBottom: 4 }}>So với Q1 / Thủ Thiêm</div>
                   <div style={{ fontSize: 15, fontWeight: 800, color: activeProject.centerBenchmark.percent <= 0 ? emerald : rose }}>
                     {activeProject.centerBenchmark.percent <= 0 ? "" : "+"}{activeProject.centerBenchmark.percent}%
                   </div>
-                  <div style={{ fontSize: 9, color: slate500, marginTop: 2 }}>TB Q1-Q3: {fmtShort(activeProject.centerBenchmark.centerAvg)}</div>
+                  <div style={{ fontSize: 9, color: activeProject.centerBenchmark.percent <= 0 ? emerald : rose, marginTop: 2, fontWeight: 600 }}>
+                    {activeProject.centerBenchmark.percent <= 0 ? "✓ Chi phí tốt" : "⚠ Chi phí cao"}
+                  </div>
+                  <div style={{ fontSize: 9, color: slate500, marginTop: 1 }}>TB Q1-Q3: {fmtShort(activeProject.centerBenchmark.centerAvg)}</div>
                 </div>
+              </div>
+              <div style={{ fontSize: 9, color: slate500, marginTop: 8, fontStyle: "italic", textAlign: "center" }}>
+                💡 Xanh = CPL thấp hơn trung bình (tốt) · Đỏ = CPL cao hơn (cần tối ưu)
               </div>
             </div>
           </div>

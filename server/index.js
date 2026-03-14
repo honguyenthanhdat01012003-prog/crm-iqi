@@ -4333,33 +4333,48 @@ async function scrapeMarketPrice(projectName, location) {
   };
 }
 
-// Module 3: Calculation Engine — CPL formula based on BĐS market tiers
-function estimateCpl(adCount, pricePerM2) {
+// Module 3: Calculation Engine — CPL Pro 2026 formula
+// CPL = Base_CPL × Segment_Factor × Location_Factor × Competition_Multiplier
+function estimateCpl(adCount, pricePerM2, location) {
   const baseCpl = 250000; // 250K VND base
   const priceInTrieu = pricePerM2 / 1000000;
 
-  // Price tier multiplier
-  let multiplier = 1.0;
+  // Segment Factor — based on price tier
+  let segmentFactor = 1.0;
   let segment = "standard";
-  if (priceInTrieu > 150)      { multiplier = 2.8; segment = "ultra_luxury"; }
-  else if (priceInTrieu > 80)  { multiplier = 1.6; segment = "luxury"; }
-  else if (priceInTrieu > 45)  { multiplier = 1.2; segment = "mid_high"; }
-  else if (priceInTrieu > 30)  { multiplier = 1.0; segment = "mid"; }
-  else                         { multiplier = 0.85; segment = "affordable"; }
+  if (priceInTrieu > 150)      { segmentFactor = 2.8; segment = "ultra_luxury"; }
+  else if (priceInTrieu > 80)  { segmentFactor = 1.6; segment = "luxury"; }
+  else if (priceInTrieu > 45)  { segmentFactor = 1.2; segment = "mid_high"; }
+  else if (priceInTrieu > 30)  { segmentFactor = 1.0; segment = "mid"; }
+  else                         { segmentFactor = 0.85; segment = "affordable"; }
 
-  // Competition fee based on ad count
-  let competitionFee = 0;
-  if (adCount > 150)      competitionFee = baseCpl * 0.5;
-  else if (adCount > 50)  competitionFee = baseCpl * 0.2;
+  // Location Factor — center/suburban/remote
+  let locationFactor = 1.0;
+  let locationTier = "suburban";
+  const loc = (location || "").toUpperCase();
+  if (/QU[ẬA]N\s*1|QU[ẬA]N\s*3|PH[ÚU]\s*NHU[ẬA]N|QU[ẬA]N\s*4/i.test(loc)) {
+    locationFactor = 1.25; locationTier = "center";
+  } else if (/QU[ẬA]N\s*7|QU[ẬA]N\s*2|TH[ỦU]\s*[ĐD][ỨU]C|B[ÌI]NH\s*TH[ẠA]NH|T[ÂA]N\s*B[ÌI]NH|G[ÒO]\s*V[ẤA]P/i.test(loc)) {
+    locationFactor = 1.0; locationTier = "suburban";
+  } else if (/NH[ÀA]\s*B[ÈE]|B[ÌI]NH\s*T[ÂA]N|QU[ẬA]N\s*12|H[ÓO]C\s*M[ÔO]N|C[ỦU]\s*CHI|LONG\s*AN|B[ÌI]NH\s*D[ƯU][ƠO]NG|[ĐD][ỒÔ]NG\s*NAI/i.test(loc)) {
+    locationFactor = 0.8; locationTier = "remote";
+  }
 
-  const cplAvg = Math.round(((baseCpl * multiplier) + competitionFee) / 1000) * 1000;
+  // Competition Multiplier — based on active ad count
+  let competitionMultiplier = 1.0;
+  let competitionLevel = "low";
+  if (adCount > 150)      { competitionMultiplier = 1.5; competitionLevel = "high"; }
+  else if (adCount > 50)  { competitionMultiplier = 1.2; competitionLevel = "medium"; }
+  else                    { competitionMultiplier = 1.0; competitionLevel = "low"; }
+
+  const cplAvg = Math.round((baseCpl * segmentFactor * locationFactor * competitionMultiplier) / 1000) * 1000;
   const cplMin = Math.round(cplAvg * 0.8 / 1000) * 1000;
   const cplMax = Math.round(cplAvg * 1.2 / 1000) * 1000;
 
-  return { cplMin, cplMax, cplAvg, segment };
+  return { cplMin, cplMax, cplAvg, segment, locationFactor, locationTier, segmentFactor, competitionMultiplier, competitionLevel };
 }
 
-// Calculate heat index and opportunity score — calibrated for BĐS
+// Calculate heat index and opportunity score — calibrated for BĐS Pro 2026
 function calcMarketMetrics(adCount, avgLongevity, pricePerM2, cplAvg, districtAvgCpl) {
   const priceInTrieu = pricePerM2 / 1000000;
 
@@ -4375,22 +4390,48 @@ function calcMarketMetrics(adCount, avgLongevity, pricePerM2, cplAvg, districtAv
   if (priceInTrieu > 100) heat = Math.min(99, heat + 10);
   else if (priceInTrieu > 60) heat = Math.min(99, heat + 5);
 
-  // Opportunity score
+  // Opportunity Score — Pro 2026 logic
+  // High score (80-100): CPL < district avg AND low competition
+  // Low score (<40): hot market AND CPL > 500K
   let opp = 50;
+  const reasons = [];
+
   if (districtAvgCpl > 0 && cplAvg > 0) {
     const ratio = cplAvg / districtAvgCpl;
-    if (ratio < 0.7) opp += 25;
-    else if (ratio < 0.9) opp += 10;
-    else if (ratio > 1.3) opp -= 20;
+    if (ratio < 0.7) { opp += 30; reasons.push("CPL thấp hơn TB khu vực 30%+"); }
+    else if (ratio < 0.9) { opp += 15; reasons.push("CPL thấp hơn TB khu vực"); }
+    else if (ratio > 1.3) { opp -= 20; reasons.push("CPL cao hơn TB khu vực 30%+"); }
+    else if (ratio > 1.1) { opp -= 10; reasons.push("CPL cao hơn TB khu vực"); }
   }
-  if (adCount < 30) opp += 20;
-  else if (adCount > 300) opp -= 25;
-  if (avgLongevity > 60) opp += 5;
+
+  // Competition impact
+  if (adCount < 30) { opp += 20; reasons.push("Ít cạnh tranh (<30 QC)"); }
+  else if (adCount < 50) { opp += 10; reasons.push("Cạnh tranh vừa phải (<50 QC)"); }
+  else if (adCount > 300) { opp -= 25; reasons.push("Cạnh tranh rất cao (>300 QC)"); }
+  else if (adCount > 150) { opp -= 15; reasons.push("Cạnh tranh cao (>150 QC)"); }
+
+  // CPL threshold penalty
+  if (cplAvg > 500000) { opp -= 15; reasons.push("CPL >500K — chi phí quá cao"); }
+  else if (cplAvg > 0 && cplAvg < 200000) { opp += 10; reasons.push("CPL <200K — chi phí rất tốt"); }
+
+  // Ad longevity bonus (experienced market)
+  if (avgLongevity > 60) { opp += 5; reasons.push("Thị trường ổn định (QC chạy lâu)"); }
+
+  const opportunityScore = Math.min(99, Math.max(5, Math.round(opp)));
+
+  // Generate reasoning text
+  let oppLabel;
+  if (opportunityScore >= 80) oppLabel = "Cơ hội rất tốt";
+  else if (opportunityScore >= 60) oppLabel = "Cơ hội khá";
+  else if (opportunityScore >= 40) oppLabel = "Cơ hội trung bình";
+  else oppLabel = "Cơ hội thấp";
 
   return {
     heatIndex: Math.min(99, Math.max(5, Math.round(heat))),
     heatLevel,
-    opportunityScore: Math.min(99, Math.max(5, Math.round(opp))),
+    opportunityScore,
+    opportunityLabel: oppLabel,
+    opportunityReasons: reasons,
   };
 }
 
@@ -4552,7 +4593,7 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     const districtInfo = getDistrictAvgCpl(location);
     const districtAvgCpl = districtInfo.cpl;
     const districtName = districtInfo.district;
-    const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, 80000);
+    const cplResult = estimateCpl(adData.activeAds, priceData.avgPriceM2, location);
 
     // Metrics
     const metrics = calcMarketMetrics(adData.activeAds, adData.avgLongevity, priceData.avgPriceM2, cplResult.cplAvg, districtAvgCpl);
@@ -4603,6 +4644,13 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
       lead_price_sources: priceData.leadPriceSources,
       opportunity_score: metrics.opportunityScore,
       segment: cplResult.segment,
+      location_factor: cplResult.locationFactor,
+      location_tier: cplResult.locationTier,
+      segment_factor: cplResult.segmentFactor,
+      competition_multiplier: cplResult.competitionMultiplier,
+      competition_level: cplResult.competitionLevel,
+      opportunity_label: metrics.opportunityLabel,
+      opportunity_reasons: metrics.opportunityReasons,
       winning_pages: winningPages,
       ad_trend_30d: adTrend,
       cpl_trend_30d: cplTrend,
