@@ -1060,9 +1060,37 @@ async function readData(db) {
   }
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
+  const projectMap = {};
+  for (const p of projectRows) { projectMap[p.id] = p.name; }
+
+  // Build phone-based registration map for re-registration detection
+  const phoneRegMap = {};
+  for (const l of leads) {
+    const phone = (l.phone || "").replace(/[^0-9+]/g, "");
+    if (!phone) continue;
+    if (!phoneRegMap[phone]) phoneRegMap[phone] = [];
+    phoneRegMap[phone].push({
+      leadId: l.id,
+      name: l.name,
+      projectId: l.project_id,
+      projectName: projectMap[l.project_id] || "-",
+      campaign: l.campaign || "-",
+      adsetName: l.adset_name || "-",
+      adName: l.ad_name || "-",
+      createdAt: l.created_at || "",
+    });
+  }
+  // Sort each phone's registrations by date
+  for (const phone in phoneRegMap) {
+    phoneRegMap[phone].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  }
 
   return {
-    leads: leads.map((l) => ({
+    leads: leads.map((l) => {
+      const phone = (l.phone || "").replace(/[^0-9+]/g, "");
+      const allRegs = phone ? (phoneRegMap[phone] || []) : [];
+      const regIndex = allRegs.findIndex(r => r.leadId === l.id);
+      return {
       id: l.id,
       projectId: l.project_id,
       name: l.name,
@@ -1085,7 +1113,11 @@ async function readData(db) {
       budget: l.budget,
       syncAt: l.sync_at,
       notes: l.notes,
-    })),
+      regCount: allRegs.length,
+      regIndex: regIndex >= 0 ? regIndex + 1 : 1,
+      registrations: allRegs,
+      };
+    }),
     campaigns: campaigns.map((c) => ({
       id: c.id,
       name: c.name,

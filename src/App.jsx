@@ -2832,6 +2832,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>NEW</span>}
+                      {l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
@@ -2888,7 +2889,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
                     <td style={tdStyle}>
@@ -2957,6 +2958,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
 function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], isMobile = false }) {
   const history = lead.saleHistory || [];
+  const registrations = lead.registrations || [];
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
   const [histFeedback, setHistFeedback] = useState("");
@@ -2965,6 +2967,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingStatus, setSavingStatus] = useState(false);
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
+  const [showRegHistory, setShowRegHistory] = useState(false);
 
   const handleDeleteHistory = async (histId) => {
     if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
@@ -3045,7 +3048,49 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b></div>
+        {lead.regCount > 1 && (
+          <div><span style={{ color: "#6b7280", fontSize: 11 }}>Số lần ĐK</span><br />
+            <b style={{ fontSize: 13, color: "#d97706" }}>{lead.regCount} lần</b>
+          </div>
+        )}
       </div>
+
+      {/* Registration history - show when customer registered multiple times */}
+      {registrations.length > 1 && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, marginBottom: 12 }}>
+          <div onClick={() => setShowRegHistory(!showRegHistory)}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+            <span style={{ fontWeight: 700, fontSize: 12, color: "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+              🚩 Lịch sử đăng ký ({registrations.length} lần)
+            </span>
+            <span style={{ fontSize: 11, color: "#b45309" }}>{showRegHistory ? "Thu gọn ▲" : "Xem chi tiết ▼"}</span>
+          </div>
+          {showRegHistory && (
+            <div style={{ marginTop: 8 }}>
+              {registrations.map((reg, ri) => {
+                const isCurrent = reg.leadId === lead.id;
+                return (
+                  <div key={ri} style={{
+                    padding: "6px 10px", marginBottom: 4, borderRadius: 6, fontSize: 12,
+                    background: isCurrent ? "#fef3c7" : "#fff",
+                    border: isCurrent ? "1px solid #f59e0b" : "1px solid #f3f4f6",
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, color: "#92400e" }}>
+                        🚩 Đăng ký lần {ri + 1}{isCurrent && " (hiện tại)"}
+                      </span>
+                      <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.createdAt || "-"}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                      Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b> | Nhóm: <b>{reg.adsetName}</b> | Content: <b>{reg.adName}</b>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Admin: Cập nhật trạng thái */}
       {isAdmin && (
@@ -3094,7 +3139,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       )}
 
       <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><ClipboardList size={16} /> Lịch sử ({history.length})</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><ClipboardList size={16} /> Lịch sử đăng ký & Tương tác</span>
         <button onClick={() => setShowForm(!showForm)}
           style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
           {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật trạng thái</>}
@@ -3127,61 +3172,111 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
       )}
 
-      {history.length === 0 ? (
-        <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử liên hệ</div>
-      ) : (
-        <div style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, paddingBottom: 8 }}>
-          <div style={{ position: "absolute", left: isMobile ? 6 : 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
-          {(() => {
-            // Build "Liên hệ lần" counter: only "Chia lead" entries get numbered, sorted by date
-            let chiaCount = 0;
-            const chiaIndexMap = new Map();
-            history.forEach((h, idx) => {
-              if ((h.action || "").toLowerCase().includes("chia")) {
-                chiaCount++;
-                chiaIndexMap.set(idx, chiaCount);
-              }
+      {(() => {
+        // Build unified timeline: registration events + sale history
+        const timelineItems = [];
+
+        // Add registration events for THIS lead (show the campaign info for context)
+        registrations.forEach((reg, ri) => {
+          if (reg.leadId === lead.id) {
+            timelineItems.push({
+              type: "reg", date: reg.createdAt || "", sortDate: reg.createdAt || "",
+              regNum: ri + 1, totalRegs: registrations.length,
+              campaign: reg.campaign, adsetName: reg.adsetName, adName: reg.adName,
+              projectName: reg.projectName,
             });
-            return history.map((h, idx) => {
-            const recalled = (h.action || "").toLowerCase().includes("thu h");
-            const isChia = (h.action || "").toLowerCase().includes("chia");
-            const isUpdate = (h.action || "").toLowerCase().includes("cập nhật") || (h.action || "").toLowerCase().includes("cap nhat");
-            const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#e88a2e";
-            const chiaNum = chiaIndexMap.get(idx);
-            return (
-              <div key={idx} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
-                <div style={{
-                  position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10,
-                  borderRadius: "50%", background: dotColor,
-                  border: "2px solid #fff", boxShadow: `0 0 0 2px ${dotColor}33`,
-                }} />
-                <div style={{ background: "#fff", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #e5e7eb" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
-                    <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13 }}>
-                      {isChia ? `Liên hệ lần ${chiaNum}` : `${idx + 1}.`} {h.saleName}
-                      <span style={{
-                        marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
-                        background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#f0faf1",
-                        color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#1a3c20",
-                      }}>{h.action}</span>
-                    </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                      <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.date || "-"}</span>
-                      {isAdmin && h.id && (
-                        <button onClick={() => handleDeleteHistory(h.id)}
-                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                          title="Xóa lịch sử này"><Trash2 size={12} /></button>
-                      )}
+          }
+        });
+
+        // Add sale history events
+        let chiaCount = 0;
+        history.forEach((h, idx) => {
+          const isChia = (h.action || "").toLowerCase().includes("chia");
+          if (isChia) chiaCount++;
+          timelineItems.push({
+            type: "history", date: h.date || "", sortDate: h.date || "",
+            histEntry: h, histIdx: idx, chiaNum: isChia ? chiaCount : null,
+          });
+        });
+
+        // Sort by date descending (newest first)
+        timelineItems.sort((a, b) => (b.sortDate || "").localeCompare(a.sortDate || ""));
+
+        if (timelineItems.length === 0) {
+          return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
+        }
+
+        return (
+          <div style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, paddingBottom: 8 }}>
+            <div style={{ position: "absolute", left: isMobile ? 6 : 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
+            {timelineItems.map((item, idx) => {
+              if (item.type === "reg") {
+                return (
+                  <div key={`reg-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
+                    <div style={{
+                      position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10,
+                      borderRadius: "50%", background: "#f59e0b",
+                      border: "2px solid #fff", boxShadow: "0 0 0 2px #f59e0b33",
+                    }} />
+                    <div style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#92400e" }}>
+                          🚩 Đăng ký lần {item.regNum}
+                          {item.totalRegs > 1 && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#fef3c7", color: "#b45309" }}>Khách cũ</span>}
+                        </span>
+                        <span style={{ fontSize: 10, color: "#9ca3af" }}>{item.date || "-"}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        Dự án: <b>{item.projectName}</b> | Chiến dịch: <b>{item.campaign}</b>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                        Nhóm: {item.adsetName} | Content: {item.adName}
+                      </div>
                     </div>
                   </div>
-                  {h.status && <div style={{ fontSize: 12, marginBottom: 2 }}>Trạng thái: <b>{h.status}</b></div>}
-                  {h.feedback && <div style={{ fontSize: 12, color: "#6b7280" }}>Feedback: {h.feedback}</div>}
+                );
+              }
+
+              const h = item.histEntry;
+              const recalled = (h.action || "").toLowerCase().includes("thu h");
+              const isChia = (h.action || "").toLowerCase().includes("chia");
+              const isUpdate = (h.action || "").toLowerCase().includes("cập nhật") || (h.action || "").toLowerCase().includes("cap nhat");
+              const dotColor = recalled ? "#ef4444" : isUpdate ? "#10b981" : "#e88a2e";
+              return (
+                <div key={`hist-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
+                  <div style={{
+                    position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10,
+                    borderRadius: "50%", background: dotColor,
+                    border: "2px solid #fff", boxShadow: `0 0 0 2px ${dotColor}33`,
+                  }} />
+                  <div style={{ background: "#fff", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #e5e7eb" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13 }}>
+                        {isChia ? `📝 Liên hệ lần ${item.chiaNum}` : `📝 ${item.histIdx + 1}.`} {h.saleName}
+                        <span style={{
+                          marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8,
+                          background: recalled ? "#fef2f2" : isUpdate ? "#f0fdf4" : "#f0faf1",
+                          color: recalled ? "#dc2626" : isUpdate ? "#059669" : "#1a3c20",
+                        }}>{h.action}</span>
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                        <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.date || "-"}</span>
+                        {isAdmin && h.id && (
+                          <button onClick={() => handleDeleteHistory(h.id)}
+                            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                            title="Xóa lịch sử này"><Trash2 size={12} /></button>
+                        )}
+                      </div>
+                    </div>
+                    {h.status && <div style={{ fontSize: 12, marginBottom: 2 }}>Trạng thái: <b>{h.status}</b></div>}
+                    {h.feedback && <div style={{ fontSize: 12, color: "#6b7280" }}>Feedback: {h.feedback}</div>}
+                  </div>
                 </div>
-              </div>
-            );
-          })})()}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 }
