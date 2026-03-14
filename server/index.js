@@ -4186,6 +4186,8 @@ async function callPerplexityAI(prompt, maxTokens = 800) {
 
 // AI verification: search internet to confirm project type, location, products
 async function aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl) {
+  // Pre-calculate villa CPL (2.2x multiplier) so Perplexity gets the right numbers
+  const villaCplAvg = Math.round(cplResult.cplAvg * 2.2 / 1000) * 1000;
   const prompt = `Tìm kiếm thông tin thực tế về dự án bất động sản "${projectName}" tại Việt Nam.
 
 DỮ LIỆU HỆ THỐNG ĐÃ CÀO (cần thẩm định):
@@ -4194,8 +4196,15 @@ DỮ LIỆU HỆ THỐNG ĐÃ CÀO (cần thẩm định):
 - Giá thấp tầng: ${priceData.lowRisePrice ? (priceData.lowRisePrice / 1e6).toFixed(1) + " triệu/m²" : "không có dữ liệu"}
 - Số tin cao tầng: ${priceData.highRiseCount}, thấp tầng: ${priceData.lowRiseCount}
 - Vị trí phát hiện: ${priceData.detectedLocation || "chưa rõ"}
-- CPL ước tính: ${cplResult.cplAvg / 1000}K, TB khu vực: ${districtAvgCpl / 1000}K
+- CPL ước tính căn hộ (cao tầng): ${cplResult.cplAvg / 1000}K
+- CPL ước tính nhà phố/biệt thự (thấp tầng): ${villaCplAvg / 1000}K
+- TB khu vực: ${districtAvgCpl / 1000}K
 - Số quảng cáo: ${adData.activeAds}, Phân khúc: ${cplResult.segment}
+
+LƯU Ý QUAN TRỌNG VỀ CPL:
+- Nếu dự án chỉ bán CAO TẦNG → dùng CPL căn hộ: ${cplResult.cplAvg / 1000}K trong marketInsight
+- Nếu dự án chỉ bán THẤP TẦNG → dùng CPL nhà phố/biệt thự: ${villaCplAvg / 1000}K trong marketInsight
+- Nếu dự án bán CẢ HAI → đề cập cả 2 mức CPL
 
 HÃY TRẢ LỜI JSON THUẦN (không backtick, không markdown):
 {
@@ -4204,7 +4213,7 @@ HÃY TRẢ LỜI JSON THUẦN (không backtick, không markdown):
   "location": "Quận/Huyện, Tỉnh/TP chính xác" hoặc null,
   "productTypes": ["chỉ liệt kê sản phẩm THỰC SỰ CÓ tại dự án"],
   "filteredPriceNote": "ghi chú nếu crawler lấy nhầm dữ liệu" hoặc null,
-  "marketInsight": "1-2 câu nhận xét chuyên nghiệp tiếng Việt về cơ hội quảng cáo"
+  "marketInsight": "1-2 câu nhận xét chuyên nghiệp tiếng Việt về cơ hội quảng cáo, dùng đúng CPL tương ứng loại dự án"
 }
 
 QUY TẮC BẮT BUỘC:
@@ -4212,7 +4221,7 @@ QUY TẮC BẮT BUỘC:
 - productTypes: CHỈ CÁC LOẠI THẬT SỰ TỒN TẠI. Chọn từ: Studio, 1PN, 2PN, 3PN, Penthouse, Nhà phố, Song lập, Biệt thự đơn lập, Shophouse.
 - location: Vị trí chính xác nhất. VD: "Nhơn Trạch, Đồng Nai" hoặc "Phú Mỹ, Bà Rịa - Vũng Tàu".
 - filteredPriceNote: Nếu crawler lấy nhầm tin chung cư vào dự án villas (hoặc ngược lại), ghi rõ.
-- marketInsight: Phân tích giá trị cho nhà quảng cáo BĐS, dựa trên CPL và mức cạnh tranh thực tế.`;
+- marketInsight: Phân tích giá trị cho nhà quảng cáo BĐS. PHẢI dùng đúng CPL tương ứng loại dự án (không dùng CPL căn hộ cho dự án villa).`;
 
   const raw = await callPerplexityAI(prompt, 600);
   if (!raw) return null;
