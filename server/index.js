@@ -3149,7 +3149,7 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
   const startTime = Date.now();
   // Safety limit: must return before Vercel kills at 60s
   const elapsed = () => Date.now() - startTime;
-  const mustStop = () => elapsed() > 58000; // 58s = absolute max, 2s buffer for response
+  const mustStop = () => elapsed() > 45000; // 45s max for ad scraping, leave 15s for price+AI+response
   const pageSet = new Map();
   let adCount = 0;
   let apiError = null;
@@ -4722,11 +4722,11 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     // Fetch ad accounts for API access
     const adAccounts = await all(db, "SELECT account_id, access_token FROM fb_ad_accounts WHERE is_active = 1 AND access_token != ''");
 
-    // Module 1: Ad Library (internal 45s budget)
-    const adData = await scrapeAdLibrary(projectName, adAccounts);
-
-    // Module 2: Market Price
-    const priceData = await scrapeMarketPrice(projectName, location);
+    // Module 1 + Module 2: Run Ad Library scraping and Market Price scraping IN PARALLEL
+    const [adData, priceData] = await Promise.all([
+      scrapeAdLibrary(projectName, adAccounts),
+      scrapeMarketPrice(projectName, location),
+    ]);
 
     // Use scraped location if user didn't provide one
     const effectiveLocation = location || priceData.detectedLocation || "";
@@ -4744,7 +4744,10 @@ app.get("/api/market-intel/analyze", requireAuth, async (req, res) => {
     let aiResult = null;
     try {
       aiResult = PERPLEXITY_API_KEY
-        ? await aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl)
+        ? await Promise.race([
+            aiVerifyProject(projectName, priceData, adData, cplResult, districtAvgCpl),
+            new Promise(r => setTimeout(() => r(null), 10000)) // 10s max for AI
+          ])
         : null;
     } catch { aiResult = null; }
 
