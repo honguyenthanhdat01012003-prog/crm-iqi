@@ -1092,9 +1092,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
 
   const matchCount = leads.filter(l => phoneMap.has(normPhone(l.phone))).length;
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} phoneMatched=${matchCount}`);
+  const newPhones = leads.filter(l => !phoneMap.has(normPhone(l.phone))).map(l => normPhone(l.phone));
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} phoneMatched=${matchCount} brandNew=${newPhones.length}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
+  return { newPhones };
 }
 
 async function readData(db) {
@@ -1251,11 +1253,85 @@ async function syncProject(db, projectId) {
   });
   const campaigns = Array.from(campaignMap.values());
 
-  await replaceProjectData(db, projectId, mappedLeads, campaigns);
+  const { newPhones } = await replaceProjectData(db, projectId, mappedLeads, campaigns);
   await run(db, "UPDATE projects SET cost_data = ? WHERE id = ?", [
     JSON.stringify(projectCost),
     projectId,
   ]);
+
+  // Auto-assign new leads to project managers & notify via Telegram
+  if (newPhones && newPhones.length > 0) {
+    try {
+      // Find managers assigned to this project
+      const managers = await all(db,
+        `SELECT u.id, u.display_name, u.telegram_id FROM users u
+         JOIN user_projects up ON u.id = up.user_id
+         WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
+
+      if (managers.length > 0) {
+        const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
+        // Get newly inserted leads by phone
+        const allNewLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
+        const newLeads = allNewLeads.filter(l => newPhones.includes(normPhone(l.phone)));
+
+        if (newLeads.length > 0) {
+          const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+          const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
+          const projectName = projectRow ? projectRow.name : "-";
+          const activeBot = await getBotForProject(projectId);
+
+          // Assign manager_name to new leads (round-robin among managers)
+          const stmts = [];
+          for (let i = 0; i < newLeads.length; i++) {
+            const mgr = managers[i % managers.length];
+            stmts.push({
+              sql: "UPDATE leads SET manager_name = ? WHERE id = ?",
+              args: [mgr.display_name, newLeads[i].id],
+            });
+          }
+          if (stmts.length) await db.batch(stmts, "write");
+
+          // Notify managers via Telegram
+          if (activeBot && activeBot.token) {
+            // Group new leads by assigned manager
+            const mgrLeadMap = new Map();
+            for (let i = 0; i < newLeads.length; i++) {
+              const mgr = managers[i % managers.length];
+              if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
+              mgrLeadMap.get(mgr.id).leads.push(newLeads[i]);
+            }
+            for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
+              if (!mgr.telegram_id) continue;
+              const leadLines = mgrNewLeads.map((l, i) =>
+                `${i + 1}. 👤 *${l.name || "N/A"}* - 📞 \`${l.phone || "-"}\`${l.product ? ` - ${l.product}` : ""}`
+              ).join("\n");
+              const msg = [
+                `🚨 *CÓ ${mgrNewLeads.length} LEAD MỚI*`,
+                `📋 Dự án: *${projectName}*`,
+                `🕒 ${now}`,
+                `----------------------------------------------`,
+                leadLines,
+                `----------------------------------------------`,
+                `⚡ Vui lòng vào CRM chia lead cho Sale ngay!`,
+              ].join("\n");
+              try {
+                await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ chat_id: mgr.telegram_id, text: msg, parse_mode: "Markdown" }),
+                });
+              } catch (tErr) {
+                console.error(`[sync] Telegram notify manager ${mgr.display_name} failed:`, tErr.message);
+              }
+            }
+          }
+          console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers`);
+        }
+      }
+    } catch (notifyErr) {
+      console.error(`[syncProject] Manager notify error for project ${projectId}:`, notifyErr.message);
+    }
+  }
 }
 
 async function syncAllProjects(db) {
@@ -1915,14 +1991,26 @@ app.get("/api/data", requireAuth, async (req, res) => {
   }
 });
 
+// Global sync hash — updated after each sync
+let lastSyncHash = "";
+
 app.post("/api/sync", requireAuth, async (req, res) => {
   try {
+    const clientHash = req.body?.hash || "";
     console.log("[sync] Starting sync...");
     const { lastSync, syncErrors } = await syncAllProjects(db);
     const data = await readData(db);
     await filterDataForRole(data, req.user);
-    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length} errors=${syncErrors.length}`);
-    res.json({ lastSync, syncErrors, ...data });
+    // Compute hash from lead count + last lead id + lastSync
+    const hashSrc = `${data.leads.length}|${data.leads[data.leads.length - 1]?.id || 0}|${lastSync}|${data.leads.reduce((s, l) => s + (l.status || ""), "")}`;
+    const hash = require("crypto").createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    lastSyncHash = hash;
+    // If client already has this hash, return minimal response
+    if (clientHash && clientHash === hash) {
+      return res.json({ noChange: true, hash, lastSync });
+    }
+    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length} errors=${syncErrors.length} hash=${hash}`);
+    res.json({ lastSync, syncErrors, hash, ...data });
   } catch (err) {
     console.error("[sync] Top-level error:", err.message, err.stack);
     res.status(500).json({ error: err.message || "Sync failed" });

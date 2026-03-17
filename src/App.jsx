@@ -488,11 +488,19 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
   const [syncCountdown, setSyncCountdown] = useState(30);
+  const [syncHash, setSyncHash] = useState("");
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
 
   const applyApiData = useCallback((data) => {
+    // If server says no change, skip all state updates
+    if (data.noChange) {
+      if (data.hash) setSyncHash(data.hash);
+      if (data.lastSync) setLastSync(data.lastSync);
+      return;
+    }
+    if (data.hash) setSyncHash(data.hash);
     if (data.leads) {
       setLeads((prev) => {
         // Use name+phone as stable key (IDs change every sync)
@@ -550,11 +558,17 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [applyApiData]);
 
   // Auto-sync from Google Sheets every 10 seconds + countdown
+  const syncHashRef = React.useRef(syncHash);
+  syncHashRef.current = syncHash;
   useEffect(() => {
     setSyncCountdown(10);
     const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 10 : c - 1), 1000);
     const interval = setInterval(() => {
-      apiFetch(`${API}/sync`, { method: "POST" })
+      apiFetch(`${API}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hash: syncHashRef.current }),
+      })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(applyApiData)
         .catch(() => apiFetch(`${API}/data`).then(r => r.json()).then(applyApiData).catch(() => {}));
@@ -1847,6 +1861,29 @@ function DashboardPage({ stats, cost, saleRanking }) {
 function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules }) {
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
+  const expandedPhoneRef = React.useRef(null);
+
+  // Track which phone is expanded so we can restore after sync changes IDs
+  const setExpandedIdStable = React.useCallback((id) => {
+    setExpandedId(id);
+    if (id) {
+      const lead = leads.find(l => l.id === id);
+      expandedPhoneRef.current = lead ? lead.phone : null;
+    } else {
+      expandedPhoneRef.current = null;
+    }
+  }, [leads]);
+
+  // When leads array changes (IDs change), restore expandedId by phone
+  React.useEffect(() => {
+    if (expandedPhoneRef.current && expandedId) {
+      const current = leads.find(l => l.id === expandedId);
+      if (!current) {
+        const byPhone = leads.find(l => l.phone === expandedPhoneRef.current);
+        if (byPhone) setExpandedId(byPhone.id);
+      }
+    }
+  }, [leads]);
   const [activeTab, setActiveTab] = useState("all");
   const [pageSize, setPageSize] = useState(15);
   const [currentPage, setCurrentPage] = useState(1);
@@ -1968,7 +2005,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     if (idx >= 0) {
       const targetPage = Math.floor(idx / pageSize) + 1;
       setCurrentPage(targetPage);
-      setExpandedId(highlightLeadId);
+      setExpandedIdStable(highlightLeadId);
       // Scroll to the lead after render
       setTimeout(() => {
         const el = document.getElementById(`lead-${highlightLeadId}`);
@@ -2837,7 +2874,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             const histCount = (l.saleHistory || []).length;
             return (
               <div key={l.id} id={`lead-${l.id}`} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : "1px solid #e5e7eb", overflow: "hidden" }}>
-                <div onClick={() => setExpandedId(isOpen ? null : l.id)}
+                <div onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
@@ -2898,7 +2935,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 const isOpen = expandedId === l.id;
                 const globalIdx = (currentPage - 1) * pageSize + i;
                 const rows = [
-                  <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedId(isOpen ? null : l.id)}
+                  <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                     style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
                     <td style={tdStyle}>{globalIdx + 1}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
