@@ -209,6 +209,22 @@ async function initDb() {
   // Add message_id column if missing (migration)
   try { await run(db, "ALTER TABLE telegram_pending ADD COLUMN message_id INTEGER"); } catch (_) {}
 
+  await run(
+    db,
+    `CREATE TABLE IF NOT EXISTS telegram_chat_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bot_id INTEGER NOT NULL,
+      telegram_id TEXT NOT NULL,
+      first_name TEXT DEFAULT '',
+      last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '',
+      full_name TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(bot_id, telegram_id),
+      FOREIGN KEY (bot_id) REFERENCES telegram_bots(id) ON DELETE CASCADE
+    )`
+  );
+
   /* ---------- Facebook Pages & Posts tables ---------- */
   await run(
     db,
@@ -1682,55 +1698,67 @@ app.delete("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, 
 /* ---------- Get users who chatted with a specific bot ---------- */
 app.get("/api/telegram-bots/:id/chat-users", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const bot = await get(db, "SELECT * FROM telegram_bots WHERE id = ?", [Number(req.params.id)]);
+    const botId = Number(req.params.id);
+    const bot = await get(db, "SELECT * FROM telegram_bots WHERE id = ?", [botId]);
     if (!bot) return res.status(404).json({ error: "Bot không tồn tại" });
 
-    const usersMap = new Map();
-    let offset = 0;
-    let hasMore = true;
+    // 1. Try fetching fresh data from Telegram and save to DB
+    let newFromTg = 0;
+    try {
+      let offset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const tgRes = await fetch(`https://api.telegram.org/bot${bot.token}/getUpdates?offset=${offset}&limit=100`);
+        const tgData = await tgRes.json();
+        if (!tgData.ok) break;
+        const results = tgData.result || [];
+        if (results.length === 0) { hasMore = false; break; }
 
-    // Fetch all updates from Telegram (paginated with offset)
-    while (hasMore) {
-      const tgRes = await fetch(`https://api.telegram.org/bot${bot.token}/getUpdates?offset=${offset}&limit=100`);
-      const tgData = await tgRes.json();
+        for (const update of results) {
+          const sources = [
+            update.message?.from,
+            update.callback_query?.from,
+            update.edited_message?.from,
+            update.channel_post?.from,
+          ].filter(Boolean);
 
-      if (!tgData.ok) {
-        return res.status(400).json({ error: tgData.description || "Không thể lấy dữ liệu từ Telegram" });
-      }
-
-      const results = tgData.result || [];
-      if (results.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      for (const update of results) {
-        // Extract user from message, callback_query, edited_message, etc.
-        const sources = [
-          update.message?.from,
-          update.callback_query?.from,
-          update.edited_message?.from,
-          update.channel_post?.from,
-        ].filter(Boolean);
-
-        for (const from of sources) {
-          if (from.is_bot) continue;
-          if (!usersMap.has(from.id)) {
-            usersMap.set(from.id, {
-              telegramId: String(from.id),
-              firstName: from.first_name || "",
-              lastName: from.last_name || "",
-              username: from.username || "",
-              fullName: [from.first_name, from.last_name].filter(Boolean).join(" "),
-            });
+          for (const from of sources) {
+            if (from.is_bot) continue;
+            const tgId = String(from.id);
+            const firstName = from.first_name || "";
+            const lastName = from.last_name || "";
+            const uname = from.username || "";
+            const fullName = [firstName, lastName].filter(Boolean).join(" ");
+            try {
+              await run(db,
+                `INSERT INTO telegram_chat_users(bot_id, telegram_id, first_name, last_name, username, full_name)
+                 VALUES(?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(bot_id, telegram_id) DO UPDATE SET
+                   first_name = excluded.first_name,
+                   last_name = excluded.last_name,
+                   username = excluded.username,
+                   full_name = excluded.full_name`,
+                [botId, tgId, firstName, lastName, uname, fullName]
+              );
+              newFromTg++;
+            } catch (_) {}
           }
         }
+        offset = results[results.length - 1].update_id + 1;
       }
+    } catch (_) { /* Telegram fetch failed, fall back to DB only */ }
 
-      offset = results[results.length - 1].update_id + 1;
-    }
+    // 2. Always return full list from DB
+    const dbUsers = await all(db, "SELECT telegram_id, first_name, last_name, username, full_name FROM telegram_chat_users WHERE bot_id = ? ORDER BY full_name", [botId]);
+    const users = dbUsers.map(u => ({
+      telegramId: u.telegram_id,
+      firstName: u.first_name,
+      lastName: u.last_name,
+      username: u.username,
+      fullName: u.full_name,
+    }));
 
-    res.json({ botName: bot.name, users: Array.from(usersMap.values()) });
+    res.json({ botName: bot.name, users });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2647,9 +2675,31 @@ const TELE_STATUS_LABELS = {
 app.post("/api/telegram-webhook", async (req, res) => {
   try {
     const { callback_query, message } = req.body || {};
-    const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+    const activeBot = await get(db, "SELECT id, token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
     if (!activeBot) return res.json({ ok: true });
     const botToken = activeBot.token;
+    const botId = activeBot.id;
+
+    // Auto-save chat user to DB from any interaction
+    const saveChatUser = (from) => {
+      if (!from || from.is_bot) return;
+      const tgId = String(from.id);
+      const firstName = from.first_name || "";
+      const lastName = from.last_name || "";
+      const uname = from.username || "";
+      const fullName = [firstName, lastName].filter(Boolean).join(" ");
+      run(db,
+        `INSERT INTO telegram_chat_users(bot_id, telegram_id, first_name, last_name, username, full_name)
+         VALUES(?, ?, ?, ?, ?, ?)
+         ON CONFLICT(bot_id, telegram_id) DO UPDATE SET
+           first_name = excluded.first_name, last_name = excluded.last_name,
+           username = excluded.username, full_name = excluded.full_name`,
+        [botId, tgId, firstName, lastName, uname, fullName]
+      ).catch(() => {});
+    };
+
+    if (callback_query?.from) saveChatUser(callback_query.from);
+    if (message?.from) saveChatUser(message.from);
 
     const sendTg = (chatId, text, extra = {}) =>
       fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
