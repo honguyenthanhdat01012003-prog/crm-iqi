@@ -69,291 +69,118 @@ async function initDb() {
     authToken: process.env.TURSO_AUTH_TOKEN || undefined,
   });
 
-  await run(
-    db,
-    `CREATE TABLE IF NOT EXISTS settings (
-      key TEXT PRIMARY KEY,
-      value TEXT
-    )`
-  );
-
-  await run(
-    db,
-    `CREATE TABLE IF NOT EXISTS campaigns (
-      id INTEGER PRIMARY KEY,
-      name TEXT NOT NULL,
-      project_id INTEGER NOT NULL,
-      channel TEXT,
-      budget REAL DEFAULT 0,
-      spent REAL DEFAULT 0
-    )`
-  );
-
-  await run(
-    db,
+  // Batch all CREATE TABLE statements in a single network call
+  await db.batch([
+    `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
+    `CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY, name TEXT NOT NULL, project_id INTEGER NOT NULL, channel TEXT, budget REAL DEFAULT 0, spent REAL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS leads (
-      id INTEGER PRIMARY KEY,
-      project_id INTEGER NOT NULL,
-      name TEXT NOT NULL,
-      phone TEXT,
-      campaign TEXT,
-      campaign_id INTEGER,
-      adset_name TEXT DEFAULT '-',
-      ad_name TEXT DEFAULT '-',
-      form_name TEXT DEFAULT '-',
-      product TEXT,
-      raw_status TEXT,
-      status TEXT,
-      created_at TEXT,
-      inbox_url TEXT,
-      is_hot INTEGER DEFAULT 0,
-      sale_id INTEGER,
-      sale_name TEXT DEFAULT '',
-      manager_name TEXT DEFAULT '',
-      source TEXT,
-      budget TEXT,
-      sync_at TEXT,
-      notes TEXT,
-      FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
-    )`
-  );
-
-  // Migration: add sale_name if table existed before this column was added
-  try { await run(db, "ALTER TABLE leads ADD COLUMN sale_name TEXT DEFAULT ''"); } catch { /* already exists */ }
-  try { await run(db, "ALTER TABLE leads ADD COLUMN adset_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
-  try { await run(db, "ALTER TABLE leads ADD COLUMN ad_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
-  try { await run(db, "ALTER TABLE leads ADD COLUMN form_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
-  try { await run(db, "ALTER TABLE leads ADD COLUMN manager_name TEXT DEFAULT ''"); } catch { /* already exists */ }
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL, phone TEXT,
+      campaign TEXT, campaign_id INTEGER, adset_name TEXT DEFAULT '-', ad_name TEXT DEFAULT '-',
+      form_name TEXT DEFAULT '-', product TEXT, raw_status TEXT, status TEXT, created_at TEXT,
+      inbox_url TEXT, is_hot INTEGER DEFAULT 0, sale_id INTEGER, sale_name TEXT DEFAULT '',
+      manager_name TEXT DEFAULT '', source TEXT, budget TEXT, sync_at TEXT, notes TEXT,
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id))`,
     `CREATE TABLE IF NOT EXISTS projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      lead_url TEXT DEFAULT '',
-      cost_url TEXT DEFAULT '',
-      cost_data TEXT DEFAULT '{}',
-      fb_code TEXT DEFAULT '',
-      fb_person TEXT DEFAULT ''
-    )`
-  );
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lead_url TEXT DEFAULT '',
+      cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS lead_history (
-      id INTEGER PRIMARY KEY,
-      lead_id INTEGER NOT NULL,
-      sale_name TEXT NOT NULL,
-      action TEXT DEFAULT '',
-      contact_date TEXT DEFAULT '',
-      status TEXT DEFAULT '',
-      feedback TEXT DEFAULT '',
-      seq INTEGER DEFAULT 0,
-      source TEXT DEFAULT ''
-    )`
-  );
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY, lead_id INTEGER NOT NULL, sale_name TEXT NOT NULL,
+      action TEXT DEFAULT '', contact_date TEXT DEFAULT '', status TEXT DEFAULT '',
+      feedback TEXT DEFAULT '', seq INTEGER DEFAULT 0, source TEXT DEFAULT '')`,
     `CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      salt TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'sale',
-      display_name TEXT NOT NULL DEFAULT '',
-      telegram_id TEXT NOT NULL DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-
-  // Migration: add telegram_id if missing
-  try { await run(db, "ALTER TABLE users ADD COLUMN telegram_id TEXT NOT NULL DEFAULT ''"); } catch (_) {}
-  // Migration: add profile fields
-  try { await run(db, "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''"); } catch (_) {}
-  try { await run(db, "ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''"); } catch (_) {}
-  try { await run(db, "ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''"); } catch (_) {}
-  try { await run(db, "ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0"); } catch (_) {}
-  try { await run(db, "ALTER TABLE users ADD COLUMN last_active TEXT DEFAULT ''"); } catch (_) {}
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'sale',
+      display_name TEXT NOT NULL DEFAULT '', telegram_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS telegram_bots (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL DEFAULT '',
-      token TEXT NOT NULL DEFAULT '',
-      is_active INTEGER NOT NULL DEFAULT 1,
-      project_id INTEGER DEFAULT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-  try { await run(db, "ALTER TABLE telegram_bots ADD COLUMN project_id INTEGER DEFAULT NULL"); } catch (_) {}
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '',
+      token TEXT NOT NULL DEFAULT '', is_active INTEGER NOT NULL DEFAULT 1,
+      project_id INTEGER DEFAULT NULL, created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS user_projects (
-      user_id INTEGER NOT NULL,
-      project_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL, project_id INTEGER NOT NULL,
       PRIMARY KEY (user_id, project_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    )`
-  );
-
-  await run(
-    db,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE)`,
     `CREATE TABLE IF NOT EXISTS telegram_pending (
-      telegram_id TEXT PRIMARY KEY,
-      lead_id INTEGER NOT NULL,
-      status TEXT DEFAULT '',
-      message_id INTEGER,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-  // Add message_id column if missing (migration)
-  try { await run(db, "ALTER TABLE telegram_pending ADD COLUMN message_id INTEGER"); } catch (_) {}
-
-  await run(
-    db,
+      telegram_id TEXT PRIMARY KEY, lead_id INTEGER NOT NULL, status TEXT DEFAULT '',
+      message_id INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS telegram_chat_users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      bot_id INTEGER NOT NULL,
-      telegram_id TEXT NOT NULL,
-      first_name TEXT DEFAULT '',
-      last_name TEXT DEFAULT '',
-      username TEXT DEFAULT '',
-      full_name TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(bot_id, telegram_id),
-      FOREIGN KEY (bot_id) REFERENCES telegram_bots(id) ON DELETE CASCADE
-    )`
-  );
-
-  /* ---------- Facebook Pages & Posts tables ---------- */
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER NOT NULL,
+      telegram_id TEXT NOT NULL, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
+      username TEXT DEFAULT '', full_name TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(bot_id, telegram_id), FOREIGN KEY (bot_id) REFERENCES telegram_bots(id) ON DELETE CASCADE)`,
     `CREATE TABLE IF NOT EXISTS fb_pages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      page_id TEXT NOT NULL DEFAULT '',
-      access_token TEXT NOT NULL DEFAULT '',
-      avatar_url TEXT DEFAULT '',
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, page_id TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL DEFAULT '', avatar_url TEXT DEFAULT '', is_active INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS fb_posts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL DEFAULT '',
-      content TEXT NOT NULL DEFAULT '',
-      images TEXT DEFAULT '[]',
-      project_id INTEGER,
-      page_ids TEXT DEFAULT '[]',
-      status TEXT DEFAULT 'draft',
-      schedule_at TEXT DEFAULT '',
-      link TEXT DEFAULT '',
-      fb_post_id TEXT DEFAULT '',
-      error_msg TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
+      images TEXT DEFAULT '[]', project_id INTEGER, page_ids TEXT DEFAULT '[]', status TEXT DEFAULT 'draft',
+      schedule_at TEXT DEFAULT '', link TEXT DEFAULT '', fb_post_id TEXT DEFAULT '', error_msg TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS sheet_configs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      project_name TEXT NOT NULL DEFAULT '',
-      script_url TEXT NOT NULL DEFAULT '',
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-  // Migration: add columns that may be missing on older DBs
-  try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN project_name TEXT NOT NULL DEFAULT ''"); } catch { /* already exists */ }
-  try { await run(db, "ALTER TABLE sheet_configs ADD COLUMN is_active INTEGER DEFAULT 1"); } catch { /* already exists */ }
-
-  /* ---------- Chat messages table ---------- */
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, project_name TEXT NOT NULL DEFAULT '',
+      script_url TEXT NOT NULL DEFAULT '', is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS chat_messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sender_id INTEGER NOT NULL,
-      receiver_id INTEGER NOT NULL,
-      content TEXT NOT NULL,
-      read INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sender_id INTEGER NOT NULL, receiver_id INTEGER NOT NULL,
+      content TEXT NOT NULL, read INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
-    )`
-  );
-
-  /* ---------- Lead status log for time-in-stage tracking ---------- */
-  await run(
-    db,
+      FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE)`,
     `CREATE TABLE IF NOT EXISTS fb_ad_accounts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL DEFAULT '',
-      account_id TEXT NOT NULL DEFAULT '',
-      access_token TEXT NOT NULL DEFAULT '',
-      is_active INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now'))
-    )`
-  );
-
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL DEFAULT '', is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS lead_status_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      lead_id INTEGER NOT NULL,
-      old_status TEXT DEFAULT '',
-      new_status TEXT NOT NULL,
-      changed_by TEXT NOT NULL,
-      changed_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
-    )`
-  );
-
-  /* ---------- Lead distribution schedules table ---------- */
-  await run(
-    db,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER NOT NULL,
+      old_status TEXT DEFAULT '', new_status TEXT NOT NULL, changed_by TEXT NOT NULL,
+      changed_at TEXT DEFAULT (datetime('now')), FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE)`,
     `CREATE TABLE IF NOT EXISTS lead_schedules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL,
-      status_filter TEXT DEFAULT 'all',
-      start_date TEXT NOT NULL DEFAULT '',
-      end_date TEXT NOT NULL,
-      leads_per_day INTEGER DEFAULT 5,
-      sale_names TEXT NOT NULL DEFAULT '[]',
-      lead_ids TEXT NOT NULL DEFAULT '[]',
-      assigned_index INTEGER DEFAULT 0,
-      total_count INTEGER DEFAULT 0,
-      created_by TEXT DEFAULT '',
-      created_at TEXT DEFAULT (datetime('now')),
-      is_active INTEGER DEFAULT 1,
-      last_processed_date TEXT DEFAULT '',
-      assignment_log TEXT DEFAULT '[]',
-      distribute_time TEXT DEFAULT '08:00'
-    )`
-  );
-  // Migration: add new columns to lead_schedules if missing
-  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN start_date TEXT NOT NULL DEFAULT ''"); } catch {}
-  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN assignment_log TEXT DEFAULT '[]'"); } catch {}
-  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN distribute_time TEXT DEFAULT '08:00'"); } catch {}
-  try { await run(db, "ALTER TABLE lead_schedules ADD COLUMN current_tour INTEGER DEFAULT 0"); } catch {}
+      id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, status_filter TEXT DEFAULT 'all',
+      start_date TEXT NOT NULL DEFAULT '', end_date TEXT NOT NULL, leads_per_day INTEGER DEFAULT 5,
+      sale_names TEXT NOT NULL DEFAULT '[]', lead_ids TEXT NOT NULL DEFAULT '[]',
+      assigned_index INTEGER DEFAULT 0, total_count INTEGER DEFAULT 0, created_by TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')), is_active INTEGER DEFAULT 1,
+      last_processed_date TEXT DEFAULT '', assignment_log TEXT DEFAULT '[]',
+      distribute_time TEXT DEFAULT '08:00', current_tour INTEGER DEFAULT 0)`,
+    `CREATE TABLE IF NOT EXISTS market_intel_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, project_name TEXT NOT NULL, location TEXT DEFAULT '',
+      ad_count INTEGER DEFAULT 0, active_ad_count INTEGER DEFAULT 0, avg_ad_longevity_days REAL DEFAULT 0,
+      top_ad_durations TEXT DEFAULT '[]', avg_price_m2 REAL DEFAULT 0, new_listings_7d INTEGER DEFAULT 0,
+      estimated_cpl_min REAL DEFAULT 0, estimated_cpl_max REAL DEFAULT 0, estimated_cpl_avg REAL DEFAULT 0,
+      district_avg_cpl REAL DEFAULT 0, market_heat_level TEXT DEFAULT 'warm', heat_index INTEGER DEFAULT 50,
+      opportunity_score INTEGER DEFAULT 50, competitor_count INTEGER DEFAULT 0, winning_pages TEXT DEFAULT '[]',
+      ad_trend_30d TEXT DEFAULT '[]', cpl_trend_30d TEXT DEFAULT '[]', segment TEXT DEFAULT 'standard',
+      scraped_at TEXT DEFAULT (datetime('now')), UNIQUE(project_name))`,
+  ], "write");
 
-  // Migration: add fb_code, fb_person columns to projects
-  try { await run(db, "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''"); } catch {}
-  try { await run(db, "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''"); } catch {}
+  // Batch all ALTER TABLE migrations (each may fail if column already exists — that's OK)
+  const migrations = [
+    "ALTER TABLE leads ADD COLUMN sale_name TEXT DEFAULT ''",
+    "ALTER TABLE leads ADD COLUMN adset_name TEXT DEFAULT '-'",
+    "ALTER TABLE leads ADD COLUMN ad_name TEXT DEFAULT '-'",
+    "ALTER TABLE leads ADD COLUMN form_name TEXT DEFAULT '-'",
+    "ALTER TABLE leads ADD COLUMN manager_name TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN telegram_id TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN email TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN must_change_password INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN last_active TEXT DEFAULT ''",
+    "ALTER TABLE telegram_bots ADD COLUMN project_id INTEGER DEFAULT NULL",
+    "ALTER TABLE telegram_pending ADD COLUMN message_id INTEGER",
+    "ALTER TABLE sheet_configs ADD COLUMN project_name TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sheet_configs ADD COLUMN is_active INTEGER DEFAULT 1",
+    "ALTER TABLE lead_schedules ADD COLUMN start_date TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE lead_schedules ADD COLUMN assignment_log TEXT DEFAULT '[]'",
+    "ALTER TABLE lead_schedules ADD COLUMN distribute_time TEXT DEFAULT '08:00'",
+    "ALTER TABLE lead_schedules ADD COLUMN current_tour INTEGER DEFAULT 0",
+    "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''",
+    "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
+  ];
+  // Run each migration individually (ALTER TABLE can't be batched if some fail)
+  await Promise.all(migrations.map(sql => run(db, sql).catch(() => {})));
 
-  // Migration: add source column to lead_history
-  try { await run(db, "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''"); } catch {}
-
-  // Backfill manager_name from "Chia lead" history for leads missing it (single query, no N+1)
+  // Backfill manager_name from "Chia lead" history for leads missing it (single query)
   try {
     const rows = await all(db,
       `SELECT l.id, lh.feedback FROM leads l
@@ -374,36 +201,6 @@ async function initDb() {
       }
     }
   } catch (e) { console.error("[migration] backfill manager_name error:", e.message); }
-
-  // Market Intelligence cache table (aggregate data only - no raw leads or personal ad account IDs)
-  await run(
-    db,
-    `CREATE TABLE IF NOT EXISTS market_intel_cache (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_name TEXT NOT NULL,
-      location TEXT DEFAULT '',
-      ad_count INTEGER DEFAULT 0,
-      active_ad_count INTEGER DEFAULT 0,
-      avg_ad_longevity_days REAL DEFAULT 0,
-      top_ad_durations TEXT DEFAULT '[]',
-      avg_price_m2 REAL DEFAULT 0,
-      new_listings_7d INTEGER DEFAULT 0,
-      estimated_cpl_min REAL DEFAULT 0,
-      estimated_cpl_max REAL DEFAULT 0,
-      estimated_cpl_avg REAL DEFAULT 0,
-      district_avg_cpl REAL DEFAULT 0,
-      market_heat_level TEXT DEFAULT 'warm',
-      heat_index INTEGER DEFAULT 50,
-      opportunity_score INTEGER DEFAULT 50,
-      competitor_count INTEGER DEFAULT 0,
-      winning_pages TEXT DEFAULT '[]',
-      ad_trend_30d TEXT DEFAULT '[]',
-      cpl_trend_30d TEXT DEFAULT '[]',
-      segment TEXT DEFAULT 'standard',
-      scraped_at TEXT DEFAULT (datetime('now')),
-      UNIQUE(project_name)
-    )`
-  );
 
   // Migrate legacy single sheet_script_url into sheet_configs
   {
