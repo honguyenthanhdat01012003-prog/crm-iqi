@@ -59,6 +59,8 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
+const DB_VERSION = 2; // Bump this when adding new DDL/migrations
+
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
   if (dbUrl.startsWith("file:")) {
@@ -69,7 +71,24 @@ async function initDb() {
     authToken: process.env.TURSO_AUTH_TOKEN || undefined,
   });
 
-  // Create all tables - use executeMultiple for DDL (no transaction needed for IF NOT EXISTS)
+  // Fast path: check if DB is already fully initialized (1 network call)
+  let dbVersion = 0;
+  try {
+    const v = await get(db, "SELECT value FROM settings WHERE key = 'db_version'");
+    dbVersion = v ? Number(v.value) : 0;
+  } catch {
+    // settings table doesn't exist yet — need full init
+    dbVersion = 0;
+  }
+
+  if (dbVersion >= DB_VERSION) {
+    console.log(`[DB] Already at version ${dbVersion}, skipping migrations`);
+    return db;
+  }
+
+  console.log(`[DB] Running migrations (current=${dbVersion}, target=${DB_VERSION})...`);
+
+  // Create all tables
   const ddlStatements = [
     `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
     `CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY, name TEXT NOT NULL, project_id INTEGER NOT NULL, channel TEXT, budget REAL DEFAULT 0, spent REAL DEFAULT 0)`,
@@ -151,12 +170,11 @@ async function initDb() {
       ad_trend_30d TEXT DEFAULT '[]', cpl_trend_30d TEXT DEFAULT '[]', segment TEXT DEFAULT 'standard',
       scraped_at TEXT DEFAULT (datetime('now')), UNIQUE(project_name))`,
   ];
-  // Run DDL one at a time (safe, and IF NOT EXISTS makes it fast — no actual work on existing DB)
   for (const sql of ddlStatements) {
     await run(db, sql);
   }
 
-  // ALTER TABLE migrations — run sequentially, each in try/catch (fast: column already exists = instant fail)
+  // ALTER TABLE migrations
   const migrations = [
     "ALTER TABLE leads ADD COLUMN sale_name TEXT DEFAULT ''",
     "ALTER TABLE leads ADD COLUMN adset_name TEXT DEFAULT '-'",
@@ -181,12 +199,11 @@ async function initDb() {
     "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''",
     "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
   ];
-  // Run each migration sequentially (each is instant if column exists; avoids Turso concurrent issues)
   for (const sql of migrations) {
-    try { await run(db, sql); } catch (_) { /* column already exists — OK */ }
+    try { await run(db, sql); } catch (_) { /* column already exists */ }
   }
 
-  // Backfill manager_name from "Chia lead" history for leads missing it (single query)
+  // Backfill manager_name from history
   try {
     const rows = await all(db,
       `SELECT l.id, lh.feedback FROM leads l
@@ -208,7 +225,7 @@ async function initDb() {
     }
   } catch (e) { console.error("[migration] backfill manager_name error:", e.message); }
 
-  // Migrate legacy single sheet_script_url into sheet_configs
+  // Migrate legacy sheet_script_url
   {
     const scCount = await get(db, "SELECT COUNT(*) as cnt FROM sheet_configs");
     if (scCount.cnt === 0) {
@@ -230,7 +247,7 @@ async function initDb() {
     );
   }
 
-  // Migration: create default project from legacy settings if none exist
+  // Create default project from legacy settings if none exist
   const projCount = await get(db, "SELECT COUNT(*) as cnt FROM projects");
   if (projCount.cnt === 0) {
     const sRows = await all(db, "SELECT key, value FROM settings");
@@ -246,6 +263,10 @@ async function initDb() {
       ]
     );
   }
+
+  // Mark DB version so next cold start skips all this
+  await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
+  console.log(`[DB] Migrations complete, version=${DB_VERSION}`);
 
   return db;
 }
