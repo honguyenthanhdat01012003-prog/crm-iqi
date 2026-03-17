@@ -961,24 +961,52 @@ function sanitizeSheetUrl(raw) {
 }
 
 async function replaceProjectData(db, projectId, leads, campaigns) {
-  // Fetch existing leads for this project (keyed by name+phone for stable matching)
+  // Helper: normalize phone for matching (remove spaces, dots, dashes)
+  const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
+
+  // 1. Load existing leads for status/sale preservation (match by phone)
   const existing = await all(
     db,
-    "SELECT id, name, phone, status, raw_status, notes, sale_id, sale_name, is_hot FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
     [projectId]
   );
-  const existingMap = new Map();
+  const phoneMap = new Map();
   for (const e of existing) {
-    existingMap.set(`${e.name}||${e.phone}`, e);
+    const np = normPhone(e.phone);
+    if (!np) continue;
+    const prev = phoneMap.get(np);
+    // Keep lead with most meaningful status
+    if (!prev || (prev.status === "new" && e.status !== "new")) {
+      phoneMap.set(np, e);
+    }
+  }
+
+  // 2. Save CRM-added history per phone (non-sheet entries)
+  let allHistory = [];
+  if (existing.length > 0) {
+    allHistory = await all(db,
+      "SELECT lh.*, l.phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ?",
+      [projectId]
+    );
+  }
+  const phoneHistMap = new Map();
+  for (const h of allHistory) {
+    if (h.source === "sheet") continue; // Sheet history comes from new sheet
+    const np = normPhone(h.phone);
+    if (!np) continue;
+    if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
+    phoneHistMap.get(np).push(h);
   }
 
   const stmts = [];
 
-  // Nullify campaign_id on leads first to avoid FK violation when deleting campaigns
+  // 3. Delete ALL existing data for this project (clean slate)
   stmts.push({ sql: "UPDATE leads SET campaign_id = NULL WHERE project_id = ?", args: [projectId] });
-
-  // Replace campaigns (these have no IDs we need to preserve)
+  stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", args: [projectId] });
+  stmts.push({ sql: "DELETE FROM leads WHERE project_id = ?", args: [projectId] });
   stmts.push({ sql: "DELETE FROM campaigns WHERE project_id = ?", args: [projectId] });
+
+  // 4. Insert campaigns
   for (const c of campaigns) {
     stmts.push({
       sql: "INSERT INTO campaigns(name, project_id, channel, budget, spent) VALUES(?, ?, ?, ?, ?)",
@@ -986,105 +1014,85 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     });
   }
 
-  // Track which existing leads are still in the sheet
-  const incomingKeys = new Set();
-
+  // 5. Insert all leads from new sheet, restoring status/sale from old data where phone matches
   for (const l of leads) {
-    const key = `${l.name}||${l.phone}`;
-    incomingKeys.add(key);
-    const prev = existingMap.get(key);
+    const np = normPhone(l.phone);
+    const prev = phoneMap.get(np);
+
+    // Start with sheet values
+    let status = l.status;
+    let rawStatus = l.rawStatus || "";
+    let notes = l.notes || "";
+    let saleId = l.saleId;
+    let saleName = l.saleName || "";
+    let isHot = l.isHot ? 1 : 0;
+    let managerName = "";
 
     if (prev) {
-      // Lead exists — UPDATE non-editable fields + sync status/sale from sheet
-      let sheetStatus = normalizeStatus(l.rawStatus);
-      // If sale gave feedback text but normalizeStatus couldn't categorize it, fallback to "called"
-      if (sheetStatus === "new" && l.saleStatus) sheetStatus = "called";
-      const sheetSale = l.saleName || "";
-      // Always use sale from sheet if it has a meaningful value
-      // This ensures reassignments (after recalls) are synced correctly
-      const newSale = sheetSale && sheetSale !== "Chưa chia"
-        ? sheetSale : prev.sale_name;
-      // Update status from sheet: if sheet has meaningful status (not "new"), always use it
-      // This ensures sale feedback from Google Sheets is synced to CRM
-      // Only keep DB status if sheet status is "new"/empty (don't revert meaningful status)
-      const dbStatus = prev.status || "new";
-      const newStatus = sheetStatus && sheetStatus !== "new"
-        ? sheetStatus : dbStatus;
-      stmts.push({
-        sql: `UPDATE leads SET campaign = ?, adset_name = ?, ad_name = ?, form_name = ?,
-              product = ?, created_at = ?, inbox_url = ?, source = ?, budget = ?, sync_at = ?,
-              raw_status = ?, status = ?, sale_name = ?
-              WHERE id = ?`,
-        args: [
-          l.campaign, l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product, l.createdAt, l.inboxUrl, l.source, l.budget, l.syncAt,
-          l.rawStatus || prev.raw_status, newStatus, newSale,
-          prev.id,
-        ],
-      });
-
-      // Sync sale history from sheet for existing leads (add missing entries)
-      if (l.saleHistory && l.saleHistory.length) {
-        const existingHist = await all(db, "SELECT sale_name, action, contact_date FROM lead_history WHERE lead_id = ?", [prev.id]);
-        const existingSet = new Set(existingHist.map(h => `${h.sale_name}||${h.action}||${h.contact_date}`));
-        let maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [prev.id]);
-        let nextSeq = (maxSeqRow?.m ?? -1) + 1;
-        for (const sh of l.saleHistory) {
-          const key = `${sh.saleName}||${sh.action}||${sh.date}`;
-          if (!existingSet.has(key)) {
-            stmts.push({
-              sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-              args: [prev.id, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, nextSeq++, "sheet"],
-            });
-            existingSet.add(key);
-          }
-        }
+      // Restore meaningful status from old data (don't revert to "new")
+      const sheetStatus = l.status || "new";
+      if (sheetStatus === "new" && prev.status && prev.status !== "new") {
+        status = prev.status;
+        rawStatus = prev.raw_status || rawStatus;
       }
-    } else {
-      // New lead — INSERT
-      const status = l.status;
-      const rawStatus = l.rawStatus;
-      const notes = l.notes || "";
-      const saleId = l.saleId;
-      const saleName = l.saleName || "";
-      const isHot = l.isHot ? 1 : 0;
+      // Restore sale assignment if sheet doesn't have one
+      const sheetSale = l.saleName || "";
+      if (prev.sale_name && prev.sale_name !== "Chưa chia") {
+        saleName = (sheetSale && sheetSale !== "Chưa chia") ? sheetSale : prev.sale_name;
+        saleId = saleName === prev.sale_name ? (prev.sale_id || saleId) : saleId;
+      }
+      // Restore notes, hot status, manager
+      if (prev.notes) notes = prev.notes;
+      if (prev.is_hot) isHot = prev.is_hot;
+      if (prev.manager_name) managerName = prev.manager_name;
+    }
 
-      stmts.push({
-        sql: `INSERT INTO leads(
-          project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
-          product, raw_status, status,
-          created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [
-          projectId, l.name, l.phone, l.campaign, null,
-          l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
-          l.source, l.budget, l.syncAt, notes,
-        ],
-      });
+    stmts.push({
+      sql: `INSERT INTO leads(
+        project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
+        product, raw_status, status,
+        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes, manager_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        projectId, l.name, l.phone, l.campaign, null,
+        l.adsetName || "-", l.adName || "-", l.formName || "-",
+        l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
+        l.source, l.budget, l.syncAt, notes, managerName,
+      ],
+    });
 
-      if (l.saleHistory && l.saleHistory.length) {
-        for (let si = 0; si < l.saleHistory.length; si++) {
-          const sh = l.saleHistory[si];
+    // Restore CRM history for matched phone
+    const crmHist = phoneHistMap.get(np);
+    if (crmHist && crmHist.length) {
+      for (let si = 0; si < crmHist.length; si++) {
+        const h = crmHist[si];
+        stmts.push({
+          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
+          args: [h.sale_name, h.action, h.contact_date, h.status, h.feedback, si, h.source || "crm"],
+        });
+      }
+    }
+
+    // Add sheet history (skip duplicates with restored CRM history)
+    if (l.saleHistory && l.saleHistory.length) {
+      const crmHistCount = (crmHist && crmHist.length) || 0;
+      for (let si = 0; si < l.saleHistory.length; si++) {
+        const sh = l.saleHistory[si];
+        const isDup = crmHist && crmHist.some(h =>
+          h.sale_name === sh.saleName && h.action === sh.action && h.contact_date === sh.date
+        );
+        if (!isDup) {
           stmts.push({
             sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
-            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, si, "sheet"],
+            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, crmHistCount + si, "sheet"],
           });
         }
       }
     }
   }
 
-  // Remove leads that no longer exist in the sheet (but keep user-assigned ones)
-  for (const [key, e] of existingMap) {
-    if (!incomingKeys.has(key)) {
-      stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id = ?", args: [e.id] });
-      stmts.push({ sql: "DELETE FROM leads WHERE id = ?", args: [e.id] });
-    }
-  }
-
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} leads=${leads.length} existing=${existing.length} new=${leads.length - incomingKeys.size + (leads.length - [...incomingKeys].filter(k => existingMap.has(k)).length)}`);
-  // Re-enable FK checks after batch
+  const matchCount = leads.filter(l => phoneMap.has(normPhone(l.phone))).length;
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} phoneMatched=${matchCount}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 }
