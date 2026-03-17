@@ -353,6 +353,31 @@ async function initDb() {
   // Migration: add source column to lead_history
   try { await run(db, "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''"); } catch {}
 
+  // Backfill manager_name from "Chia lead" history for leads missing it
+  try {
+    const noMgr = await all(db, "SELECT id FROM leads WHERE (manager_name IS NULL OR manager_name = '')");
+    if (noMgr.length > 0) {
+      const batchStmts = [];
+      for (const lead of noMgr) {
+        // Find the latest "Chia lead" history entry — the person who chia'd is the manager
+        const chiaHist = await get(db,
+          "SELECT feedback FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1",
+          [lead.id]);
+        if (chiaHist && chiaHist.feedback) {
+          // feedback format: "Admin X chia lead" or "Lịch chia tự động #N (...)"
+          const m = chiaHist.feedback.match(/^Admin\s+(.+?)\s+(?:chia lead|xáo lead)/);
+          if (m && m[1]) {
+            batchStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [m[1], lead.id] });
+          }
+        }
+      }
+      if (batchStmts.length) {
+        await db.batch(batchStmts, "write");
+        console.log(`[migration] Backfilled manager_name for ${batchStmts.length} leads`);
+      }
+    }
+  } catch (e) { console.error("[migration] backfill manager_name error:", e.message); }
+
   // Market Intelligence cache table (aggregate data only - no raw leads or personal ad account IDs)
   await run(
     db,
@@ -1260,6 +1285,34 @@ async function syncProject(db, projectId) {
   ]);
 
   // Auto-assign new leads to project managers & notify via Telegram
+  // Helper: check if current Vietnam time is within active hours (6:00 AM - 10:59 PM)
+  const vnHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })).getHours();
+  const isActiveHours = vnHour >= 6 && vnHour < 23; // 6:00 - 22:59
+
+  // Assign pending unassigned leads from previous off-hours (runs every sync during active hours)
+  if (isActiveHours) {
+    try {
+      const managers = await all(db,
+        `SELECT u.id, u.display_name, u.telegram_id FROM users u
+         JOIN user_projects up ON u.id = up.user_id
+         WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
+      if (managers.length > 0) {
+        const pendingLeads = await all(db,
+          "SELECT id, name, phone, product FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '')",
+          [projectId]);
+        if (pendingLeads.length > 0) {
+          const stmts = [];
+          for (let i = 0; i < pendingLeads.length; i++) {
+            const mgr = managers[i % managers.length];
+            stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, pendingLeads[i].id] });
+          }
+          await db.batch(stmts, "write");
+          console.log(`[syncProject] project=${projectId} assigned ${pendingLeads.length} pending leads to managers (off-hours backlog)`);
+        }
+      }
+    } catch (e) { console.error(`[syncProject] pending assign error:`, e.message); }
+  }
+
   if (newPhones && newPhones.length > 0) {
     try {
       // Find managers assigned to this project
@@ -1280,18 +1333,23 @@ async function syncProject(db, projectId) {
           const projectName = projectRow ? projectRow.name : "-";
           const activeBot = await getBotForProject(projectId);
 
-          // Assign manager_name to new leads (round-robin among managers)
-          const stmts = [];
-          for (let i = 0; i < newLeads.length; i++) {
-            const mgr = managers[i % managers.length];
-            stmts.push({
-              sql: "UPDATE leads SET manager_name = ? WHERE id = ?",
-              args: [mgr.display_name, newLeads[i].id],
-            });
+          if (isActiveHours) {
+            // Assign manager_name to new leads (round-robin among managers)
+            const stmts = [];
+            for (let i = 0; i < newLeads.length; i++) {
+              const mgr = managers[i % managers.length];
+              stmts.push({
+                sql: "UPDATE leads SET manager_name = ? WHERE id = ?",
+                args: [mgr.display_name, newLeads[i].id],
+              });
+            }
+            if (stmts.length) await db.batch(stmts, "write");
+            console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers`);
+          } else {
+            console.log(`[syncProject] project=${projectId} ${newLeads.length} new leads NOT assigned (off-hours ${vnHour}:00, will assign at 6AM)`);
           }
-          if (stmts.length) await db.batch(stmts, "write");
 
-          // Notify managers via Telegram
+          // Always notify managers about new leads (even off-hours)
           if (activeBot && activeBot.token) {
             // Group new leads by assigned manager
             const mgrLeadMap = new Map();
@@ -1325,7 +1383,6 @@ async function syncProject(db, projectId) {
               }
             }
           }
-          console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers`);
         }
       }
     } catch (notifyErr) {
