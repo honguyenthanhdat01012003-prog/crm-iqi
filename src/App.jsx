@@ -6201,7 +6201,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   const [bots, setBots] = useState([]);
   const [showBotForm, setShowBotForm] = useState(false);
   const [editingBot, setEditingBot] = useState(null);
-  const [botDraft, setBotDraft] = useState({ name: "", token: "" });
+  const [botDraft, setBotDraft] = useState({ name: "", token: "", projectId: null });
   const [botError, setBotError] = useState("");
 
   // Bot chat users
@@ -6374,14 +6374,14 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   // Bot handlers
   const openNewBot = () => {
     setEditingBot(null);
-    setBotDraft({ name: "", token: "" });
+    setBotDraft({ name: "", token: "", projectId: null });
     setBotError("");
     setShowBotForm(true);
   };
 
   const openEditBot = (b) => {
     setEditingBot(b);
-    setBotDraft({ name: b.name, token: b.token });
+    setBotDraft({ name: b.name, token: b.token, projectId: b.projectId || null });
     setBotError("");
     setShowBotForm(true);
   };
@@ -6704,7 +6704,8 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                   background: b.isActive ? "#f0fdf4" : "#fef2f2", color: b.isActive ? "#16a34a" : "#dc2626",
                 }}>{b.isActive ? <><Check size={12} /> On</> : <><Ban size={12} /> Off</>}</button>
               </div>
-              <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", marginBottom: 8, wordBreak: "break-all" }}>{b.token.slice(0, 12)}...{b.token.slice(-6)}</div>
+              <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", marginBottom: 4, wordBreak: "break-all" }}>{b.token.slice(0, 12)}...{b.token.slice(-6)}</div>
+              {(() => { const p = projects.find(pr => pr.id === b.projectId); return p ? <div style={{ fontSize: 11, color: "#2563eb", marginBottom: 8, display: "flex", alignItems: "center", gap: 4 }}><Building size={11} /> {p.name}</div> : <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 8 }}>Chưa gán dự án</div>; })()}
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => handleShowBotChatUsers(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Users size={12} /> DS Chat</button>
                 <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
@@ -6720,6 +6721,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
               <tr>
                 <th style={thStyle}>#</th>
                 <th style={thStyle}>Tên Bot</th>
+                <th style={thStyle}>Dự án</th>
                 <th style={thStyle}>Token</th>
                 <th style={thStyle}>Trạng thái</th>
                 <th style={thStyle}>Ngày tạo</th>
@@ -6731,6 +6733,9 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                 <tr key={b.id} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
                   <td style={tdStyle}>{i + 1}</td>
                   <td style={{ ...tdStyle, fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Bot size={12} /> {b.name}</td>
+                  <td style={{ ...tdStyle, fontSize: 11 }}>
+                    {(() => { const p = projects.find(pr => pr.id === b.projectId); return p ? <span style={{ background: "#eff6ff", color: "#2563eb", padding: "2px 8px", borderRadius: 8, fontSize: 10, fontWeight: 600 }}>{p.name}</span> : <span style={{ color: "#9ca3af" }}>—</span>; })()}
+                  </td>
                   <td style={{ ...tdStyle, fontSize: 11, fontFamily: "monospace", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {b.token.slice(0, 12)}...{b.token.slice(-6)}
                   </td>
@@ -6958,6 +6963,18 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           <label style={labelStyle}>Bot Token</label>
           <input style={inputStyle} value={botDraft.token}
             onChange={(e) => setBotDraft({ ...botDraft, token: e.target.value })} placeholder="VD: 7123456789:AAH..." />
+          <label style={labelStyle}><Building size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Dự án liên kết</label>
+          <select
+            value={botDraft.projectId || ""}
+            onChange={(e) => setBotDraft({ ...botDraft, projectId: e.target.value ? Number(e.target.value) : null })}
+            style={inputStyle}
+          >
+            <option value="">— Không gán dự án (dùng chung) —</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: "#6b7280", marginTop: -4, marginBottom: 8 }}>
+            <Info size={11} style={{ display: "inline", verticalAlign: "middle" }} /> Bot sẽ gửi thông báo cho lead thuộc dự án này. Nếu không gán, bot sẽ dùng làm fallback.
+          </div>
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSaveBot} disabled={savingBot} style={{ ...btnPrimary, flex: 1, opacity: savingBot ? 0.6 : 1 }}>{savingBot ? "Đang lưu..." : "Lưu"}</button>
             <button onClick={() => setShowBotForm(false)} disabled={savingBot} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>

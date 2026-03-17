@@ -181,9 +181,11 @@ async function initDb() {
       name TEXT NOT NULL DEFAULT '',
       token TEXT NOT NULL DEFAULT '',
       is_active INTEGER NOT NULL DEFAULT 1,
+      project_id INTEGER DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     )`
   );
+  try { await run(db, "ALTER TABLE telegram_bots ADD COLUMN project_id INTEGER DEFAULT NULL"); } catch (_) {}
 
   await run(
     db,
@@ -1656,7 +1658,16 @@ app.put("/api/users/:id/profile", requireAuth, requireAdmin, async (req, res) =>
 });
 
 /* ---------- Telegram Bots CRUD ---------- */
-const mapBot = b => ({ id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, createdAt: b.created_at });
+const mapBot = b => ({ id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, projectId: b.project_id || null, createdAt: b.created_at });
+
+// Helper: get bot token for a lead's project (fallback to any active bot)
+async function getBotForProject(projectId) {
+  if (projectId) {
+    const bot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 AND project_id = ? LIMIT 1", [projectId]);
+    if (bot) return bot;
+  }
+  return await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+}
 
 app.get("/api/telegram-bots", requireAuth, requireAdmin, async (_req, res) => {
   try {
@@ -1667,9 +1678,9 @@ app.get("/api/telegram-bots", requireAuth, requireAdmin, async (_req, res) => {
 
 app.post("/api/telegram-bots", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { name, token } = req.body;
+    const { name, token, projectId } = req.body;
     if (!name || !token) return res.status(400).json({ error: "Tên bot và token bắt buộc" });
-    await run(db, "INSERT INTO telegram_bots(name, token) VALUES(?, ?)", [String(name).trim(), String(token).trim()]);
+    await run(db, "INSERT INTO telegram_bots(name, token, project_id) VALUES(?, ?, ?)", [String(name).trim(), String(token).trim(), projectId || null]);
     const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
     res.json(bots.map(mapBot));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1678,10 +1689,11 @@ app.post("/api/telegram-bots", requireAuth, requireAdminOnly, async (req, res) =
 app.put("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { name, token, isActive } = req.body;
+    const { name, token, isActive, projectId } = req.body;
     if (name !== undefined) await run(db, "UPDATE telegram_bots SET name = ? WHERE id = ?", [String(name).trim(), id]);
     if (token !== undefined) await run(db, "UPDATE telegram_bots SET token = ? WHERE id = ?", [String(token).trim(), id]);
     if (isActive !== undefined) await run(db, "UPDATE telegram_bots SET is_active = ? WHERE id = ?", [isActive ? 1 : 0, id]);
+    if (projectId !== undefined) await run(db, "UPDATE telegram_bots SET project_id = ? WHERE id = ?", [projectId || null, id]);
     const bots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
     res.json(bots.map(mapBot));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1982,12 +1994,13 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
 
     // Send Telegram for each lead
     try {
-      const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
       const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-      if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
+      if (saleUser && saleUser.telegram_id) {
         for (const lid of leadIds) {
           const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [lid]);
           if (!lead) continue;
+          const activeBot = await getBotForProject(lead.project_id);
+          if (!activeBot || !activeBot.token) continue;
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
             `🔔 *BẠN CÓ LEAD MỚI*`,
@@ -2173,13 +2186,13 @@ async function processSchedules(db, triggerUser) {
 
     // Send Telegram notifications
     try {
-      const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
-      if (activeBot && activeBot.token) {
-        for (const { leadId, saleName } of assignedLeads) {
+      for (const { leadId, saleName } of assignedLeads) {
           const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
           if (!saleUser || !saleUser.telegram_id) continue;
           const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
           if (!lead) continue;
+          const activeBot = await getBotForProject(lead.project_id);
+          if (!activeBot || !activeBot.token) continue;
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
             `🔔 *BẠN CÓ LEAD MỚI*`,
@@ -2218,7 +2231,6 @@ async function processSchedules(db, triggerUser) {
             console.error("[Telegram schedule] Send failed:", teleErr.message);
           }
         }
-      }
     } catch (teleErr) {
       console.error("[Telegram schedule] Error:", teleErr.message);
     }
@@ -2466,7 +2478,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
       // Send Telegram notification with inline keyboard
       try {
-        const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+        const activeBot = lead ? await getBotForProject(lead.project_id) : await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
@@ -2591,7 +2603,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 
       // Send Telegram recall message to the sale being removed
       try {
-        const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+        const activeBot = lead ? await getBotForProject(lead.project_id) : await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
           // Delete the original notification message (with inline keyboard)
