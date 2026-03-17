@@ -2010,13 +2010,22 @@ app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
 });
 
 /* ---------- Public health ---------- */
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
+  let counts = {};
+  try {
+    const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+    const uc = await get(db, "SELECT COUNT(*) as c FROM users");
+    const pc = await get(db, "SELECT COUNT(*) as c FROM projects");
+    const hc = await get(db, "SELECT COUNT(*) as c FROM lead_history");
+    counts = { leads: lc?.c || 0, users: uc?.c || 0, projects: pc?.c || 0, history: hc?.c || 0 };
+  } catch (e) { counts = { error: e.message }; }
   res.json({
     ok: !dbInitError,
     dbReady: !!db,
     dbError: dbInitError,
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
+    counts,
   });
 });
 
