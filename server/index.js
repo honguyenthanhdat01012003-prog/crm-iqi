@@ -2744,7 +2744,7 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, 
 });
 
 /* ===== Telegram Webhook Handler ===== */
-app.post("/api/telegram-webhook/:botId?", async (req, res) => {
+async function handleTelegramWebhook(req, res) {
   try {
     const { callback_query, message } = req.body || {};
 
@@ -2884,7 +2884,9 @@ app.post("/api/telegram-webhook/:botId?", async (req, res) => {
     console.error("[Telegram Webhook] Error:", err.message);
     res.json({ ok: true });
   }
-});
+}
+app.post("/api/telegram-webhook/:botId", handleTelegramWebhook);
+app.post("/api/telegram-webhook", handleTelegramWebhook);
 
 /* ===== Google Sheet Integration (Multi-sheet) ===== */
 
