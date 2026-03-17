@@ -1679,6 +1679,63 @@ app.delete("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ---------- Get users who chatted with a specific bot ---------- */
+app.get("/api/telegram-bots/:id/chat-users", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const bot = await get(db, "SELECT * FROM telegram_bots WHERE id = ?", [Number(req.params.id)]);
+    if (!bot) return res.status(404).json({ error: "Bot không tồn tại" });
+
+    const usersMap = new Map();
+    let offset = 0;
+    let hasMore = true;
+
+    // Fetch all updates from Telegram (paginated with offset)
+    while (hasMore) {
+      const tgRes = await fetch(`https://api.telegram.org/bot${bot.token}/getUpdates?offset=${offset}&limit=100`);
+      const tgData = await tgRes.json();
+
+      if (!tgData.ok) {
+        return res.status(400).json({ error: tgData.description || "Không thể lấy dữ liệu từ Telegram" });
+      }
+
+      const results = tgData.result || [];
+      if (results.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      for (const update of results) {
+        // Extract user from message, callback_query, edited_message, etc.
+        const sources = [
+          update.message?.from,
+          update.callback_query?.from,
+          update.edited_message?.from,
+          update.channel_post?.from,
+        ].filter(Boolean);
+
+        for (const from of sources) {
+          if (from.is_bot) continue;
+          if (!usersMap.has(from.id)) {
+            usersMap.set(from.id, {
+              telegramId: String(from.id),
+              firstName: from.first_name || "",
+              lastName: from.last_name || "",
+              username: from.username || "",
+              fullName: [from.first_name, from.last_name].filter(Boolean).join(" "),
+            });
+          }
+        }
+      }
+
+      offset = results[results.length - 1].update_id + 1;
+    }
+
+    res.json({ botName: bot.name, users: Array.from(usersMap.values()) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ---------- Sales analytics ---------- */
 app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
   try {

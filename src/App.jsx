@@ -6204,6 +6204,14 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   const [botDraft, setBotDraft] = useState({ name: "", token: "" });
   const [botError, setBotError] = useState("");
 
+  // Bot chat users
+  const [showBotChatUsers, setShowBotChatUsers] = useState(false);
+  const [botChatUsers, setBotChatUsers] = useState([]);
+  const [botChatBotName, setBotChatBotName] = useState("");
+  const [botChatLoading, setBotChatLoading] = useState(false);
+  const [botChatError, setBotChatError] = useState("");
+  const [botChatSearch, setBotChatSearch] = useState("");
+
   const loadUsers = async () => {
     try {
       const r = await apiFetch(`${API}/users`);
@@ -6414,6 +6422,37 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
       if (r.ok) setBots(await r.json());
     } catch (e) { console.error(e); }
   };
+
+  const handleShowBotChatUsers = async (bot) => {
+    setShowBotChatUsers(true);
+    setBotChatBotName(bot.name);
+    setBotChatUsers([]);
+    setBotChatError("");
+    setBotChatSearch("");
+    setBotChatLoading(true);
+    try {
+      const r = await apiFetch(`${API}/telegram-bots/${bot.id}/chat-users`);
+      const data = await r.json();
+      if (r.ok) {
+        setBotChatUsers(data.users || []);
+      } else {
+        setBotChatError(data.error || "Lỗi không xác định");
+      }
+    } catch (e) {
+      setBotChatError(e.message);
+    }
+    setBotChatLoading(false);
+  };
+
+  const filteredBotChatUsers = useMemo(() => {
+    if (!botChatSearch.trim()) return botChatUsers;
+    const q = botChatSearch.toLowerCase();
+    return botChatUsers.filter(u =>
+      u.fullName.toLowerCase().includes(q) ||
+      u.telegramId.includes(q) ||
+      (u.username || "").toLowerCase().includes(q)
+    );
+  }, [botChatUsers, botChatSearch]);
 
   return (
     <>
@@ -6667,6 +6706,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
               </div>
               <div style={{ fontSize: 11, color: "#6b7280", fontFamily: "monospace", marginBottom: 8, wordBreak: "break-all" }}>{b.token.slice(0, 12)}...{b.token.slice(-6)}</div>
               <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => handleShowBotChatUsers(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Users size={12} /> DS Chat</button>
                 <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
                 <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, flex: 1, padding: "8px", fontSize: 12, minHeight: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>
               </div>
@@ -6706,6 +6746,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                   <td style={{ ...tdStyle, fontSize: 11 }}>{b.createdAt || "-"}</td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 4 }}>
+                      <button onClick={() => handleShowBotChatUsers(b)} title="DS người chat" style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Users size={11} /></button>
                       <button onClick={() => openEditBot(b)} style={{ ...btnSecondary, padding: "2px 8px", fontSize: 11 }}><Pencil size={11} /></button>
                       <button onClick={() => handleDeleteBot(b.id)} style={{ ...btnDanger, padding: "2px 8px", fontSize: 11 }}><Trash2 size={11} /></button>
                     </div>
@@ -6920,6 +6961,67 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSaveBot} disabled={savingBot} style={{ ...btnPrimary, flex: 1, opacity: savingBot ? 0.6 : 1 }}>{savingBot ? "Đang lưu..." : "Lưu"}</button>
             <button onClick={() => setShowBotForm(false)} disabled={savingBot} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal danh sách người đã chat với bot */}
+      {showBotChatUsers && (
+        <Modal onClose={() => setShowBotChatUsers(false)} title={`Người đã chat — ${botChatBotName}`}>
+          {botChatLoading ? (
+            <div style={{ textAlign: "center", padding: 24, color: "#6b7280" }}>
+              <Hourglass size={20} className="spin" style={{ marginBottom: 8 }} />
+              <div style={{ fontSize: 13 }}>Đang tải danh sách từ Telegram...</div>
+            </div>
+          ) : botChatError ? (
+            <div style={{ background: "#fef2f2", color: "#dc2626", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>
+              <X size={13} style={{ display: "inline", verticalAlign: "middle" }} /> {botChatError}
+            </div>
+          ) : botChatUsers.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontSize: 13 }}>
+              <Info size={16} style={{ marginBottom: 6 }} />
+              <div>Chưa có ai chat với bot này.</div>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                <div style={{ position: "relative", flex: 1 }}>
+                  <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#9ca3af" }} />
+                  <input
+                    value={botChatSearch}
+                    onChange={(e) => setBotChatSearch(e.target.value)}
+                    placeholder="Tìm tên, ID, username..."
+                    style={{ ...inputStyle, paddingLeft: 32, marginBottom: 0 }}
+                  />
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>{filteredBotChatUsers.length} / {botChatUsers.length}</div>
+              </div>
+              <div style={{ maxHeight: 400, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 10, background: "#fafafa" }}>
+                {filteredBotChatUsers.map((u, i) => (
+                  <div key={u.telegramId} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "10px 14px", borderBottom: i < filteredBotChatUsers.length - 1 ? "1px solid #e5e7eb" : "none",
+                    background: i % 2 ? "#f9fafb" : "#fff",
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{u.fullName || "Không có tên"}</div>
+                      <div style={{ fontSize: 11, color: "#6b7280", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><Hash size={10} /> {u.telegramId}</span>
+                        {u.username && <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}><User size={10} /> @{u.username}</span>}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(u.telegramId); showToast(`Đã copy ID: ${u.telegramId}`, "success"); }}
+                      title="Copy Telegram ID"
+                      style={{ ...btnSecondary, padding: "4px 10px", fontSize: 11, flexShrink: 0 }}
+                    ><ClipboardList size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button onClick={() => setShowBotChatUsers(false)} style={{ ...btnSecondary, flex: 1 }}>Đóng</button>
           </div>
         </Modal>
       )}
