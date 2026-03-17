@@ -3381,6 +3381,65 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- Facebook Ad Preview by ad name ---
+app.get("/api/fb-ads/ad-preview", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { adName } = req.query;
+    if (!adName) return res.status(400).json({ error: "adName is required" });
+
+    const accounts = await all(db, "SELECT account_id, access_token FROM fb_ad_accounts WHERE is_active = 1 AND access_token != ''");
+    if (!accounts.length) return res.status(400).json({ error: "Chưa cấu hình tài khoản Facebook Ads" });
+
+    for (const acct of accounts) {
+      try {
+        // Search for the ad by name
+        const filtering = JSON.stringify([{ field: "name", operator: "CONTAIN", value: adName }]);
+        const fields = "id,name,status,effective_status,creative{id,name,thumbnail_url,image_url,object_story_spec,asset_feed_spec}";
+        const searchUrl = `https://graph.facebook.com/v22.0/act_${acct.account_id}/ads?filtering=${encodeURIComponent(filtering)}&fields=${encodeURIComponent(fields)}&limit=5&access_token=${acct.access_token}`;
+        const fbRes = await fetch(searchUrl);
+        const data = await fbRes.json();
+        if (data.error) continue;
+        if (!data.data || !data.data.length) continue;
+
+        // Get ad previews for the first matching ad
+        const ad = data.data[0];
+        const previews = [];
+        const formats = ["DESKTOP_FEED_STANDARD", "MOBILE_FEED_STANDARD"];
+        for (const fmt of formats) {
+          try {
+            const prevUrl = `https://graph.facebook.com/v22.0/${ad.id}/previews?ad_format=${fmt}&access_token=${acct.access_token}`;
+            const prevRes = await fetch(prevUrl);
+            const prevData = await prevRes.json();
+            if (prevData.data && prevData.data.length) {
+              previews.push({ format: fmt, html: prevData.data[0].body });
+            }
+          } catch {}
+        }
+
+        // Also get the creative images directly
+        let imageUrl = ad.creative?.image_url || ad.creative?.thumbnail_url || "";
+        // Try object_story_spec for image
+        if (!imageUrl && ad.creative?.object_story_spec) {
+          const spec = ad.creative.object_story_spec;
+          if (spec.link_data?.image_hash || spec.link_data?.picture) imageUrl = spec.link_data.picture || "";
+          if (spec.video_data?.image_url) imageUrl = spec.video_data.image_url;
+        }
+
+        return res.json({
+          adId: ad.id,
+          adName: ad.name,
+          status: ad.effective_status || ad.status,
+          imageUrl,
+          previews,
+          allAds: data.data.map(a => ({ id: a.id, name: a.name, status: a.effective_status || a.status })),
+        });
+      } catch { continue; }
+    }
+
+    return res.json({ adId: null, adName, error: "Không tìm thấy quảng cáo với tên này" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ========== MARKET INTELLIGENCE ENGINE ==========
 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)

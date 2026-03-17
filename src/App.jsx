@@ -2983,6 +2983,25 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
+  const [adPreview, setAdPreview] = useState(null);
+  const [loadingAdPreview, setLoadingAdPreview] = useState(false);
+  const [showAdPreview, setShowAdPreview] = useState(false);
+
+  const handleViewAdPreview = async (adName) => {
+    if (!adName || adName === "-") return;
+    setShowAdPreview(true);
+    setLoadingAdPreview(true);
+    setAdPreview(null);
+    try {
+      const r = await apiFetch(`${API}/fb-ads/ad-preview?adName=${encodeURIComponent(adName)}`);
+      const data = await r.json();
+      setAdPreview(data);
+    } catch (e) {
+      setAdPreview({ error: e.message });
+    } finally {
+      setLoadingAdPreview(false);
+    }
+  };
 
   const handleDeleteHistory = async (histId) => {
     if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
@@ -3062,7 +3081,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b></div>
+        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
+          {isAdmin && lead.adName && lead.adName !== "-" ? (
+            <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(lead.adName); }}
+              style={{ fontSize: isMobile ? 11 : 13, color: "#2563eb", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
+              title="Click để xem quảng cáo">{lead.adName}</b>
+          ) : (
+            <b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b>
+          )}
+        </div>
         {lead.regCount > 1 && (
           <div><span style={{ color: "#6b7280", fontSize: 11 }}>Số lần ĐK</span><br />
             <b style={{ fontSize: 13, color: "#d97706" }}>{lead.regCount} lần</b>
@@ -3097,7 +3124,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.createdAt || "-"}</span>
                     </div>
                     <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                      Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b> | Nhóm: <b>{reg.adsetName}</b> | Content: <b>{reg.adName}</b>
+                      Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b> | Nhóm: <b>{reg.adsetName}</b> | Content: {isAdmin && reg.adName ? (
+                        <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(reg.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{reg.adName}</b>
+                      ) : <b>{reg.adName}</b>}
                     </div>
                   </div>
                 );
@@ -3252,7 +3281,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                         Dự án: <b>{item.projectName}</b> | Chiến dịch: <b>{item.campaign}</b>
                       </div>
                       <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                        Nhóm: {item.adsetName} | Content: {item.adName}
+                        Nhóm: {item.adsetName} | Content: {isAdmin && item.adName ? (
+                          <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(item.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{item.adName}</span>
+                        ) : item.adName}
                       </div>
                     </div>
                   </div>
@@ -3310,6 +3341,86 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         );
       })()}
+
+      {/* Ad Preview Modal */}
+      {showAdPreview && (
+        <div onClick={() => setShowAdPreview(false)} style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999,
+          display: "flex", justifyContent: "center", alignItems: "center", padding: 16,
+        }}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: "#fff", borderRadius: 16, width: "100%", maxWidth: 600, maxHeight: "90vh",
+            overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+          }}>
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+                <Eye size={18} /> Xem quảng cáo
+              </h3>
+              <button onClick={() => setShowAdPreview(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20 }}>
+              {loadingAdPreview ? (
+                <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>
+                  <RefreshCw size={24} style={{ animation: "spin 1s linear infinite" }} />
+                  <div style={{ marginTop: 8 }}>Đang tải quảng cáo...</div>
+                </div>
+              ) : adPreview?.error && !adPreview?.adId ? (
+                <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+                  <AlertCircle size={32} style={{ color: "#f59e0b", marginBottom: 8 }} />
+                  <div>{adPreview.error}</div>
+                </div>
+              ) : adPreview?.adId ? (
+                <div>
+                  <div style={{ marginBottom: 12, padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#166534" }}>{adPreview.adName}</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                      Trạng thái: <span style={{ fontWeight: 600, color: adPreview.status === "ACTIVE" ? "#16a34a" : "#dc2626" }}>{adPreview.status}</span>
+                      {" · "}Ad ID: {adPreview.adId}
+                    </div>
+                  </div>
+                  {adPreview.imageUrl && (
+                    <div style={{ marginBottom: 12, textAlign: "center" }}>
+                      <img src={adPreview.imageUrl} alt="Ad Creative" style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }} />
+                    </div>
+                  )}
+                  {adPreview.previews?.length > 0 && adPreview.previews.map((p, pi) => (
+                    <div key={pi} style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
+                        {p.format === "DESKTOP_FEED_STANDARD" ? "📺 Desktop Feed" : "📱 Mobile Feed"}
+                      </div>
+                      <div
+                        style={{ border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", background: "#fafafa" }}
+                        dangerouslySetInnerHTML={{ __html: p.html }}
+                      />
+                    </div>
+                  ))}
+                  {!adPreview.imageUrl && (!adPreview.previews || adPreview.previews.length === 0) && (
+                    <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 13 }}>
+                      Không có preview cho quảng cáo này
+                    </div>
+                  )}
+                  {adPreview.allAds?.length > 1 && (
+                    <div style={{ marginTop: 12, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>Các ad liên quan ({adPreview.allAds.length})</div>
+                      {adPreview.allAds.map((a, ai) => (
+                        <div key={ai} style={{ fontSize: 12, padding: "2px 0", display: "flex", justifyContent: "space-between" }}>
+                          <span>{a.name}</span>
+                          <span style={{ fontSize: 10, color: a.status === "ACTIVE" ? "#16a34a" : "#9ca3af", fontWeight: 600 }}>{a.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+                  <AlertCircle size={32} style={{ marginBottom: 8 }} />
+                  <div>Không tìm thấy quảng cáo</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
