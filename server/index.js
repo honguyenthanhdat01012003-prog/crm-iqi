@@ -109,6 +109,7 @@ async function initDb() {
       is_hot INTEGER DEFAULT 0,
       sale_id INTEGER,
       sale_name TEXT DEFAULT '',
+      manager_name TEXT DEFAULT '',
       source TEXT,
       budget TEXT,
       sync_at TEXT,
@@ -122,6 +123,7 @@ async function initDb() {
   try { await run(db, "ALTER TABLE leads ADD COLUMN adset_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
   try { await run(db, "ALTER TABLE leads ADD COLUMN ad_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
   try { await run(db, "ALTER TABLE leads ADD COLUMN form_name TEXT DEFAULT '-'"); } catch { /* already exists */ }
+  try { await run(db, "ALTER TABLE leads ADD COLUMN manager_name TEXT DEFAULT ''"); } catch { /* already exists */ }
 
   await run(
     db,
@@ -1156,6 +1158,7 @@ async function readData(db) {
       isHot: Boolean(l.is_hot),
       saleId: l.sale_id,
       saleName: l.sale_name || "",
+      managerName: l.manager_name || "",
       saleHistory: historyMap[l.id] || [],
       source: l.source,
       budget: l.budget,
@@ -2006,7 +2009,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     for (const lid of leadIds) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, req.user.displayName, lid] });
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -2174,7 +2177,7 @@ async function processSchedules(db, triggerUser) {
       const saleIdx = (Math.floor(i / perDay) + currentTour) % saleList.length;
       const saleName = saleList[saleIdx];
 
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, sch.created_by || "Hệ thống", lid] });
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
@@ -2466,6 +2469,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
+        sets.push("manager_name = ?"); params.push(req.user.displayName);
         // Reset status to "new" (Chưa feedback) when reassigning to a new sale
         if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
       }
@@ -2674,10 +2678,10 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
       const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND id != ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1", [leadId, histId]);
       if (prev) {
         // Revert to previous sale
-        await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [prev.sale_name, leadId]);
+        await run(db, "UPDATE leads SET sale_name = ?, manager_name = '' WHERE id = ?", [prev.sale_name, leadId]);
       } else {
         // No prior assignment — clear sale
-        await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
+        await run(db, "UPDATE leads SET sale_name = '', manager_name = '', sale_id = NULL WHERE id = ?", [leadId]);
       }
 
       // Revert lead status to the most recent history entry's status (excluding the one being deleted)

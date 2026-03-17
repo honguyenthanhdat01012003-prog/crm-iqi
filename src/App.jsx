@@ -2860,6 +2860,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.createdAt || "-"}</span>
                       {histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
                       {isAdmin && l.saleName && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><User size={12} /> {l.saleName}</span>}
+                      {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
                     </div>
                   </div>
@@ -2887,6 +2888,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <th style={thStyle}>SĐT</th>
                 <th style={thStyle}>Nhu cầu KH</th>
                 <th style={thStyle}>Trạng thái</th>
+                <th style={thStyle}>Người quản lý</th>
                 <th style={thStyle}>Sale hiện tại</th>
                 <th style={thStyle}>Dự án</th>
                 <th style={thStyle}>Ngày nhận lead</th>
@@ -2911,6 +2913,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap",
                       }}>{STATUS_LABELS[l.status] || l.status}</span>
                     </td>
+                    <td style={{ ...tdStyle, fontSize: 12, color: "#4b5563" }}>{l.managerName || "-"}</td>
                     <td style={tdStyle}>{l.saleName || "Chưa chia"}</td>
                     <td style={{ ...tdStyle, fontSize: 11 }}>{projectMap[l.projectId] || "-"}</td>
                     <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>
@@ -2924,7 +2927,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 if (isOpen) {
                   rows.push(
                     <tr key={`${l.id}-detail`}>
-                      <td colSpan={9} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
+                      <td colSpan={10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
                         <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={false} />
                       </td>
                     </tr>
@@ -2934,7 +2937,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               })}
               {tabFiltered.length === 0 && (
                 <tr>
-                  <td colSpan={9} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af" }}>Không có khách hàng nào</td>
+                  <td colSpan={10} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af" }}>Không có khách hàng nào</td>
                 </tr>
               )}
             </tbody>
