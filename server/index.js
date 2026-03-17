@@ -353,27 +353,24 @@ async function initDb() {
   // Migration: add source column to lead_history
   try { await run(db, "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''"); } catch {}
 
-  // Backfill manager_name from "Chia lead" history for leads missing it
+  // Backfill manager_name from "Chia lead" history for leads missing it (single query, no N+1)
   try {
-    const noMgr = await all(db, "SELECT id FROM leads WHERE (manager_name IS NULL OR manager_name = '')");
-    if (noMgr.length > 0) {
-      const batchStmts = [];
-      for (const lead of noMgr) {
-        // Find the latest "Chia lead" history entry — the person who chia'd is the manager
-        const chiaHist = await get(db,
-          "SELECT feedback FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1",
-          [lead.id]);
-        if (chiaHist && chiaHist.feedback) {
-          // feedback format: "Admin X chia lead" or "Lịch chia tự động #N (...)"
-          const m = chiaHist.feedback.match(/^Admin\s+(.+?)\s+(?:chia lead|xáo lead)/);
-          if (m && m[1]) {
-            batchStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [m[1], lead.id] });
-          }
-        }
+    const rows = await all(db,
+      `SELECT l.id, lh.feedback FROM leads l
+       JOIN lead_history lh ON lh.lead_id = l.id AND lh.action = 'Chia lead'
+       WHERE (l.manager_name IS NULL OR l.manager_name = '')
+       AND lh.seq = (SELECT MAX(lh2.seq) FROM lead_history lh2 WHERE lh2.lead_id = l.id AND lh2.action = 'Chia lead')`
+    );
+    if (rows.length > 0) {
+      const stmts = [];
+      for (const r of rows) {
+        if (!r.feedback) continue;
+        const m = r.feedback.match(/^Admin\s+(.+?)\s+(?:chia lead|xáo lead)/);
+        if (m && m[1]) stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [m[1], r.id] });
       }
-      if (batchStmts.length) {
-        await db.batch(batchStmts, "write");
-        console.log(`[migration] Backfilled manager_name for ${batchStmts.length} leads`);
+      if (stmts.length) {
+        await db.batch(stmts, "write");
+        console.log(`[migration] Backfilled manager_name for ${stmts.length} leads`);
       }
     }
   } catch (e) { console.error("[migration] backfill manager_name error:", e.message); }
