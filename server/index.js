@@ -2694,7 +2694,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq, "admin"]
+      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq, req.user.role === "sale" ? "sale" : "admin"]
     );
 
     // Also update lead status if provided
