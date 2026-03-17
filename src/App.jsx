@@ -6397,8 +6397,11 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
         method: editingBot ? "PUT" : "POST",
         body: JSON.stringify(botDraft),
       });
-      if (!r.ok) { const d = await r.json(); setBotError(String(d.error || "Lỗi")); setSavingBot(false); return; }
-      setBots(await r.json());
+      const text = await r.text();
+      let d;
+      try { d = JSON.parse(text); } catch { setBotError(text.slice(0, 120) || "Server trả về lỗi không xác định"); setSavingBot(false); return; }
+      if (!r.ok) { setBotError(String(d.error || "Lỗi")); setSavingBot(false); return; }
+      setBots(d);
       setShowBotForm(false);
     } catch (e) { setBotError(e.message); }
     setSavingBot(false);
