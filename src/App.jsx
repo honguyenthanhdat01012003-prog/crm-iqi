@@ -549,21 +549,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       .catch(console.error);
   }, [applyApiData]);
 
-  // Auto-sync from Google Sheets every 30 seconds + countdown
+  // Auto-sync from Google Sheets every 10 seconds + countdown
   useEffect(() => {
-    setSyncCountdown(30);
-    const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 30 : c - 1), 1000);
+    setSyncCountdown(10);
+    const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 10 : c - 1), 1000);
     const interval = setInterval(() => {
-      const endpoint = isAdmin ? `${API}/sync` : `${API}/data`;
-      const opts = isAdmin ? { method: "POST" } : {};
-      apiFetch(endpoint, opts)
+      apiFetch(`${API}/sync`, { method: "POST" })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(applyApiData)
         .catch(() => apiFetch(`${API}/data`).then(r => r.json()).then(applyApiData).catch(() => {}));
-      setSyncCountdown(30);
-    }, 30000);
+      setSyncCountdown(10);
+    }, 10000);
     return () => { clearInterval(interval); clearInterval(tick); };
-  }, [applyApiData, isAdmin]);
+  }, [applyApiData]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {

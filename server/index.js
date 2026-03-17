@@ -1253,14 +1253,15 @@ async function syncProject(db, projectId) {
 async function syncAllProjects(db) {
   const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const errors = [];
-  for (const p of projects) {
+  // Sync all projects in parallel for speed
+  await Promise.allSettled(projects.map(async (p) => {
     try {
       await syncProject(db, p.id);
     } catch (e) {
       console.error("Sync project", p.id, "failed:", e.message, e.stack);
       errors.push(`${p.name}: ${e.message}`);
     }
-  }
+  }));
   if (errors.length) console.error("Sync errors:", errors);
   const lastSync = new Date().toISOString();
   await upsertSetting(db, "lastSync", lastSync);
@@ -1906,7 +1907,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/sync", requireAuth, async (req, res) => {
   try {
     console.log("[sync] Starting sync...");
     const { lastSync, syncErrors } = await syncAllProjects(db);
