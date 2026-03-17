@@ -6179,6 +6179,13 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   const [autoCreateMsg, setAutoCreateMsg] = useState("");
   const [autoCreating, setAutoCreating] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
+  const [showBulkCreate, setShowBulkCreate] = useState(false);
+  const [bulkNames, setBulkNames] = useState("");
+  const [bulkCreating, setBulkCreating] = useState(false);
+  const [bulkResult, setBulkResult] = useState(null);
+  const [userSearch, setUserSearch] = useState("");
+  const [userPage, setUserPage] = useState(1);
+  const USERS_PER_PAGE = 10;
   const [savingBot, setSavingBot] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(null);
@@ -6288,6 +6295,49 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
     setAutoCreating(false);
   };
 
+  const handleBulkCreate = async () => {
+    const nameList = bulkNames.split("\n").map(n => n.trim()).filter(Boolean);
+    if (nameList.length === 0) return;
+    setBulkCreating(true);
+    setBulkResult(null);
+    try {
+      const r = await apiFetch(`${API}/users/bulk-create-sales`, {
+        method: "POST",
+        body: JSON.stringify({ names: nameList }),
+      });
+      const data = await r.json();
+      if (r.ok) {
+        setUsers(data.users);
+        setBulkResult(data);
+        if (data.created > 0) setBulkNames("");
+      } else {
+        setBulkResult({ error: data.error || "Lỗi không xác định" });
+      }
+    } catch (e) {
+      setBulkResult({ error: e.message });
+    }
+    setBulkCreating(false);
+  };
+
+  // Filtered + paginated users
+  const filteredUsers = useMemo(() => {
+    if (!userSearch.trim()) return users;
+    const q = userSearch.toLowerCase();
+    return users.filter(u =>
+      (u.username || "").toLowerCase().includes(q) ||
+      (u.displayName || "").toLowerCase().includes(q) ||
+      (u.email || "").toLowerCase().includes(q) ||
+      (u.phone || "").toLowerCase().includes(q) ||
+      (u.role || "").toLowerCase().includes(q)
+    );
+  }, [users, userSearch]);
+
+  const totalUserPages = Math.max(1, Math.ceil(filteredUsers.length / USERS_PER_PAGE));
+  const paginatedUsers = filteredUsers.slice((userPage - 1) * USERS_PER_PAGE, userPage * USERS_PER_PAGE);
+
+  // Reset page when search changes
+  useEffect(() => { setUserPage(1); }, [userSearch]);
+
   const openProfile = (u) => {
     setShowProfileModal(u);
     setProfileDraft({ avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "", telegramId: u.telegramId || "" });
@@ -6368,15 +6418,35 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   return (
     <>
       {/* ===== TÀI KHOẢN ===== */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 14, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}><Users size={14} /> {users.length} tài khoản</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={handleAutoCreate} disabled={autoCreating} style={{ ...btnSecondary, minHeight: 40, fontSize: 12 }}>
             {autoCreating ? <><Hourglass size={14} className="spin" /> Đang tạo...</> : <><Bot size={14} /> Tự tạo TK Sale</>}
           </button>
+          <button onClick={() => { setShowBulkCreate(true); setBulkResult(null); }} style={{ ...btnSecondary, minHeight: 40, fontSize: 12 }}>
+            <ClipboardList size={14} /> Tạo DS Sale
+          </button>
           <button onClick={openNew} style={{ ...btnPrimary, minHeight: 40 }}>+ Thêm tài khoản</button>
         </div>
       </div>
+
+      {/* Thanh tìm kiếm tài khoản */}
+      <div style={{ position: "relative", marginBottom: 12 }}>
+        <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#9ca3af" }} />
+        <input
+          value={userSearch}
+          onChange={(e) => setUserSearch(e.target.value)}
+          placeholder="Tìm kiếm tài khoản (tên, username, email, SĐT...)"
+          style={{ ...inputStyle, paddingLeft: 34, marginBottom: 0 }}
+        />
+        {userSearch && (
+          <button onClick={() => setUserSearch("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#9ca3af", padding: 2 }}>
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      {userSearch && <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>Tìm thấy {filteredUsers.length} tài khoản</div>}
       {autoCreateMsg && (
         <div style={{
           background: autoCreateMsg.startsWith("[OK]") ? "#f0fdf4" : autoCreateMsg.startsWith("[INFO]") ? "#f0faf1" : "#fef2f2",
@@ -6392,8 +6462,8 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
       )}
 
       {isMobile ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 32 }}>
-          {users.map((u) => (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+          {paginatedUsers.map((u) => (
             <div key={u.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -6441,7 +6511,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           ))}
         </div>
       ) : (
-      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 32 }}>
+      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 12 }}>
         <table style={tableStyle}>
           <thead>
             <tr>
@@ -6457,9 +6527,11 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
             </tr>
           </thead>
           <tbody>
-            {users.map((u, i) => (
-              <tr key={u.id} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
-                <td style={tdStyle}>{i + 1}</td>
+            {paginatedUsers.map((u, i) => {
+              const globalIdx = (userPage - 1) * USERS_PER_PAGE + i;
+              return (
+              <tr key={u.id} style={{ background: globalIdx % 2 ? "#f9fafb" : "#fff" }}>
+                <td style={tdStyle}>{globalIdx + 1}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{u.username}</td>
                 <td style={tdStyle}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -6517,10 +6589,51 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
+      )}
+
+      {/* Pagination */}
+      {totalUserPages > 1 && (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, marginBottom: 24 }}>
+          <button
+            onClick={() => setUserPage(p => Math.max(1, p - 1))}
+            disabled={userPage === 1}
+            style={{ ...btnSecondary, padding: "6px 10px", fontSize: 12, opacity: userPage === 1 ? 0.4 : 1 }}
+          ><ChevronLeft size={14} /></button>
+          {Array.from({ length: totalUserPages }, (_, i) => i + 1)
+            .filter(p => p === 1 || p === totalUserPages || Math.abs(p - userPage) <= 2)
+            .reduce((acc, p, idx, arr) => {
+              if (idx > 0 && p - arr[idx - 1] > 1) acc.push("...");
+              acc.push(p);
+              return acc;
+            }, [])
+            .map((p, idx) =>
+              p === "..." ? (
+                <span key={"dot" + idx} style={{ color: "#9ca3af", fontSize: 12, padding: "0 2px" }}>...</span>
+              ) : (
+                <button
+                  key={p}
+                  onClick={() => setUserPage(p)}
+                  style={{
+                    padding: "6px 10px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    border: userPage === p ? "2px solid #e88a2e" : "1px solid #d1d5db",
+                    background: userPage === p ? "#fef6ee" : "#fff",
+                    color: userPage === p ? "#e88a2e" : "#374151",
+                    cursor: "pointer", minWidth: 36,
+                  }}
+                >{p}</button>
+              )
+            )}
+          <button
+            onClick={() => setUserPage(p => Math.min(totalUserPages, p + 1))}
+            disabled={userPage === totalUserPages}
+            style={{ ...btnSecondary, padding: "6px 10px", fontSize: 12, opacity: userPage === totalUserPages ? 0.4 : 1 }}
+          ><ChevronRight size={14} /></button>
+        </div>
       )}
 
       {/* ===== TELEGRAM BOT (Admin only) ===== */}
@@ -6729,6 +6842,67 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSave} disabled={savingUser} style={{ ...btnPrimary, flex: 1, opacity: savingUser ? 0.6 : 1 }}>{savingUser ? "Đang lưu..." : "Lưu"}</button>
             <button onClick={() => setShowForm(false)} disabled={savingUser} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal tạo danh sách TK Sale */}
+      {showBulkCreate && (
+        <Modal onClose={() => setShowBulkCreate(false)} title="Tạo danh sách tài khoản Sale">
+          <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12, lineHeight: 1.6 }}>
+            <Info size={13} style={{ display: "inline", verticalAlign: "middle" }} /> Nhập danh sách tên Sale, <strong>mỗi tên một dòng</strong>.
+            <br />Mật khẩu mặc định: tên (không dấu) + 123. VD: <strong>thao123</strong>
+            <br />Sale sẽ phải đổi mật khẩu khi đăng nhập lần đầu.
+          </div>
+          <label style={labelStyle}>Danh sách tên Sale</label>
+          <textarea
+            value={bulkNames}
+            onChange={(e) => setBulkNames(e.target.value)}
+            placeholder={"Nguyễn Văn A\nTrần Thị B\nLê Văn C\n..."}
+            rows={8}
+            style={{ ...inputStyle, resize: "vertical", fontFamily: "inherit", lineHeight: 1.6 }}
+          />
+          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 12 }}>
+            {bulkNames.split("\n").filter(n => n.trim()).length} tên trong danh sách
+          </div>
+
+          {bulkResult && !bulkResult.error && (
+            <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12, fontSize: 13, marginBottom: 12, maxHeight: 200, overflowY: "auto" }}>
+              {bulkResult.created > 0 ? (
+                <>
+                  <div style={{ fontWeight: 700, color: "#16a34a", marginBottom: 6 }}><Check size={13} style={{ display: "inline", verticalAlign: "middle" }} /> Đã tạo {bulkResult.created} tài khoản:</div>
+                  {bulkResult.createdList.map((c, i) => (
+                    <div key={i} style={{ fontSize: 12, color: "#1a3c20", padding: "2px 0" }}>• {c.displayName} → @{c.username} (MK: {c.defaultPassword})</div>
+                  ))}
+                </>
+              ) : (
+                <div style={{ color: "#6b7280" }}><Info size={13} style={{ display: "inline", verticalAlign: "middle" }} /> Không có tài khoản mới được tạo.</div>
+              )}
+              {bulkResult.skippedList && bulkResult.skippedList.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #d1fae5" }}>
+                  <div style={{ fontWeight: 600, color: "#ca8a04", fontSize: 12, marginBottom: 4 }}>Bỏ qua ({bulkResult.skippedList.length}):</div>
+                  {bulkResult.skippedList.map((s, i) => (
+                    <div key={i} style={{ fontSize: 11, color: "#92400e", padding: "1px 0" }}>• {s.name}: {s.reason}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {bulkResult && bulkResult.error && (
+            <div style={{ background: "#fef2f2", color: "#dc2626", padding: "8px 12px", borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
+              <X size={13} style={{ display: "inline", verticalAlign: "middle" }} /> {bulkResult.error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button
+              onClick={handleBulkCreate}
+              disabled={bulkCreating || bulkNames.split("\n").filter(n => n.trim()).length === 0}
+              style={{ ...btnPrimary, flex: 1, opacity: (bulkCreating || bulkNames.split("\n").filter(n => n.trim()).length === 0) ? 0.6 : 1 }}
+            >
+              {bulkCreating ? <><Hourglass size={14} className="spin" /> Đang tạo...</> : <><ClipboardList size={14} /> Tạo tài khoản</>}
+            </button>
+            <button onClick={() => setShowBulkCreate(false)} disabled={bulkCreating} style={{ ...btnSecondary, flex: 1 }}>Đóng</button>
           </div>
         </Modal>
       )}

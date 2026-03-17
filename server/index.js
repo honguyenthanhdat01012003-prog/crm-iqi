@@ -1492,6 +1492,74 @@ app.post("/api/users/auto-create-sales", requireAuth, requireAdmin, async (req, 
   }
 });
 
+/* ---------- Bulk create sale accounts from a list of names ---------- */
+app.post("/api/users/bulk-create-sales", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { names } = req.body;
+    if (!names || !Array.isArray(names) || names.length === 0) {
+      return res.status(400).json({ error: "Danh sách tên không hợp lệ" });
+    }
+    if (names.length > 200) {
+      return res.status(400).json({ error: "Tối đa 200 tài khoản mỗi lần" });
+    }
+
+    const existingUsers = await all(db, "SELECT username, display_name FROM users");
+    const existingDisplayNames = new Set(existingUsers.map(u => foldText(u.display_name)));
+    const existingUsernames = new Set(existingUsers.map(u => u.username));
+
+    let created = 0;
+    const createdList = [];
+    const skippedList = [];
+
+    for (const rawName of names) {
+      const saleName = String(rawName).trim();
+      if (!saleName) continue;
+
+      if (existingDisplayNames.has(foldText(saleName))) {
+        skippedList.push({ name: saleName, reason: "Đã tồn tại" });
+        continue;
+      }
+
+      const words = saleName.split(/\s+/).filter(Boolean);
+      if (words.length < 2) {
+        skippedList.push({ name: saleName, reason: "Tên phải có ít nhất 2 từ" });
+        continue;
+      }
+
+      const lastTwo = words.slice(-2).map(w =>
+        w.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase()
+      ).join("");
+
+      let username = lastTwo;
+      if (existingUsernames.has(username)) {
+        let suffix = 2;
+        while (existingUsernames.has(username + suffix)) suffix++;
+        username = username + suffix;
+      }
+
+      const lastWord = words[words.length - 1]
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[đĐ]/g, "d").toLowerCase();
+      const defaultPwd = lastWord + "123";
+
+      const { hash, salt } = hashPassword(defaultPwd);
+      await run(
+        db,
+        "INSERT INTO users(username, password_hash, salt, role, display_name, must_change_password) VALUES(?, ?, ?, ?, ?, ?)",
+        [username, hash, salt, "sale", saleName, 1]
+      );
+      existingUsernames.add(username);
+      existingDisplayNames.add(foldText(saleName));
+      created++;
+      createdList.push({ username, displayName: saleName, defaultPassword: defaultPwd });
+    }
+
+    const users = await selectUsers();
+    res.json({ created, createdList, skippedList, users: await mapUsersWithProjects(users) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ---------- Self-profile endpoints (any authenticated user) ---------- */
 app.get("/api/profile", requireAuth, async (req, res) => {
   try {
