@@ -3382,7 +3382,7 @@ app.get("/api/fb-ads/adsets/:accountId", requireAuth, requireAdmin, async (req, 
 });
 
 // --- Facebook Ad Preview by ad name ---
-app.get("/api/fb-ads/ad-preview", requireAuth, requireAdmin, async (req, res) => {
+app.get("/api/fb-ads/ad-preview", requireAuth, async (req, res) => {
   try {
     const { adName } = req.query;
     if (!adName) return res.status(400).json({ error: "adName is required" });

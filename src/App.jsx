@@ -3082,7 +3082,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
-          {isAdmin && lead.adName && lead.adName !== "-" ? (
+          {lead.adName && lead.adName !== "-" ? (
             <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(lead.adName); }}
               style={{ fontSize: isMobile ? 11 : 13, color: "#2563eb", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
               title="Click để xem quảng cáo">{lead.adName}</b>
@@ -3124,7 +3124,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.createdAt || "-"}</span>
                     </div>
                     <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                      Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b> | Nhóm: <b>{reg.adsetName}</b> | Content: {isAdmin && reg.adName ? (
+                      Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b> | Nhóm: <b>{reg.adsetName}</b> | Content: {reg.adName ? (
                         <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(reg.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{reg.adName}</b>
                       ) : <b>{reg.adName}</b>}
                     </div>
@@ -3281,7 +3281,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                         Dự án: <b>{item.projectName}</b> | Chiến dịch: <b>{item.campaign}</b>
                       </div>
                       <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                        Nhóm: {item.adsetName} | Content: {isAdmin && item.adName ? (
+                        Nhóm: {item.adsetName} | Content: {item.adName ? (
                           <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(item.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{item.adName}</span>
                         ) : item.adName}
                       </div>
