@@ -3388,9 +3388,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
                         {p.format === "DESKTOP_FEED_STANDARD" ? "📺 Desktop Feed" : "📱 Mobile Feed"}
                       </div>
-                      <div
-                        style={{ border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden", background: "#fafafa" }}
-                        dangerouslySetInnerHTML={{ __html: p.html }}
+                      <iframe
+                        srcDoc={p.html}
+                        style={{ width: "100%", minHeight: p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600, border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}
+                        sandbox="allow-scripts allow-same-origin allow-popups"
+                        scrolling="no"
+                        onLoad={e => {
+                          try {
+                            const doc = e.target.contentDocument || e.target.contentWindow?.document;
+                            if (doc?.body) {
+                              const h = doc.body.scrollHeight;
+                              if (h > 100) e.target.style.height = (h + 20) + "px";
+                            }
+                          } catch(err) {}
+                        }}
                       />
                     </div>
                   ))}
