@@ -2003,7 +2003,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
     await filterDataForRole(data, req.user);
     // Compute hash from lead count + last lead id + lastSync
     const hashSrc = `${data.leads.length}|${data.leads[data.leads.length - 1]?.id || 0}|${lastSync}|${data.leads.reduce((s, l) => s + (l.status || ""), "")}`;
-    const hash = require("crypto").createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    const hash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
     lastSyncHash = hash;
     // If client already has this hash, return minimal response
     if (clientHash && clientHash === hash) {
