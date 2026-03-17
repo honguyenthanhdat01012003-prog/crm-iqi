@@ -69,8 +69,8 @@ async function initDb() {
     authToken: process.env.TURSO_AUTH_TOKEN || undefined,
   });
 
-  // Batch all CREATE TABLE statements in a single network call
-  await db.batch([
+  // Create all tables - use executeMultiple for DDL (no transaction needed for IF NOT EXISTS)
+  const ddlStatements = [
     `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`,
     `CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY, name TEXT NOT NULL, project_id INTEGER NOT NULL, channel TEXT, budget REAL DEFAULT 0, spent REAL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS leads (
@@ -150,9 +150,13 @@ async function initDb() {
       opportunity_score INTEGER DEFAULT 50, competitor_count INTEGER DEFAULT 0, winning_pages TEXT DEFAULT '[]',
       ad_trend_30d TEXT DEFAULT '[]', cpl_trend_30d TEXT DEFAULT '[]', segment TEXT DEFAULT 'standard',
       scraped_at TEXT DEFAULT (datetime('now')), UNIQUE(project_name))`,
-  ], "write");
+  ];
+  // Run DDL one at a time (safe, and IF NOT EXISTS makes it fast — no actual work on existing DB)
+  for (const sql of ddlStatements) {
+    await run(db, sql);
+  }
 
-  // Batch all ALTER TABLE migrations (each may fail if column already exists — that's OK)
+  // ALTER TABLE migrations — run sequentially, each in try/catch (fast: column already exists = instant fail)
   const migrations = [
     "ALTER TABLE leads ADD COLUMN sale_name TEXT DEFAULT ''",
     "ALTER TABLE leads ADD COLUMN adset_name TEXT DEFAULT '-'",
@@ -177,8 +181,10 @@ async function initDb() {
     "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''",
     "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
   ];
-  // Run each migration individually (ALTER TABLE can't be batched if some fail)
-  await Promise.all(migrations.map(sql => run(db, sql).catch(() => {})));
+  // Run each migration sequentially (each is instant if column exists; avoids Turso concurrent issues)
+  for (const sql of migrations) {
+    try { await run(db, sql); } catch (_) { /* column already exists — OK */ }
+  }
 
   // Backfill manager_name from "Chia lead" history for leads missing it (single query)
   try {
@@ -1228,6 +1234,7 @@ try {
 
 /* ---------- Auth middleware ---------- */
 function requireAuth(req, res, next) {
+  if (!db) return res.status(503).json({ error: "Database not ready", dbError: dbInitError });
   const token = (req.headers.authorization || "").replace("Bearer ", "");
   if (!token) return res.status(401).json({ error: "Unauthorized" });
   try {
