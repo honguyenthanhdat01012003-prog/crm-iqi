@@ -6682,6 +6682,14 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={async () => {
             try {
+              const r = await apiFetch(`${API}/telegram-bots/auto-assign`, { method: "POST" });
+              const d = await r.json();
+              if (d.bots) setBots(d.bots);
+              showToast(d.msg, d.assigned > 0 ? "success" : "info");
+            } catch (e) { showToast(e.message, "error"); }
+          }} style={{ ...btnSecondary, fontSize: 12, padding: "8px 12px", minHeight: 40, display: "flex", alignItems: "center", gap: 4 }}><Zap size={14} /> Auto gán DA</button>
+          <button onClick={async () => {
+            try {
               const r = await apiFetch(`${API}/telegram-webhook/setup`, { method: "POST" });
               const d = await r.json();
               showToast(d.ok ? d.msg : d.error, d.ok ? "success" : "error");

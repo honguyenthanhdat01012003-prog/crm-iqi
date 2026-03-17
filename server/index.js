@@ -1707,6 +1707,31 @@ app.delete("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ---------- Auto-assign bots to projects by name matching ---------- */
+app.post("/api/telegram-bots/auto-assign", requireAuth, requireAdminOnly, async (_req, res) => {
+  try {
+    const bots = await all(db, "SELECT id, name FROM telegram_bots WHERE project_id IS NULL");
+    const projects = await all(db, "SELECT id, name FROM projects");
+    if (!bots.length) return res.json({ msg: "Tất cả bot đã được gắn dự án", assigned: 0 });
+
+    let assigned = 0;
+    for (const bot of bots) {
+      const botNameLower = bot.name.toLowerCase();
+      // Find project whose name is contained in bot name or vice versa
+      const match = projects.find(p => {
+        const pLower = p.name.toLowerCase();
+        return botNameLower.includes(pLower) || pLower.includes(botNameLower);
+      });
+      if (match) {
+        await run(db, "UPDATE telegram_bots SET project_id = ? WHERE id = ?", [match.id, bot.id]);
+        assigned++;
+      }
+    }
+    const allBots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
+    res.json({ msg: `Đã gắn ${assigned}/${bots.length} bot vào dự án`, assigned, bots: allBots.map(mapBot) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* ---------- Get users who chatted with a specific bot ---------- */
 app.get("/api/telegram-bots/:id/chat-users", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -2684,13 +2709,56 @@ const TELE_STATUS_LABELS = {
   hung_up: "Tắt máy ngang", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
 };
 
-app.post("/api/telegram-webhook", async (req, res) => {
+/* ===== Setup Telegram webhook ===== */
+app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const activeBots = await all(db, "SELECT id, name, token FROM telegram_bots WHERE is_active = 1");
+    if (!activeBots || activeBots.length === 0) return res.status(400).json({ error: "Không có bot nào đang hoạt động" });
+
+    const results = [];
+    for (const bot of activeBots) {
+      const webhookUrl = `https://crm-iqi.id.vn/api/telegram-webhook/${bot.id}`;
+      try {
+        const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: webhookUrl }),
+        });
+        const data = await r.json();
+        results.push({ name: bot.name, ok: data.ok, error: data.ok ? null : data.description });
+      } catch (e) {
+        results.push({ name: bot.name, ok: false, error: e.message });
+      }
+    }
+
+    const successCount = results.filter(r => r.ok).length;
+    const failList = results.filter(r => !r.ok).map(r => `${r.name}: ${r.error}`);
+    if (successCount === activeBots.length) {
+      res.json({ ok: true, msg: `Webhook đã cài đặt cho ${successCount} bot thành công!` });
+    } else {
+      res.json({ ok: successCount > 0, msg: `${successCount}/${activeBots.length} bot OK.${failList.length ? " Lỗi: " + failList.join("; ") : ""}` });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ===== Telegram Webhook Handler ===== */
+app.post("/api/telegram-webhook/:botId?", async (req, res) => {
   try {
     const { callback_query, message } = req.body || {};
-    const activeBot = await get(db, "SELECT id, token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
-    if (!activeBot) return res.json({ ok: true });
-    const botToken = activeBot.token;
-    const botId = activeBot.id;
+
+    // Determine which bot this webhook is for
+    let bot;
+    if (req.params.botId) {
+      bot = await get(db, "SELECT id, token FROM telegram_bots WHERE id = ? AND is_active = 1", [Number(req.params.botId)]);
+    }
+    if (!bot) {
+      bot = await get(db, "SELECT id, token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+    }
+    if (!bot) return res.json({ ok: true });
+    const botToken = bot.token;
+    const botId = bot.id;
 
     // Auto-save chat user to DB from any interaction
     const saveChatUser = (from) => {
@@ -2815,28 +2883,6 @@ app.post("/api/telegram-webhook", async (req, res) => {
   } catch (err) {
     console.error("[Telegram Webhook] Error:", err.message);
     res.json({ ok: true });
-  }
-});
-
-/* ===== Setup Telegram webhook ===== */
-app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, res) => {
-  try {
-    const activeBot = await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
-    if (!activeBot) return res.status(400).json({ error: "Không có bot nào đang hoạt động" });
-    const webhookUrl = `https://crm-iqi.id.vn/api/telegram-webhook`;
-    const r = await fetch(`https://api.telegram.org/bot${activeBot.token}/setWebhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl }),
-    });
-    const data = await r.json();
-    if (data.ok) {
-      res.json({ ok: true, msg: `Webhook đã được cài đặt: ${webhookUrl}` });
-    } else {
-      res.status(400).json({ error: data.description || "Cài đặt webhook thất bại" });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 
