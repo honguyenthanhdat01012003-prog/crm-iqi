@@ -3029,6 +3029,17 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [adPreview, setAdPreview] = useState(null);
   const [loadingAdPreview, setLoadingAdPreview] = useState(false);
   const [showAdPreview, setShowAdPreview] = useState(false);
+  // Messenger chat state
+  const [messengerConvs, setMessengerConvs] = useState([]);
+  const [messengerLoading, setMessengerLoading] = useState(false);
+  const [messengerError, setMessengerError] = useState("");
+  const [messengerOpen, setMessengerOpen] = useState(false);
+  const [activeMessengerConv, setActiveMessengerConv] = useState(null);
+  const [messengerMsgs, setMessengerMsgs] = useState([]);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [messengerDraft, setMessengerDraft] = useState("");
+  const [sendingMsg, setSendingMsg] = useState(false);
+  const messengerEndRef = useRef(null);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;
@@ -3045,6 +3056,61 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       setLoadingAdPreview(false);
     }
   };
+
+  // Messenger: load conversations for this lead
+  const loadMessengerConvs = async () => {
+    if (!lead.name) return;
+    setMessengerLoading(true);
+    setMessengerError("");
+    try {
+      const r = await apiFetch(`${API}/fb-messenger/lead-conversations?leadName=${encodeURIComponent(lead.name)}`);
+      const data = await r.json();
+      if (!r.ok) { setMessengerError(data.error || "Lỗi tải chat"); return; }
+      setMessengerConvs(data.conversations || []);
+      if (!data.conversations?.length) setMessengerError("Không tìm thấy cuộc hội thoại nào khớp với khách hàng này");
+    } catch (e) { setMessengerError("Không thể kết nối"); }
+    finally { setMessengerLoading(false); }
+  };
+
+  // Messenger: load messages for a conversation
+  const loadMessengerMessages = async (conv) => {
+    setActiveMessengerConv(conv);
+    setLoadingMsgs(true);
+    setMessengerMsgs([]);
+    try {
+      const r = await apiFetch(`${API}/fb-messenger/messages?pageId=${conv.pageDbId}&conversationId=${conv.id}`);
+      const data = await r.json();
+      if (r.ok) {
+        setMessengerMsgs((data.messages || []).reverse());
+        setTimeout(() => messengerEndRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+      }
+    } catch { /* ignore */ }
+    setLoadingMsgs(false);
+  };
+
+  // Messenger: send reply
+  const sendMessengerReply = async () => {
+    if (!messengerDraft.trim() || !activeMessengerConv || sendingMsg) return;
+    const text = messengerDraft.trim();
+    const customer = activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId);
+    if (!customer) return;
+    setSendingMsg(true);
+    setMessengerDraft("");
+    try {
+      const r = await apiFetch(`${API}/fb-messenger/reply`, {
+        method: "POST",
+        body: JSON.stringify({ pageId: activeMessengerConv.pageDbId, recipientId: customer.id, message: text }),
+      });
+      if (r.ok) loadMessengerMessages(activeMessengerConv);
+      else { const d = await r.json().catch(() => ({})); setMessengerDraft(text); setMessengerError(d.error || "Gửi thất bại"); }
+    } catch { setMessengerDraft(text); }
+    setSendingMsg(false);
+  };
+
+  // Auto-open messenger section on mount if lead name exists
+  useEffect(() => {
+    if (messengerOpen && messengerConvs.length === 0 && !messengerLoading) loadMessengerConvs();
+  }, [messengerOpen]);
 
   const handleDeleteHistory = async (histId) => {
     if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
@@ -3526,6 +3592,115 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           })()}
         </>
       )}
+
+      {/* === MESSENGER CHAT SECTION === */}
+      <div style={{ marginTop: 16, border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden" }}>
+        <div onClick={() => setMessengerOpen(!messengerOpen)}
+          style={{ padding: "10px 14px", background: "linear-gradient(135deg, #eff6ff, #dbeafe)", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontWeight: 700, fontSize: 13, color: "#1e40af", display: "flex", alignItems: "center", gap: 6 }}>
+            <MessageSquare size={16} /> Chat Messenger với {lead.name}
+            {messengerConvs.length > 0 && <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 10, background: "#3b82f6", color: "#fff", fontWeight: 600 }}>{messengerConvs.length}</span>}
+          </span>
+          <span style={{ fontSize: 11, color: "#3b82f6" }}>{messengerOpen ? "Thu gọn ▲" : "Mở xem ▼"}</span>
+        </div>
+
+        {messengerOpen && (
+          <div style={{ padding: 12, background: "#f8fafc" }}>
+            {messengerLoading && <div style={{ textAlign: "center", padding: 20, color: "#6b7280", fontSize: 13 }}><RefreshCw size={16} style={{ animation: "spin 1s linear infinite" }} /> Đang tìm cuộc hội thoại...</div>}
+            {messengerError && !messengerConvs.length && <div style={{ textAlign: "center", padding: 16, color: "#9ca3af", fontSize: 12 }}>{messengerError}</div>}
+
+            {/* Conversation list */}
+            {!activeMessengerConv && messengerConvs.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Tìm thấy {messengerConvs.length} cuộc hội thoại:</div>
+                {messengerConvs.map((conv, ci) => {
+                  const customer = conv.senders?.find(s => s.id !== conv.pageId);
+                  return (
+                    <div key={ci} onClick={() => loadMessengerMessages(conv)}
+                      style={{ padding: "10px 12px", marginBottom: 6, background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", cursor: "pointer", transition: "all .15s" }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = "#3b82f6"}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "#e5e7eb"}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: "#1f2937" }}>{customer?.name || "Khách hàng"}</div>
+                          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{conv.snippet}</div>
+                        </div>
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontSize: 10, color: "#9ca3af" }}>{conv.updatedTime ? new Date(conv.updatedTime).toLocaleDateString("vi-VN") : ""}</div>
+                          <div style={{ fontSize: 10, color: "#3b82f6", marginTop: 2 }}>📘 {conv.pageName}</div>
+                          {conv.unreadCount > 0 && <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#ef4444", color: "#fff", fontWeight: 600 }}>{conv.unreadCount}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Active conversation - message thread */}
+            {activeMessengerConv && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <button onClick={() => { setActiveMessengerConv(null); setMessengerMsgs([]); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#3b82f6", display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+                    <ChevronLeft size={14} /> Quay lại
+                  </button>
+                  <span style={{ fontWeight: 600, fontSize: 13, color: "#1f2937" }}>
+                    {activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId)?.name || "Khách hàng"}
+                  </span>
+                  <span style={{ fontSize: 10, color: "#6b7280" }}>— 📘 {activeMessengerConv.pageName}</span>
+                </div>
+
+                {/* Messages */}
+                <div style={{ maxHeight: 350, overflowY: "auto", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", padding: 10, marginBottom: 8 }}>
+                  {loadingMsgs && <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 12 }}>Đang tải tin nhắn...</div>}
+                  {!loadingMsgs && messengerMsgs.length === 0 && <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 12 }}>Không có tin nhắn</div>}
+                  {messengerMsgs.map((msg, mi) => {
+                    const isPage = msg.from?.id === activeMessengerConv.pageId;
+                    return (
+                      <div key={mi} style={{ display: "flex", justifyContent: isPage ? "flex-end" : "flex-start", marginBottom: 6 }}>
+                        <div style={{
+                          maxWidth: "75%", padding: "8px 12px", borderRadius: 14,
+                          background: isPage ? "linear-gradient(135deg, #3b82f6, #2563eb)" : "#f3f4f6",
+                          color: isPage ? "#fff" : "#1f2937", fontSize: 13,
+                          borderBottomRightRadius: isPage ? 4 : 14,
+                          borderBottomLeftRadius: isPage ? 14 : 4,
+                        }}>
+                          {msg.message && <div style={{ wordBreak: "break-word" }}>{msg.message}</div>}
+                          {msg.attachments?.map((att, ai) => (
+                            <div key={ai} style={{ marginTop: 4 }}>
+                              {att.type?.startsWith("image") && att.url && <img src={att.url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginTop: 4 }} />}
+                              {!att.type?.startsWith("image") && att.url && <a href={att.url} target="_blank" rel="noreferrer" style={{ color: isPage ? "#dbeafe" : "#3b82f6", fontSize: 11 }}>📎 {att.name || "Tệp đính kèm"}</a>}
+                            </div>
+                          ))}
+                          <div style={{ fontSize: 9, marginTop: 4, opacity: 0.7, textAlign: "right" }}>
+                            {msg.createdTime ? new Date(msg.createdTime).toLocaleString("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : ""}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div ref={messengerEndRef} />
+                </div>
+
+                {/* Reply input */}
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input value={messengerDraft} onChange={e => setMessengerDraft(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendMessengerReply()}
+                    placeholder="Nhập tin nhắn trả lời..."
+                    style={{ flex: 1, padding: "10px 12px", borderRadius: 20, border: "1px solid #d1d5db", fontSize: 13, outline: "none" }}
+                    disabled={sendingMsg} />
+                  <button onClick={sendMessengerReply} disabled={sendingMsg || !messengerDraft.trim()}
+                    style={{ padding: "8px 16px", borderRadius: 20, border: "none", background: messengerDraft.trim() ? "linear-gradient(135deg, #3b82f6, #2563eb)" : "#e5e7eb", color: messengerDraft.trim() ? "#fff" : "#9ca3af", cursor: messengerDraft.trim() ? "pointer" : "default", fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
+                    <Send size={14} /> {sendingMsg ? "..." : "Gửi"}
+                  </button>
+                </div>
+                {messengerError && <div style={{ fontSize: 11, color: "#ef4444", marginTop: 4 }}>{messengerError}</div>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Ad Preview Modal */}
       {showAdPreview && (

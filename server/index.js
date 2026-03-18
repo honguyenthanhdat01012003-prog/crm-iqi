@@ -3386,7 +3386,7 @@ app.get("/api/fb-messenger/conversations", requireAuth, requireAdmin, async (req
 
 // GET /api/fb-messenger/messages?pageId=<fb_pages.id>&conversationId=<conv_id>&after=<cursor>
 // Get messages in a conversation
-app.get("/api/fb-messenger/messages", requireAuth, requireAdmin, async (req, res) => {
+app.get("/api/fb-messenger/messages", requireAuth, async (req, res) => {
   try {
     const pageDbId = Number(req.query.pageId);
     const conversationId = req.query.conversationId;
@@ -3424,7 +3424,7 @@ app.get("/api/fb-messenger/messages", requireAuth, requireAdmin, async (req, res
 
 // POST /api/fb-messenger/reply
 // Send a reply in a conversation
-app.post("/api/fb-messenger/reply", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/fb-messenger/reply", requireAuth, async (req, res) => {
   try {
     const { pageId, recipientId, message } = req.body;
     if (!pageId || !recipientId || !message) return res.status(400).json({ error: "pageId, recipientId và message là bắt buộc" });
@@ -3469,6 +3469,59 @@ app.get("/api/fb-messenger/participant", requireAuth, requireAdmin, async (req, 
     if (data.error) return res.status(400).json({ error: data.error.message });
 
     res.json({ id: data.id, name: data.name || "Người dùng Facebook", profilePic: data.profile_pic || "" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/fb-messenger/lead-conversations?leadName=<name>
+// Find Messenger conversations matching a lead's name across all active pages
+app.get("/api/fb-messenger/lead-conversations", requireAuth, async (req, res) => {
+  try {
+    const leadName = (req.query.leadName || "").trim().toLowerCase();
+    if (!leadName) return res.status(400).json({ error: "leadName là bắt buộc" });
+
+    const activePages = await all(db, "SELECT * FROM fb_pages WHERE is_active = 1 AND access_token != '' AND page_id != ''");
+    if (!activePages.length) return res.json({ conversations: [], pages: [] });
+
+    const results = [];
+    const pageInfos = [];
+
+    for (const page of activePages) {
+      try {
+        const url = `https://graph.facebook.com/v22.0/${page.page_id}/conversations?fields=id,snippet,updated_time,unread_count,senders,message_count&limit=50&access_token=${page.access_token}`;
+        const fbRes = await fetch(url);
+        const data = await fbRes.json();
+        if (data.error) continue;
+
+        const pInfo = { id: page.id, name: page.name, pageId: page.page_id, avatarUrl: page.avatar_url };
+        let added = false;
+
+        for (const c of (data.data || [])) {
+          const senders = (c.senders?.data || []);
+          const customer = senders.find(s => s.id !== page.page_id);
+          if (!customer) continue;
+          const customerName = (customer.name || "").toLowerCase();
+          // Match if lead name contains customer name or vice versa
+          if (customerName.includes(leadName) || leadName.includes(customerName)) {
+            results.push({
+              id: c.id,
+              snippet: c.snippet || "",
+              updatedTime: c.updated_time,
+              unreadCount: c.unread_count || 0,
+              messageCount: c.message_count || 0,
+              senders: senders.map(s => ({ id: s.id, name: s.name, email: s.email })),
+              pageDbId: page.id,
+              pageName: page.name,
+              pageId: page.page_id,
+            });
+            if (!added) { pageInfos.push(pInfo); added = true; }
+          }
+        }
+      } catch { /* skip page on error */ }
+    }
+
+    // Sort by updated time desc
+    results.sort((a, b) => (b.updatedTime || "").localeCompare(a.updatedTime || ""));
+    res.json({ conversations: results, pages: pageInfos });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
