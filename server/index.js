@@ -1259,6 +1259,13 @@ async function syncAllProjects(db) {
   if (errors.length) console.error("Sync errors:", errors);
   const lastSync = new Date().toISOString();
   await upsertSetting(db, "lastSync", lastSync);
+  // Update global hash so poll clients detect the change
+  try {
+    const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+    const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+    const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
+    lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+  } catch {}
   return { lastSync, syncErrors: errors };
 }
 
@@ -1914,6 +1921,22 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
 // Global sync hash — updated after each sync
 let lastSyncHash = "";
+
+// Lightweight poll endpoint — returns hash only (no DB query if hash unchanged)
+app.get("/api/data/poll", requireAuth, async (req, res) => {
+  const clientHash = req.query.hash || "";
+  // If no hash computed yet, compute it now
+  if (!lastSyncHash) {
+    try {
+      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+      const lastSync = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
+      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
+      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    } catch { lastSyncHash = "init"; }
+  }
+  res.json({ hash: lastSyncHash, changed: clientHash !== lastSyncHash });
+});
 
 app.post("/api/sync", requireAuth, async (req, res) => {
   try {

@@ -557,21 +557,24 @@ function CRMApp({ user, updateUser, onLogout }) {
       .catch(console.error);
   }, [applyApiData]);
 
-  // Auto-sync from Google Sheets every 10 seconds + countdown
+  // Auto-poll for changes every 10 seconds (lightweight hash check, no full sync)
   const syncHashRef = React.useRef(syncHash);
   syncHashRef.current = syncHash;
   useEffect(() => {
     setSyncCountdown(10);
     const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 10 : c - 1), 1000);
     const interval = setInterval(() => {
-      apiFetch(`${API}/sync`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hash: syncHashRef.current }),
-      })
+      // Step 1: lightweight hash check (no sync, no heavy query)
+      apiFetch(`${API}/data/poll?hash=${encodeURIComponent(syncHashRef.current)}`)
         .then(r => r.ok ? r.json() : Promise.reject())
-        .then(applyApiData)
-        .catch(() => apiFetch(`${API}/data`).then(r => r.json()).then(applyApiData).catch(() => {}));
+        .then(pollResult => {
+          if (!pollResult.changed) return; // No changes — skip data fetch
+          // Step 2: only fetch full data when hash actually changed
+          return apiFetch(`${API}/data`)
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then(applyApiData);
+        })
+        .catch(() => {});
       setSyncCountdown(10);
     }, 10000);
     return () => { clearInterval(interval); clearInterval(tick); };
