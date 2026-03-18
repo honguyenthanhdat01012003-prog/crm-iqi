@@ -780,6 +780,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "posts", label: "Tất cả bài", icon: FileText },
     { key: "calendar", label: "Lịch đăng bài", icon: Calendar },
   ];
+  if (isAdminOnly) postChildren.push({ key: "fb_pages_mgmt", label: "Quản lý Page", icon: Globe });
   if (isAdminOnly) postChildren.push({ key: "sheet_config", label: "Cấu hình Sheet", icon: Settings });
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
@@ -1150,6 +1151,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
+        {page === "fb_pages_mgmt" && isAdminOnly && <FbPagesPage />}
         {page === "sheet_config" && isAdminOnly && <SheetConfigPage />}
         {page === "messenger_inbox" && isAdminOnly && <MessengerInboxPage />}
         </div>
@@ -8574,6 +8576,183 @@ function SheetPostDetail({ post, onClose, getTitle, getProject, getContent, getS
         </details>
       </div>
     </Modal>
+  );
+}
+
+/* ===== FB Pages Management Page ===== */
+function FbPagesPage() {
+  const isMobile = useIsMobile();
+  const [pages, setPages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editingPage, setEditingPage] = useState(null); // null=closed, {}=new, {id,...}=edit
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ name: "", pageId: "", accessToken: "", avatarUrl: "" });
+
+  const loadPages = async () => {
+    setLoading(true);
+    try {
+      const r = await apiFetch(`${API}/fb-pages`);
+      if (r.ok) setPages(await r.json());
+    } catch {}
+    setLoading(false);
+  };
+
+  useEffect(() => { loadPages(); }, []);
+
+  const openNew = () => { setForm({ name: "", pageId: "", accessToken: "", avatarUrl: "" }); setEditingPage({}); };
+  const openEdit = (p) => { setForm({ name: p.name, pageId: p.pageId, accessToken: p.accessToken, avatarUrl: p.avatarUrl || "" }); setEditingPage(p); };
+  const closeModal = () => { if (!saving) setEditingPage(null); };
+
+  const handleSave = async () => {
+    if (!form.name.trim()) return showToast("Tên Page là bắt buộc", "error");
+    setSaving(true);
+    try {
+      const isNew = !editingPage?.id;
+      const url = isNew ? `${API}/fb-pages` : `${API}/fb-pages/${editingPage.id}`;
+      const r = await apiFetch(url, {
+        method: isNew ? "POST" : "PUT",
+        body: JSON.stringify({ name: form.name.trim(), pageId: form.pageId.trim(), accessToken: form.accessToken.trim(), avatarUrl: form.avatarUrl.trim(), isActive: editingPage?.isActive !== false }),
+      });
+      if (r.ok) { setPages(await r.json()); setEditingPage(null); showToast(isNew ? "Đã thêm Page" : "Đã cập nhật Page"); }
+      else { const d = await r.json().catch(() => ({})); showToast(d.error || "Lỗi", "error"); }
+    } catch { showToast("Lỗi kết nối", "error"); }
+    setSaving(false);
+  };
+
+  const handleToggleActive = async (p) => {
+    try {
+      const r = await apiFetch(`${API}/fb-pages/${p.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ name: p.name, pageId: p.pageId, accessToken: p.accessToken, avatarUrl: p.avatarUrl || "", isActive: !p.isActive }),
+      });
+      if (r.ok) setPages(await r.json());
+    } catch {}
+  };
+
+  const handleDelete = async (p) => {
+    if (!(await showConfirm(`Xóa Page "${p.name}"?`))) return;
+    try {
+      const r = await apiFetch(`${API}/fb-pages/${p.id}`, { method: "DELETE" });
+      if (r.ok) { setPages(await r.json()); showToast("Đã xóa"); }
+    } catch {}
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20, display: "flex", alignItems: "center", gap: 8 }}>
+          <Globe size={20} /> Quản lý Page Facebook
+        </h2>
+        <button onClick={openNew} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <Plus size={14} /> Thêm Page mới
+        </button>
+      </div>
+
+      <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: "#1e40af" }}>
+        <b>💡 Hướng dẫn:</b> Để lấy Access Token, truy cập{" "}
+        <a href="https://developers.facebook.com/tools/explorer/" target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>Graph API Explorer</a>
+        {" → "}chọn Page → Generate Token → Copy. Cần quyền: <code>pages_manage_posts</code>, <code>pages_messaging</code>.
+        {" "}Chi tiết xem tài liệu hướng dẫn.
+      </div>
+
+      {loading && <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}><RefreshCw size={20} style={{ animation: "spin 1s linear infinite" }} /> Đang tải...</div>}
+
+      {!loading && pages.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: "#9ca3af", background: "#f9fafb", borderRadius: 12, border: "1px dashed #d1d5db" }}>
+          <Globe size={48} style={{ opacity: 0.3, marginBottom: 8 }} />
+          <p style={{ fontSize: 14 }}>Chưa có Page nào.</p>
+          <p style={{ fontSize: 12 }}>Bấm <b>"Thêm Page mới"</b> để bắt đầu.</p>
+        </div>
+      )}
+
+      {!loading && pages.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e5e7eb" }}>
+                <th style={{ padding: "10px 12px", textAlign: "left" }}>Ảnh</th>
+                <th style={{ padding: "10px 12px", textAlign: "left" }}>Tên Page</th>
+                <th style={{ padding: "10px 12px", textAlign: "left" }}>Facebook Page ID</th>
+                <th style={{ padding: "10px 12px", textAlign: "center" }}>Token</th>
+                <th style={{ padding: "10px 12px", textAlign: "center" }}>Active</th>
+                <th style={{ padding: "10px 12px", textAlign: "center" }}>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pages.map(p => (
+                <tr key={p.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                  <td style={{ padding: "8px 12px" }}>
+                    {p.avatarUrl ? <img src={p.avatarUrl} alt="" style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover" }} /> : <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📘</div>}
+                  </td>
+                  <td style={{ padding: "8px 12px", fontWeight: 600 }}>{p.name}</td>
+                  <td style={{ padding: "8px 12px", color: "#6b7280", fontSize: 12 }}>{p.pageId || <span style={{ color: "#d97706" }}>Chưa nhập</span>}</td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    {p.accessToken ? <span style={{ color: "#059669", fontWeight: 600, fontSize: 11 }}>🟢 Đã kết nối</span> : <span style={{ color: "#dc2626", fontWeight: 600, fontSize: 11 }}>🔴 Chưa cập nhật</span>}
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    <button onClick={() => handleToggleActive(p)}
+                      style={{ padding: "4px 12px", borderRadius: 12, border: "none", background: p.isActive ? "#dcfce7" : "#f3f4f6", color: p.isActive ? "#059669" : "#9ca3af", fontWeight: 600, fontSize: 11, cursor: "pointer" }}>
+                      {p.isActive ? "🟢 ON" : "⚪ OFF"}
+                    </button>
+                  </td>
+                  <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                    <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                      <button onClick={() => openEdit(p)} style={{ background: "none", border: "none", cursor: "pointer", color: "#3b82f6", padding: 4 }} title="Sửa"><Pencil size={14} /></button>
+                      <button onClick={() => handleDelete(p)} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", padding: 4 }} title="Xóa"><Trash2 size={14} /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add/Edit Modal */}
+      {editingPage !== null && (
+        <div onClick={closeModal} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 9999, display: "flex", justifyContent: "center", alignItems: "center", padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 480, boxShadow: "0 20px 60px rgba(0,0,0,.3)" }}>
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>{editingPage?.id ? "Sửa Page" : "Thêm Page mới"}</h3>
+              <button onClick={closeModal} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>Tên Page <span style={{ color: "#dc2626" }}>*</span></label>
+                <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                  placeholder="VD: Vinhomes Grand Park Official"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>Facebook Page ID</label>
+                <input value={form.pageId} onChange={e => setForm(f => ({ ...f, pageId: e.target.value }))}
+                  placeholder="VD: 105432789012345"
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>Access Token</label>
+                <textarea value={form.accessToken} onChange={e => setForm(f => ({ ...f, accessToken: e.target.value }))}
+                  placeholder="Dán Page Access Token từ Graph API Explorer vào đây..."
+                  rows={3}
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12, boxSizing: "border-box", resize: "vertical", fontFamily: "monospace" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4, display: "block" }}>URL ảnh đại diện (tuỳ chọn)</label>
+                <input value={form.avatarUrl} onChange={e => setForm(f => ({ ...f, avatarUrl: e.target.value }))}
+                  placeholder="https://..."
+                  style={{ width: "100%", padding: "10px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+            </div>
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={closeModal} disabled={saving} style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontSize: 13, cursor: "pointer" }}>Hủy</button>
+              <button onClick={handleSave} disabled={saving} style={{ padding: "8px 20px", borderRadius: 8, border: "none", background: "linear-gradient(135deg, #3b82f6, #2563eb)", color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                {saving ? "Đang lưu..." : "Lưu"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
