@@ -858,11 +858,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
 
-  // 2. Save CRM-added history per phone (non-sheet entries)
+  // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
   if (existing.length > 0) {
     allHistory = await all(db,
-      "SELECT lh.*, l.phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ?",
+      "SELECT lh.*, l.phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ? ORDER BY lh.seq DESC",
       [projectId]
     );
   }
@@ -872,7 +872,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const np = normPhone(h.phone);
     if (!np) continue;
     if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
-    phoneHistMap.get(np).push(h);
+    const arr = phoneHistMap.get(np);
+    if (arr.length < 20) arr.push(h); // Limit to 20 CRM entries per phone to prevent bloat
   }
 
   const stmts = [];
@@ -5246,6 +5247,24 @@ if (!process.env.VERCEL) {
   app.listen(PORT, () => {
     console.log(`CRM API running at http://localhost:${PORT}`);
   });
+
+  // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS) || 3 * 60 * 1000; // default 3 min
+  let isSyncing = false;
+  setInterval(async () => {
+    if (isSyncing || !db) return;
+    isSyncing = true;
+    try {
+      console.log("[auto-sync] Starting...");
+      await syncAllProjects(db);
+      console.log("[auto-sync] Done");
+    } catch (e) {
+      console.error("[auto-sync] Error:", e.message);
+    } finally {
+      isSyncing = false;
+    }
+  }, SYNC_INTERVAL);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s`);
 }
 
 export default app;
