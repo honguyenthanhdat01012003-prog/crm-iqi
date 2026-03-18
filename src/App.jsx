@@ -3634,7 +3634,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                         <div>
                           <div style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
                             {customer?.name || "Khách hàng"}
-                            {(customer?.link || customer?.name) && <a href={customer?.link || `https://www.facebook.com/search/people/?q=${encodeURIComponent(customer?.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={customer?.link ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                            {(customer?.link || customer?.name) && <a href={customer?.link || `https://www.facebook.com/search/top/?q=${encodeURIComponent(customer?.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={customer?.link ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
                           </div>
                           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{conv.snippet}</div>
                         </div>
@@ -3661,7 +3661,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   {(() => { const cust = activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId); return (
                     <span style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
                       {cust?.name || "Khách hàng"}
-                      {(cust?.link || cust?.name) && <a href={cust?.link || `https://www.facebook.com/search/people/?q=${encodeURIComponent(cust?.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={cust?.link ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                      {(cust?.link || cust?.name) && <a href={cust?.link || `https://www.facebook.com/search/top/?q=${encodeURIComponent(cust?.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={cust?.link ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
                     </span>
                   ); })()}
                   <span style={{ fontSize: 10, color: "#6b7280" }}>— 📘 {activeMessengerConv.pageName}</span>
@@ -8002,7 +8002,7 @@ function MessengerInboxPage() {
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                           <span style={{ fontWeight: conv.unreadCount > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
                             {custName}
-                            {(() => { const custLink = getCustomerLink(conv); return (custLink || custName) ? <a href={custLink || `https://www.facebook.com/search/people/?q=${encodeURIComponent(custName)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={custLink ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex", flexShrink: 0 }}><ExternalLink size={12} /></a> : null; })()}
+                            {(() => { const custLink = getCustomerLink(conv); return (custLink || custName) ? <a href={custLink || `https://www.facebook.com/search/top/?q=${encodeURIComponent(custName)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title={custLink ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex", flexShrink: 0 }}><ExternalLink size={12} /></a> : null; })()}
                           </span>
                           <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>
                             {formatTime(conv.updatedTime)}
@@ -8067,7 +8067,7 @@ function MessengerInboxPage() {
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 4 }}>
                         {getCustomerName(activeConv)}
-                        {(() => { const custLink = getCustomerLink(activeConv); const custN = getCustomerName(activeConv); return (custLink || custN !== "Khách hàng") ? <a href={custLink || `https://www.facebook.com/search/people/?q=${encodeURIComponent(custN)}`} target="_blank" rel="noopener noreferrer" title={custLink ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={14} /></a> : null; })()}
+                        {(() => { const custLink = getCustomerLink(activeConv); const custN = getCustomerName(activeConv); return (custLink || custN !== "Khách hàng") ? <a href={custLink || `https://www.facebook.com/search/top/?q=${encodeURIComponent(custN)}`} target="_blank" rel="noopener noreferrer" title={custLink ? "Xem Facebook" : "Tìm trên Facebook"} style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={14} /></a> : null; })()}
                       </div>
                       <div style={{ fontSize: 11, color: "#9ca3af" }}>
                         via {selectedPage?.name || "Facebook Page"}
