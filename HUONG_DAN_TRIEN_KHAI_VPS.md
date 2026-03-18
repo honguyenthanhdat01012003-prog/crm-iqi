@@ -1,6 +1,8 @@
-# HƯỚNG DẪN TRIỂN KHAI CRM TỪ VERCEL SANG VPS (TURSO DB) BẰNG aaPanel
+# HƯỚNG DẪN TRIỂN KHAI CRM TỪ VERCEL SANG VPS (SQLite Local) BẰNG aaPanel
 
 > Dành cho người mới, từng bước một, không cần biết code!
+> 
+> **Lưu ý:** Phiên bản này dùng **SQLite local trên VPS** (nhanh hơn Turso cloud rất nhiều, không bị lỗi đồng bộ)
 
 ---
 
@@ -73,7 +75,9 @@
 - Chọn Node version: v22.x (hoặc bản phù hợp)
 - Bấm **Submit** để tạo project
 
-## 4. Cấu hình biến môi trường Turso (Cực chi tiết)
+## 4. Cấu hình biến môi trường (Cực chi tiết)
+
+> **KHÔNG CẦN Turso nữa!** App sẽ tự dùng SQLite local trên VPS (nhanh hơn, ổn định hơn).
 
 ### 4.1. Mở menu Files
 - Nhìn menu bên trái, bấm vào **Files** (icon hình thư mục)
@@ -91,13 +95,24 @@
 - Bấm vào file `.env` vừa tạo
 - Dán vào nội dung:
   ```
-  TURSO_URL=libsql://db-xxxx.turso.io
-  TURSO_AUTH_TOKEN=eyJhbGciOi...
+  PORT=4000
+  NODE_ENV=production
   ```
+- **KHÔNG cần** `TURSO_URL` hay `TURSO_AUTH_TOKEN` nữa!
+- App sẽ tự tạo file database tại `server/data/crm.db`
 - Bấm **Save** (góc trên bên phải)
 
-### 4.5. Kiểm tra lại file .env
+### 4.5. (Tùy chọn) Migrate dữ liệu cũ từ Turso về local
+- Nếu bạn có dữ liệu cũ trên Turso muốn chuyển về, chạy:
+  ```
+  cd /www/wwwroot/crm-iqi
+  TURSO_URL="libsql://db-xxxx.turso.io" TURSO_AUTH_TOKEN="eyJ..." node migrate-turso-to-local.js
+  ```
+- Sau khi chạy xong, dữ liệu sẽ nằm trong `server/data/crm.db`
+
+### 4.6. Kiểm tra lại file .env
 - Đảm bảo file .env nằm đúng thư mục dự án (VD: /www/wwwroot/crm-iqi/.env)
+- Đảm bảo **KHÔNG CÓ** dòng `TURSO_URL` trong file .env
 
 ---
 
@@ -163,6 +178,7 @@
 - Xem log: bấm **Logs** để kiểm tra lỗi
 - Truy cập web: http://<IP-VPS>:<port> (port do aaPanel cấp)
 - Kiểm tra endpoint: http://<IP-VPS>:<port>/api/health
+  - `dbType` phải là `sqlite-local`
 
 ## 9. Cấu hình domain (nếu cần)
 
@@ -177,13 +193,14 @@
 ---
 
 ### Lưu ý:
-- Luôn dùng TURSO_URL và TURSO_AUTH_TOKEN mới nhất.
-- Nếu lỗi, kiểm tra log Node Project, file `.env`, và quyền truy cập DB.
+- **KHÔNG cần** Turso nữa — app dùng SQLite local, dữ liệu lưu tại `server/data/crm.db`
+- Nếu lỗi, kiểm tra log Node Project, file `.env`, và file database `server/data/crm.db`
 - Nếu cần hỗ trợ, liên hệ quản trị viên hoặc gửi ảnh lỗi.
+- **Backup:** Nên sao lưu file `server/data/crm.db` định kỳ để tránh mất dữ liệu.
 
 > Tài liệu này dành cho người mới, làm từng bước sẽ thành công!
 
-# HƯỚNG DẪN TRIỂN KHAI CRM TỪ VERCEL SANG VPS (TURSO DB)
+# HƯỚNG DẪN TRIỂN KHAI CRM TỪ VERCEL SANG VPS (SQLite Local)
 
 > Dành cho người mới, từng bước một, không cần biết code!
 
@@ -221,31 +238,30 @@
   cd my-react-app
   ```
 
-## 4. Cài đặt Turso DB
+## 4. Cấu hình biến môi trường
 
-- Đăng nhập https://dashboard.turso.tech/
-- Tạo database mới (nếu chưa có)
-- Lấy 2 thông tin:
-  - TURSO_URL (libsql://db-xxxx.turso.io)
-  - TURSO_AUTH_TOKEN (token dài)
-
-## 5. Cấu hình biến môi trường
-
-- Tạo file `.env` trong thư mục gốc dự án (my-react-app):
+- Tạo file `.env` trong thư mục gốc dự án:
   ```env
-  TURSO_URL=libsql://db-xxxx.turso.io
-  TURSO_AUTH_TOKEN=eyJhbGciOi...
+  PORT=4000
+  NODE_ENV=production
   ```
+- **KHÔNG cần** Turso nữa! App tự dùng SQLite local (file `server/data/crm.db`)
 - Lưu file `.env`
 
-## 6. Cài đặt các package cần thiết
+### (Tùy chọn) Migrate dữ liệu cũ từ Turso về local
+- Nếu có dữ liệu trên Turso muốn giữ:
+  ```bash
+  TURSO_URL="libsql://db-xxxx.turso.io" TURSO_AUTH_TOKEN="eyJ..." node migrate-turso-to-local.js
+  ```
+
+## 5. Cài đặt các package cần thiết
 
 - Chạy lệnh:
   ```bash
   npm install
   ```
 
-## 7. Chạy backend
+## 6. Chạy backend
 
 - Chạy lệnh:
   ```bash
@@ -253,7 +269,7 @@
   ```
 - Nếu có lỗi, kiểm tra log và đảm bảo đã cấu hình đúng `.env`
 
-## 8. Chạy frontend (React)
+## 7. Chạy frontend (React)
 
 - Chạy lệnh:
   ```bash
@@ -261,14 +277,15 @@
   ```
 - Truy cập: `http://<IP-VPS>:5173` (hoặc port khác nếu cấu hình)
 
-## 9. Kiểm tra kết nối Turso DB
+## 8. Kiểm tra hoạt động
 
 - Truy cập: `http://<IP-VPS>:4000/api/health`
-- Nếu hiện `tursoConfigured:true` và số lượng bản ghi đúng, đã kết nối thành công.
+- Kiểm tra `dbType` phải là `sqlite-local`
+- Nếu hiện số lượng bản ghi đúng, đã hoạt động thành công.
 
 ---
 
-## 10. Cập nhật code và deploy tự động (giống Vercel)
+## 9. Cập nhật code và deploy tự động (giống Vercel)
 
 ### A. Cấu hình Git để cập nhật code
 
@@ -321,7 +338,7 @@
 
 ---
 
-## 11. Cấu hình domain (nếu cần)
+## 10. Cấu hình domain (nếu cần)
 
 - Trỏ domain về IP VPS
 - Cài nginx hoặc apache để proxy port 4000/5173 ra domain
@@ -340,7 +357,7 @@
 
 ---
 
-## 12. Hoàn tất!
+## 11. Hoàn tất!
 
 - Đăng nhập CRM, kiểm tra dữ liệu, sử dụng bình thường.
 - Mỗi lần muốn cập nhật code, chỉ cần pull code và restart pm2 là web tự động cập nhật giống Vercel.
@@ -348,8 +365,9 @@
 ---
 
 ### Lưu ý:
-- Luôn dùng TURSO_URL và TURSO_AUTH_TOKEN mới nhất.
-- Nếu lỗi, kiểm tra log backend, file `.env`, và quyền truy cập DB.
+- **KHÔNG cần** Turso nữa — dữ liệu lưu tại `server/data/crm.db` trên VPS
+- Nếu lỗi, kiểm tra log backend, file `.env`, và file database
+- **Backup:** Nên sao lưu file `server/data/crm.db` định kỳ
 - Nếu cần hỗ trợ, liên hệ quản trị viên hoặc gửi ảnh lỗi.
 
 > Tài liệu này dành cho người mới, làm từng bước sẽ thành công!

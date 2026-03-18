@@ -63,8 +63,12 @@ const DB_VERSION = 2; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
-  if (dbUrl.startsWith("file:")) {
+  const isLocal = dbUrl.startsWith("file:");
+  if (isLocal) {
     fs.mkdirSync(DB_DIR, { recursive: true });
+    console.log(`[DB] Using LOCAL SQLite: ${DB_PATH}`);
+  } else {
+    console.log(`[DB] Using REMOTE Turso: ${dbUrl}`);
   }
   const db = createClient({
     url: dbUrl,
@@ -1845,6 +1849,7 @@ app.get("/api/health", async (_req, res) => {
     ok: !dbInitError,
     dbReady: !!db,
     dbError: dbInitError,
+    dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
     counts,
