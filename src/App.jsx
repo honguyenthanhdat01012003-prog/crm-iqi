@@ -3603,7 +3603,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {/* --- RIGHT COLUMN: Chat Messenger --- */}
       <div>
 
-      {/* === MESSENGER CHAT SECTION === */}
+      {/* === MESSENGER CHAT SECTION (Admin only) === */}
+      {!isAdmin ? (
+        <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>
+          <MessageSquare size={20} style={{ marginBottom: 8, opacity: 0.5 }} />
+          <div>Tính năng Chat Messenger chỉ dành cho Admin</div>
+        </div>
+      ) : (
       <div style={{ border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden", position: isMobile ? "static" : "sticky", top: 16 }}>
         <div onClick={() => setMessengerOpen(!messengerOpen)}
           style={{ padding: "10px 14px", background: "linear-gradient(135deg, #eff6ff, #dbeafe)", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -3717,6 +3723,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         )}
       </div>
+      )}
 
       </div>
       {/* --- END 2-COLUMN LAYOUT --- */}

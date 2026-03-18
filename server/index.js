@@ -3438,8 +3438,8 @@ app.get("/api/fb-messenger/messages", requireAuth, async (req, res) => {
 });
 
 // POST /api/fb-messenger/reply
-// Send a reply in a conversation
-app.post("/api/fb-messenger/reply", requireAuth, async (req, res) => {
+// Send a reply in a conversation (Admin only)
+app.post("/api/fb-messenger/reply", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { pageId, recipientId, message } = req.body;
     if (!pageId || !recipientId || !message) return res.status(400).json({ error: "pageId, recipientId và message là bắt buộc" });
