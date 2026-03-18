@@ -59,7 +59,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 3; // Bump this when adding new DDL/migrations
+const DB_VERSION = 4; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -268,8 +268,8 @@ async function initDb() {
     );
   }
 
-  // --- v3: Add indexes + cleanup excessive history ---
-  if (dbVersion < 3) {
+  // --- v3+v4: Add indexes + cleanup excessive history ---
+  if (dbVersion < 4) {
     console.log("[DB] v3 migration: adding indexes...");
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lh_lead_seq ON lead_history(lead_id, seq)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_leads_project ON leads(project_id)"); } catch (_) {}
@@ -279,14 +279,19 @@ async function initDb() {
     console.log("[DB] v3 migration: cleaning up excessive history...");
     try {
       const beforeCount = await get(db, "SELECT COUNT(*) as c FROM lead_history");
-      await run(db, `DELETE FROM lead_history WHERE id NOT IN (
-        SELECT id FROM (
-          SELECT id, ROW_NUMBER() OVER (PARTITION BY lead_id ORDER BY seq DESC) as rn
-          FROM lead_history
-        ) WHERE rn <= 30
-      )`);
+      // Process per-lead to avoid memory issues with huge datasets
+      const bloated = await all(db, "SELECT lead_id, COUNT(*) as cnt FROM lead_history GROUP BY lead_id HAVING cnt > 30");
+      for (const { lead_id } of bloated) {
+        const toDelete = await all(db, { sql: "SELECT id FROM lead_history WHERE lead_id = ? ORDER BY seq DESC LIMIT -1 OFFSET 30", args: [lead_id] });
+        if (toDelete.length > 0) {
+          for (let j = 0; j < toDelete.length; j += 200) {
+            const ids = toDelete.slice(j, j + 200).map(r => r.id).join(",");
+            await run(db, `DELETE FROM lead_history WHERE id IN (${ids})`);
+          }
+        }
+      }
       const afterCount = await get(db, "SELECT COUNT(*) as c FROM lead_history");
-      console.log(`[DB] v3 cleanup: ${beforeCount?.c || 0} -> ${afterCount?.c || 0} history rows`);
+      console.log(`[DB] v3 cleanup: ${beforeCount?.c || 0} -> ${afterCount?.c || 0} history rows (${bloated.length} leads cleaned)`);
     } catch (e) { console.error("[DB] v3 cleanup error:", e.message); }
   }
 
@@ -973,15 +978,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
 async function readData(db) {
   const leads = await all(db, "SELECT * FROM leads ORDER BY id ASC");
-  // Limit to last 30 history entries per lead to avoid loading 300K+ rows into memory
-  const historyRows = await all(db, `
-    SELECT id, lead_id, sale_name, action, contact_date, status, feedback, seq, source
-    FROM (
-      SELECT *, ROW_NUMBER() OVER (PARTITION BY lead_id ORDER BY seq DESC) as rn
-      FROM lead_history
-    ) WHERE rn <= 30
-    ORDER BY lead_id, seq
-  `);
+  const historyRows = await all(db, "SELECT * FROM lead_history ORDER BY lead_id, seq");
   const historyMap = {};
   for (const h of historyRows) {
     if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
