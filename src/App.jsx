@@ -487,7 +487,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
-  const [syncCountdown, setSyncCountdown] = useState(30);
+  const [syncCountdown, setSyncCountdown] = useState(0);
   const [syncHash, setSyncHash] = useState("");
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
@@ -561,25 +561,19 @@ function CRMApp({ user, updateUser, onLogout }) {
   const syncHashRef = React.useRef(syncHash);
   syncHashRef.current = syncHash;
   useEffect(() => {
-    setSyncCountdown(10);
-    const tick = setInterval(() => setSyncCountdown(c => c <= 1 ? 10 : c - 1), 1000);
     const interval = setInterval(() => {
-      // Step 1: lightweight hash check (no sync, no heavy query)
       apiFetch(`${API}/data/poll?hash=${encodeURIComponent(syncHashRef.current)}`)
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(pollResult => {
-          if (!pollResult.changed) return; // No changes — skip data fetch
-          // Save server hash immediately so next poll won't repeat
+          if (!pollResult.changed) return;
           if (pollResult.hash) setSyncHash(pollResult.hash);
-          // Step 2: only fetch full data when hash actually changed
           return apiFetch(`${API}/data`)
             .then(r => r.ok ? r.json() : Promise.reject())
             .then(applyApiData);
         })
         .catch(() => {});
-      setSyncCountdown(10);
     }, 10000);
-    return () => { clearInterval(interval); clearInterval(tick); };
+    return () => clearInterval(interval);
   }, [applyApiData]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
@@ -1083,7 +1077,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               <button
                 onClick={handleSync}
                 disabled={syncing}
-                title={syncing ? "Đang đồng bộ..." : `Đồng bộ (${syncCountdown}s)`}
+                title={syncing ? "Đang đồng bộ..." : "Đồng bộ dữ liệu"}
                 style={{
                   background: "transparent",
                   border: "none",
@@ -1095,13 +1089,12 @@ function CRMApp({ user, updateUser, onLogout }) {
                 <span style={{
                   fontSize: 22, lineHeight: 1,
                   display: "inline-block",
-                  animation: syncing ? "spin 1s linear infinite" : (syncCountdown <= 5 ? "pulse 1s ease-in-out infinite" : "none"),
+                  animation: syncing ? "spin 1s linear infinite" : "none",
                 }}><RefreshCw size={22} /></span>
                 <span style={{
                   fontSize: 10, fontWeight: 700, marginTop: 1,
-                  color: syncing ? "#e88a2e" : (syncCountdown <= 5 ? "#ef4444" : "#6b7280"),
-                  fontVariantNumeric: "tabular-nums",
-                }}>{syncing ? "..." : `${syncCountdown}s`}</span>
+                  color: syncing ? "#e88a2e" : "#6b7280",
+                }}>{syncing ? "..." : ""}</span>
               </button>
             </div>
           )}
@@ -3641,7 +3634,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                         <div>
                           <div style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
                             {customer?.name || "Khách hàng"}
-                            {customer?.id && <a href={`https://www.facebook.com/${customer.id}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                            {customer?.name && <a href={`https://www.facebook.com/search/people/?q=${encodeURIComponent(customer.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Tìm trên Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
                           </div>
                           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{conv.snippet}</div>
                         </div>
@@ -3668,7 +3661,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   {(() => { const cust = activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId); return (
                     <span style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
                       {cust?.name || "Khách hàng"}
-                      {cust?.id && <a href={`https://www.facebook.com/${cust.id}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                      {cust?.name && <a href={`https://www.facebook.com/search/people/?q=${encodeURIComponent(cust.name)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Tìm trên Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
                     </span>
                   ); })()}
                   <span style={{ fontSize: 10, color: "#6b7280" }}>— 📘 {activeMessengerConv.pageName}</span>
@@ -8003,7 +7996,7 @@ function MessengerInboxPage() {
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                           <span style={{ fontWeight: conv.unreadCount > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
                             {custName}
-                            {custId && <a href={`https://www.facebook.com/${custId}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex", flexShrink: 0 }}><ExternalLink size={12} /></a>}
+                            {custName && <a href={`https://www.facebook.com/search/people/?q=${encodeURIComponent(custName)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Tìm trên Facebook" style={{ color: "#3b82f6", display: "inline-flex", flexShrink: 0 }}><ExternalLink size={12} /></a>}
                           </span>
                           <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>
                             {formatTime(conv.updatedTime)}
@@ -8068,7 +8061,7 @@ function MessengerInboxPage() {
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 4 }}>
                         {getCustomerName(activeConv)}
-                        {getCustomerId(activeConv) && <a href={`https://www.facebook.com/${getCustomerId(activeConv)}`} target="_blank" rel="noopener noreferrer" title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={14} /></a>}
+                        {getCustomerName(activeConv) !== "Khách hàng" && <a href={`https://www.facebook.com/search/people/?q=${encodeURIComponent(getCustomerName(activeConv))}`} target="_blank" rel="noopener noreferrer" title="Tìm trên Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={14} /></a>}
                       </div>
                       <div style={{ fontSize: 11, color: "#9ca3af" }}>
                         via {selectedPage?.name || "Facebook Page"}
