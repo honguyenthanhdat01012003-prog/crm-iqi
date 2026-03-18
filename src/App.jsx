@@ -3033,7 +3033,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [messengerConvs, setMessengerConvs] = useState([]);
   const [messengerLoading, setMessengerLoading] = useState(false);
   const [messengerError, setMessengerError] = useState("");
-  const [messengerOpen, setMessengerOpen] = useState(false);
+  const [messengerOpen, setMessengerOpen] = useState(true);
   const [activeMessengerConv, setActiveMessengerConv] = useState(null);
   const [messengerMsgs, setMessengerMsgs] = useState([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -3066,9 +3066,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       const r = await apiFetch(`${API}/fb-messenger/lead-conversations?leadName=${encodeURIComponent(lead.name)}`);
       const data = await r.json();
       if (!r.ok) { setMessengerError(data.error || "Lỗi tải chat"); return; }
+      if (data.noPages) { setMessengerError(data.message || "Chưa thêm Page Facebook. Vào Quản lý Page để thêm."); return; }
       setMessengerConvs(data.conversations || []);
-      if (!data.conversations?.length) setMessengerError("Không tìm thấy cuộc hội thoại nào khớp với khách hàng này");
-    } catch (e) { setMessengerError("Không thể kết nối"); }
+      if (!data.conversations?.length) setMessengerError("Không tìm thấy cuộc hội thoại nào khớp với tên \"" + lead.name + "\" trên Messenger");
+    } catch (e) { setMessengerError("Không thể kết nối server: " + (e.message || "")); }
     finally { setMessengerLoading(false); }
   };
 
@@ -3244,6 +3245,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           )}
         </div>
       )}
+
+      {/* === 2-COLUMN LAYOUT: Tương tác (left) | Chat (right) === */}
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, alignItems: "start" }}>
+      {/* --- LEFT COLUMN: Tương tác --- */}
+      <div>
 
       {/* Admin: Cập nhật trạng thái */}
       {isAdmin && (
@@ -3593,8 +3599,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </>
       )}
 
+      </div>
+      {/* --- RIGHT COLUMN: Chat Messenger --- */}
+      <div>
+
       {/* === MESSENGER CHAT SECTION === */}
-      <div style={{ marginTop: 16, border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden", position: isMobile ? "static" : "sticky", top: 16 }}>
         <div onClick={() => setMessengerOpen(!messengerOpen)}
           style={{ padding: "10px 14px", background: "linear-gradient(135deg, #eff6ff, #dbeafe)", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontWeight: 700, fontSize: 13, color: "#1e40af", display: "flex", alignItems: "center", gap: 6 }}>
@@ -3652,7 +3662,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </div>
 
                 {/* Messages */}
-                <div style={{ maxHeight: 350, overflowY: "auto", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", padding: 10, marginBottom: 8 }}>
+                <div style={{ maxHeight: isMobile ? 350 : 500, overflowY: "auto", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", padding: 10, marginBottom: 8 }}>
                   {loadingMsgs && <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 12 }}>Đang tải tin nhắn...</div>}
                   {!loadingMsgs && messengerMsgs.length === 0 && <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 12 }}>Không có tin nhắn</div>}
                   {messengerMsgs.map((msg, mi) => {
@@ -3700,6 +3710,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             )}
           </div>
         )}
+      </div>
+
+      </div>
+      {/* --- END 2-COLUMN LAYOUT --- */}
       </div>
 
       {/* Ad Preview Modal */}

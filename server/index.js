@@ -3480,7 +3480,10 @@ app.get("/api/fb-messenger/lead-conversations", requireAuth, async (req, res) =>
     if (!leadName) return res.status(400).json({ error: "leadName là bắt buộc" });
 
     const activePages = await all(db, "SELECT * FROM fb_pages WHERE is_active = 1 AND access_token != '' AND page_id != ''");
-    if (!activePages.length) return res.json({ conversations: [], pages: [] });
+    if (!activePages.length) {
+      const totalPages = await get(db, "SELECT COUNT(*) as cnt FROM fb_pages");
+      return res.json({ conversations: [], pages: [], noPages: true, message: totalPages?.cnt ? "Không có Page nào đang hoạt động. Kiểm tra Quản lý Page và bật Page lên." : "Chưa thêm Page Facebook nào. Vào Quản lý Page để thêm Page và nhập Page Access Token." });
+    }
 
     const results = [];
     const pageInfos = [];
