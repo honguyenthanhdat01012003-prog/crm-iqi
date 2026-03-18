@@ -3349,6 +3349,129 @@ app.get("/api/chat/new/:userId", requireAuth, async (req, res) => {
   }
 });
 
+/* ===== Facebook Messenger Inbox (Admin) ===== */
+
+// GET /api/fb-messenger/conversations?pageId=<fb_pages.id>&after=<cursor>
+// List conversations from a Facebook Page
+app.get("/api/fb-messenger/conversations", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const pageDbId = Number(req.query.pageId);
+    if (!pageDbId) return res.status(400).json({ error: "pageId là bắt buộc" });
+    const page = await get(db, "SELECT * FROM fb_pages WHERE id = ? AND is_active = 1", [pageDbId]);
+    if (!page) return res.status(404).json({ error: "Page không tồn tại hoặc đã tắt" });
+    if (!page.access_token) return res.status(400).json({ error: "Page chưa có Access Token" });
+
+    let url = `https://graph.facebook.com/v22.0/${page.page_id}/conversations?fields=id,snippet,updated_time,unread_count,senders,message_count&limit=25&access_token=${page.access_token}`;
+    const after = req.query.after;
+    if (after) url += `&after=${encodeURIComponent(after)}`;
+
+    const fbRes = await fetch(url);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
+
+    res.json({
+      conversations: (data.data || []).map(c => ({
+        id: c.id,
+        snippet: c.snippet || "",
+        updatedTime: c.updated_time,
+        unreadCount: c.unread_count || 0,
+        messageCount: c.message_count || 0,
+        senders: (c.senders?.data || []).map(s => ({ id: s.id, name: s.name, email: s.email })),
+      })),
+      paging: data.paging || null,
+      pageInfo: { id: page.id, name: page.name, pageId: page.page_id, avatarUrl: page.avatar_url },
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/fb-messenger/messages?pageId=<fb_pages.id>&conversationId=<conv_id>&after=<cursor>
+// Get messages in a conversation
+app.get("/api/fb-messenger/messages", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const pageDbId = Number(req.query.pageId);
+    const conversationId = req.query.conversationId;
+    if (!pageDbId || !conversationId) return res.status(400).json({ error: "pageId và conversationId là bắt buộc" });
+
+    const page = await get(db, "SELECT * FROM fb_pages WHERE id = ? AND is_active = 1", [pageDbId]);
+    if (!page) return res.status(404).json({ error: "Page không tồn tại" });
+
+    let url = `https://graph.facebook.com/v22.0/${conversationId}/messages?fields=id,message,from,to,created_time,attachments&limit=25&access_token=${page.access_token}`;
+    const after = req.query.after;
+    if (after) url += `&after=${encodeURIComponent(after)}`;
+
+    const fbRes = await fetch(url);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
+
+    res.json({
+      messages: (data.data || []).map(m => ({
+        id: m.id,
+        message: m.message || "",
+        from: m.from ? { id: m.from.id, name: m.from.name } : null,
+        to: (m.to?.data || []).map(t => ({ id: t.id, name: t.name })),
+        createdTime: m.created_time,
+        attachments: (m.attachments?.data || []).map(a => ({
+          type: a.mime_type || a.type || "",
+          url: a.image_data?.url || a.video_data?.url || a.file_url || "",
+          name: a.name || "",
+        })),
+      })),
+      paging: data.paging || null,
+      pageId: page.page_id,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/fb-messenger/reply
+// Send a reply in a conversation
+app.post("/api/fb-messenger/reply", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { pageId, recipientId, message } = req.body;
+    if (!pageId || !recipientId || !message) return res.status(400).json({ error: "pageId, recipientId và message là bắt buộc" });
+
+    const page = await get(db, "SELECT * FROM fb_pages WHERE id = ? AND is_active = 1", [Number(pageId)]);
+    if (!page) return res.status(404).json({ error: "Page không tồn tại" });
+    if (!page.access_token) return res.status(400).json({ error: "Page chưa có Access Token" });
+
+    const text = String(message).trim().slice(0, 2000);
+    if (!text) return res.status(400).json({ error: "Nội dung tin nhắn không được trống" });
+
+    const fbRes = await fetch(`https://graph.facebook.com/v22.0/${page.page_id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        message: { text },
+        messaging_type: "RESPONSE",
+        access_token: page.access_token,
+      }),
+    });
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message || "Gửi tin nhắn thất bại" });
+
+    res.json({ success: true, messageId: data.message_id, recipientId: data.recipient_id });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/fb-messenger/participant?pageId=<fb_pages.id>&userId=<psid>
+// Get participant profile info
+app.get("/api/fb-messenger/participant", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const pageDbId = Number(req.query.pageId);
+    const userId = req.query.userId;
+    if (!pageDbId || !userId) return res.status(400).json({ error: "pageId và userId là bắt buộc" });
+
+    const page = await get(db, "SELECT * FROM fb_pages WHERE id = ? AND is_active = 1", [pageDbId]);
+    if (!page) return res.status(404).json({ error: "Page không tồn tại" });
+
+    const fbRes = await fetch(`https://graph.facebook.com/v22.0/${userId}?fields=name,profile_pic&access_token=${page.access_token}`);
+    const data = await fbRes.json();
+    if (data.error) return res.status(400).json({ error: data.error.message });
+
+    res.json({ id: data.id, name: data.name || "Người dùng Facebook", profilePic: data.profile_pic || "" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // --- Facebook Ad Accounts CRUD ---
 app.get("/api/fb-ad-accounts", requireAuth, requireAdmin, async (_req, res) => {
   try {

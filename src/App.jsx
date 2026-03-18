@@ -789,6 +789,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "sales", label: "Sale", icon: Trophy, adminOnly: true },
     { key: "users", label: "Quản lý tài khoản", icon: UserCog, adminOnly: true },
     { key: "profile", label: "Hồ sơ cá nhân", icon: IdCard, adminOnly: false },
+    { key: "messenger_inbox", label: "Hộp thư Messenger", icon: MessageSquare, adminOnly: true },
     { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: postChildren },
   ];
 
@@ -1150,6 +1151,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "sheet_config" && isAdminOnly && <SheetConfigPage />}
+        {page === "messenger_inbox" && isAdminOnly && <MessengerInboxPage />}
         </div>
       </main>
 
@@ -7516,6 +7518,447 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
       }} onClose={() => setUserCropSrc(null)} />}
       {lightboxSrc && <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </>
+  );
+}
+
+/* ===== Facebook Messenger Inbox (Admin) ===== */
+function MessengerInboxPage() {
+  const isMobile = useIsMobile();
+  const [pages, setPages] = useState([]);
+  const [selectedPageId, setSelectedPageId] = useState(null);
+  const [conversations, setConversations] = useState([]);
+  const [activeConv, setActiveConv] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [draft, setDraft] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [convPaging, setConvPaging] = useState(null);
+  const [msgPaging, setMsgPaging] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const msgEndRef = useRef(null);
+  const inputRef = useRef(null);
+  const pollRef = useRef(null);
+
+  // Load Facebook pages
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/fb-pages`);
+        if (r.ok) {
+          const data = await r.json();
+          const active = data.filter(p => p.isActive && p.pageId && p.accessToken);
+          setPages(active);
+          if (active.length > 0 && !selectedPageId) setSelectedPageId(active[0].id);
+        }
+      } catch (e) { /* ignore */ }
+    })();
+  }, []);
+
+  // Load conversations when page selected
+  const loadConversations = useCallback(async (pageId, after) => {
+    if (!pageId) return;
+    if (!after) setLoading(true);
+    else setLoadingMore(true);
+    setError("");
+    try {
+      let url = `${API}/fb-messenger/conversations?pageId=${pageId}`;
+      if (after) url += `&after=${encodeURIComponent(after)}`;
+      const r = await apiFetch(url);
+      const data = await r.json();
+      if (!r.ok) { setError(data.error || "Lỗi tải hội thoại"); setLoading(false); setLoadingMore(false); return; }
+      if (after) {
+        setConversations(prev => [...prev, ...data.conversations]);
+      } else {
+        setConversations(data.conversations || []);
+      }
+      setConvPaging(data.paging);
+    } catch (e) { setError("Không thể kết nối Facebook API"); }
+    setLoading(false);
+    setLoadingMore(false);
+  }, []);
+
+  useEffect(() => {
+    if (selectedPageId) {
+      setConversations([]);
+      setActiveConv(null);
+      setMessages([]);
+      loadConversations(selectedPageId);
+    }
+  }, [selectedPageId, loadConversations]);
+
+  // Auto refresh conversations every 15s
+  useEffect(() => {
+    if (!selectedPageId) return;
+    const iv = setInterval(() => loadConversations(selectedPageId), 15000);
+    return () => clearInterval(iv);
+  }, [selectedPageId, loadConversations]);
+
+  // Load messages for a conversation
+  const loadMessages = useCallback(async (conv) => {
+    if (!selectedPageId || !conv) return;
+    setLoadingMsgs(true);
+    setMessages([]);
+    setMsgPaging(null);
+    try {
+      const r = await apiFetch(`${API}/fb-messenger/messages?pageId=${selectedPageId}&conversationId=${conv.id}`);
+      const data = await r.json();
+      if (r.ok) {
+        // FB returns newest first, reverse for chat display
+        setMessages((data.messages || []).reverse());
+        setMsgPaging(data.paging);
+        setTimeout(() => msgEndRef.current?.scrollIntoView({ behavior: "smooth" }), 150);
+      }
+    } catch (e) { /* ignore */ }
+    setLoadingMsgs(false);
+  }, [selectedPageId]);
+
+  // Load older messages
+  const loadOlderMessages = async () => {
+    if (!msgPaging?.next || !activeConv || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const afterCursor = msgPaging.cursors?.after;
+      if (!afterCursor) { setLoadingMore(false); return; }
+      const r = await apiFetch(`${API}/fb-messenger/messages?pageId=${selectedPageId}&conversationId=${activeConv.id}&after=${encodeURIComponent(afterCursor)}`);
+      const data = await r.json();
+      if (r.ok) {
+        // Older messages prepended (FB returns newest first, so reverse and prepend)
+        setMessages(prev => [...(data.messages || []).reverse(), ...prev]);
+        setMsgPaging(data.paging);
+      }
+    } catch (e) { /* ignore */ }
+    setLoadingMore(false);
+  };
+
+  const openConversation = (conv) => {
+    setActiveConv(conv);
+    setDraft("");
+    loadMessages(conv);
+  };
+
+  // Poll new messages every 5s when conversation is open
+  useEffect(() => {
+    if (!activeConv || !selectedPageId) return;
+    const iv = setInterval(() => loadMessages(activeConv), 5000);
+    pollRef.current = iv;
+    return () => clearInterval(iv);
+  }, [activeConv, selectedPageId, loadMessages]);
+
+  // Send reply
+  const sendReply = async () => {
+    if (!draft.trim() || !activeConv || sending) return;
+    const text = draft.trim();
+    // Get the customer (non-page) sender ID
+    const selectedPage = pages.find(p => p.id === selectedPageId);
+    const customer = activeConv.senders?.find(s => s.id !== selectedPage?.pageId);
+    if (!customer) { setError("Không tìm thấy người nhận"); return; }
+
+    setSending(true);
+    setDraft("");
+    try {
+      const r = await apiFetch(`${API}/fb-messenger/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageId: selectedPageId, recipientId: customer.id, message: text }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        setError(data.error || "Gửi tin nhắn thất bại");
+        setDraft(text);
+      } else {
+        // Refresh messages
+        loadMessages(activeConv);
+      }
+    } catch (e) { setError("Lỗi kết nối"); setDraft(text); }
+    setSending(false);
+    setTimeout(() => inputRef.current?.focus(), 100);
+  };
+
+  const getCustomerName = (conv) => {
+    const selectedPage = pages.find(p => p.id === selectedPageId);
+    const customer = conv.senders?.find(s => s.id !== selectedPage?.pageId);
+    return customer?.name || "Khách hàng";
+  };
+
+  const getCustomerId = (conv) => {
+    const selectedPage = pages.find(p => p.id === selectedPageId);
+    const customer = conv.senders?.find(s => s.id !== selectedPage?.pageId);
+    return customer?.id || "";
+  };
+
+  const isFromPage = (msg) => {
+    const selectedPage = pages.find(p => p.id === selectedPageId);
+    return msg.from?.id === selectedPage?.pageId;
+  };
+
+  const formatTime = (ts) => {
+    if (!ts) return "";
+    const d = new Date(ts);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 60000);
+    if (diff < 1) return "Vừa xong";
+    if (diff < 60) return `${diff} phút trước`;
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    const yesterday = new Date(now); yesterday.setDate(yesterday.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Hôm qua " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric" }) + " " + d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const filteredConvs = searchText
+    ? conversations.filter(c => getCustomerName(c).toLowerCase().includes(searchText.toLowerCase()) || (c.snippet || "").toLowerCase().includes(searchText.toLowerCase()))
+    : conversations;
+
+  const selectedPage = pages.find(p => p.id === selectedPageId);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 22, display: "flex", alignItems: "center", gap: 8 }}>
+          <MessageSquare size={22} /> Hộp thư Messenger
+        </h2>
+        <select
+          value={selectedPageId || ""}
+          onChange={e => setSelectedPageId(Number(e.target.value))}
+          style={{ padding: "6px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, background: "#fff" }}
+        >
+          {pages.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        <button onClick={() => loadConversations(selectedPageId)} disabled={loading}
+          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
+          <RefreshCw size={14} style={loading ? { animation: "spin 1s linear infinite" } : {}} /> Làm mới
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px", marginBottom: 12, color: "#dc2626", fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <AlertCircle size={16} /> {error}
+          <button onClick={() => setError("")} style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", color: "#dc2626" }}><X size={14} /></button>
+        </div>
+      )}
+
+      {pages.length === 0 && !loading && (
+        <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>
+          <MessageSquare size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
+          <p>Chưa có Facebook Page nào được cấu hình.</p>
+          <p style={{ fontSize: 13 }}>Vào <strong>Quản lý bài đăng</strong> → thêm Page với Access Token có quyền <code>pages_messaging</code></p>
+        </div>
+      )}
+
+      {pages.length > 0 && (
+        <div style={{ display: "flex", gap: 0, height: isMobile ? "calc(100vh - 180px)" : "calc(100vh - 200px)", background: "#fff", borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          {/* Conversation list */}
+          {(!isMobile || !activeConv) && (
+            <div style={{ width: isMobile ? "100%" : 340, borderRight: "1px solid #e5e7eb", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+              <div style={{ padding: "12px", borderBottom: "1px solid #f3f4f6" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f3f4f6", borderRadius: 20, padding: "6px 12px" }}>
+                  <Search size={14} style={{ color: "#9ca3af" }} />
+                  <input
+                    value={searchText} onChange={e => setSearchText(e.target.value)}
+                    placeholder="Tìm kiếm hội thoại..."
+                    style={{ border: "none", background: "transparent", outline: "none", flex: 1, fontSize: 13 }}
+                  />
+                </div>
+              </div>
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                {loading && conversations.length === 0 && (
+                  <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+                    <RefreshCw size={24} style={{ animation: "spin 1s linear infinite", marginBottom: 8 }} />
+                    <p style={{ fontSize: 13 }}>Đang tải hội thoại...</p>
+                  </div>
+                )}
+                {!loading && filteredConvs.length === 0 && (
+                  <div style={{ textAlign: "center", padding: 40, color: "#9ca3af", fontSize: 13 }}>
+                    Không có hội thoại nào
+                  </div>
+                )}
+                {filteredConvs.map(conv => {
+                  const isActive = activeConv?.id === conv.id;
+                  const custName = getCustomerName(conv);
+                  return (
+                    <div
+                      key={conv.id}
+                      onClick={() => openConversation(conv)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", cursor: "pointer",
+                        background: isActive ? "#eff6ff" : "transparent",
+                        borderLeft: isActive ? "3px solid #2563eb" : "3px solid transparent",
+                        transition: "background .15s",
+                      }}
+                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = "#f9fafb"; }}
+                      onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
+                    >
+                      <div style={{
+                        width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                        display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 16, flexShrink: 0,
+                      }}>
+                        {custName.charAt(0).toUpperCase()}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ fontWeight: conv.unreadCount > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {custName}
+                          </span>
+                          <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>
+                            {formatTime(conv.updatedTime)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{
+                            fontSize: 12, color: conv.unreadCount > 0 ? "#1f2937" : "#6b7280",
+                            fontWeight: conv.unreadCount > 0 ? 600 : 400,
+                            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
+                          }}>
+                            {conv.snippet || "..."}
+                          </span>
+                          {conv.unreadCount > 0 && (
+                            <span style={{
+                              minWidth: 18, height: 18, borderRadius: 9, background: "#2563eb", color: "#fff",
+                              fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 4px",
+                            }}>{conv.unreadCount}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {convPaging?.next && (
+                  <button onClick={() => loadConversations(selectedPageId, convPaging.cursors?.after)} disabled={loadingMore}
+                    style={{ width: "100%", padding: "10px", background: "none", border: "none", color: "#2563eb", cursor: "pointer", fontSize: 13 }}>
+                    {loadingMore ? "Đang tải..." : "Tải thêm hội thoại"}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Message area */}
+          {(!isMobile || activeConv) && (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+              {!activeConv ? (
+                <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af" }}>
+                  <div style={{ textAlign: "center" }}>
+                    <MessageSquare size={48} style={{ opacity: 0.3, marginBottom: 12 }} />
+                    <p style={{ fontSize: 15 }}>Chọn một hội thoại để xem tin nhắn</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Chat header */}
+                  <div style={{
+                    padding: "10px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", gap: 10, background: "#fafbfc",
+                  }}>
+                    {isMobile && (
+                      <button onClick={() => setActiveConv(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                        <ArrowLeft size={20} />
+                      </button>
+                    )}
+                    <div style={{
+                      width: 36, height: 36, borderRadius: "50%", background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                      display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 14,
+                    }}>
+                      {getCustomerName(activeConv).charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{getCustomerName(activeConv)}</div>
+                      <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                        via {selectedPage?.name || "Facebook Page"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Messages */}
+                  <div style={{ flex: 1, overflowY: "auto", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 4 }}>
+                    {msgPaging?.next && (
+                      <button onClick={loadOlderMessages} disabled={loadingMore}
+                        style={{ alignSelf: "center", padding: "6px 16px", borderRadius: 16, border: "1px solid #e5e7eb", background: "#f9fafb", cursor: "pointer", fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+                        {loadingMore ? "Đang tải..." : "Tải tin nhắn cũ hơn"}
+                      </button>
+                    )}
+                    {loadingMsgs && messages.length === 0 && (
+                      <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+                        <RefreshCw size={20} style={{ animation: "spin 1s linear infinite" }} />
+                      </div>
+                    )}
+                    {messages.map((msg, idx) => {
+                      const fromPage = isFromPage(msg);
+                      const showTime = idx === 0 || (new Date(msg.createdTime) - new Date(messages[idx - 1]?.createdTime)) > 300000;
+                      return (
+                        <React.Fragment key={msg.id}>
+                          {showTime && (
+                            <div style={{ textAlign: "center", fontSize: 11, color: "#9ca3af", margin: "8px 0 4px" }}>
+                              {formatTime(msg.createdTime)}
+                            </div>
+                          )}
+                          <div style={{ display: "flex", justifyContent: fromPage ? "flex-end" : "flex-start", marginBottom: 2 }}>
+                            <div style={{
+                              maxWidth: "70%", padding: "8px 12px", borderRadius: fromPage ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
+                              background: fromPage ? "#2563eb" : "#f3f4f6",
+                              color: fromPage ? "#fff" : "#1f2937",
+                              fontSize: 14, lineHeight: 1.45, wordBreak: "break-word",
+                            }}>
+                              {msg.message}
+                              {msg.attachments?.length > 0 && (
+                                <div style={{ marginTop: 6 }}>
+                                  {msg.attachments.map((att, ai) => (
+                                    att.url ? (
+                                      att.type?.startsWith("image") ? (
+                                        <img key={ai} src={att.url} alt="" style={{ maxWidth: "100%", borderRadius: 8, marginTop: 4 }} />
+                                      ) : (
+                                        <a key={ai} href={att.url} target="_blank" rel="noopener noreferrer"
+                                          style={{ color: fromPage ? "#dbeafe" : "#2563eb", fontSize: 12, textDecoration: "underline" }}>
+                                          {att.name || "Tệp đính kèm"}
+                                        </a>
+                                      )
+                                    ) : null
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                    <div ref={msgEndRef} />
+                  </div>
+
+                  {/* Input area */}
+                  <div style={{ padding: "10px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8, alignItems: "flex-end", background: "#fafbfc" }}>
+                    <textarea
+                      ref={inputRef}
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                      placeholder="Nhập tin nhắn..."
+                      rows={1}
+                      style={{
+                        flex: 1, resize: "none", border: "1px solid #e5e7eb", borderRadius: 20, padding: "8px 14px",
+                        fontSize: 14, outline: "none", maxHeight: 100, fontFamily: "inherit",
+                      }}
+                      onInput={e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 100) + "px"; }}
+                    />
+                    <button
+                      onClick={sendReply}
+                      disabled={!draft.trim() || sending}
+                      style={{
+                        width: 38, height: 38, borderRadius: "50%", border: "none",
+                        background: draft.trim() ? "#2563eb" : "#e5e7eb", color: "#fff",
+                        cursor: draft.trim() ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center",
+                        transition: "background .2s",
+                      }}
+                    >
+                      <Send size={16} />
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
