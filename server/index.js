@@ -3369,15 +3369,30 @@ app.get("/api/fb-messenger/conversations", requireAuth, requireAdmin, async (req
     const data = await fbRes.json();
     if (data.error) return res.status(400).json({ error: data.error.message || "Facebook API error" });
 
+    const convs = (data.data || []).map(c => ({
+      id: c.id,
+      snippet: c.snippet || "",
+      updatedTime: c.updated_time,
+      unreadCount: c.unread_count || 0,
+      messageCount: c.message_count || 0,
+      senders: (c.senders?.data || []).map(s => ({ id: s.id, name: s.name, email: s.email })),
+    }));
+
+    // Resolve profile links for unique customer PSIDs
+    const psids = new Set();
+    for (const c of convs) { for (const s of c.senders) { if (s.id !== page.page_id) psids.add(s.id); } }
+    const linkMap = new Map();
+    await Promise.all([...psids].map(async (psid) => {
+      try {
+        const pRes = await fetch(`https://graph.facebook.com/v22.0/${encodeURIComponent(psid)}?fields=link&access_token=${page.access_token}`);
+        const pData = await pRes.json();
+        if (pData.link) linkMap.set(psid, pData.link);
+      } catch {}
+    }));
+    for (const c of convs) { for (const s of c.senders) { if (linkMap.has(s.id)) s.link = linkMap.get(s.id); } }
+
     res.json({
-      conversations: (data.data || []).map(c => ({
-        id: c.id,
-        snippet: c.snippet || "",
-        updatedTime: c.updated_time,
-        unreadCount: c.unread_count || 0,
-        messageCount: c.message_count || 0,
-        senders: (c.senders?.data || []).map(s => ({ id: s.id, name: s.name, email: s.email })),
-      })),
+      conversations: convs,
       paging: data.paging || null,
       pageInfo: { id: page.id, name: page.name, pageId: page.page_id, avatarUrl: page.avatar_url },
     });
@@ -3455,7 +3470,7 @@ app.post("/api/fb-messenger/reply", requireAuth, async (req, res) => {
 
 // GET /api/fb-messenger/participant?pageId=<fb_pages.id>&userId=<psid>
 // Get participant profile info
-app.get("/api/fb-messenger/participant", requireAuth, requireAdmin, async (req, res) => {
+app.get("/api/fb-messenger/participant", requireAuth, async (req, res) => {
   try {
     const pageDbId = Number(req.query.pageId);
     const userId = req.query.userId;
@@ -3464,11 +3479,11 @@ app.get("/api/fb-messenger/participant", requireAuth, requireAdmin, async (req, 
     const page = await get(db, "SELECT * FROM fb_pages WHERE id = ? AND is_active = 1", [pageDbId]);
     if (!page) return res.status(404).json({ error: "Page không tồn tại" });
 
-    const fbRes = await fetch(`https://graph.facebook.com/v22.0/${userId}?fields=name,profile_pic&access_token=${page.access_token}`);
+    const fbRes = await fetch(`https://graph.facebook.com/v22.0/${encodeURIComponent(userId)}?fields=name,profile_pic,link&access_token=${page.access_token}`);
     const data = await fbRes.json();
     if (data.error) return res.status(400).json({ error: data.error.message });
 
-    res.json({ id: data.id, name: data.name || "Người dùng Facebook", profilePic: data.profile_pic || "" });
+    res.json({ id: data.id, name: data.name || "Người dùng Facebook", profilePic: data.profile_pic || "", link: data.link || "" });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -3515,6 +3530,7 @@ app.get("/api/fb-messenger/lead-conversations", requireAuth, async (req, res) =>
               pageDbId: page.id,
               pageName: page.name,
               pageId: page.page_id,
+              pageToken: page.access_token,
             });
             if (!added) { pageInfos.push(pInfo); added = true; }
           }
@@ -3524,6 +3540,27 @@ app.get("/api/fb-messenger/lead-conversations", requireAuth, async (req, res) =>
 
     // Sort by updated time desc
     results.sort((a, b) => (b.updatedTime || "").localeCompare(a.updatedTime || ""));
+
+    // Resolve profile links for all unique customer PSIDs
+    const psidMap = new Map();
+    for (const r of results) {
+      const cust = r.senders.find(s => s.id !== r.pageId);
+      if (cust && !psidMap.has(cust.id)) psidMap.set(cust.id, { psid: cust.id, token: r.pageToken });
+    }
+    const linkMap = new Map();
+    await Promise.all([...psidMap.values()].map(async ({ psid, token }) => {
+      try {
+        const pRes = await fetch(`https://graph.facebook.com/v22.0/${encodeURIComponent(psid)}?fields=link&access_token=${token}`);
+        const pData = await pRes.json();
+        if (pData.link) linkMap.set(psid, pData.link);
+      } catch {}
+    }));
+    // Attach links to senders & remove token from response
+    for (const r of results) {
+      for (const s of r.senders) { if (linkMap.has(s.id)) s.link = linkMap.get(s.id); }
+      delete r.pageToken;
+    }
+
     res.json({ conversations: results, pages: pageInfos });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
