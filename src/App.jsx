@@ -569,6 +569,8 @@ function CRMApp({ user, updateUser, onLogout }) {
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(pollResult => {
           if (!pollResult.changed) return; // No changes — skip data fetch
+          // Save server hash immediately so next poll won't repeat
+          if (pollResult.hash) setSyncHash(pollResult.hash);
           // Step 2: only fetch full data when hash actually changed
           return apiFetch(`${API}/data`)
             .then(r => r.ok ? r.json() : Promise.reject())

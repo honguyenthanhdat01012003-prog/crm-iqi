@@ -1913,7 +1913,17 @@ app.get("/api/data", requireAuth, async (req, res) => {
       const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
       schedules = rows.map(formatSchedule);
     }
-    res.json({ ...config, ...data, schedules });
+    // Include hash so client can track changes
+    if (!lastSyncHash) {
+      try {
+        const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+        const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+        const lastSync2 = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
+        const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync2}`;
+        lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+      } catch {}
+    }
+    res.json({ ...config, ...data, schedules, hash: lastSyncHash });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
