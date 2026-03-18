@@ -3662,14 +3662,37 @@ async function scrapeAdLibrary(projectName, _adAccountRows) {
     activityLog.push("Đang khởi tạo trình duyệt ảo (Headless Chromium)...");
     console.log("[MI] Launching headless Chromium...");
 
-    const chromium = (await import("@sparticuz/chromium")).default;
     const puppeteer = (await import("puppeteer-core")).default;
 
+    // Try @sparticuz/chromium first (Vercel/Lambda), then system Chromium (VPS)
+    let execPath;
+    let launchArgs = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"];
+    let headlessMode = "new";
+    try {
+      const chromium = (await import("@sparticuz/chromium")).default;
+      execPath = await chromium.executablePath();
+      launchArgs = [...chromium.args, ...launchArgs];
+      headlessMode = chromium.headless ?? "new";
+    } catch {
+      // Fallback: find system Chromium/Chrome on VPS
+      const candidates = [
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/snap/bin/chromium",
+        process.env.CHROMIUM_PATH || "",
+      ];
+      execPath = candidates.find(p => p && fs.existsSync(p));
+      if (!execPath) throw new Error("Chromium not found on VPS. Install: apt install -y chromium-browser");
+      console.log(`[MI] Using system Chromium: ${execPath}`);
+    }
+
     browser = await puppeteer.launch({
-      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--single-process"],
+      args: launchArgs,
       defaultViewport: { width: 1920, height: 1080 },
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless ?? "new",
+      executablePath: execPath,
+      headless: headlessMode,
     });
 
     bPage = await browser.newPage();
