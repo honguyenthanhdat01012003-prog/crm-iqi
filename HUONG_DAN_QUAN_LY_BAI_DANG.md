@@ -213,6 +213,7 @@ Tìm và bấm **"Thêm"** (Add) cho các quyền sau:
 | ✅ **Xem danh sách Page** | `pages_show_list` | Cho phép xem danh sách Page bạn quản lý |
 | ✅ **Quản lý Page** | `pages_manage_metadata` | Cho phép quản lý thông tin Page |
 | ✅ **Đọc user profile** | `pages_read_user_content` | Cho phép đọc nội dung người dùng trên Page |
+| ✅ **Tin nhắn Messenger** | `pages_messaging` | Cho phép đọc và trả lời tin nhắn Messenger trên Page |
 
 **Cách thêm quyền:**
 - Mỗi quyền có nút **"Thêm"** (Add) bên phải → Bấm từng cái một
@@ -262,6 +263,7 @@ Nếu muốn người khác cũng dùng được ứng dụng (trước khi xét
    - ✅ `pages_read_engagement`
    - ✅ `pages_show_list`
    - ✅ `pages_read_user_content`
+   - ✅ `pages_messaging` (cần cho Hộp thư Messenger & Chat trong chi tiết KH)
 
 ##### C4. Tạo User Token
 1. Bấm nút **"Generate Access Token"** (Tạo Access Token)

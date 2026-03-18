@@ -3066,12 +3066,17 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     setMessengerError("");
     try {
       const r = await apiFetch(`${API}/fb-messenger/lead-conversations?leadName=${encodeURIComponent(lead.name)}`);
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        setMessengerError("Server trả về lỗi (không phải JSON). Có thể server chưa restart sau khi cập nhật. Hãy restart lại server trên VPS.");
+        return;
+      }
       const data = await r.json();
       if (!r.ok) { setMessengerError(data.error || "Lỗi tải chat"); return; }
       if (data.noPages) { setMessengerError(data.message || "Chưa thêm Page Facebook. Vào Quản lý Page để thêm."); return; }
       setMessengerConvs(data.conversations || []);
       if (!data.conversations?.length) setMessengerError("Không tìm thấy cuộc hội thoại nào khớp với tên \"" + lead.name + "\" trên Messenger");
-    } catch (e) { setMessengerError("Không thể kết nối server: " + (e.message || "")); }
+    } catch (e) { setMessengerError("Không thể kết nối: " + (e.message || "Kiểm tra server đã chạy chưa")); }
     finally { setMessengerLoading(false); }
   };
 
