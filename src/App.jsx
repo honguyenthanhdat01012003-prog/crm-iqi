@@ -3639,7 +3639,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       onMouseLeave={e => e.currentTarget.style.borderColor = "#e5e7eb"}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                         <div>
-                          <div style={{ fontWeight: 600, fontSize: 13, color: "#1f2937" }}>{customer?.name || "Khách hàng"}</div>
+                          <div style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
+                            {customer?.name || "Khách hàng"}
+                            {customer?.id && <a href={`https://www.facebook.com/${customer.id}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                          </div>
                           <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{conv.snippet}</div>
                         </div>
                         <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -3662,9 +3665,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#3b82f6", display: "flex", alignItems: "center", gap: 4, fontSize: 12 }}>
                     <ChevronLeft size={14} /> Quay lại
                   </button>
-                  <span style={{ fontWeight: 600, fontSize: 13, color: "#1f2937" }}>
-                    {activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId)?.name || "Khách hàng"}
-                  </span>
+                  {(() => { const cust = activeMessengerConv.senders?.find(s => s.id !== activeMessengerConv.pageId); return (
+                    <span style={{ fontWeight: 600, fontSize: 13, color: "#1f2937", display: "flex", alignItems: "center", gap: 4 }}>
+                      {cust?.name || "Khách hàng"}
+                      {cust?.id && <a href={`https://www.facebook.com/${cust.id}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={12} /></a>}
+                    </span>
+                  ); })()}
                   <span style={{ fontSize: 10, color: "#6b7280" }}>— 📘 {activeMessengerConv.pageName}</span>
                 </div>
 
@@ -7973,6 +7979,7 @@ function MessengerInboxPage() {
                 {filteredConvs.map(conv => {
                   const isActive = activeConv?.id === conv.id;
                   const custName = getCustomerName(conv);
+                  const custId = getCustomerId(conv);
                   return (
                     <div
                       key={conv.id}
@@ -7994,8 +8001,9 @@ function MessengerInboxPage() {
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                          <span style={{ fontWeight: conv.unreadCount > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <span style={{ fontWeight: conv.unreadCount > 0 ? 700 : 500, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
                             {custName}
+                            {custId && <a href={`https://www.facebook.com/${custId}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex", flexShrink: 0 }}><ExternalLink size={12} /></a>}
                           </span>
                           <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap", flexShrink: 0 }}>
                             {formatTime(conv.updatedTime)}
@@ -8058,7 +8066,10 @@ function MessengerInboxPage() {
                       {getCustomerName(activeConv).charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{getCustomerName(activeConv)}</div>
+                      <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 4 }}>
+                        {getCustomerName(activeConv)}
+                        {getCustomerId(activeConv) && <a href={`https://www.facebook.com/${getCustomerId(activeConv)}`} target="_blank" rel="noopener noreferrer" title="Xem Facebook" style={{ color: "#3b82f6", display: "inline-flex" }}><ExternalLink size={14} /></a>}
+                      </div>
                       <div style={{ fontSize: 11, color: "#9ca3af" }}>
                         via {selectedPage?.name || "Facebook Page"}
                       </div>
