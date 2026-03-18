@@ -8,4 +8,18 @@ export default defineConfig({
       "/api": "http://localhost:4000",
     },
   },
+  build: {
+    rollupOptions: {
+      // Exclude server-only packages from Rollup resolver (fixes ENOTDIR on Linux)
+      external: [
+        "@sparticuz/chromium",
+        "puppeteer-core",
+        "@libsql/client",
+        "express",
+        "cors",
+        "helmet",
+        "jsonwebtoken",
+      ],
+    },
+  },
 });
