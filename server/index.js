@@ -221,15 +221,6 @@ async function initDb() {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
   }
 
-  // Create manager_overrides table (stores manual manager assignments to survive sync)
-  await run(db, `CREATE TABLE IF NOT EXISTS manager_overrides (
-    norm_phone TEXT NOT NULL,
-    project_id INTEGER NOT NULL,
-    manager_name TEXT NOT NULL,
-    updated_at TEXT,
-    PRIMARY KEY(norm_phone, project_id)
-  )`);
-
   // Backfill manager_name from history
   try {
     const rows = await all(db,
@@ -881,11 +872,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
 
-  // 1b. Load admin manual overrides (highest priority, survives any race condition)
-  const overrideRows = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
-  const overrideMap = new Map();
-  for (const o of overrideRows) overrideMap.set(normalizePhoneKey(o.norm_phone), o.manager_name);
-
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
   if (existing.length > 0) {
@@ -953,11 +939,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       managerName = prev.manager_name || "";
     }
 
-    // Override from admin manual assignment takes highest priority
-    if (np && overrideMap.has(np)) {
-      managerName = overrideMap.get(np);
-    }
-
     stmts.push({
       sql: `INSERT INTO leads(
         project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
@@ -1013,23 +994,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
 async function readData(db) {
   const leads = await all(db, "SELECT * FROM leads ORDER BY id ASC");
-
-  // Safety net: always apply manager_overrides to ensure manual changes are reflected
-  // This catches any case where sync didn't properly restore the override
-  try {
-    const overrides = await all(db, "SELECT norm_phone, project_id, manager_name FROM manager_overrides");
-    if (overrides.length > 0) {
-      const oMap = new Map();
-      for (const o of overrides) oMap.set(`${normalizePhoneKey(o.norm_phone)}|${o.project_id}`, o.manager_name);
-      for (const l of leads) {
-        const key = `${normalizePhoneKey(l.phone)}|${l.project_id}`;
-        const mgr = oMap.get(key);
-        if (mgr && mgr !== l.manager_name) {
-          l.manager_name = mgr;
-        }
-      }
-    }
-  } catch (_) { /* manager_overrides table may not exist yet */ }
 
   const historyRows = await all(db, "SELECT * FROM lead_history ORDER BY lead_id, seq");
   const historyMap = {};
@@ -1194,34 +1158,7 @@ async function syncProject(db, projectId) {
   const vnHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })).getHours();
   const isActiveHours = vnHour >= 6 && vnHour < 23; // 6:00 - 22:59
 
-  // FIRST: Apply manual manager overrides BEFORE round-robin (so they don't get overwritten)
-  try {
-    const overrides = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
-    if (overrides.length) {
-      const leadsAfterInsert = await all(db, "SELECT id, phone FROM leads WHERE project_id = ?", [projectId]);
-      const oStmts = [];
-      const cleanStmts = [];
-      for (const o of overrides) {
-        const oKey = normalizePhoneKey(o.norm_phone);
-        const matched = leadsAfterInsert.find(l => normalizePhoneKey(l.phone) === oKey);
-        if (matched) {
-          oStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [o.manager_name, matched.id] });
-        } else {
-          // Only clean up overrides older than 24h to prevent premature deletion
-          cleanStmts.push({ sql: "DELETE FROM manager_overrides WHERE norm_phone = ? AND project_id = ? AND updated_at < datetime('now', '-1 day')", args: [o.norm_phone, projectId] });
-        }
-      }
-      if (oStmts.length) {
-        await db.batch(oStmts, "write");
-        console.log(`[syncProject] project=${projectId} applied ${oStmts.length} manual manager overrides BEFORE round-robin`);
-      }
-      if (cleanStmts.length) await db.batch(cleanStmts, "write");
-    }
-  } catch (oErr) {
-    console.error(`[syncProject] Pre-roundrobin override error:`, oErr.message);
-  }
-
-  // THEN: assign manager_name only to leads that are STILL unassigned (truly new leads)
+  // Assign manager_name to leads that are unassigned (round-robin)
   try {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
@@ -1231,7 +1168,7 @@ async function syncProject(db, projectId) {
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
-      // Step 1: Assign manager to ONLY truly unassigned leads (after overrides have been applied)
+      // Assign manager to unassigned leads via round-robin
       {
         const unassigned = await all(db,
           "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
@@ -1308,7 +1245,6 @@ async function syncProject(db, projectId) {
     console.error(`[syncProject] Manager assign/notify error for project ${projectId}:`, notifyErr.message);
   }
 
-  // Overrides already applied BEFORE round-robin above — no need to re-apply here
 }
 
 async function syncAllProjects(db) {
@@ -1969,16 +1905,6 @@ app.get("/api/health", async (_req, res) => {
   });
 });
 
-// Debug endpoint: check manager overrides (admin only)
-app.get("/api/debug/manager-overrides", requireAuth, requireAdmin, async (req, res) => {
-  try {
-    const overrides = await all(db, "SELECT * FROM manager_overrides ORDER BY updated_at DESC");
-    res.json({ count: overrides.length, overrides });
-  } catch (err) {
-    res.json({ error: err.message, note: "table may not exist" });
-  }
-});
-
 // Debug endpoint: check managers linked to a project
 app.get("/api/debug/project-managers/:projectId", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -2012,19 +1938,9 @@ app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmi
     if (allLeads.length === 0) return res.status(400).json({ error: "Dự án chưa có lead nào" });
 
     const stmts = [];
-    const normPhone = normalizePhoneKey;
     for (let i = 0; i < allLeads.length; i++) {
       const mgr = managers[i % managers.length];
       stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, allLeads[i].id] });
-      // Also update manager_overrides so manual overrides reflect redistribution
-      const np = normPhone(allLeads[i].phone);
-      if (np) {
-        stmts.push({
-          sql: `INSERT INTO manager_overrides(norm_phone, project_id, manager_name, updated_at)
-                VALUES(?, ?, ?, datetime('now')) ON CONFLICT(norm_phone, project_id) DO UPDATE SET manager_name = excluded.manager_name, updated_at = excluded.updated_at`,
-          args: [np, projectId, mgr.display_name]
-        });
-      }
     }
     await db.batch(stmts, "write");
     // Save mgr_assign_idx atomically
@@ -2222,15 +2138,6 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const stmts = [];
     for (const lid of leadIds) {
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, req.user.displayName, lid] });
-      // Save manager override so it survives sync
-      const leadForOverride = await get(db, "SELECT phone, project_id FROM leads WHERE id = ?", [lid]);
-      if (leadForOverride) {
-        const np = normalizePhoneKey(leadForOverride.phone);
-        if (np) {
-          stmts.push({ sql: "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
-            args: [np, leadForOverride.project_id, req.user.displayName, new Date().toISOString()] });
-        }
-      }
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -2400,15 +2307,6 @@ async function processSchedules(db, triggerUser) {
       const saleName = saleList[saleIdx];
 
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, sch.created_by || "Hệ thống", lid] });
-      // Save manager override so it survives sync
-      const leadForOverride = await get(db, "SELECT phone, project_id FROM leads WHERE id = ?", [lid]);
-      if (leadForOverride) {
-        const np = normalizePhoneKey(leadForOverride.phone);
-        if (np) {
-          stmts.push({ sql: "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
-            args: [np, leadForOverride.project_id, sch.created_by || "Hệ thống", new Date().toISOString()] });
-        }
-      }
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
@@ -2703,13 +2601,6 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
     const oldManager = lead.manager_name;
     console.log(`[PATCH manager] lead#${actualId} old_manager=${oldManager} new_manager=${managerName}`);
 
-    // Save override to survive sync race conditions
-    const leadFull = await get(db, "SELECT project_id, phone FROM leads WHERE id = ?", [actualId]);
-    if (leadFull) {
-      const np = normalizePhoneKey(leadFull.phone);
-      if (np) await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, leadFull.project_id, managerName, new Date().toISOString()]);
-    }
-
     // Direct UPDATE
     const result = await run(db, "UPDATE leads SET manager_name = ? WHERE id = ?", [managerName, actualId]);
     console.log(`[PATCH manager] UPDATE result: ${result.changes} rows affected`);
@@ -2825,18 +2716,6 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (result.changes === 0) {
         return res.status(404).json({ error: `Không thể cập nhật lead (ID=${actualLeadId}, 0 rows affected)` });
       }
-      // Always save manager_name override to survive sync (for any manager change)
-      if (sets.some(s => s.startsWith("manager_name"))) {
-        const updatedLead = await get(db, "SELECT phone, project_id, manager_name FROM leads WHERE id = ?", [actualLeadId]);
-        if (updatedLead) {
-          const np = normalizePhoneKey(updatedLead.phone);
-          if (np) {
-            await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
-              [np, updatedLead.project_id, updatedLead.manager_name, new Date().toISOString()]);
-            console.log(`[PUT /api/leads/${actualLeadId}] Saved manager override: phone=${np} manager=${updatedLead.manager_name}`);
-          }
-        }
-      }
     }
 
     // When admin/manager assigns lead to a sale: save history + send Telegram
@@ -2921,12 +2800,6 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (!updated || updated.manager_name !== managerName) {
         console.error(`[PUT /api/leads/${actualLeadId}] WRITE VERIFICATION FAILED: DB has "${updated?.manager_name}" but expected "${managerName}"`);
         return res.status(500).json({ error: `Ghi DB thất bại: DB="${updated?.manager_name}" nhưng cần="${managerName}"` });
-      }
-      // Save override to survive sync race conditions
-      const np = normalizePhoneKey(updated.phone);
-      if (np) {
-        await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, updated.project_id, managerName, new Date().toISOString()]);
-        console.log(`[PUT /api/leads/${actualLeadId}] Saved override: phone=${np} project=${updated.project_id} manager=${managerName}`);
       }
       lastSyncHash = ""; // invalidate so next poll re-fetches
       return res.json({ updatedLead: { id: actualLeadId, phone: updated.phone, managerName: updated.manager_name } });
