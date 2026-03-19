@@ -869,6 +869,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
 
+  // 1b. Load admin manual overrides (highest priority, survives any race condition)
+  const overrideRows = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
+  const overrideMap = new Map();
+  for (const o of overrideRows) overrideMap.set(o.norm_phone, o.manager_name);
+
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
   if (existing.length > 0) {
@@ -934,6 +939,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
       managerName = prev.manager_name || "";
+    }
+
+    // Override from admin manual assignment takes highest priority
+    if (np && overrideMap.has(np)) {
+      managerName = overrideMap.get(np);
     }
 
     stmts.push({
@@ -1164,14 +1174,14 @@ async function syncProject(db, projectId) {
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
-      // Step 1: Assign manager to all unassigned leads (always, regardless of hours)
+      // Step 1: Assign manager to all unassigned leads (sequential round-robin: A→B→C→A→B→C)
       {
         const unassigned = await all(db,
           "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
           [projectId]);
         if (unassigned.length > 0) {
           const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
-          let idx = (projRow && projRow.mgr_assign_idx) || 0;
+          let idx = Number(projRow?.mgr_assign_idx) || 0;
           const startIdx = idx;
           const stmts = [];
           for (let i = 0; i < unassigned.length; i++) {
@@ -1179,14 +1189,11 @@ async function syncProject(db, projectId) {
             stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, unassigned[i].id] });
             idx++;
           }
+          // Save round-robin index in the SAME batch to guarantee persistence
+          stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
           await db.batch(stmts, "write");
-          // Save round-robin index SEPARATELY to ensure it persists
-          await run(db, "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", [idx, projectId]);
-          // Log assignments for debugging
           const sample = unassigned.slice(0, Math.min(6, unassigned.length));
-          const sampleAssign = sample.map((u, i) => {
-            return `lead#${u.id}->${managers[(startIdx + i) % managers.length].display_name}`;
-          });
+          const sampleAssign = sample.map((u, i) => `lead#${u.id}->${managers[(startIdx + i) % managers.length].display_name}`);
           console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${startIdx} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
         }
       }
@@ -1207,7 +1214,8 @@ async function syncProject(db, projectId) {
             // Group new leads by their ACTUAL assigned manager_name (from DB)
             const mgrLeadMap = new Map();
             for (const lead of newLeads) {
-              const mgr = managers.find(m => m.display_name === lead.manager_name) || managers[0];
+              const mgr = managers.find(m => m.display_name === lead.manager_name);
+              if (!mgr) continue; // skip leads without a valid manager match
               if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
               mgrLeadMap.get(mgr.id).leads.push(lead);
             }
@@ -1930,6 +1938,73 @@ app.get("/api/debug/manager-overrides", requireAuth, requireAdmin, async (req, r
     res.json({ count: overrides.length, overrides });
   } catch (err) {
     res.json({ error: err.message, note: "table may not exist" });
+  }
+});
+
+// Debug endpoint: check managers linked to a project
+app.get("/api/debug/project-managers/:projectId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectId = Number(req.params.projectId);
+    const managers = await all(db,
+      `SELECT u.id, u.display_name, u.role, u.username FROM users u
+       JOIN user_projects up ON u.id = up.user_id
+       WHERE up.project_id = ? AND u.role = 'manager'
+       ORDER BY u.id ASC`, [projectId]);
+    const projRow = await get(db, "SELECT id, name, mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
+    const leadCounts = await all(db,
+      `SELECT manager_name, COUNT(*) as cnt FROM leads WHERE project_id = ? GROUP BY manager_name ORDER BY cnt DESC`, [projectId]);
+    res.json({ project: projRow, managers, leadCounts });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Admin: redistribute ALL leads of a project evenly across all managers (round-robin reset)
+app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectId = Number(req.params.projectId);
+    const managers = await all(db,
+      `SELECT u.id, u.display_name FROM users u
+       JOIN user_projects up ON u.id = up.user_id
+       WHERE up.project_id = ? AND u.role = 'manager'
+       ORDER BY u.id ASC`, [projectId]);
+    if (managers.length === 0) return res.status(400).json({ error: "Không có quản lý nào được gán cho dự án này" });
+
+    const allLeads = await all(db, "SELECT id, phone FROM leads WHERE project_id = ? ORDER BY id ASC", [projectId]);
+    if (allLeads.length === 0) return res.status(400).json({ error: "Dự án chưa có lead nào" });
+
+    const stmts = [];
+    const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
+    for (let i = 0; i < allLeads.length; i++) {
+      const mgr = managers[i % managers.length];
+      stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, allLeads[i].id] });
+      // Also update manager_overrides so manual overrides reflect redistribution
+      const np = normPhone(allLeads[i].phone);
+      if (np) {
+        stmts.push({
+          sql: `INSERT INTO manager_overrides(norm_phone, project_id, manager_name, updated_at)
+                VALUES(?, ?, ?, datetime('now')) ON CONFLICT(norm_phone, project_id) DO UPDATE SET manager_name = excluded.manager_name, updated_at = excluded.updated_at`,
+          args: [np, projectId, mgr.display_name]
+        });
+      }
+    }
+    await db.batch(stmts, "write");
+    // Save mgr_assign_idx atomically
+    await run(db, "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", [allLeads.length, projectId]);
+    // Invalidate sync hash so clients pick up changes
+    lastSyncHash = "";
+
+    // Count distribution
+    const dist = {};
+    for (let i = 0; i < allLeads.length; i++) {
+      const name = managers[i % managers.length].display_name;
+      dist[name] = (dist[name] || 0) + 1;
+    }
+    console.log(`[redistribute] project=${projectId} total=${allLeads.length} managers=${managers.length} distribution:`, dist);
+    res.json({ success: true, total: allLeads.length, managers: managers.length, distribution: dist });
+  } catch (err) {
+    console.error("[redistribute] error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

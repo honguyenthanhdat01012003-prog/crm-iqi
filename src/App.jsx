@@ -1936,6 +1936,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleHistoryPage, setScheduleHistoryPage] = useState(1);
   const [scheduleHistorySearch, setScheduleHistorySearch] = useState("");
   const [allUsers, setAllUsers] = useState([]);
+  const [redistributing, setRedistributing] = useState(false);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -2248,11 +2249,38 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
       {/* Admin chia lead */}
       {isAdmin && (
-        <div style={{ marginBottom: 12 }}>
+        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
             style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
             <Shuffle size={14} /> Chia Lead cho Sale
           </button>
+          {selectedProject && (
+            <button
+              disabled={redistributing}
+              onClick={async () => {
+                if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
+                if (!window.confirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?")) return;
+                setRedistributing(true);
+                try {
+                  const r = await apiFetch(`${API}/admin/redistribute-managers/${selectedProject}`, { method: "POST" });
+                  const data = await r.json();
+                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                  const distStr = Object.entries(data.distribution).map(([k, v]) => `${k}: ${v}`).join(", ");
+                  showToast(`Đã phân chia ${data.total} lead cho ${data.managers} quản lý (${distStr})`, "success");
+                  // Refresh data
+                  const r2 = await apiFetch(`${API}/data`);
+                  const d2 = await r2.json();
+                  applyApiData(d2);
+                } catch (e) {
+                  showToast("Lỗi: " + e.message, "error");
+                } finally {
+                  setRedistributing(false);
+                }
+              }}
+              style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 4, background: "#7c3aed" }}>
+              <Shield size={14} /> {redistributing ? "Đang chia..." : "Phân chia lại quản lý"}
+            </button>
+          )}
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13 }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
