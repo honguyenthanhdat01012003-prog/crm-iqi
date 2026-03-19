@@ -105,7 +105,8 @@ async function initDb() {
       FOREIGN KEY (campaign_id) REFERENCES campaigns(id))`,
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lead_url TEXT DEFAULT '',
-      cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '')`,
+      cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '',
+      mgr_assign_idx INTEGER DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS lead_history (
       id INTEGER PRIMARY KEY, lead_id INTEGER NOT NULL, sale_name TEXT NOT NULL,
       action TEXT DEFAULT '', contact_date TEXT DEFAULT '', status TEXT DEFAULT '',
@@ -1148,7 +1149,9 @@ async function syncProject(db, projectId) {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
        JOIN user_projects up ON u.id = up.user_id
-       WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
+       WHERE up.project_id = ? AND u.role = 'manager'
+       ORDER BY u.id ASC`, [projectId]);
+    console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
       // Step 1: Assign manager to all unassigned leads (during active hours)
@@ -1167,7 +1170,13 @@ async function syncProject(db, projectId) {
           }
           stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
           await db.batch(stmts, "write");
-          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} unassigned leads to ${managers.length} managers, idx=${idx}`);
+          // Log first few assignments for debugging
+          const sample = unassigned.slice(0, Math.min(6, unassigned.length));
+          const sampleAssign = sample.map((u, i) => {
+            const mIdx = ((projRow && projRow.mgr_assign_idx) || 0) + i;
+            return `lead#${u.id}->${managers[mIdx % managers.length].display_name}`;
+          });
+          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${(projRow && projRow.mgr_assign_idx) || 0} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
         }
       }
 
