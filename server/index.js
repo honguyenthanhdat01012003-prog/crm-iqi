@@ -906,6 +906,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let saleId = l.saleId;
     let saleName = l.saleName || "";
     let isHot = l.isHot ? 1 : 0;
+    let managerName = "";
 
     if (prev) {
       // Restore meaningful status from old data (don't revert to "new")
@@ -920,21 +921,22 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         saleName = (sheetSale && sheetSale !== "Chưa chia") ? sheetSale : prev.sale_name;
         saleId = saleName === prev.sale_name ? (prev.sale_id || saleId) : saleId;
       }
-      // Restore notes, hot status (manager is restored separately AFTER batch)
+      // Restore notes, hot status, and manager_name
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
+      managerName = prev.manager_name || "";
     }
 
     stmts.push({
       sql: `INSERT INTO leads(
         project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
         product, raw_status, status,
-        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, inbox_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         projectId, l.name, l.phone, l.campaign, null,
         l.adsetName || "-", l.adName || "-", l.formName || "-",
-        l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
+        l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName, managerName,
         l.source, l.budget, l.syncAt, notes,
       ],
     });
@@ -974,21 +976,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} phoneMatched=${matchCount} brandNew=${newPhones.length}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
-
-  // Restore manager_name AFTER batch using phoneMap (separate step to avoid race with manual changes)
-  const mgrStmts = [];
-  for (const [np, prev] of phoneMap) {
-    if (prev.manager_name) {
-      mgrStmts.push({
-        sql: "UPDATE leads SET manager_name = ? WHERE project_id = ? AND phone = ?",
-        args: [prev.manager_name, projectId, prev.phone],
-      });
-    }
-  }
-  if (mgrStmts.length) {
-    await db.batch(mgrStmts, "write");
-    console.log(`[replaceProjectData] restored manager_name for ${mgrStmts.length} leads`);
-  }
 
   return { newPhones };
 }
@@ -2508,6 +2495,11 @@ async function filterDataForRole(data, user) {
 /* ===== Dedicated Manager Change endpoint (clean, verified write) ===== */
 app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) => {
   try {
+    // Wait for sync to finish to avoid race condition (max 15s)
+    if (syncInProgress) {
+      const t0 = Date.now();
+      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+    }
     const leadId = Number(req.params.id);
     const { managerName, phone } = req.body || {};
     console.log(`[POST /api/leads/${leadId}/manager] managerName=${managerName} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
