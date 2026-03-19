@@ -3794,19 +3794,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {showAdPreview && (
         <div onClick={() => setShowAdPreview(false)} style={{
           position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999,
-          display: "flex", justifyContent: "center", alignItems: "center", padding: 16,
+          display: "flex", justifyContent: "center", alignItems: isMobile ? "flex-end" : "center", padding: isMobile ? 0 : 16,
         }}>
           <div onClick={e => e.stopPropagation()} style={{
-            background: "#fff", borderRadius: 16, width: "100%", maxWidth: 600, maxHeight: "90vh",
+            background: "#fff", borderRadius: isMobile ? "16px 16px 0 0" : 16, width: "100%", maxWidth: isMobile ? "100%" : 600, maxHeight: isMobile ? "92vh" : "90vh",
             overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+            WebkitOverflowScrolling: "touch",
           }}>
-            <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ padding: isMobile ? "14px 16px" : "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: isMobile ? 15 : 16, display: "flex", alignItems: "center", gap: 8 }}>
                 <Eye size={18} /> Xem quảng cáo
               </h3>
               <button onClick={() => setShowAdPreview(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} /></button>
             </div>
-            <div style={{ padding: 20 }}>
+            <div style={{ padding: isMobile ? 14 : 20 }}>
               {loadingAdPreview ? (
                 <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>
                   <RefreshCw size={24} style={{ animation: "spin 1s linear infinite" }} />
@@ -3819,9 +3820,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </div>
               ) : adPreview?.adId ? (
                 <div>
-                  <div style={{ marginBottom: 12, padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "#166534" }}>{adPreview.adName}</div>
-                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                  <div style={{ marginBottom: 12, padding: isMobile ? "10px 12px" : "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontSize: isMobile ? 14 : 13, fontWeight: 600, color: "#166534", wordBreak: "break-word" }}>{adPreview.adName}</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, wordBreak: "break-all" }}>
                       Trạng thái: <span style={{ fontWeight: 600, color: adPreview.status === "ACTIVE" ? "#16a34a" : "#dc2626" }}>{adPreview.status}</span>
                       {" · "}Ad ID: {adPreview.adId}
                     </div>
@@ -3838,7 +3839,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       </div>
                       <iframe
                         srcDoc={p.html}
-                        style={{ width: "100%", minHeight: p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600, border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}
+                        style={{ width: "100%", minHeight: isMobile ? 400 : (p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600), border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}
                         sandbox="allow-scripts allow-same-origin allow-popups"
                         scrolling="no"
                         onLoad={e => {
