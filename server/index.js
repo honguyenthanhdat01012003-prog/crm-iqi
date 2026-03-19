@@ -2628,13 +2628,22 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
 
           // Save pending state for this user (include message_id for recall)
-          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, leadId, sentMsgId]);
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, actualLeadId, sentMsgId]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
       }
     }
 
+    // For manager-only changes, return targeted update (avoids race with sync)
+    if (managerName !== undefined && saleName === undefined && status === undefined && notes === undefined && isHot === undefined) {
+      const updated = await get(db, "SELECT id, phone, manager_name FROM leads WHERE id = ?", [actualLeadId]);
+      console.log(`[PUT /api/leads/${actualLeadId}] Verify after update: manager_name=${updated?.manager_name}`);
+      lastSyncHash = ""; // invalidate so next poll re-fetches
+      return res.json({ updatedLead: { id: actualLeadId, phone: updated?.phone, managerName: updated?.manager_name || managerName } });
+    }
+
+    lastSyncHash = ""; // invalidate hash after any lead change
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json(data);

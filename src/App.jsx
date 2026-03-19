@@ -500,6 +500,15 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (data.lastSync) setLastSync(data.lastSync);
       return;
     }
+    // Targeted single-lead update (e.g. manager change)
+    if (data.updatedLead) {
+      setLeads(prev => prev.map(l =>
+        (l.id === data.updatedLead.id || (data.updatedLead.phone && l.phone === data.updatedLead.phone))
+          ? { ...l, ...data.updatedLead }
+          : l
+      ));
+      return;
+    }
     if (data.hash) setSyncHash(data.hash);
     if (data.leads) {
       setLeads((prev) => {
@@ -3191,16 +3200,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
-        alert("Đổi quản lý thất bại: " + (err.error || r.statusText));
+        showToast("Đổi quản lý thất bại: " + (err.error || r.statusText), "error");
         return;
       }
       const data = await r.json();
       applyApiData(data);
       setEditManager("");
-      alert("Đã đổi quản lý thành công!");
+      showToast("Đã đổi quản lý thành công!", "success");
     } catch (e) {
       console.error(e);
-      alert("Lỗi kết nối: " + e.message);
+      showToast("Lỗi kết nối: " + e.message, "error");
     } finally {
       setSavingManager(false);
     }
