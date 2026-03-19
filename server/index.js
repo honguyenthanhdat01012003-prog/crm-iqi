@@ -1218,15 +1218,64 @@ async function syncProject(db, projectId) {
     projectId,
   ]);
 
-  // Notify managers about NEW leads via Telegram
+  // === Round-robin: assign manager_name to ALL unassigned leads ===
   try {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
        JOIN user_projects up ON u.id = up.user_id
        WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
+    console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
+      // Step 1: Assign manager to all unassigned leads via round-robin
+      const unassigned = await all(db,
+        "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
+        [projectId]);
+      if (unassigned.length > 0) {
+        const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
+        let idx = (projRow && projRow.mgr_assign_idx) || 0;
+        const startIdx = idx;
+        const stmts = [];
+        for (let i = 0; i < unassigned.length; i++) {
+          const mgr = managers[idx % managers.length];
+          stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, unassigned[i].id] });
+          idx++;
+        }
+        await db.batch(stmts, "write");
+        await run(db, "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", [idx, projectId]);
+        const sample = unassigned.slice(0, Math.min(6, unassigned.length));
+        const sampleAssign = sample.map((u, i) => `lead#${u.id}->${managers[(startIdx + i) % managers.length].display_name}`);
+        console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${startIdx} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
+      }
+
+      // Step 2: Apply manual manager overrides (bulletproof: survives any sync)
+      try {
+        const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
+        const overrides = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
+        if (overrides.length) {
+          const leadsAfterSync = await all(db, "SELECT id, phone FROM leads WHERE project_id = ?", [projectId]);
+          const oStmts = [];
+          const cleanStmts = [];
+          for (const o of overrides) {
+            const matched = leadsAfterSync.find(l => normPhone(l.phone) === o.norm_phone);
+            if (matched) {
+              oStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [o.manager_name, matched.id] });
+            } else {
+              cleanStmts.push({ sql: "DELETE FROM manager_overrides WHERE norm_phone = ? AND project_id = ?", args: [o.norm_phone, projectId] });
+            }
+          }
+          if (oStmts.length) {
+            await db.batch(oStmts, "write");
+            console.log(`[syncProject] project=${projectId} applied ${oStmts.length} manual manager overrides`);
+          }
+          if (cleanStmts.length) await db.batch(cleanStmts, "write");
+        }
+      } catch (oErr) {
+        console.error(`[syncProject] Manager override error:`, oErr.message);
+      }
+
+      // Step 3: Notify managers about NEW leads via Telegram
       // Notify about NEW leads
       if (newPhones && newPhones.length > 0) {
         const normPhone = normalizePhoneKey;
