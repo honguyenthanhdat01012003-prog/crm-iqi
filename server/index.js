@@ -1918,9 +1918,19 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
-    build: "2026-03-19-v5",
+    build: "2026-03-19-v7",
     counts,
   });
+});
+
+// Debug endpoint: check manager overrides (admin only)
+app.get("/api/debug/manager-overrides", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const overrides = await all(db, "SELECT * FROM manager_overrides ORDER BY updated_at DESC");
+    res.json({ count: overrides.length, overrides });
+  } catch (err) {
+    res.json({ error: err.message, note: "table may not exist" });
+  }
 });
 
 app.get("/api/config", requireAuth, async (_req, res) => {
@@ -2632,6 +2642,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
     // Admin/Manager can change sale assignment and isHot
     let reassigning = false;
+    let managerChangeRequested = managerName !== undefined && saleName === undefined;
+    let managerChangeApplied = false;
     if (req.user.role === "admin" || req.user.role === "manager") {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
@@ -2641,11 +2653,17 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
       }
       // Admin can directly reassign manager (without changing sale)
-      if (managerName !== undefined && saleName === undefined) {
+      if (managerChangeRequested) {
         sets.push("manager_name = ?"); params.push(managerName);
+        managerChangeApplied = true;
         console.log(`[PUT /api/leads/${actualLeadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
+    }
+    // Block: if manager change was requested but role prevented it
+    if (managerChangeRequested && !managerChangeApplied) {
+      console.log(`[PUT /api/leads/${actualLeadId}] BLOCKED: manager change requested by role=${req.user.role}, only admin/manager allowed`);
+      return res.status(403).json({ error: `Chỉ admin/manager mới được đổi quản lý (role hiện tại: ${req.user.role})` });
     }
     if (status !== undefined) { sets.push("status = ?"); params.push(status); }
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
@@ -2746,14 +2764,20 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     // For manager-only changes, return targeted update (avoids race with sync)
     if (managerName !== undefined && saleName === undefined && status === undefined && notes === undefined && isHot === undefined) {
       const updated = await get(db, "SELECT id, phone, manager_name, project_id FROM leads WHERE id = ?", [actualLeadId]);
-      console.log(`[PUT /api/leads/${actualLeadId}] Verify after update: manager_name=${updated?.manager_name}`);
+      console.log(`[PUT /api/leads/${actualLeadId}] Verify after update: manager_name="${updated?.manager_name}" (expected="${managerName}")`);
+      // Verify the write actually happened
+      if (!updated || updated.manager_name !== managerName) {
+        console.error(`[PUT /api/leads/${actualLeadId}] WRITE VERIFICATION FAILED: DB has "${updated?.manager_name}" but expected "${managerName}"`);
+        return res.status(500).json({ error: `Ghi DB thất bại: DB="${updated?.manager_name}" nhưng cần="${managerName}"` });
+      }
       // Save override to survive sync race conditions
-      if (updated) {
-        const np = (updated.phone || "").replace(/[\s.\-()]/g, "").trim();
-        if (np) await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, updated.project_id, managerName, new Date().toISOString()]);
+      const np = (updated.phone || "").replace(/[\s.\-()]/g, "").trim();
+      if (np) {
+        await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, updated.project_id, managerName, new Date().toISOString()]);
+        console.log(`[PUT /api/leads/${actualLeadId}] Saved override: phone=${np} project=${updated.project_id} manager=${managerName}`);
       }
       lastSyncHash = ""; // invalidate so next poll re-fetches
-      return res.json({ updatedLead: { id: actualLeadId, phone: updated?.phone, managerName: updated?.manager_name || managerName } });
+      return res.json({ updatedLead: { id: actualLeadId, phone: updated.phone, managerName: updated.manager_name } });
     }
 
     lastSyncHash = ""; // invalidate hash after any lead change

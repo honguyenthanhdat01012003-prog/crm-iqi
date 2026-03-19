@@ -3203,10 +3203,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast("Đổi quản lý thất bại: " + (data.error || r.statusText), "error");
         return;
       }
-      // Update local state immediately using closure values (guaranteed match)
-      applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: editManager } });
+      // Use server-verified value if available, fallback to local
+      const serverManager = data.updatedLead?.managerName || editManager;
+      applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: serverManager } });
+      // Force re-fetch to guarantee consistency with DB
+      try {
+        const r2 = await apiFetch(`${API}/data`);
+        if (r2.ok) { const d2 = await r2.json(); applyApiData(d2); }
+      } catch (_) {}
       setEditManager("");
-      showToast(`Đã đổi quản lý thành ${editManager}!`, "success");
+      showToast(`Đã đổi quản lý thành ${serverManager}!`, "success");
     } catch (e) {
       console.error(e);
       showToast("Lỗi kết nối: " + e.message, "error");
