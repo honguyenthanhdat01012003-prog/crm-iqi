@@ -906,7 +906,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let saleId = l.saleId;
     let saleName = l.saleName || "";
     let isHot = l.isHot ? 1 : 0;
-    let managerName = "";
 
     if (prev) {
       // Restore meaningful status from old data (don't revert to "new")
@@ -921,23 +920,22 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         saleName = (sheetSale && sheetSale !== "Chưa chia") ? sheetSale : prev.sale_name;
         saleId = saleName === prev.sale_name ? (prev.sale_id || saleId) : saleId;
       }
-      // Restore notes, hot status, manager
+      // Restore notes, hot status (manager is restored separately AFTER batch)
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
-      if (prev.manager_name) managerName = prev.manager_name;
     }
 
     stmts.push({
       sql: `INSERT INTO leads(
         project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
         product, raw_status, status,
-        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes, manager_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, inbox_url, is_hot, sale_id, sale_name, source, budget, sync_at, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         projectId, l.name, l.phone, l.campaign, null,
         l.adsetName || "-", l.adName || "-", l.formName || "-",
         l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName,
-        l.source, l.budget, l.syncAt, notes, managerName,
+        l.source, l.budget, l.syncAt, notes,
       ],
     });
 
@@ -976,6 +974,22 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} phoneMatched=${matchCount} brandNew=${newPhones.length}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
+
+  // Restore manager_name AFTER batch using phoneMap (separate step to avoid race with manual changes)
+  const mgrStmts = [];
+  for (const [np, prev] of phoneMap) {
+    if (prev.manager_name) {
+      mgrStmts.push({
+        sql: "UPDATE leads SET manager_name = ? WHERE project_id = ? AND phone = ?",
+        args: [prev.manager_name, projectId, prev.phone],
+      });
+    }
+  }
+  if (mgrStmts.length) {
+    await db.batch(mgrStmts, "write");
+    console.log(`[replaceProjectData] restored manager_name for ${mgrStmts.length} leads`);
+  }
+
   return { newPhones };
 }
 
@@ -1162,21 +1176,22 @@ async function syncProject(db, projectId) {
         if (unassigned.length > 0) {
           const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
           let idx = (projRow && projRow.mgr_assign_idx) || 0;
+          const startIdx = idx;
           const stmts = [];
           for (let i = 0; i < unassigned.length; i++) {
             const mgr = managers[idx % managers.length];
             stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, unassigned[i].id] });
             idx++;
           }
-          stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
           await db.batch(stmts, "write");
-          // Log first few assignments for debugging
+          // Save round-robin index SEPARATELY to ensure it persists
+          await run(db, "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", [idx, projectId]);
+          // Log assignments for debugging
           const sample = unassigned.slice(0, Math.min(6, unassigned.length));
           const sampleAssign = sample.map((u, i) => {
-            const mIdx = ((projRow && projRow.mgr_assign_idx) || 0) + i;
-            return `lead#${u.id}->${managers[mIdx % managers.length].display_name}`;
+            return `lead#${u.id}->${managers[(startIdx + i) % managers.length].display_name}`;
           });
-          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${(projRow && projRow.mgr_assign_idx) || 0} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
+          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${startIdx} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
         }
       }
 
@@ -1234,6 +1249,8 @@ async function syncProject(db, projectId) {
 }
 
 async function syncAllProjects(db) {
+  syncInProgress = true;
+  try {
   const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const errors = [];
   // Sync all projects in parallel for speed
@@ -1256,6 +1273,9 @@ async function syncAllProjects(db) {
     lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
   } catch {}
   return { lastSync, syncErrors: errors };
+  } finally {
+    syncInProgress = false;
+  }
 }
 
 const app = express();
@@ -1921,6 +1941,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
 // Global sync hash — updated after each sync
 let lastSyncHash = "";
+let syncInProgress = false; // Lock to prevent PUT/sync race condition
 
 // Lightweight poll endpoint — returns hash only (no DB query if hash unchanged)
 app.get("/api/data/poll", requireAuth, async (req, res) => {
@@ -2534,6 +2555,11 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
 
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
+    // Wait for sync to finish to avoid race condition (max 15s)
+    if (syncInProgress) {
+      const t0 = Date.now();
+      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+    }
     const leadId = Number(req.params.id);
     const phone = req.body?.phone; // optional fallback identifier
     console.log(`[PUT /api/leads/${leadId}] body:`, JSON.stringify(req.body), `user: ${req.user.displayName} role: ${req.user.role}`);
