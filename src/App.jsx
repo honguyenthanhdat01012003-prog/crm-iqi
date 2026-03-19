@@ -43,6 +43,10 @@ let _confirmFn = null;
 function showToast(msg, type = "info") { _toastFn && _toastFn(typeof msg === "string" ? msg : String(msg || ""), type); }
 function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : resolve(window.confirm(msg)); }); }
 
+// Global manager overrides map: protects manual manager changes from poll/sync overwrite
+// Map<phone, {managerName, expiry}>
+const _managerOverrides = new Map();
+
 function ToastContainer() {
   const [toasts, setToasts] = useState([]);
   useEffect(() => {
@@ -493,6 +497,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
 
+  // Manual manager overrides: protects local state from poll/sync overwrite for 30s
+  // (uses module-level _managerOverrides Map so LeadDetail can access it)
+
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
     if (data.noChange) {
@@ -511,6 +518,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     if (data.hash) setSyncHash(data.hash);
     if (data.leads) {
+      // Apply manual manager overrides to incoming data (protects against poll/sync overwrite)
+      const now = Date.now();
+      for (const [phone, o] of _managerOverrides) { if (now > o.expiry) _managerOverrides.delete(phone); }
+      if (_managerOverrides.size > 0) {
+        data.leads = data.leads.map(l => {
+          const o = _managerOverrides.get(l.phone);
+          return o ? { ...l, managerName: o.managerName } : l;
+        });
+      }
       setLeads((prev) => {
         // Use name+phone as stable key (IDs change every sync)
         const prevKeys = new Set(prev.map(l => `${l.name}||${l.phone}`));
@@ -3205,12 +3221,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       }
       // Use server-verified value if available, fallback to local
       const serverManager = data.updatedLead?.managerName || editManager;
+      // Protect this change from poll/sync overwrite for 30 seconds
+      if (lead.phone) {
+        _managerOverrides.set(lead.phone, { managerName: serverManager, expiry: Date.now() + 30000 });
+      }
       applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: serverManager } });
-      // Force re-fetch to guarantee consistency with DB
-      try {
-        const r2 = await apiFetch(`${API}/data`);
-        if (r2.ok) { const d2 = await r2.json(); applyApiData(d2); }
-      } catch (_) {}
       setEditManager("");
       showToast(`Đã đổi quản lý thành ${serverManager}!`, "success");
     } catch (e) {
