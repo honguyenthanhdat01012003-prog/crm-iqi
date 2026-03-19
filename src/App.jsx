@@ -3023,7 +3023,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingStatus, setSavingStatus] = useState(false);
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
-  const [editManager, setEditManager] = useState(lead.managerName || "");
+  const [editManager, setEditManager] = useState("");
   const [savingManager, setSavingManager] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
@@ -3336,8 +3336,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               <option value="">-- Chọn Quản lý --</option>
               {managerNames.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
-            <button onClick={handleChangeManager} disabled={savingManager || !editManager}
-              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editManager ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+            <button onClick={handleChangeManager} disabled={savingManager || !editManager || editManager === lead.managerName}
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: (!editManager || editManager === lead.managerName) ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
               {savingManager ? "Đang đổi..." : <><Shield size={14} /> Đổi quản lý</>}
             </button>
           </div>

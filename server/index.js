@@ -2520,6 +2520,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       // Admin can directly reassign manager (without changing sale)
       if (managerName !== undefined && saleName === undefined) {
         sets.push("manager_name = ?"); params.push(managerName);
+        console.log(`[PUT /api/leads/${leadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
