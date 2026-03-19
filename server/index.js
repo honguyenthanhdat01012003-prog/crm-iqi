@@ -59,7 +59,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 4; // Bump this when adding new DDL/migrations
+const DB_VERSION = 5; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -202,6 +202,7 @@ async function initDb() {
     "ALTER TABLE projects ADD COLUMN fb_code TEXT DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''",
     "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN mgr_assign_idx INTEGER DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -1154,13 +1155,17 @@ async function syncProject(db, projectId) {
           "SELECT id, name, phone, product FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '')",
           [projectId]);
         if (pendingLeads.length > 0) {
+          const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
+          let idx = (projRow && projRow.mgr_assign_idx) || 0;
           const stmts = [];
           for (let i = 0; i < pendingLeads.length; i++) {
-            const mgr = managers[i % managers.length];
+            const mgr = managers[idx % managers.length];
             stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, pendingLeads[i].id] });
+            idx++;
           }
+          stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
           await db.batch(stmts, "write");
-          console.log(`[syncProject] project=${projectId} assigned ${pendingLeads.length} pending leads to managers (off-hours backlog)`);
+          console.log(`[syncProject] project=${projectId} assigned ${pendingLeads.length} pending leads to managers (off-hours backlog), idx=${idx}`);
         }
       }
     } catch (e) { console.error(`[syncProject] pending assign error:`, e.message); }
@@ -1186,30 +1191,39 @@ async function syncProject(db, projectId) {
           const projectName = projectRow ? projectRow.name : "-";
           const activeBot = await getBotForProject(projectId);
 
+          // Read persistent round-robin index
+          const projRow2 = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
+          let mgrIdx = (projRow2 && projRow2.mgr_assign_idx) || 0;
+          const startIdx = mgrIdx;
+
           if (isActiveHours) {
-            // Assign manager_name to new leads (round-robin among managers)
+            // Assign manager_name to new leads (round-robin among managers with persistent index)
             const stmts = [];
             for (let i = 0; i < newLeads.length; i++) {
-              const mgr = managers[i % managers.length];
+              const mgr = managers[mgrIdx % managers.length];
               stmts.push({
                 sql: "UPDATE leads SET manager_name = ? WHERE id = ?",
                 args: [mgr.display_name, newLeads[i].id],
               });
+              mgrIdx++;
             }
+            stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [mgrIdx, projectId] });
             if (stmts.length) await db.batch(stmts, "write");
-            console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers`);
+            console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers, idx=${startIdx}->${mgrIdx}`);
           } else {
             console.log(`[syncProject] project=${projectId} ${newLeads.length} new leads NOT assigned (off-hours ${vnHour}:00, will assign at 6AM)`);
           }
 
           // Always notify managers about new leads (even off-hours)
           if (activeBot && activeBot.token) {
-            // Group new leads by assigned manager
+            // Group new leads by assigned manager (use same index logic)
             const mgrLeadMap = new Map();
+            let notifyIdx = startIdx;
             for (let i = 0; i < newLeads.length; i++) {
-              const mgr = managers[i % managers.length];
+              const mgr = managers[notifyIdx % managers.length];
               if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
               mgrLeadMap.get(mgr.id).leads.push(newLeads[i]);
+              notifyIdx++;
             }
             for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
               if (!mgr.telegram_id) continue;
