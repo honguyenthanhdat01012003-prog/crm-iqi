@@ -3170,7 +3170,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ saleName: editSale }),
+        body: JSON.stringify({ saleName: editSale, phone: lead.phone }),
       });
       const data = await r.json();
       applyApiData(data);
@@ -3187,12 +3187,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ managerName: editManager }),
+        body: JSON.stringify({ managerName: editManager, phone: lead.phone }),
       });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        alert("Đổi quản lý thất bại: " + (err.error || r.statusText));
+        return;
+      }
       const data = await r.json();
       applyApiData(data);
+      setEditManager("");
+      alert("Đã đổi quản lý thành công!");
     } catch (e) {
       console.error(e);
+      alert("Lỗi kết nối: " + e.message);
     } finally {
       setSavingManager(false);
     }

@@ -1154,8 +1154,8 @@ async function syncProject(db, projectId) {
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
-      // Step 1: Assign manager to all unassigned leads (during active hours)
-      if (isActiveHours) {
+      // Step 1: Assign manager to all unassigned leads (always, regardless of hours)
+      {
         const unassigned = await all(db,
           "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
           [projectId]);
@@ -1187,10 +1187,6 @@ async function syncProject(db, projectId) {
         const newLeads = allLeads.filter(l => newPhones.includes(normPhone(l.phone)));
 
         if (newLeads.length > 0) {
-          if (!isActiveHours) {
-            console.log(`[syncProject] project=${projectId} ${newLeads.length} new leads NOT assigned (off-hours ${vnHour}:00, will assign at 6AM)`);
-          }
-
           const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
@@ -1880,6 +1876,7 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
+    build: "2026-03-19-v2",
     counts,
   });
 });
@@ -2490,13 +2487,31 @@ async function filterDataForRole(data, user) {
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
+    const phone = req.body?.phone; // optional fallback identifier
+    console.log(`[PUT /api/leads/${leadId}] body:`, JSON.stringify(req.body), `user: ${req.user.displayName} role: ${req.user.role}`);
+
+    // Verify lead exists; if ID stale (after sync), try finding by phone
+    let actualLeadId = leadId;
+    const existCheck = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE id = ?", [leadId]);
+    if (!existCheck && phone) {
+      const byPhone = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [phone]);
+      if (byPhone) {
+        actualLeadId = byPhone.id;
+        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualLeadId}`);
+      } else {
+        return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId}, phone=${phone})` });
+      }
+    } else if (!existCheck) {
+      return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId})` });
+    }
+
     // Sale can only update leads assigned to them (current or ever assigned via history)
     if (req.user.role === "sale") {
-      const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [leadId]);
+      const lead = existCheck || await get(db, "SELECT sale_name FROM leads WHERE id = ?", [actualLeadId]);
       const currentMatch = lead && matchSaleName(lead.sale_name, req.user.displayName);
       let historyMatch = false;
       if (!currentMatch) {
-        const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [leadId, req.user.displayName]);
+        const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [actualLeadId, req.user.displayName]);
         historyMatch = !!hist;
       }
       if (!currentMatch && !historyMatch) {
@@ -2520,7 +2535,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       // Admin can directly reassign manager (without changing sale)
       if (managerName !== undefined && saleName === undefined) {
         sets.push("manager_name = ?"); params.push(managerName);
-        console.log(`[PUT /api/leads/${leadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
+        console.log(`[PUT /api/leads/${actualLeadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
@@ -2530,28 +2545,32 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     if (sets.length) {
       // Log status change
       if (status !== undefined || reassigning) {
-        const oldLead = await get(db, "SELECT status FROM leads WHERE id = ?", [leadId]);
+        const oldLead = await get(db, "SELECT status FROM leads WHERE id = ?", [actualLeadId]);
         const oldStatus = oldLead?.status || "new";
         const newStatus = status !== undefined ? status : "new";
         if (oldStatus !== newStatus) {
           await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
-            [leadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
+            [actualLeadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
         }
       }
-      params.push(leadId);
-      await run(db, `UPDATE leads SET ${sets.join(", ")} WHERE id = ?`, params);
+      params.push(actualLeadId);
+      const result = await run(db, `UPDATE leads SET ${sets.join(", ")} WHERE id = ?`, params);
+      console.log(`[PUT /api/leads/${actualLeadId}] UPDATE result: ${result.changes} rows affected, sets=[${sets.join(', ')}]`);
+      if (result.changes === 0) {
+        return res.status(404).json({ error: `Không thể cập nhật lead (ID=${actualLeadId}, 0 rows affected)` });
+      }
     }
 
     // When admin/manager assigns lead to a sale: save history + send Telegram
     if ((req.user.role === "admin" || req.user.role === "manager") && saleName) {
-      const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+      const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [actualLeadId]);
       const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [actualLeadId]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       await run(
         db,
         "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        [leadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"]
+        [actualLeadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"]
       );
 
       // Send Telegram notification with inline keyboard
@@ -5515,7 +5534,7 @@ if (fs.existsSync(distPath)) {
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`CRM API running at http://localhost:${PORT}`);
+    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v2]`);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
