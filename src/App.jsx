@@ -12,6 +12,7 @@ import {
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair
 } from "lucide-react";
+import { MaintenancePage } from "./NotFound";
 
 const API = "/api";
 
@@ -548,11 +549,16 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [notifications]);
 
   useEffect(() => {
-    // Check server version on load
-    fetch(`${API}/version`).then(r => r.json()).then(v => console.log(`[CRM] Server version: ${v.version} uptime: ${Math.round(v.uptime)}s`)).catch(() => {});
+    // Connection health state
+    const checkHealth = () => fetch(`${API}/version`, { signal: AbortSignal.timeout(8000) })
+      .then(r => { if (r.ok) { setServerDown(false); return r.json(); } throw new Error(); })
+      .then(v => console.log(`[CRM] Server version: ${v.version} uptime: ${Math.round(v.uptime)}s`))
+      .catch(() => setServerDown(true));
+    checkHealth();
     apiFetch(`${API}/data`)
       .then((r) => r.json())
       .then((data) => {
+        setServerDown(false);
         // First load: mark all current leads as seen so they don't trigger notifications
         if (data.leads) {
           setSeenLeadKeys(prev => {
@@ -566,7 +572,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
         applyApiData(data);
       })
-      .catch(console.error);
+      .catch(() => setServerDown(true));
   }, [applyApiData]);
 
   // Auto-poll for changes every 10 seconds (lightweight hash check, no full sync)
@@ -587,6 +593,17 @@ function CRMApp({ user, updateUser, onLogout }) {
     }, 10000);
     return () => clearInterval(interval);
   }, [applyApiData]);
+
+  // Connection health check - detect server down
+  const [serverDown, setServerDown] = useState(false);
+  useEffect(() => {
+    const healthIv = setInterval(() => {
+      fetch(`${API}/version`, { signal: AbortSignal.timeout(8000) })
+        .then(r => { if (r.ok) setServerDown(false); else setServerDown(true); })
+        .catch(() => setServerDown(true));
+    }, 15000);
+    return () => clearInterval(healthIv);
+  }, []);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
@@ -807,8 +824,18 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
 
+  if (serverDown && leads.length === 0) {
+    return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
+  }
+
   return (
     <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5" }}>
+      {/* Server down warning banner */}
+      {serverDown && (
+        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "linear-gradient(135deg, #dc2626, #b91c1c)", color: "#fff", textAlign: "center", padding: "8px 16px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 2px 12px rgba(220,38,38,.3)" }}>
+          <AlertCircle size={16} /> Mất kết nối máy chủ — Dữ liệu có thể không được cập nhật
+        </div>
+      )}
       {/* Mobile overlay backdrop */}
       {isMobile && sidebarOpen && (
         <div onClick={() => setSidebarOpen(false)} style={{
@@ -2240,10 +2267,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
       {/* Admin chia lead */}
       {isAdmin && (
-        <div style={{ marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
-            style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 4 }}>
-            <Shuffle size={14} /> Chia Lead cho Sale
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+            <Shuffle size={16} /> Chia Lead cho Sale
           </button>
           {selectedProject && (
             <button
@@ -2268,12 +2295,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   setRedistributing(false);
                 }
               }}
-              style={{ ...btnPrimary, padding: "6px 16px", fontSize: 13, display: "flex", alignItems: "center", gap: 4, background: "#7c3aed" }}>
-              <Shield size={14} /> {redistributing ? "Đang chia..." : "Phân chia lại quản lý"}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #7c3aed, #6d28d9)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+              <Shield size={16} /> {redistributing ? "Đang chia..." : "Phân chia lại quản lý"}
             </button>
           )}
           {shuffleOpen && (
-            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13 }}>
+            <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
 
               {/* Row 1: Chọn dự án */}
@@ -3474,20 +3501,23 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           const isRecall = (h.action || "").toLowerCase().includes("thu h");
           if (isChia) {
             const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
-            currentAssignment = { saleName: h.saleName, chiaDate: h.date, chiaBy: assignedBy, chiaHistEntry: h, contacts: [] };
+            currentAssignment = { saleName: h.saleName, chiaDate: h.date, chiaBy: assignedBy, chiaHistEntry: h, contacts: [], isImplicit: false };
             assignments.push(currentAssignment);
           } else if (isRecall) {
             recalls.push(h);
           } else {
-            // Contact entry — attach to matching assignment or create implicit one
+            // Contact entry — attach to current assignment or matching one
             const sn = h.saleName || "Không rõ";
-            // Find the LAST assignment for this sale (most recent assignment for them)
-            let target = null;
-            for (let i = assignments.length - 1; i >= 0; i--) {
-              if (assignments[i].saleName === sn) { target = assignments[i]; break; }
+            // If there's a current assignment for this sale, use it
+            let target = currentAssignment && currentAssignment.saleName === sn ? currentAssignment : null;
+            // Otherwise find the LAST explicit assignment for this sale
+            if (!target) {
+              for (let i = assignments.length - 1; i >= 0; i--) {
+                if (assignments[i].saleName === sn) { target = assignments[i]; break; }
+              }
             }
             if (!target) {
-              target = { saleName: sn, chiaDate: null, chiaBy: null, chiaHistEntry: null, contacts: [] };
+              target = { saleName: sn, chiaDate: h.date || null, chiaBy: null, chiaHistEntry: null, contacts: [], isImplicit: true };
               assignments.push(target);
             }
             target.contacts.push(h);
@@ -3555,8 +3585,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{assignNum}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: asg.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{assignNum}</span>
                         Liên hệ lần {assignNum} — <b style={{ color: "#e88a2e" }}>{asg.saleName}</b>
+                        {asg.isImplicit && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: "#f3f4f6", color: "#6b7280" }}>Giao ban đầu</span>}
                         {ct.length > 0 && (
                           <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
                             {lastStatusLabel}
