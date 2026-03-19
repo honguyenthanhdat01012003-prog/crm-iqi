@@ -502,7 +502,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Targeted single-lead update (e.g. manager change)
     if (data.updatedLead) {
-      setLeads(prev => prev.map(l =>
+      setLeads(prev => (Array.isArray(prev) ? prev : []).map(l =>
         (l.id === data.updatedLead.id || (data.updatedLead.name && l.name === data.updatedLead.name && l.phone === data.updatedLead.phone))
           ? { ...l, ...data.updatedLead }
           : l
@@ -510,27 +510,28 @@ function CRMApp({ user, updateUser, onLogout }) {
       return;
     }
     if (data.hash) setSyncHash(data.hash);
-    if (data.leads) {
+    if (Array.isArray(data.leads)) {
       setLeads((prev) => {
+        const prevArr = Array.isArray(prev) ? prev : [];
         // Use name+phone as stable key (IDs change every sync)
-        const prevKeys = new Set(prev.map(l => `${l.name}||${l.phone}`));
+        const prevKeys = new Set(prevArr.map(l => `${l.name}||${l.phone}`));
         const newLeads = data.leads.filter(l => {
           const key = `${l.name}||${l.phone}`;
           return !prevKeys.has(key) && !seenLeadKeys.has(key);
         });
-        if (newLeads.length > 0 && prev.length > 0) {
+        if (newLeads.length > 0 && prevArr.length > 0) {
           setNotifications(n => {
-            const existing = new Set(n.map(x => `${x.name}||${x.phone}`));
+            const existing = new Set((Array.isArray(n) ? n : []).map(x => `${x.name}||${x.phone}`));
             const fresh = newLeads.filter(l => !existing.has(`${l.name}||${l.phone}`));
-            return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...n].slice(0, 50);
+            return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...(Array.isArray(n) ? n : [])].slice(0, 50);
           });
         }
         return data.leads;
       });
     }
-    if (data.campaigns) setCampaigns(data.campaigns);
-    if (data.projects) setProjects(data.projects);
-    if (data.schedules) setSchedules(data.schedules);
+    if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
+    if (Array.isArray(data.projects)) setProjects(data.projects);
+    if (Array.isArray(data.schedules)) setSchedules(data.schedules);
     if (data.lastSync) setLastSync(data.lastSync);
   }, [seenLeadKeys]);
 
@@ -688,7 +689,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   // --- Filtered leads ---
   const filteredLeads = useMemo(() => {
-    let list = leads;
+    let list = Array.isArray(leads) ? leads : [];
     if (selectedProject && selectedProject !== "all") {
       list = list.filter((l) => l.projectId === Number(selectedProject));
     }
@@ -776,8 +777,9 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   // --- Campaigns list ---
   const filteredCampaigns = useMemo(() => {
-    if (selectedProject === "all") return campaigns;
-    return campaigns.filter((c) => c.projectId === Number(selectedProject));
+    const list = Array.isArray(campaigns) ? campaigns : [];
+    if (selectedProject === "all") return list;
+    return list.filter((c) => c.projectId === Number(selectedProject));
   }, [campaigns, selectedProject]);
 
   // --- Pages ---
@@ -1928,7 +1930,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   useEffect(() => {
     if (isAdmin) {
-      apiFetch(`${API}/users`).then(r => r.json()).then(setAllUsers).catch(() => {});
+      apiFetch(`${API}/users`).then(r => r.json()).then(data => setAllUsers(Array.isArray(data) ? data : [])).catch(() => {});
     }
   }, [isAdmin]);
 
@@ -1942,20 +1944,23 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const projectMap = useMemo(() => {
     const m = {};
-    projects.forEach((p) => (m[p.id] = p.name));
+    const list = Array.isArray(projects) ? projects : [];
+    list.forEach((p) => (m[p.id] = p.name));
     return m;
   }, [projects]);
 
   // Available projects for this user
   const availableProjects = useMemo(() => {
-    if (isSale || user.role === "manager") return projects.filter(p => user.projectIds && user.projectIds.includes(p.id));
-    return projects;
+    const list = Array.isArray(projects) ? projects : [];
+    if (isSale || user.role === "manager") return list.filter(p => user.projectIds && user.projectIds.includes(p.id));
+    return list;
   }, [projects, isSale, user.projectIds, user.role]);
 
   // Lead counts per project (from ALL leads passed to this page, not filtered)
   const projectLeadCounts = useMemo(() => {
     const counts = {};
-    leads.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
+    const list = Array.isArray(leads) ? leads : [];
+    list.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
     return counts;
   }, [leads]);
 
@@ -2031,16 +2036,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const saleNames = useMemo(() => {
     const names = new Set();
-    leads.forEach(l => { if (l.saleName) names.add(l.saleName); });
+    (Array.isArray(leads) ? leads : []).forEach(l => { if (l.saleName) names.add(l.saleName); });
     return [...names].sort();
   }, [leads]);
 
   const allSaleUsers = useMemo(() => {
-    return allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
+    return (Array.isArray(allUsers) ? allUsers : []).filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
   }, [allUsers]);
 
   const allManagerNames = useMemo(() => {
-    return allUsers.filter(u => (u.role === "manager" || u.role === "admin") && u.displayName).map(u => u.displayName).sort();
+    return (Array.isArray(allUsers) ? allUsers : []).filter(u => (u.role === "manager" || u.role === "admin") && u.displayName).map(u => u.displayName).sort();
   }, [allUsers]);
 
   const getProjectSaleNames = (projectId) => {
@@ -2138,7 +2143,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       else {
         setShuffleMsg("[OK] " + data.msg);
         applyApiData(data);
-        if (data.schedules) setSchedules(data.schedules);
+        if (Array.isArray(data.schedules)) setSchedules(data.schedules);
         setShuffleSelected(new Set());
       }
     } catch (e) {
@@ -2152,7 +2157,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}`, { method: "DELETE" });
       const data = await r.json();
-      if (data.schedules) setSchedules(data.schedules);
+      if (Array.isArray(data.schedules)) setSchedules(data.schedules);
       setShuffleMsg("[OK] " + (data.msg || "Đã hủy"));
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
