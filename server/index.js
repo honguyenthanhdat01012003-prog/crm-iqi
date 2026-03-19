@@ -1876,7 +1876,7 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
-    build: "2026-03-19-v2",
+    build: "2026-03-19-v3",
     counts,
   });
 });
@@ -5543,7 +5543,7 @@ if (fs.existsSync(distPath)) {
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v2]`);
+    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v3]`);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)

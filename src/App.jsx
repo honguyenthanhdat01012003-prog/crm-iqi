@@ -3203,10 +3203,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast("Đổi quản lý thất bại: " + (err.error || r.statusText), "error");
         return;
       }
-      const data = await r.json();
-      applyApiData(data);
+      await r.json(); // consume response
+      // Use lead.id from closure (guaranteed to match current state) for local update
+      applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: editManager } });
       setEditManager("");
-      showToast("Đã đổi quản lý thành công!", "success");
+      showToast(`Đã đổi quản lý thành ${editManager}!`, "success");
     } catch (e) {
       console.error(e);
       showToast("Lỗi kết nối: " + e.message, "error");
