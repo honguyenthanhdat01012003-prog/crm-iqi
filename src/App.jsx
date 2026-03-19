@@ -3194,8 +3194,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     if (!editManager) return;
     setSavingManager(true);
     try {
-      const r = await apiFetch(`${API}/leads/${lead.id}/manager`, {
-        method: "POST",
+      const r = await apiFetch(`${API}/leads/${lead.id}`, {
+        method: "PUT",
         body: JSON.stringify({ managerName: editManager, phone: lead.phone }),
       });
       const data = await r.json();
@@ -3203,12 +3203,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast("Đổi quản lý thất bại: " + (data.error || r.statusText), "error");
         return;
       }
-      // Server verified the write — use server's confirmed data + local fallback
-      if (data.updatedLead) {
-        applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: data.updatedLead.managerName } });
-      }
+      // Update local state immediately using closure values (guaranteed match)
+      applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: editManager } });
       setEditManager("");
-      showToast(`Đã đổi quản lý thành ${data.updatedLead?.managerName || editManager}!`, "success");
+      showToast(`Đã đổi quản lý thành ${editManager}!`, "success");
     } catch (e) {
       console.error(e);
       showToast("Lỗi kết nối: " + e.message, "error");
