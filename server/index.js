@@ -1154,46 +1154,16 @@ async function syncProject(db, projectId) {
     projectId,
   ]);
 
-  // Auto-assign new leads to project managers & notify via Telegram
-  // Helper: check if current Vietnam time is within active hours (6:00 AM - 10:59 PM)
-  const vnHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })).getHours();
-  const isActiveHours = vnHour >= 6 && vnHour < 23; // 6:00 - 22:59
-
-  // Assign manager_name to leads that are unassigned (round-robin)
+  // Notify managers about NEW leads via Telegram
   try {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
        JOIN user_projects up ON u.id = up.user_id
        WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
-    console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
-      // Assign manager to unassigned leads via round-robin
-      {
-        const unassigned = await all(db,
-          "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
-          [projectId]);
-        if (unassigned.length > 0) {
-          const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
-          let idx = Number(projRow?.mgr_assign_idx) || 0;
-          const startIdx = idx;
-          const stmts = [];
-          for (let i = 0; i < unassigned.length; i++) {
-            const mgr = managers[idx % managers.length];
-            stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, unassigned[i].id] });
-            idx++;
-          }
-          // Save round-robin index in the SAME batch to guarantee persistence
-          stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
-          await db.batch(stmts, "write");
-          const sample = unassigned.slice(0, Math.min(6, unassigned.length));
-          const sampleAssign = sample.map((u, i) => `lead#${u.id}->${managers[(startIdx + i) % managers.length].display_name}`);
-          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} leads to ${managers.length} managers, idxBefore=${startIdx} idxAfter=${idx}, sample: [${sampleAssign.join(', ')}]`);
-        }
-      }
-
-      // Step 2: Notify managers about NEW leads (always, even off-hours)
+      // Notify about NEW leads
       if (newPhones && newPhones.length > 0) {
         const normPhone = normalizePhoneKey;
         const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
@@ -2138,7 +2108,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     for (const lid of leadIds) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, req.user.displayName, lid] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -2307,7 +2277,13 @@ async function processSchedules(db, triggerUser) {
       const saleIdx = (Math.floor(i / perDay) + currentTour) % saleList.length;
       const saleName = saleList[saleIdx];
 
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, sch.created_by || "Hệ thống", lid] });
+      // Only set manager if lead has no manager yet
+      const schLead = await get(db, "SELECT manager_name FROM leads WHERE id = ?", [lid]);
+      if (schLead?.manager_name) {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      } else {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      }
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
@@ -2681,7 +2657,6 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
-        sets.push("manager_name = ?"); params.push(req.user.displayName);
         // Reset status to "new" (Chưa feedback) when reassigning to a new sale
         if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
       }
@@ -2919,10 +2894,10 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
       const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND id != ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1", [leadId, histId]);
       if (prev) {
         // Revert to previous sale
-        await run(db, "UPDATE leads SET sale_name = ?, manager_name = '' WHERE id = ?", [prev.sale_name, leadId]);
+        await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [prev.sale_name, leadId]);
       } else {
         // No prior assignment — clear sale
-        await run(db, "UPDATE leads SET sale_name = '', manager_name = '', sale_id = NULL WHERE id = ?", [leadId]);
+        await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
       }
 
       // Revert lead status to the most recent history entry's status (excluding the one being deleted)
