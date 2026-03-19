@@ -3221,14 +3221,21 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   };
 
   const handleChangeManager = async () => {
-    if (!editManager) return;
+    console.log("[handleChangeManager] Called, editManager=", editManager, "lead.id=", lead.id);
+    if (!editManager) {
+      console.log("[handleChangeManager] EARLY RETURN: editManager is empty");
+      return;
+    }
     setSavingManager(true);
     try {
+      console.log("[handleChangeManager] Calling API: PUT /api/leads/" + lead.id, { managerName: editManager, phone: lead.phone, name: lead.name });
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
         body: JSON.stringify({ managerName: editManager, phone: lead.phone, name: lead.name }),
       });
+      console.log("[handleChangeManager] API Response status:", r.status);
       const data = await r.json();
+      console.log("[handleChangeManager] API Response data:", data);
       if (!r.ok) {
         showToast("Đổi quản lý thất bại: " + (data.error || r.statusText), "error");
         return;
@@ -3238,7 +3245,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       setEditManager("");
       showToast(`Đã đổi quản lý thành ${serverManager}!`, "success");
     } catch (e) {
-      console.error(e);
+      console.error("[handleChangeManager] ERROR:", e);
       showToast("Lỗi kết nối: " + e.message, "error");
     } finally {
       setSavingManager(false);
