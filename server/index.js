@@ -2019,6 +2019,11 @@ app.get("/api/config", requireAuth, async (_req, res) => {
 
 app.get("/api/data", requireAuth, async (req, res) => {
   try {
+    // Wait for any running sync to finish to avoid reading inconsistent data
+    if (syncInProgress) {
+      const t0 = Date.now();
+      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+    }
     // Auto-process pending distribution schedules
     try { await processSchedules(db); } catch (e) { console.error("[schedule] process error:", e.message); }
     const config = await getConfig(db);
@@ -2179,6 +2184,15 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const stmts = [];
     for (const lid of leadIds) {
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, req.user.displayName, lid] });
+      // Save manager override so it survives sync
+      const leadForOverride = await get(db, "SELECT phone, project_id FROM leads WHERE id = ?", [lid]);
+      if (leadForOverride) {
+        const np = (leadForOverride.phone || "").replace(/[\s.\-()]/g, "").trim();
+        if (np) {
+          stmts.push({ sql: "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
+            args: [np, leadForOverride.project_id, req.user.displayName, new Date().toISOString()] });
+        }
+      }
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -2236,6 +2250,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
       console.error("[Telegram bulk] Send failed:", teleErr.message);
     }
 
+    lastSyncHash = ""; // invalidate so next poll re-fetches
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json({ msg: `Đã chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
@@ -2347,6 +2362,15 @@ async function processSchedules(db, triggerUser) {
       const saleName = saleList[saleIdx];
 
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, manager_name = ?, status = 'new' WHERE id = ?", args: [saleName, sch.created_by || "Hệ thống", lid] });
+      // Save manager override so it survives sync
+      const leadForOverride = await get(db, "SELECT phone, project_id FROM leads WHERE id = ?", [lid]);
+      if (leadForOverride) {
+        const np = (leadForOverride.phone || "").replace(/[\s.\-()]/g, "").trim();
+        if (np) {
+          stmts.push({ sql: "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
+            args: [np, leadForOverride.project_id, sch.created_by || "Hệ thống", new Date().toISOString()] });
+        }
+      }
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
@@ -2759,6 +2783,18 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       console.log(`[PUT /api/leads/${actualLeadId}] UPDATE result: ${result.changes} rows affected, sets=[${sets.join(', ')}]`);
       if (result.changes === 0) {
         return res.status(404).json({ error: `Không thể cập nhật lead (ID=${actualLeadId}, 0 rows affected)` });
+      }
+      // Always save manager_name override to survive sync (for any manager change)
+      if (sets.some(s => s.startsWith("manager_name"))) {
+        const updatedLead = await get(db, "SELECT phone, project_id, manager_name FROM leads WHERE id = ?", [actualLeadId]);
+        if (updatedLead) {
+          const np = (updatedLead.phone || "").replace(/[\s.\-()]/g, "").trim();
+          if (np) {
+            await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)",
+              [np, updatedLead.project_id, updatedLead.manager_name, new Date().toISOString()]);
+            console.log(`[PUT /api/leads/${actualLeadId}] Saved manager override: phone=${np} manager=${updatedLead.manager_name}`);
+          }
+        }
       }
     }
 
