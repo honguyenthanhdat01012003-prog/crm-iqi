@@ -11,6 +11,9 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Build version — used to verify deployment
+const BUILD_VERSION = "2026-03-19-v2";
+
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -1320,6 +1323,11 @@ const distPath = path.join(__dirname, "..", "dist");
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
+
+// Version endpoint — no auth required, used to verify deployment
+app.get("/api/version", (req, res) => {
+  res.json({ version: BUILD_VERSION, uptime: process.uptime(), pid: process.pid });
+});
 
 let db;
 let dbInitError = null;
@@ -2698,10 +2706,13 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
 
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
+    console.log(`[PUT /api/leads] version=${BUILD_VERSION} body=${JSON.stringify(req.body)} user=${req.user?.displayName} role=${req.user?.role}`);
     // Wait for sync to finish to avoid race condition (max 15s)
     if (syncInProgress) {
+      console.log(`[PUT /api/leads] Waiting for sync to finish...`);
       const t0 = Date.now();
       while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+      console.log(`[PUT /api/leads] Sync wait done (${Date.now() - t0}ms)`);
     }
     const leadId = Number(req.params.id);
     const phone = req.body?.phone; // optional fallback identifier

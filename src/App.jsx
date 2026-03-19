@@ -509,6 +509,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Targeted single-lead update (e.g. manager change)
     if (data.updatedLead) {
+      console.log(`[applyApiData] Targeted update: id=${data.updatedLead.id} phone=${data.updatedLead.phone} managerName=${data.updatedLead.managerName}`);
       setLeads(prev => prev.map(l =>
         (l.id === data.updatedLead.id || (data.updatedLead.phone && l.phone === data.updatedLead.phone))
           ? { ...l, ...data.updatedLead }
@@ -522,8 +523,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       const now = Date.now();
       for (const [phone, o] of _managerOverrides) { if (now > o.expiry) _managerOverrides.delete(phone); }
       if (_managerOverrides.size > 0) {
+        console.log(`[applyApiData] Active overrides: ${[..._managerOverrides.entries()].map(([p, o]) => `${p}→${o.managerName}`).join(', ')}`);
         data.leads = data.leads.map(l => {
           const o = _managerOverrides.get(l.phone);
+          if (o) console.log(`[applyApiData] Override applied: phone=${l.phone} server=${l.managerName}→override=${o.managerName}`);
           return o ? { ...l, managerName: o.managerName } : l;
         });
       }
@@ -563,6 +566,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [notifications]);
 
   useEffect(() => {
+    // Check server version on load
+    fetch(`${API}/version`).then(r => r.json()).then(v => console.log(`[CRM] Server version: ${v.version} uptime: ${Math.round(v.uptime)}s`)).catch(() => {});
     apiFetch(`${API}/data`)
       .then((r) => r.json())
       .then((data) => {
@@ -3238,22 +3243,29 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     if (!editManager) return;
     setSavingManager(true);
     try {
+      console.log(`[handleChangeManager] PUT /api/leads/${lead.id} managerName=${editManager} phone=${lead.phone}`);
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
         body: JSON.stringify({ managerName: editManager, phone: lead.phone }),
       });
       const data = await r.json();
+      console.log(`[handleChangeManager] Response status=${r.status} data=`, JSON.stringify(data).slice(0, 500));
       if (!r.ok) {
         showToast("Đổi quản lý thất bại: " + (data.error || r.statusText), "error");
         return;
       }
       // Use server-verified value if available, fallback to local
       const serverManager = data.updatedLead?.managerName || editManager;
-      // Protect this change from poll/sync overwrite for 30 seconds
+      console.log(`[handleChangeManager] serverManager=${serverManager} hasUpdatedLead=${!!data.updatedLead}`);
+      // Protect this change from poll/sync overwrite for 5 minutes
       if (lead.phone) {
-        _managerOverrides.set(lead.phone, { managerName: serverManager, expiry: Date.now() + 30000 });
+        _managerOverrides.set(lead.phone, { managerName: serverManager, expiry: Date.now() + 300000 });
       }
       applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: serverManager } });
+      // Also force a full re-fetch after a short delay to ensure data is consistent
+      setTimeout(() => {
+        apiFetch(`${API}/data`).then(r2 => r2.ok ? r2.json() : null).then(d => { if (d) applyApiData(d); });
+      }, 1500);
       setEditManager("");
       showToast(`Đã đổi quản lý thành ${serverManager}!`, "success");
     } catch (e) {
