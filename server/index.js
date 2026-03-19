@@ -2581,22 +2581,22 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
       while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
     }
     const leadId = Number(req.params.id);
-    const { managerName, phone } = req.body || {};
-    console.log(`[POST /api/leads/${leadId}/manager] managerName=${managerName} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
+    const { managerName, phone, name } = req.body || {};
+    console.log(`[POST /api/leads/${leadId}/manager] managerName=${managerName} name=${name} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
 
     if (!managerName) return res.status(400).json({ error: "managerName is required" });
 
-    // Find the lead by ID first, fallback to phone
+    // Find the lead by ID first, fallback to name+phone
     let actualId = leadId;
     let lead = await get(db, "SELECT id, phone, manager_name FROM leads WHERE id = ?", [leadId]);
-    if (!lead && phone) {
-      lead = await get(db, "SELECT id, phone, manager_name FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [phone]);
+    if (!lead && name && phone) {
+      lead = await get(db, "SELECT id, phone, manager_name FROM leads WHERE name = ? AND phone = ? ORDER BY id DESC LIMIT 1", [name, phone]);
       if (lead) {
         actualId = lead.id;
-        console.log(`[PATCH manager] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualId}`);
+        console.log(`[PATCH manager] ID ${leadId} not found, resolved by name+phone ${name}/${phone} -> ID ${actualId}`);
       }
     }
-    if (!lead) return res.status(404).json({ error: `Lead not found (ID=${leadId}, phone=${phone})` });
+    if (!lead) return res.status(404).json({ error: `Lead not found (ID=${leadId}, name=${name})` });
 
     const oldManager = lead.manager_name;
     console.log(`[PATCH manager] lead#${actualId} old_manager=${oldManager} new_manager=${managerName}`);
@@ -2636,19 +2636,20 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       console.log(`[PUT /api/leads] Sync wait done (${Date.now() - t0}ms)`);
     }
     const leadId = Number(req.params.id);
-    const phone = req.body?.phone; // optional fallback identifier
+    const phone = req.body?.phone;
+    const name = req.body?.name;
     console.log(`[PUT /api/leads/${leadId}] body:`, JSON.stringify(req.body), `user: ${req.user.displayName} role: ${req.user.role}`);
 
-    // Verify lead exists; if ID stale (after sync), try finding by phone
+    // Verify lead exists; if ID stale (after sync), try finding by name+phone
     let actualLeadId = leadId;
     const existCheck = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE id = ?", [leadId]);
-    if (!existCheck && phone) {
-      const byPhone = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [phone]);
-      if (byPhone) {
-        actualLeadId = byPhone.id;
-        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualLeadId}`);
+    if (!existCheck && name && phone) {
+      const byNamePhone = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE name = ? AND phone = ? ORDER BY id DESC LIMIT 1", [name, phone]);
+      if (byNamePhone) {
+        actualLeadId = byNamePhone.id;
+        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by name+phone ${name}/${phone} -> ID ${actualLeadId}`);
       } else {
-        return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId}, phone=${phone})` });
+        return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId}, name=${name})` });
       }
     } else if (!existCheck) {
       return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId})` });

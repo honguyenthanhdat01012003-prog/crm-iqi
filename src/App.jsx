@@ -503,7 +503,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     // Targeted single-lead update (e.g. manager change)
     if (data.updatedLead) {
       setLeads(prev => prev.map(l =>
-        (l.id === data.updatedLead.id || (data.updatedLead.phone && l.phone === data.updatedLead.phone))
+        (l.id === data.updatedLead.id || (data.updatedLead.name && l.name === data.updatedLead.name && l.phone === data.updatedLead.phone))
           ? { ...l, ...data.updatedLead }
           : l
       ));
@@ -3226,7 +3226,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ managerName: editManager, phone: lead.phone }),
+        body: JSON.stringify({ managerName: editManager, phone: lead.phone, name: lead.name }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -3234,7 +3234,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         return;
       }
       const serverManager = data.updatedLead?.managerName || editManager;
-      applyApiData({ updatedLead: { id: lead.id, phone: lead.phone, managerName: serverManager } });
+      applyApiData({ updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, managerName: serverManager } });
       setEditManager("");
       showToast(`Đã đổi quản lý thành ${serverManager}!`, "success");
     } catch (e) {
