@@ -874,6 +874,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
   console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
+  // Debug: log first few entries from each map
+  const debugNameMapEntries = Array.from(nameMap.entries()).slice(0, 5);
+  console.log(`[replaceProjectData] nameMap samples:`, debugNameMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
+  const debugPhoneMapEntries = Array.from(phoneMap.entries()).slice(0, 5);
+  console.log(`[replaceProjectData] phoneMap samples:`, debugPhoneMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
 
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
@@ -949,6 +954,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
       managerName = prev.manager_name || "";
+      // Debug log for first 3 matched leads
+      if (matchByAdsId + matchByPhone + matchByName <= 3) {
+        console.log(`[replaceProjectData] MATCH: sheet.name="${l.name}" sheet.phone="${l.phone}" -> prev.id=${prev.id} prev.name="${prev.name}" prev.manager_name="${prev.manager_name}" => managerName="${managerName}"`);
+      }
     }
 
     stmts.push({
