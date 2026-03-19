@@ -3195,7 +3195,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     setSavingManager(true);
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/manager`, {
-        method: "PATCH",
+        method: "POST",
         body: JSON.stringify({ managerName: editManager, phone: lead.phone }),
       });
       const data = await r.json();

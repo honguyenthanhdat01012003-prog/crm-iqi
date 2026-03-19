@@ -1876,7 +1876,7 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
-    build: "2026-03-19-v4",
+    build: "2026-03-19-v5",
     counts,
   });
 });
@@ -2485,11 +2485,11 @@ async function filterDataForRole(data, user) {
 }
 
 /* ===== Dedicated Manager Change endpoint (clean, verified write) ===== */
-app.patch("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) => {
+app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     const { managerName, phone } = req.body || {};
-    console.log(`[PATCH /api/leads/${leadId}/manager] managerName=${managerName} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
+    console.log(`[POST /api/leads/${leadId}/manager] managerName=${managerName} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
 
     if (!managerName) return res.status(400).json({ error: "managerName is required" });
 
@@ -2527,7 +2527,7 @@ app.patch("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) 
     lastSyncHash = ""; // invalidate so next poll re-fetches
     res.json({ ok: true, updatedLead: { id: actualId, phone: verified.phone, managerName: verified.manager_name } });
   } catch (err) {
-    console.error(`[PATCH manager] ERROR:`, err);
+    console.error(`[POST manager] ERROR:`, err);
     res.status(500).json({ error: err.message || "Manager update failed" });
   }
 });
@@ -5591,7 +5591,7 @@ if (fs.existsSync(distPath)) {
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v4]`);
+    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v5]`);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
