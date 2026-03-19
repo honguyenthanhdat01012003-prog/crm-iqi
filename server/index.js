@@ -843,8 +843,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
     [projectId]
   );
-  // Build 3-tier matching: ads_id (best) → phone (good) → name (fallback)
+  // Build 4-tier matching: ads_id (best) → phone+name (specific) → phone → name (fallback)
   const adsIdMap = new Map();
+  const phoneNameMap = new Map(); // NEW: composite phone+name key
   const phoneMap = new Map();
   const nameMap = new Map();
   for (const e of existing) {
@@ -856,16 +857,24 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         adsIdMap.set(aid, e);
       }
     }
-    // Tier 2: phone
+    // Tier 2: phone+name composite (most specific non-ads match)
     const np = normPhone(e.phone);
+    const nName = (e.name || "").trim().toLowerCase();
+    if (np && nName) {
+      const pnKey = `${np}||${nName}`;
+      const prevPN = phoneNameMap.get(pnKey);
+      if (!prevPN || (prevPN.status === "new" && e.status !== "new")) {
+        phoneNameMap.set(pnKey, e);
+      }
+    }
+    // Tier 3: phone only
     if (np) {
       const prevP = phoneMap.get(np);
       if (!prevP || (prevP.status === "new" && e.status !== "new")) {
         phoneMap.set(np, e);
       }
     }
-    // Tier 3: name
-    const nName = (e.name || "").trim().toLowerCase();
+    // Tier 4: name only
     if (nName) {
       const prevN = nameMap.get(nName);
       if (!prevN || (prevN.status === "new" && e.status !== "new")) {
@@ -873,12 +882,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       }
     }
   }
-  console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
-  // Debug: log first few entries from each map
-  const debugNameMapEntries = Array.from(nameMap.entries()).slice(0, 5);
-  console.log(`[replaceProjectData] nameMap samples:`, debugNameMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
-  const debugPhoneMapEntries = Array.from(phoneMap.entries()).slice(0, 5);
-  console.log(`[replaceProjectData] phoneMap samples:`, debugPhoneMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
+  console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneNameMap=${phoneNameMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
+  // Debug: log first few entries
+  const debugPhoneNameMapEntries = Array.from(phoneNameMap.entries()).slice(0, 3);
+  console.log(`[replaceProjectData] phoneNameMap samples:`, debugPhoneNameMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
 
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
@@ -915,15 +922,21 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
 
   // 5. Insert all leads from new sheet, restoring status/sale from old data where name matches
-  let matchByAdsId = 0, matchByPhone = 0, matchByName = 0, noMatch = 0;
+  let matchByAdsId = 0, matchByPhoneName = 0, matchByPhone = 0, matchByName = 0, noMatch = 0;
   for (const l of leads) {
     const np = normPhone(l.phone);
     const nName = (l.name || "").trim().toLowerCase();
     const lAdsId = (l.adsId || "").trim();
-    // 3-tier matching: ads_id → phone → name
-    const prev = (lAdsId && adsIdMap.get(lAdsId)) || (np && phoneMap.get(np)) || (nName && nameMap.get(nName)) || undefined;
+    const pnKey = np && nName ? `${np}||${nName}` : "";
+    // 4-tier matching: ads_id → phone+name → phone → name
+    const prev = (lAdsId && adsIdMap.get(lAdsId)) 
+              || (pnKey && phoneNameMap.get(pnKey))
+              || (np && phoneMap.get(np)) 
+              || (nName && nameMap.get(nName)) 
+              || undefined;
     if (prev) {
       if (lAdsId && adsIdMap.has(lAdsId)) matchByAdsId++;
+      else if (pnKey && phoneNameMap.has(pnKey)) matchByPhoneName++;
       else if (np && phoneMap.has(np)) matchByPhone++;
       else matchByName++;
     } else { noMatch++; }
@@ -1008,9 +1021,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const aid = (l.adsId || "").trim();
     const np = normPhone(l.phone);
     const nName = (l.name || "").trim().toLowerCase();
-    return !(aid && adsIdMap.has(aid)) && !(np && phoneMap.has(np)) && !(nName && nameMap.has(nName));
+    const pnKey = np && nName ? `${np}||${nName}` : "";
+    return !(aid && adsIdMap.has(aid)) && !(pnKey && phoneNameMap.has(pnKey)) && !(np && phoneMap.has(np)) && !(nName && nameMap.has(nName));
   }).map(l => normPhone(l.phone));
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch}`);
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
