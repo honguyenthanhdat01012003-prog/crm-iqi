@@ -1227,6 +1227,10 @@ async function syncProject(db, projectId) {
        ORDER BY u.id ASC`, [projectId]);
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
+    if (managers.length === 0) {
+      console.warn(`[syncProject] ⚠️ project=${projectId} has NO managers in user_projects! New leads will NOT be auto-assigned. Add managers via Quản lý tài khoản → Projects.`);
+    }
+
     if (managers.length > 0) {
       // Step 1: Assign manager to all unassigned leads via round-robin
       const unassigned = await all(db,

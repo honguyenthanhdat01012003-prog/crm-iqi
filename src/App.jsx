@@ -3403,307 +3403,231 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
       )}
 
-      {/* === SALE VIEW: Simple contact form === */}
-      {!isAdmin && (
-        <div style={{ marginBottom: 16 }}>
-          <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-            <ClipboardList size={16} /> Cập nhật thông tin khách hàng
-          </h4>
-          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12 }}>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", flexDirection: isMobile ? "column" : "row" }}>
-              <div style={{ flex: "1 1 200px", width: isMobile ? "100%" : "auto" }}>
-                <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Trạng thái khách</label>
-                <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
-                  style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }}>
-                  <option value="">-- Chọn trạng thái --</option>
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </select>
-              </div>
-              <div style={{ flex: "2 1 300px", width: isMobile ? "100%" : "auto" }}>
-                <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Ghi chú</label>
-                <input value={histFeedback} onChange={(e) => setHistFeedback(e.target.value)}
-                  placeholder="Nội dung trao đổi với khách..."
-                  style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }} />
-              </div>
-              <button onClick={handleAddHistory} disabled={saving}
-                style={{ ...btnPrimary, padding: "10px 16px", whiteSpace: "nowrap", width: isMobile ? "100%" : "auto", minHeight: 44 }}>
-                {saving ? "Đang lưu..." : <><Save size={14} /> Lưu liên hệ</>}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* === ADMIN/MANAGER VIEW: Full timeline === */}
-      {isAdmin && (
-        <>
-          <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <ClipboardList size={16} /> Lịch sử đăng ký & Tương tác
-              {lead.saleName && lead.saleName !== "Chưa chia" && (
-                <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 8, background: "#dbeafe", color: "#1e40af", fontWeight: 600, marginLeft: 4 }}>
-                  Sale hiện tại: {lead.saleName}
-                </span>
-              )}
-            </span>
-            <button onClick={() => setShowForm(!showForm)}
-              style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
-              {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật thông tin khách hàng</>}
-            </button>
-          </h4>
-
-          {/* Add history form (admin) */}
-          {showForm && (
-            <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", flexDirection: isMobile ? "column" : "row" }}>
-                <div style={{ flex: "1 1 200px", width: isMobile ? "100%" : "auto" }}>
-                  <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Trạng thái</label>
-                  <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
-                    style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }}>
-                    <option value="">-- Chọn trạng thái --</option>
-                    {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <div style={{ flex: "2 1 300px", width: isMobile ? "100%" : "auto" }}>
-                  <label style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>Feedback</label>
-                  <input value={histFeedback} onChange={(e) => setHistFeedback(e.target.value)}
-                    placeholder="Ghi chú về khách hàng..."
-                    style={{ ...inputStyle, marginBottom: 0, marginTop: 4 }} />
-                </div>
-                <button onClick={handleAddHistory} disabled={saving}
-                  style={{ ...btnPrimary, padding: "10px 16px", whiteSpace: "nowrap", width: isMobile ? "100%" : "auto", minHeight: 44 }}>
-                  {saving ? "Đang lưu..." : <><Save size={14} /> Lưu</>}
+      {/* === Contact form (both sale and admin) === */}
+      {(() => {
+        const formVisible = !isAdmin || showForm;
+        return (
+          <div style={{ marginBottom: 16 }}>
+            <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <ClipboardList size={16} /> {isAdmin ? "Lịch sử đăng ký & Tương tác" : "Cập nhật thông tin khách hàng"}
+                {isAdmin && lead.saleName && lead.saleName !== "Chưa chia" && (
+                  <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 8, background: "#dbeafe", color: "#1e40af", fontWeight: 600 }}>
+                    Sale hiện tại: {lead.saleName}
+                  </span>
+                )}
+              </span>
+              {isAdmin && (
+                <button onClick={() => setShowForm(!showForm)}
+                  style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
+                  {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật thông tin khách hàng</>}
                 </button>
+              )}
+            </h4>
+            {(!isAdmin || formVisible) && (!isAdmin || showForm) && (
+              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 16 : 12, marginBottom: 12 }}>
+                <div style={{ display: "flex", gap: isMobile ? 12 : 8, flexDirection: "column" }}>
+                  <div style={{ width: "100%" }}>
+                    <label style={{ fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 6, display: "block" }}>Trạng thái khách</label>
+                    <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
+                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 15 : 13, padding: isMobile ? "12px 14px" : "8px 10px", minHeight: isMobile ? 48 : "auto" }}>
+                      <option value="">-- Chọn trạng thái --</option>
+                      {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ width: "100%" }}>
+                    <label style={{ fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 6, display: "block" }}>Ghi chú</label>
+                    <textarea value={histFeedback} onChange={(e) => setHistFeedback(e.target.value)}
+                      placeholder="Nội dung trao đổi với khách..."
+                      rows={3}
+                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 15 : 13, padding: isMobile ? "12px 14px" : "8px 10px", minHeight: isMobile ? 80 : 60, resize: "vertical" }} />
+                  </div>
+                  <button onClick={handleAddHistory} disabled={saving}
+                    style={{ ...btnPrimary, padding: isMobile ? "14px 16px" : "10px 16px", whiteSpace: "nowrap", width: "100%", minHeight: isMobile ? 48 : 44, fontSize: isMobile ? 15 : 14, borderRadius: 10 }}>
+                    {saving ? "Đang lưu..." : <><Save size={16} /> Lưu liên hệ</>}
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        );
+      })()}
 
-          {(() => {
-            // Build unified timeline: registration events + sale history
-            const timelineItems = [];
+      {/* === TREE-VIEW TIMELINE: grouped by sale assignment === */}
+      {(() => {
+        // Build sale assignment groups: each "Chia lead" creates a new assignment
+        const assignments = []; // { saleName, chiaDate, chiaBy, chiaHistEntry, contacts: [] }
+        const recalls = []; // standalone recall events
+        const regEvents = []; // registration events
 
-            // Add registration events for THIS lead
-            registrations.forEach((reg, ri) => {
-              if (reg.leadId === lead.id) {
-                timelineItems.push({
-                  type: "reg", date: reg.createdAt || "", sortDate: reg.createdAt || "",
-                  regNum: ri + 1, totalRegs: registrations.length,
-                  campaign: reg.campaign, adsetName: reg.adsetName, adName: reg.adName,
-                  projectName: reg.projectName,
-                });
-              }
-            });
+        // Collect registration events
+        registrations.forEach((reg, ri) => {
+          if (reg.leadId === lead.id) {
+            regEvents.push({ regNum: ri + 1, totalRegs: registrations.length, date: reg.createdAt || "", campaign: reg.campaign, adsetName: reg.adsetName, adName: reg.adName, projectName: reg.projectName });
+          }
+        });
 
-            // Group sale history: chia lead events + update events grouped by sale
-            const saleContactMap = new Map(); // saleName -> [{...histEntry}]
-            let contactCount = 0;
-            history.forEach((h, idx) => {
-              const isChia = (h.action || "").toLowerCase().includes("chia");
-              const isRecall = (h.action || "").toLowerCase().includes("thu h");
-              if (isChia) {
-                // Parse who assigned from feedback: "Admin X chia lead"
-                const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || h.saleName;
-                timelineItems.push({
-                  type: "chia", date: h.date || "", sortDate: h.date || "",
-                  saleName: h.saleName, assignedBy, histEntry: h,
-                });
-                // Start a new contact group for this sale
-                if (!saleContactMap.has(h.saleName)) saleContactMap.set(h.saleName, []);
-              } else if (isRecall) {
-                timelineItems.push({
-                  type: "recall", date: h.date || "", sortDate: h.date || "",
-                  histEntry: h,
-                });
-              } else {
-                // Contact/update entries - group by sale
-                contactCount++;
-                const sn = h.saleName || "Không rõ";
-                if (!saleContactMap.has(sn)) saleContactMap.set(sn, []);
-                saleContactMap.get(sn).push({ ...h, contactNum: saleContactMap.get(sn).length + 1, histIdx: idx });
-              }
-            });
-
-            // For each sale that has contacts, add a grouped contact item
-            for (const [saleName, contacts] of saleContactMap) {
-              if (contacts.length === 0) continue;
-              const lastContact = contacts[contacts.length - 1];
-              timelineItems.push({
-                type: "contacts", date: lastContact.date || "", sortDate: lastContact.date || "",
-                saleName, contacts, lastStatus: lastContact.status || "",
-              });
+        // Walk history chronologically to build assignment groups
+        let currentAssignment = null;
+        history.forEach((h) => {
+          const isChia = (h.action || "").toLowerCase().includes("chia");
+          const isRecall = (h.action || "").toLowerCase().includes("thu h");
+          if (isChia) {
+            const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
+            currentAssignment = { saleName: h.saleName, chiaDate: h.date, chiaBy: assignedBy, chiaHistEntry: h, contacts: [] };
+            assignments.push(currentAssignment);
+          } else if (isRecall) {
+            recalls.push(h);
+          } else {
+            // Contact entry — attach to matching assignment or create implicit one
+            const sn = h.saleName || "Không rõ";
+            // Find the LAST assignment for this sale (most recent assignment for them)
+            let target = null;
+            for (let i = assignments.length - 1; i >= 0; i--) {
+              if (assignments[i].saleName === sn) { target = assignments[i]; break; }
             }
-
-            // Sort by date descending
-            timelineItems.sort((a, b) => (b.sortDate || "").localeCompare(a.sortDate || ""));
-
-            if (timelineItems.length === 0) {
-              return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
+            if (!target) {
+              target = { saleName: sn, chiaDate: null, chiaBy: null, chiaHistEntry: null, contacts: [] };
+              assignments.push(target);
             }
+            target.contacts.push(h);
+          }
+        });
 
-            return (
-              <div style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, paddingBottom: 8 }}>
-                <div style={{ position: "absolute", left: isMobile ? 6 : 8, top: 4, bottom: 4, width: 2, background: "#e5e7eb" }} />
-                {timelineItems.map((item, idx) => {
-                  // --- Registration event ---
-                  if (item.type === "reg") {
-                    return (
-                      <div key={`reg-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
-                        <div style={{ position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10, borderRadius: "50%", background: "#f59e0b", border: "2px solid #fff", boxShadow: "0 0 0 2px #f59e0b33" }} />
-                        <div style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#92400e" }}>
-                              🚩 Đăng ký lần {item.regNum}
-                              {item.totalRegs > 1 && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#fef3c7", color: "#b45309" }}>Khách cũ</span>}
-                            </span>
-                            <span style={{ fontSize: 10, color: "#9ca3af" }}>{item.date || "-"}</span>
-                          </div>
-                          <div style={{ fontSize: 12, color: "#6b7280" }}>
-                            Dự án: <b>{item.projectName}</b> | Chiến dịch: <b>{item.campaign}</b>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                            Nhóm: {item.adsetName} | Content: {item.adName ? (
-                              <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(item.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{item.adName}</span>
-                            ) : item.adName}
-                          </div>
-                        </div>
+        // For sale view: filter to only show their own assignments
+        const visibleAssignments = !isAdmin
+          ? assignments.filter(a => a.saleName === user?.displayName)
+          : assignments;
+
+        const hasContent = regEvents.length > 0 || visibleAssignments.length > 0 || recalls.length > 0;
+        if (!hasContent) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
+
+        return (
+          <div style={{ paddingBottom: 8 }}>
+            {/* Registration events */}
+            {isAdmin && regEvents.map((reg, ri) => (
+              <div key={`reg-${ri}`} style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#92400e" }}>
+                    🚩 Đăng ký lần {reg.regNum}
+                    {reg.totalRegs > 1 && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#fef3c7", color: "#b45309" }}>Khách cũ</span>}
+                  </span>
+                  <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.date || "-"}</span>
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280" }}>Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b></div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                  Nhóm: {reg.adsetName} | Content: {reg.adName ? (
+                    <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(reg.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{reg.adName}</span>
+                  ) : reg.adName}
+                </div>
+              </div>
+            ))}
+
+            {/* Recall events (admin only) */}
+            {isAdmin && recalls.map((h, ri) => (
+              <div key={`recall-${ri}`} style={{ background: "#fef2f2", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fecaca", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#dc2626" }}>🔄 {h.action} — {h.saleName}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                    <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.date || "-"}</span>
+                    {isAdmin && h.id && (
+                      <button onClick={() => handleDeleteHistory(h.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }} title="Xóa"><Trash2 size={12} /></button>
+                    )}
+                  </div>
+                </div>
+                {h.feedback && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{h.feedback}</div>}
+              </div>
+            ))}
+
+            {/* Sale assignment groups — tree view */}
+            {visibleAssignments.map((asg, asgIdx) => {
+              const assignNum = asgIdx + 1;
+              const isExpanded = expandedSaleContact === `asg-${asgIdx}`;
+              const ct = asg.contacts;
+              const lastCt = ct.length > 0 ? ct[ct.length - 1] : null;
+              const lastStatusLabel = lastCt ? (STATUS_LABELS[lastCt.status] || lastCt.status || "Chưa feedback") : "Chưa feedback";
+              const lastStatusColor = lastCt ? (STATUS_COLORS[lastCt.status] || "#6b7280") : "#6b7280";
+
+              return (
+                <div key={`asg-${asgIdx}`} style={{ marginBottom: 12, borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+                  {/* Assignment header */}
+                  <div onClick={() => setExpandedSaleContact(isExpanded ? null : `asg-${asgIdx}`)}
+                    style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{assignNum}</span>
+                        Liên hệ lần {assignNum} — <b style={{ color: "#e88a2e" }}>{asg.saleName}</b>
+                        {ct.length > 0 && (
+                          <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
+                            {lastStatusLabel}
+                          </span>
+                        )}
                       </div>
-                    );
-                  }
-
-                  // --- Chia lead event ---
-                  if (item.type === "chia") {
-                    return (
-                      <div key={`chia-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
-                        <div style={{ position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10, borderRadius: "50%", background: "#3b82f6", border: "2px solid #fff", boxShadow: "0 0 0 2px #3b82f633" }} />
-                        <div style={{ background: "#eff6ff", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #bfdbfe" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4, flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#1e40af" }}>
-                              📋 Chia lead cho <b>{item.saleName}</b>
-                            </span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                              <span style={{ fontSize: 10, color: "#9ca3af" }}>{item.date || "-"}</span>
-                              {item.histEntry.id && (
-                                <button onClick={() => handleDeleteHistory(item.histEntry.id)}
-                                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                                  title="Xóa"><Trash2 size={12} /></button>
-                              )}
-                            </div>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                            Người chia: <b>{item.assignedBy}</b>
-                          </div>
-                        </div>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                        {asg.chiaDate && <span>📅 {asg.chiaDate}</span>}
+                        {isAdmin && asg.chiaBy && <span>Người chia: {asg.chiaBy}</span>}
+                        <span>📞 {ct.length} lần gọi</span>
                       </div>
-                    );
-                  }
+                    </div>
+                    <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                      {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
+                    </span>
+                  </div>
 
-                  // --- Recall event ---
-                  if (item.type === "recall") {
-                    const h = item.histEntry;
-                    return (
-                      <div key={`recall-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
-                        <div style={{ position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10, borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", boxShadow: "0 0 0 2px #ef444433" }} />
-                        <div style={{ background: "#fef2f2", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fecaca" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 4, flexWrap: "wrap" }}>
-                            <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#dc2626" }}>
-                              🔄 {h.action} — {h.saleName}
-                            </span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                              <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.date || "-"}</span>
-                              {h.id && (
-                                <button onClick={() => handleDeleteHistory(h.id)}
-                                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                                  title="Xóa"><Trash2 size={12} /></button>
-                              )}
-                            </div>
-                          </div>
-                          {h.feedback && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>{h.feedback}</div>}
-                        </div>
-                      </div>
-                    );
-                  }
+                  {/* Expanded: call sub-items as tree branches */}
+                  {isExpanded && (
+                    <div style={{ padding: isMobile ? "8px 12px 12px 12px" : "8px 14px 14px 14px" }}>
+                      {ct.length === 0 && (
+                        <div style={{ color: "#9ca3af", fontSize: 12, fontStyle: "italic", padding: 8 }}>Chưa có lần gọi nào</div>
+                      )}
+                      {ct.map((c, ci) => {
+                        const stLabel = STATUS_LABELS[c.status] || c.status || "Chưa feedback";
+                        const stColor = STATUS_COLORS[c.status] || "#6b7280";
+                        return (
+                          <div key={ci} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: ci < ct.length - 1 ? 6 : 0 }}>
+                            {/* Tree branch line */}
+                            <div style={{ position: "absolute", left: 8, top: 0, bottom: ci < ct.length - 1 ? 0 : "50%", width: 2, background: "#e5e7eb" }} />
+                            <div style={{ position: "absolute", left: 8, top: 14, width: isMobile ? 10 : 12, height: 2, background: "#e5e7eb" }} />
+                            <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
 
-                  // --- Grouped sale contacts (collapsible) ---
-                  if (item.type === "contacts") {
-                    const isExpanded = expandedSaleContact === item.saleName;
-                    const ct = item.contacts;
-                    const lastCt = ct[ct.length - 1];
-                    const lastStatusLabel = STATUS_LABELS[lastCt.status] || lastCt.status || "Chưa feedback";
-                    const lastStatusColor = STATUS_COLORS[lastCt.status] || "#6b7280";
-                    return (
-                      <div key={`contacts-${idx}`} style={{ position: "relative", marginBottom: 10, paddingLeft: isMobile ? 12 : 16 }}>
-                        <div style={{ position: "absolute", left: isMobile ? -14 : -16, top: 6, width: 10, height: 10, borderRadius: "50%", background: "#10b981", border: "2px solid #fff", boxShadow: "0 0 0 2px #10b98133" }} />
-                        <div style={{ background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb", overflow: "hidden" }}>
-                          {/* Summary header - click to expand */}
-                          <div onClick={() => setExpandedSaleContact(isExpanded ? null : item.saleName)}
-                            style={{ padding: isMobile ? 10 : 12, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, background: isExpanded ? "#f0fdf4" : "#fff" }}>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                📞 {item.saleName} — {ct.length} lần liên hệ
-                                <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
-                                  {lastStatusLabel}
+                            <div style={{ background: ci % 2 ? "#f9fafb" : "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                  Gọi lần {ci + 1}
+                                  <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
+                                  {c.source && (
+                                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
+                                      background: c.source === "telegram" ? "#dbeafe" : c.source === "sheet" ? "#fef9c3" : c.source === "schedule" ? "#f3e8ff" : c.source === "sale" ? "#f0fdf4" : "#e0e7ff",
+                                      color: c.source === "telegram" ? "#1d4ed8" : c.source === "sheet" ? "#a16207" : c.source === "schedule" ? "#7c3aed" : c.source === "sale" ? "#16a34a" : "#4338ca",
+                                    }}>
+                                      {c.source === "telegram" ? "📱 Telegram" : c.source === "sheet" ? "📊 Sheet" : c.source === "schedule" ? "⏰ Tự động" : c.source === "sale" ? "👤 Sale" : "👤 Admin"}
+                                    </span>
+                                  )}
                                 </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                  <span style={{ fontSize: 10, color: "#9ca3af" }}>{c.date || "-"}</span>
+                                  {isAdmin && c.id && (
+                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(c.id); }}
+                                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                                      title="Xóa"><Trash2 size={12} /></button>
+                                  )}
+                                </div>
                               </div>
-                              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                                Lần cuối: {lastCt.date || "-"}
-                                {!lastCt.feedback && <span style={{ color: "#f59e0b", fontWeight: 600, marginLeft: 8 }}>⚠ Chưa feedback</span>}
-                                {lastCt.feedback && <span style={{ marginLeft: 8 }}>— {lastCt.feedback}</span>}
+                              <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4 }}>
+                                {c.feedback ? c.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
                               </div>
                             </div>
-                            <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0 }}>{isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}</span>
                           </div>
-                          {/* Expanded detail */}
-                          {isExpanded && (
-                            <div style={{ borderTop: "1px solid #e5e7eb", padding: isMobile ? 8 : 10 }}>
-                              {ct.map((c, ci) => {
-                                const stLabel = STATUS_LABELS[c.status] || c.status || "Chưa feedback";
-                                const stColor = STATUS_COLORS[c.status] || "#6b7280";
-                                return (
-                                  <div key={ci} style={{ padding: "6px 8px", marginBottom: 4, borderRadius: 6, background: ci % 2 ? "#f9fafb" : "#fff", border: "1px solid #f3f4f6" }}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                      <span style={{ fontWeight: 600, fontSize: 12 }}>
-                                        Liên hệ lần {c.contactNum}
-                                        <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
-                                      </span>
-                                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                        <span style={{ fontSize: 10, color: "#9ca3af" }}>{c.date || "-"}</span>
-                                        {c.id && (
-                                          <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(c.id); }}
-                                            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                                            title="Xóa"><Trash2 size={12} /></button>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
-                                      {c.feedback ? c.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
-                                    </div>
-                                    {c.source && (
-                                      <div style={{ marginTop: 2 }}>
-                                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
-                                          background: c.source === "telegram" ? "#dbeafe" : c.source === "sheet" ? "#fef9c3" : c.source === "schedule" ? "#f3e8ff" : "#e0e7ff",
-                                          color: c.source === "telegram" ? "#1d4ed8" : c.source === "sheet" ? "#a16207" : c.source === "schedule" ? "#7c3aed" : "#4338ca",
-                                        }}>
-                                          {c.source === "telegram" ? "📱 Telegram" : c.source === "sheet" ? "📊 Google Sheet" : c.source === "schedule" ? "⏰ Lịch tự động" : "👤 Admin"}
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return null;
-                })}
-              </div>
-            );
-          })()}
-        </>
-      )}
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       </div>
       {/* --- RIGHT COLUMN: Chat Messenger --- */}
