@@ -862,14 +862,19 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     [projectId]
   );
   const phoneMap = new Map();
+  const nameMap = new Map(); // Backup: match by normalized name when phone fails
   for (const e of existing) {
     const np = normPhone(e.phone);
-    if (!np) continue;
-    const prev = phoneMap.get(np);
-    // Keep lead with most meaningful status
-    if (!prev || (prev.status === "new" && e.status !== "new")) {
-      phoneMap.set(np, e);
+    if (np) {
+      const prev = phoneMap.get(np);
+      // Keep lead with most meaningful status
+      if (!prev || (prev.status === "new" && e.status !== "new")) {
+        phoneMap.set(np, e);
+      }
     }
+    // Also index by name for fallback matching
+    const nName = (e.name || "").trim().toLowerCase();
+    if (nName) nameMap.set(nName, e);
   }
 
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
@@ -909,7 +914,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 5. Insert all leads from new sheet, restoring status/sale from old data where phone matches
   for (const l of leads) {
     const np = normPhone(l.phone);
-    const prev = phoneMap.get(np);
+    let prev = phoneMap.get(np);
+    // Fallback: match by name if phone didn't match
+    if (!prev) {
+      const nName = (l.name || "").trim().toLowerCase();
+      if (nName) prev = nameMap.get(nName);
+      if (prev) console.log(`[replaceProjectData] phoneMap miss, nameMap hit: name="${l.name}" sheetPhone="${l.phone}" dbPhone="${prev.phone}"`);
+    }
 
     // Start with sheet values
     let status = l.status;
