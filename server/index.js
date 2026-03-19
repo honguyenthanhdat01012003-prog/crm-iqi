@@ -209,6 +209,15 @@ async function initDb() {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
   }
 
+  // Create manager_overrides table (stores manual manager assignments to survive sync)
+  await run(db, `CREATE TABLE IF NOT EXISTS manager_overrides (
+    norm_phone TEXT NOT NULL,
+    project_id INTEGER NOT NULL,
+    manager_name TEXT NOT NULL,
+    updated_at TEXT,
+    PRIMARY KEY(norm_phone, project_id)
+  )`);
+
   // Backfill manager_name from history
   try {
     const rows = await all(db,
@@ -1232,6 +1241,32 @@ async function syncProject(db, projectId) {
     }
   } catch (notifyErr) {
     console.error(`[syncProject] Manager assign/notify error for project ${projectId}:`, notifyErr.message);
+  }
+
+  // Apply manual manager overrides (bulletproof: survives any sync race condition)
+  try {
+    const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
+    const overrides = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
+    if (overrides.length) {
+      const leadsAfterSync = await all(db, "SELECT id, phone FROM leads WHERE project_id = ?", [projectId]);
+      const oStmts = [];
+      const cleanStmts = [];
+      for (const o of overrides) {
+        const matched = leadsAfterSync.find(l => normPhone(l.phone) === o.norm_phone);
+        if (matched) {
+          oStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [o.manager_name, matched.id] });
+        } else {
+          cleanStmts.push({ sql: "DELETE FROM manager_overrides WHERE norm_phone = ? AND project_id = ?", args: [o.norm_phone, projectId] });
+        }
+      }
+      if (oStmts.length) {
+        await db.batch(oStmts, "write");
+        console.log(`[syncProject] project=${projectId} applied ${oStmts.length} manual manager overrides`);
+      }
+      if (cleanStmts.length) await db.batch(cleanStmts, "write");
+    }
+  } catch (oErr) {
+    console.error(`[syncProject] Manager override error:`, oErr.message);
   }
 }
 
@@ -2521,6 +2556,13 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
     const oldManager = lead.manager_name;
     console.log(`[PATCH manager] lead#${actualId} old_manager=${oldManager} new_manager=${managerName}`);
 
+    // Save override to survive sync race conditions
+    const leadFull = await get(db, "SELECT project_id, phone FROM leads WHERE id = ?", [actualId]);
+    if (leadFull) {
+      const np = (leadFull.phone || "").replace(/[\s.\-()]/g, "").trim();
+      if (np) await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, leadFull.project_id, managerName, new Date().toISOString()]);
+    }
+
     // Direct UPDATE
     const result = await run(db, "UPDATE leads SET manager_name = ? WHERE id = ?", [managerName, actualId]);
     console.log(`[PATCH manager] UPDATE result: ${result.changes} rows affected`);
@@ -2703,8 +2745,13 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
     // For manager-only changes, return targeted update (avoids race with sync)
     if (managerName !== undefined && saleName === undefined && status === undefined && notes === undefined && isHot === undefined) {
-      const updated = await get(db, "SELECT id, phone, manager_name FROM leads WHERE id = ?", [actualLeadId]);
+      const updated = await get(db, "SELECT id, phone, manager_name, project_id FROM leads WHERE id = ?", [actualLeadId]);
       console.log(`[PUT /api/leads/${actualLeadId}] Verify after update: manager_name=${updated?.manager_name}`);
+      // Save override to survive sync race conditions
+      if (updated) {
+        const np = (updated.phone || "").replace(/[\s.\-()]/g, "").trim();
+        if (np) await run(db, "INSERT OR REPLACE INTO manager_overrides(norm_phone, project_id, manager_name, updated_at) VALUES(?, ?, ?, ?)", [np, updated.project_id, managerName, new Date().toISOString()]);
+      }
       lastSyncHash = ""; // invalidate so next poll re-fetches
       return res.json({ updatedLead: { id: actualLeadId, phone: updated?.phone, managerName: updated?.manager_name || managerName } });
     }
