@@ -110,7 +110,7 @@ async function initDb() {
     `CREATE TABLE IF NOT EXISTS campaigns (id INTEGER PRIMARY KEY, name TEXT NOT NULL, project_id INTEGER NOT NULL, channel TEXT, budget REAL DEFAULT 0, spent REAL DEFAULT 0)`,
     `CREATE TABLE IF NOT EXISTS leads (
       id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL, phone TEXT,
-      campaign TEXT, campaign_id INTEGER, adset_name TEXT DEFAULT '-', ad_name TEXT DEFAULT '-',
+      ads_id TEXT DEFAULT '', campaign TEXT, campaign_id INTEGER, adset_name TEXT DEFAULT '-', ad_name TEXT DEFAULT '-',
       form_name TEXT DEFAULT '-', product TEXT, raw_status TEXT, status TEXT, created_at TEXT,
       inbox_url TEXT, is_hot INTEGER DEFAULT 0, sale_id INTEGER, sale_name TEXT DEFAULT '',
       manager_name TEXT DEFAULT '', source TEXT, budget TEXT, sync_at TEXT, notes TEXT,
@@ -216,32 +216,11 @@ async function initDb() {
     "ALTER TABLE projects ADD COLUMN fb_person TEXT DEFAULT ''",
     "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN mgr_assign_idx INTEGER DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN ads_id TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
   }
-
-  // Backfill manager_name from history
-  try {
-    const rows = await all(db,
-      `SELECT l.id, lh.feedback FROM leads l
-       JOIN lead_history lh ON lh.lead_id = l.id AND lh.action = 'Chia lead'
-       WHERE (l.manager_name IS NULL OR l.manager_name = '')
-       AND lh.seq = (SELECT MAX(lh2.seq) FROM lead_history lh2 WHERE lh2.lead_id = l.id AND lh2.action = 'Chia lead')`
-    );
-    if (rows.length > 0) {
-      const stmts = [];
-      for (const r of rows) {
-        if (!r.feedback) continue;
-        const m = r.feedback.match(/^Admin\s+(.+?)\s+(?:chia lead|xáo lead)/);
-        if (m && m[1]) stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [m[1], r.id] });
-      }
-      if (stmts.length) {
-        await db.batch(stmts, "write");
-        console.log(`[migration] Backfilled manager_name for ${stmts.length} leads`);
-      }
-    }
-  } catch (e) { console.error("[migration] backfill manager_name error:", e.message); }
 
   // Migrate legacy sheet_script_url
   {
@@ -656,6 +635,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
       const name = findVal(r, ["full name", "full_name", "ho ten", "ten", "name", "ten day du"]);
       if (!name) return null;
 
+      const adsId = findVal(r, ["id", "lead_id", "ads_id", "id_ads", "ma_lead", "id lead"]);
       let phone = findVal(r, ["phone", "so dien thoai", "sdt", "dien thoai", "phone number", "mobile", "di dong", "so dt"]);
       if (phone.startsWith("p:")) phone = phone.slice(2);
       const campaign = findVal(r, ["campaign_name", "campaign name", "chien dich", "ten chien dich"]);
@@ -689,6 +669,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         projectId: 1,
         name,
         phone,
+        adsId: adsId || "",
         campaign: campaign || "Khac",
         campaignId: null,
         adsetName: adsetName || "-",
@@ -760,6 +741,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         projectId: 1,
         name,
         phone,
+        adsId: "",
         campaign: campaign || "Khac",
         campaignId: null,
         adsetName,
@@ -858,19 +840,40 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
-    "SELECT id, name, phone, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
     [projectId]
   );
+  // Build 3-tier matching: ads_id (best) → phone (good) → name (fallback)
+  const adsIdMap = new Map();
+  const phoneMap = new Map();
   const nameMap = new Map();
   for (const e of existing) {
+    // Tier 1: ads_id (unique per lead from ad platform)
+    const aid = (e.ads_id || "").trim();
+    if (aid) {
+      const prevAid = adsIdMap.get(aid);
+      if (!prevAid || (prevAid.status === "new" && e.status !== "new")) {
+        adsIdMap.set(aid, e);
+      }
+    }
+    // Tier 2: phone
+    const np = normPhone(e.phone);
+    if (np) {
+      const prevP = phoneMap.get(np);
+      if (!prevP || (prevP.status === "new" && e.status !== "new")) {
+        phoneMap.set(np, e);
+      }
+    }
+    // Tier 3: name
     const nName = (e.name || "").trim().toLowerCase();
-    if (!nName) continue;
-    const prev = nameMap.get(nName);
-    // Keep lead with most meaningful status
-    if (!prev || (prev.status === "new" && e.status !== "new")) {
-      nameMap.set(nName, e);
+    if (nName) {
+      const prevN = nameMap.get(nName);
+      if (!prevN || (prevN.status === "new" && e.status !== "new")) {
+        nameMap.set(nName, e);
+      }
     }
   }
+  console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
 
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
@@ -907,10 +910,18 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
 
   // 5. Insert all leads from new sheet, restoring status/sale from old data where name matches
+  let matchByAdsId = 0, matchByPhone = 0, matchByName = 0, noMatch = 0;
   for (const l of leads) {
     const np = normPhone(l.phone);
     const nName = (l.name || "").trim().toLowerCase();
-    const prev = nName ? nameMap.get(nName) : undefined;
+    const lAdsId = (l.adsId || "").trim();
+    // 3-tier matching: ads_id → phone → name
+    const prev = (lAdsId && adsIdMap.get(lAdsId)) || (np && phoneMap.get(np)) || (nName && nameMap.get(nName)) || undefined;
+    if (prev) {
+      if (lAdsId && adsIdMap.has(lAdsId)) matchByAdsId++;
+      else if (np && phoneMap.has(np)) matchByPhone++;
+      else matchByName++;
+    } else { noMatch++; }
 
     // Start with sheet values
     let status = l.status;
@@ -942,12 +953,12 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
     stmts.push({
       sql: `INSERT INTO leads(
-        project_id, name, phone, campaign, campaign_id, adset_name, ad_name, form_name,
+        project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
         product, raw_status, status,
         created_at, inbox_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
-        projectId, l.name, l.phone, l.campaign, null,
+        projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
         l.adsetName || "-", l.adName || "-", l.formName || "-",
         l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName, managerName,
         l.source, l.budget, l.syncAt, notes,
@@ -984,9 +995,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
 
-  const matchCount = leads.filter(l => nameMap.has((l.name || "").trim().toLowerCase())).length;
-  const newPhones = leads.filter(l => !nameMap.has((l.name || "").trim().toLowerCase())).map(l => normPhone(l.phone));
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} newLeads=${leads.length} oldLeads=${existing.length} nameMatched=${matchCount} brandNew=${newPhones.length}`);
+  const newPhones = leads.filter(l => {
+    const aid = (l.adsId || "").trim();
+    const np = normPhone(l.phone);
+    const nName = (l.name || "").trim().toLowerCase();
+    return !(aid && adsIdMap.has(aid)) && !(np && phoneMap.has(np)) && !(nName && nameMap.has(nName));
+  }).map(l => normPhone(l.phone));
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
@@ -1052,6 +1067,7 @@ async function readData(db) {
       phone: l.phone,
       campaign: l.campaign,
       campaignId: l.campaign_id,
+      adsId: l.ads_id || "",
       adsetName: l.adset_name || "-",
       adName: l.ad_name || "-",
       formName: l.form_name || "-",
