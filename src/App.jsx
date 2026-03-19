@@ -2027,6 +2027,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
   }, [allUsers]);
 
+  const allManagerNames = useMemo(() => {
+    return allUsers.filter(u => (u.role === "manager" || u.role === "admin") && u.displayName).map(u => u.displayName).sort();
+  }, [allUsers]);
+
   const getProjectSaleNames = (projectId) => {
     const merged = new Set([...allSaleUsers, ...saleNames]);
     return [...merged].sort();
@@ -2905,7 +2909,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={isMobile} />
+                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} />
                   </div>
                 )}
               </div>
@@ -2965,7 +2969,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} isMobile={false} />
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} />
                       </td>
                     </tr>
                   );
@@ -3008,7 +3012,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], isMobile = false }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false }) {
   const history = lead.saleHistory || [];
   const registrations = lead.registrations || [];
   const [showForm, setShowForm] = useState(false);
@@ -3019,6 +3023,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingStatus, setSavingStatus] = useState(false);
   const [editSale, setEditSale] = useState(lead.saleName || "");
   const [savingSale, setSavingSale] = useState(false);
+  const [editManager, setEditManager] = useState(lead.managerName || "");
+  const [savingManager, setSavingManager] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
   const [adPreview, setAdPreview] = useState(null);
@@ -3175,6 +3181,23 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     }
   };
 
+  const handleChangeManager = async () => {
+    if (!editManager) return;
+    setSavingManager(true);
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ managerName: editManager }),
+      });
+      const data = await r.json();
+      applyApiData(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingManager(false);
+    }
+  };
+
   return (
     <div style={{ padding: isMobile ? "12px" : "16px 24px" }}>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: 12, fontSize: 13 }}>
@@ -3292,6 +3315,30 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
               style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
               {savingSale ? "Đang chia..." : <><Share2 size={14} /> Chia lead</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Admin: Đổi Quản lý */}
+      {isAdmin && managerNames.length > 0 && (
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Shield size={14} /> Quản lý phụ trách:</b>
+            {lead.managerName
+              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#dbeafe", color: "#1e40af" }}>{lead.managerName}</span>
+              : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa gán</span>
+            }
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={editManager} onChange={(e) => setEditManager(e.target.value)}
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: editManager ? "#1f2937" : "#9ca3af" }}>
+              <option value="">-- Chọn Quản lý --</option>
+              {managerNames.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <button onClick={handleChangeManager} disabled={savingManager || !editManager}
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editManager ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              {savingManager ? "Đang đổi..." : <><Shield size={14} /> Đổi quản lý</>}
             </button>
           </div>
         </div>

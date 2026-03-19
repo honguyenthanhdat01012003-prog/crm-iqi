@@ -2503,7 +2503,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         return res.status(403).json({ error: "You can only update your own leads" });
       }
     }
-    const { status, notes, saleId, saleName, isHot } = req.body;
+    const { status, notes, saleId, saleName, isHot, managerName } = req.body;
     const sets = [];
     const params = [];
 
@@ -2516,6 +2516,10 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         sets.push("manager_name = ?"); params.push(req.user.displayName);
         // Reset status to "new" (Chưa feedback) when reassigning to a new sale
         if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
+      }
+      // Admin can directly reassign manager (without changing sale)
+      if (managerName !== undefined && saleName === undefined) {
+        sets.push("manager_name = ?"); params.push(managerName);
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
