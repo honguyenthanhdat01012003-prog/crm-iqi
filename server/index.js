@@ -1143,87 +1143,57 @@ async function syncProject(db, projectId) {
   const vnHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })).getHours();
   const isActiveHours = vnHour >= 6 && vnHour < 23; // 6:00 - 22:59
 
-  // Assign pending unassigned leads from previous off-hours (runs every sync during active hours)
-  if (isActiveHours) {
-    try {
-      const managers = await all(db,
-        `SELECT u.id, u.display_name, u.telegram_id FROM users u
-         JOIN user_projects up ON u.id = up.user_id
-         WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
-      if (managers.length > 0) {
-        const pendingLeads = await all(db,
-          "SELECT id, name, phone, product FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '')",
+  // SINGLE assignment block: assign manager_name to ALL unassigned leads (no double-assign)
+  try {
+    const managers = await all(db,
+      `SELECT u.id, u.display_name, u.telegram_id FROM users u
+       JOIN user_projects up ON u.id = up.user_id
+       WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
+
+    if (managers.length > 0) {
+      // Step 1: Assign manager to all unassigned leads (during active hours)
+      if (isActiveHours) {
+        const unassigned = await all(db,
+          "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
           [projectId]);
-        if (pendingLeads.length > 0) {
+        if (unassigned.length > 0) {
           const projRow = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
           let idx = (projRow && projRow.mgr_assign_idx) || 0;
           const stmts = [];
-          for (let i = 0; i < pendingLeads.length; i++) {
+          for (let i = 0; i < unassigned.length; i++) {
             const mgr = managers[idx % managers.length];
-            stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, pendingLeads[i].id] });
+            stmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [mgr.display_name, unassigned[i].id] });
             idx++;
           }
           stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [idx, projectId] });
           await db.batch(stmts, "write");
-          console.log(`[syncProject] project=${projectId} assigned ${pendingLeads.length} pending leads to managers (off-hours backlog), idx=${idx}`);
+          console.log(`[syncProject] project=${projectId} assigned ${unassigned.length} unassigned leads to ${managers.length} managers, idx=${idx}`);
         }
       }
-    } catch (e) { console.error(`[syncProject] pending assign error:`, e.message); }
-  }
 
-  if (newPhones && newPhones.length > 0) {
-    try {
-      // Find managers assigned to this project
-      const managers = await all(db,
-        `SELECT u.id, u.display_name, u.telegram_id FROM users u
-         JOIN user_projects up ON u.id = up.user_id
-         WHERE up.project_id = ? AND u.role = 'manager'`, [projectId]);
-
-      if (managers.length > 0) {
+      // Step 2: Notify managers about NEW leads (always, even off-hours)
+      if (newPhones && newPhones.length > 0) {
         const normPhone = (p) => (p || "").replace(/[\s.\-()]/g, "").trim();
-        // Get newly inserted leads by phone
-        const allNewLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
-        const newLeads = allNewLeads.filter(l => newPhones.includes(normPhone(l.phone)));
+        const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
+        const newLeads = allLeads.filter(l => newPhones.includes(normPhone(l.phone)));
 
         if (newLeads.length > 0) {
+          if (!isActiveHours) {
+            console.log(`[syncProject] project=${projectId} ${newLeads.length} new leads NOT assigned (off-hours ${vnHour}:00, will assign at 6AM)`);
+          }
+
           const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
           const activeBot = await getBotForProject(projectId);
 
-          // Read persistent round-robin index
-          const projRow2 = await get(db, "SELECT mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
-          let mgrIdx = (projRow2 && projRow2.mgr_assign_idx) || 0;
-          const startIdx = mgrIdx;
-
-          if (isActiveHours) {
-            // Assign manager_name to new leads (round-robin among managers with persistent index)
-            const stmts = [];
-            for (let i = 0; i < newLeads.length; i++) {
-              const mgr = managers[mgrIdx % managers.length];
-              stmts.push({
-                sql: "UPDATE leads SET manager_name = ? WHERE id = ?",
-                args: [mgr.display_name, newLeads[i].id],
-              });
-              mgrIdx++;
-            }
-            stmts.push({ sql: "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", args: [mgrIdx, projectId] });
-            if (stmts.length) await db.batch(stmts, "write");
-            console.log(`[syncProject] project=${projectId} assigned ${newLeads.length} new leads to ${managers.length} managers, idx=${startIdx}->${mgrIdx}`);
-          } else {
-            console.log(`[syncProject] project=${projectId} ${newLeads.length} new leads NOT assigned (off-hours ${vnHour}:00, will assign at 6AM)`);
-          }
-
-          // Always notify managers about new leads (even off-hours)
           if (activeBot && activeBot.token) {
-            // Group new leads by assigned manager (use same index logic)
+            // Group new leads by their ACTUAL assigned manager_name (from DB)
             const mgrLeadMap = new Map();
-            let notifyIdx = startIdx;
-            for (let i = 0; i < newLeads.length; i++) {
-              const mgr = managers[notifyIdx % managers.length];
+            for (const lead of newLeads) {
+              const mgr = managers.find(m => m.display_name === lead.manager_name) || managers[0];
               if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
-              mgrLeadMap.get(mgr.id).leads.push(newLeads[i]);
-              notifyIdx++;
+              mgrLeadMap.get(mgr.id).leads.push(lead);
             }
             for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
               if (!mgr.telegram_id) continue;
@@ -1252,9 +1222,9 @@ async function syncProject(db, projectId) {
           }
         }
       }
-    } catch (notifyErr) {
-      console.error(`[syncProject] Manager notify error for project ${projectId}:`, notifyErr.message);
     }
+  } catch (notifyErr) {
+    console.error(`[syncProject] Manager assign/notify error for project ${projectId}:`, notifyErr.message);
   }
 }
 
