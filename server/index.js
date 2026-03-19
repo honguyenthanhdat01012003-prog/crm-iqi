@@ -1194,7 +1194,34 @@ async function syncProject(db, projectId) {
   const vnHour = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" })).getHours();
   const isActiveHours = vnHour >= 6 && vnHour < 23; // 6:00 - 22:59
 
-  // SINGLE assignment block: assign manager_name to ALL unassigned leads (no double-assign)
+  // FIRST: Apply manual manager overrides BEFORE round-robin (so they don't get overwritten)
+  try {
+    const overrides = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
+    if (overrides.length) {
+      const leadsAfterInsert = await all(db, "SELECT id, phone FROM leads WHERE project_id = ?", [projectId]);
+      const oStmts = [];
+      const cleanStmts = [];
+      for (const o of overrides) {
+        const oKey = normalizePhoneKey(o.norm_phone);
+        const matched = leadsAfterInsert.find(l => normalizePhoneKey(l.phone) === oKey);
+        if (matched) {
+          oStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [o.manager_name, matched.id] });
+        } else {
+          // Only clean up overrides older than 24h to prevent premature deletion
+          cleanStmts.push({ sql: "DELETE FROM manager_overrides WHERE norm_phone = ? AND project_id = ? AND updated_at < datetime('now', '-1 day')", args: [o.norm_phone, projectId] });
+        }
+      }
+      if (oStmts.length) {
+        await db.batch(oStmts, "write");
+        console.log(`[syncProject] project=${projectId} applied ${oStmts.length} manual manager overrides BEFORE round-robin`);
+      }
+      if (cleanStmts.length) await db.batch(cleanStmts, "write");
+    }
+  } catch (oErr) {
+    console.error(`[syncProject] Pre-roundrobin override error:`, oErr.message);
+  }
+
+  // THEN: assign manager_name only to leads that are STILL unassigned (truly new leads)
   try {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
@@ -1204,7 +1231,7 @@ async function syncProject(db, projectId) {
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
     if (managers.length > 0) {
-      // Step 1: Assign manager to all unassigned leads (sequential round-robin: A→B→C→A→B→C)
+      // Step 1: Assign manager to ONLY truly unassigned leads (after overrides have been applied)
       {
         const unassigned = await all(db,
           "SELECT id FROM leads WHERE project_id = ? AND (manager_name IS NULL OR manager_name = '') ORDER BY id ASC",
@@ -1281,33 +1308,7 @@ async function syncProject(db, projectId) {
     console.error(`[syncProject] Manager assign/notify error for project ${projectId}:`, notifyErr.message);
   }
 
-  // Apply manual manager overrides (bulletproof: survives any sync race condition)
-  try {
-    const overrides = await all(db, "SELECT norm_phone, manager_name FROM manager_overrides WHERE project_id = ?", [projectId]);
-    if (overrides.length) {
-      const leadsAfterSync = await all(db, "SELECT id, phone FROM leads WHERE project_id = ?", [projectId]);
-      const oStmts = [];
-      const cleanStmts = [];
-      for (const o of overrides) {
-        // Use robust phone normalization to match +84/0 formats
-        const oKey = normalizePhoneKey(o.norm_phone);
-        const matched = leadsAfterSync.find(l => normalizePhoneKey(l.phone) === oKey);
-        if (matched) {
-          oStmts.push({ sql: "UPDATE leads SET manager_name = ? WHERE id = ?", args: [o.manager_name, matched.id] });
-        } else {
-          // Only clean up overrides older than 24h to prevent premature deletion
-          cleanStmts.push({ sql: "DELETE FROM manager_overrides WHERE norm_phone = ? AND project_id = ? AND updated_at < datetime('now', '-1 day')", args: [o.norm_phone, projectId] });
-        }
-      }
-      if (oStmts.length) {
-        await db.batch(oStmts, "write");
-        console.log(`[syncProject] project=${projectId} applied ${oStmts.length} manual manager overrides`);
-      }
-      if (cleanStmts.length) await db.batch(cleanStmts, "write");
-    }
-  } catch (oErr) {
-    console.error(`[syncProject] Manager override error:`, oErr.message);
-  }
+  // Overrides already applied BEFORE round-robin above — no need to re-apply here
 }
 
 async function syncAllProjects(db) {
