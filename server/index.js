@@ -1172,7 +1172,7 @@ async function syncProject(db, projectId) {
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.telegram_id FROM users u
        JOIN user_projects up ON u.id = up.user_id
-       WHERE up.project_id = ? AND u.role = 'manager'
+       WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
     console.log(`[syncProject] project=${projectId} managers=[${managers.map(m => `${m.display_name}(id=${m.id})`).join(', ')}]`);
 
@@ -1956,7 +1956,7 @@ app.get("/api/debug/project-managers/:projectId", requireAuth, requireAdmin, asy
     const managers = await all(db,
       `SELECT u.id, u.display_name, u.role, u.username FROM users u
        JOIN user_projects up ON u.id = up.user_id
-       WHERE up.project_id = ? AND u.role = 'manager'
+       WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
     const projRow = await get(db, "SELECT id, name, mgr_assign_idx FROM projects WHERE id = ?", [projectId]);
     const leadCounts = await all(db,
@@ -1974,7 +1974,7 @@ app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmi
     const managers = await all(db,
       `SELECT u.id, u.display_name FROM users u
        JOIN user_projects up ON u.id = up.user_id
-       WHERE up.project_id = ? AND u.role = 'manager'
+       WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
     if (managers.length === 0) return res.status(400).json({ error: "Không có quản lý nào được gán cho dự án này" });
 
