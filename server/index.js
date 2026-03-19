@@ -843,9 +843,25 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
     [projectId]
   );
+  
+  // Helper: compare two leads, return true if newLead should replace prevLead
+  // Priority: 1) non-empty manager_name, 2) non-"new" status, 3) higher ID (more recent)
+  const shouldReplace = (prevLead, newLead) => {
+    // Prefer lead with non-empty manager_name
+    const prevHasMgr = !!(prevLead.manager_name && prevLead.manager_name.trim());
+    const newHasMgr = !!(newLead.manager_name && newLead.manager_name.trim());
+    if (newHasMgr && !prevHasMgr) return true;
+    if (prevHasMgr && !newHasMgr) return false;
+    // Both have or both don't have manager - prefer meaningful status
+    if (prevLead.status === "new" && newLead.status !== "new") return true;
+    if (prevLead.status !== "new" && newLead.status === "new") return false;
+    // Same status category - prefer higher ID (more recent)
+    return newLead.id > prevLead.id;
+  };
+  
   // Build 4-tier matching: ads_id (best) → phone+name (specific) → phone → name (fallback)
   const adsIdMap = new Map();
-  const phoneNameMap = new Map(); // NEW: composite phone+name key
+  const phoneNameMap = new Map(); // composite phone+name key
   const phoneMap = new Map();
   const nameMap = new Map();
   for (const e of existing) {
@@ -853,7 +869,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const aid = (e.ads_id || "").trim();
     if (aid) {
       const prevAid = adsIdMap.get(aid);
-      if (!prevAid || (prevAid.status === "new" && e.status !== "new")) {
+      if (!prevAid || shouldReplace(prevAid, e)) {
         adsIdMap.set(aid, e);
       }
     }
@@ -863,29 +879,33 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     if (np && nName) {
       const pnKey = `${np}||${nName}`;
       const prevPN = phoneNameMap.get(pnKey);
-      if (!prevPN || (prevPN.status === "new" && e.status !== "new")) {
+      if (!prevPN || shouldReplace(prevPN, e)) {
         phoneNameMap.set(pnKey, e);
       }
     }
     // Tier 3: phone only
     if (np) {
       const prevP = phoneMap.get(np);
-      if (!prevP || (prevP.status === "new" && e.status !== "new")) {
+      if (!prevP || shouldReplace(prevP, e)) {
         phoneMap.set(np, e);
       }
     }
     // Tier 4: name only
     if (nName) {
       const prevN = nameMap.get(nName);
-      if (!prevN || (prevN.status === "new" && e.status !== "new")) {
+      if (!prevN || shouldReplace(prevN, e)) {
         nameMap.set(nName, e);
       }
     }
   }
   console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneNameMap=${phoneNameMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
-  // Debug: log first few entries
-  const debugPhoneNameMapEntries = Array.from(phoneNameMap.entries()).slice(0, 3);
-  console.log(`[replaceProjectData] phoneNameMap samples:`, debugPhoneNameMapEntries.map(([k, v]) => `${k}->${v.manager_name}`).join(', '));
+  // Debug: log all leads with their manager_name for tracing
+  const mgrCounts = {};
+  for (const e of existing) {
+    const mgr = e.manager_name || "(empty)";
+    mgrCounts[mgr] = (mgrCounts[mgr] || 0) + 1;
+  }
+  console.log(`[replaceProjectData] Existing leads manager distribution:`, JSON.stringify(mgrCounts));
 
   // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
   let allHistory = [];
@@ -967,9 +987,14 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
       managerName = prev.manager_name || "";
-      // Debug log for first 3 matched leads
-      if (matchByAdsId + matchByPhone + matchByName <= 3) {
-        console.log(`[replaceProjectData] MATCH: sheet.name="${l.name}" sheet.phone="${l.phone}" -> prev.id=${prev.id} prev.name="${prev.name}" prev.manager_name="${prev.manager_name}" => managerName="${managerName}"`);
+      // Debug: log manager restoration for leads with specific managers
+      if (prev.manager_name && prev.manager_name !== "Trần Văn Quyết") {
+        console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${lAdsId && adsIdMap.has(lAdsId) ? 'adsId' : pnKey && phoneNameMap.has(pnKey) ? 'phoneName' : np && phoneMap.has(np) ? 'phone' : 'name'})`);
+      }
+    } else {
+      // No previous lead found - log for debugging
+      if (matchByAdsId + matchByPhoneName + matchByPhone + matchByName + noMatch <= 5) {
+        console.log(`[replaceProjectData] NO_MATCH: "${l.name}" phone="${l.phone}" adsId="${lAdsId}" - will have empty manager`);
       }
     }
 
