@@ -1876,7 +1876,7 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
-    build: "2026-03-19-v3",
+    build: "2026-03-19-v4",
     counts,
   });
 });
@@ -2483,6 +2483,54 @@ async function filterDataForRole(data, user) {
   }
   return data;
 }
+
+/* ===== Dedicated Manager Change endpoint (clean, verified write) ===== */
+app.patch("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const { managerName, phone } = req.body || {};
+    console.log(`[PATCH /api/leads/${leadId}/manager] managerName=${managerName} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
+
+    if (!managerName) return res.status(400).json({ error: "managerName is required" });
+
+    // Find the lead by ID first, fallback to phone
+    let actualId = leadId;
+    let lead = await get(db, "SELECT id, phone, manager_name FROM leads WHERE id = ?", [leadId]);
+    if (!lead && phone) {
+      lead = await get(db, "SELECT id, phone, manager_name FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [phone]);
+      if (lead) {
+        actualId = lead.id;
+        console.log(`[PATCH manager] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualId}`);
+      }
+    }
+    if (!lead) return res.status(404).json({ error: `Lead not found (ID=${leadId}, phone=${phone})` });
+
+    const oldManager = lead.manager_name;
+    console.log(`[PATCH manager] lead#${actualId} old_manager=${oldManager} new_manager=${managerName}`);
+
+    // Direct UPDATE
+    const result = await run(db, "UPDATE leads SET manager_name = ? WHERE id = ?", [managerName, actualId]);
+    console.log(`[PATCH manager] UPDATE result: ${result.changes} rows affected`);
+
+    if (result.changes === 0) {
+      return res.status(500).json({ error: `UPDATE affected 0 rows for lead#${actualId}` });
+    }
+
+    // Verify the write by reading back
+    const verified = await get(db, "SELECT id, phone, manager_name FROM leads WHERE id = ?", [actualId]);
+    console.log(`[PATCH manager] VERIFY read-back: manager_name=${verified?.manager_name}`);
+
+    if (!verified || verified.manager_name !== managerName) {
+      return res.status(500).json({ error: `Write verification failed: wrote "${managerName}", read back "${verified?.manager_name}"` });
+    }
+
+    lastSyncHash = ""; // invalidate so next poll re-fetches
+    res.json({ ok: true, updatedLead: { id: actualId, phone: verified.phone, managerName: verified.manager_name } });
+  } catch (err) {
+    console.error(`[PATCH manager] ERROR:`, err);
+    res.status(500).json({ error: err.message || "Manager update failed" });
+  }
+});
 
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
@@ -5543,7 +5591,7 @@ if (fs.existsSync(distPath)) {
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
   app.listen(PORT, () => {
-    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v3]`);
+    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v4]`);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
