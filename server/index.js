@@ -1330,6 +1330,59 @@ app.get("/api/version", (req, res) => {
   res.json({ version: BUILD_VERSION, uptime: process.uptime(), pid: process.pid });
 });
 
+// Debug endpoint — check manager distribution in DB (no auth for easy testing)
+app.get("/api/debug/managers", async (req, res) => {
+  try {
+    if (!db) return res.status(503).json({ error: "DB not ready" });
+    const projectId = Number(req.query.projectId) || 1;
+    
+    // Get manager distribution
+    const mgrDist = await all(db, 
+      `SELECT manager_name, COUNT(*) as cnt FROM leads WHERE project_id = ? GROUP BY manager_name ORDER BY cnt DESC`,
+      [projectId]
+    );
+    
+    // Get sample leads for specific phone (if provided)
+    const phone = req.query.phone || "";
+    let phoneSamples = [];
+    if (phone) {
+      phoneSamples = await all(db,
+        `SELECT id, name, phone, manager_name, status, created_at FROM leads WHERE project_id = ? AND phone LIKE ? ORDER BY id DESC LIMIT 10`,
+        [projectId, `%${phone}%`]
+      );
+    }
+    
+    // Get sample leads for specific name (if provided)
+    const name = req.query.name || "";
+    let nameSamples = [];
+    if (name) {
+      nameSamples = await all(db,
+        `SELECT id, name, phone, manager_name, status, created_at FROM leads WHERE project_id = ? AND LOWER(name) LIKE LOWER(?) ORDER BY id DESC LIMIT 10`,
+        [projectId, `%${name}%`]
+      );
+    }
+    
+    // Get recently updated leads (if any have non-default manager)
+    const recentNonDefault = await all(db,
+      `SELECT id, name, phone, manager_name, status FROM leads 
+       WHERE project_id = ? AND manager_name != '' AND manager_name != 'Trần Văn Quyết' 
+       ORDER BY id DESC LIMIT 20`,
+      [projectId]
+    );
+    
+    res.json({
+      projectId,
+      totalLeads: mgrDist.reduce((s, r) => s + r.cnt, 0),
+      managerDistribution: mgrDist,
+      recentNonDefaultManagers: recentNonDefault,
+      phoneSamples,
+      nameSamples,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 let db;
 let dbInitError = null;
 try {
