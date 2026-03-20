@@ -21,5 +21,6 @@ export default defineConfig({
         "jsonwebtoken",
       ],
     },
+    sourcemap: false,
   },
 });

@@ -2,6 +2,7 @@ import { createClient } from "@libsql/client";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import fs from "fs";
 import helmet from "helmet";
 import http from "http";
@@ -19,7 +20,9 @@ const BUILD_VERSION = "2026-03-20-v1";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
-const JWT_SECRET = process.env.JWT_SECRET || "crm-dev-secret-change-in-production";
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? (() => { console.error("CRITICAL: JWT_SECRET not set in production! Using random secret (tokens won't survive restarts)"); return crypto.randomBytes(32).toString("hex"); })() : "crm-dev-secret-change-in-production");
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [];
+const TELEGRAM_WEBHOOK_SECRET = crypto.createHash("sha256").update("tg-webhook-" + JWT_SECRET).digest("hex").slice(0, 64);
 
 // Global Socket.IO instance — set up when server starts
 let io = null;
@@ -283,8 +286,9 @@ async function initDb() {
         const toDelete = await all(db, { sql: "SELECT id FROM lead_history WHERE lead_id = ? ORDER BY seq DESC LIMIT -1 OFFSET 30", args: [lead_id] });
         if (toDelete.length > 0) {
           for (let j = 0; j < toDelete.length; j += 200) {
-            const ids = toDelete.slice(j, j + 200).map(r => r.id).join(",");
-            await run(db, `DELETE FROM lead_history WHERE id IN (${ids})`);
+            const batch = toDelete.slice(j, j + 200);
+            const placeholders = batch.map(() => "?").join(",");
+            await run(db, `DELETE FROM lead_history WHERE id IN (${placeholders})`, batch.map(r => r.id));
           }
         }
       }
@@ -321,6 +325,17 @@ async function getConfig(db) {
 }
 
 async function fetchCsvText(csvUrl) {
+  // SSRF protection: only allow Google Sheets URLs
+  try {
+    const parsed = new URL(csvUrl);
+    if (!parsed.hostname.endsWith("google.com") && !parsed.hostname.endsWith("googleapis.com")) {
+      throw new Error("Only Google Sheets URLs are allowed");
+    }
+    if (parsed.protocol !== "https:") throw new Error("Only HTTPS URLs allowed");
+  } catch (e) {
+    if (e.message.includes("allowed")) throw e;
+    throw new Error("Invalid URL format");
+  }
   const response = await fetch(csvUrl);
   if (!response.ok) throw new Error(`Sheet request failed: ${response.status}`);
   return response.text();
@@ -1393,8 +1408,13 @@ const app = express();
 
 // --- Security headers ---
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+app.use(cors(ALLOWED_ORIGINS.length > 0 ? { origin: ALLOWED_ORIGINS, credentials: true } : undefined));
 app.use(express.json({ limit: "10mb" }));
+
+// Rate limiters
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: { error: "Quá nhiều lần đăng nhập. Vui lòng thử lại sau 15 phút." }, standardHeaders: true, legacyHeaders: false });
+const apiLimiter = rateLimit({ windowMs: 1 * 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false });
+app.use("/api/", apiLimiter);
 
 // --- Serve static build ---
 const distPath = path.join(__dirname, "..", "dist");
@@ -1408,7 +1428,7 @@ app.get("/api/version", (req, res) => {
 });
 
 // Debug endpoint — check manager distribution in DB (no auth for easy testing)
-app.get("/api/debug/managers", async (req, res) => {
+app.get("/api/debug/managers", requireAuth, requireAdmin, async (req, res) => {
   try {
     if (!db) return res.status(503).json({ error: "DB not ready" });
     const projectId = Number(req.query.projectId) || 1;
@@ -1494,7 +1514,7 @@ function requireAdminOnly(req, res, next) {
 }
 
 /* ---------- Auth endpoints ---------- */
-app.post("/api/login", async (req, res) => {
+app.post("/api/login", loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
@@ -3165,7 +3185,7 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (req, r
         const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: webhookUrl }),
+          body: JSON.stringify({ url: webhookUrl, secret_token: TELEGRAM_WEBHOOK_SECRET }),
         });
         const data = await r.json();
         console.log(`[telegram-webhook/setup] Bot "${bot.name}" result:`, JSON.stringify(data));
@@ -3191,6 +3211,13 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (req, r
 /* ===== Telegram Webhook Handler ===== */
 async function handleTelegramWebhook(req, res) {
   try {
+    // Verify webhook secret to ensure request comes from Telegram
+    const secretHeader = req.headers["x-telegram-bot-api-secret-token"] || "";
+    if (secretHeader !== TELEGRAM_WEBHOOK_SECRET) {
+      console.warn(`[telegram-webhook] Invalid secret token from ${req.ip}`);
+      return res.status(403).json({ ok: false });
+    }
+
     const { callback_query, message } = req.body || {};
     console.log(`[telegram-webhook] Received: callback_query=${!!callback_query}, message=${!!message}, botId=${req.params.botId || 'none'}`);
 
@@ -5942,7 +5969,7 @@ if (fs.existsSync(distPath)) {
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
   const server = http.createServer(app);
-  io = new SocketIOServer(server, { cors: { origin: "*" } });
+  io = new SocketIOServer(server, { cors: ALLOWED_ORIGINS.length > 0 ? { origin: ALLOWED_ORIGINS, credentials: true } : { origin: "*" } });
 
   io.on("connection", (socket) => {
     console.log(`[socket.io] Client connected: ${socket.id}`);
