@@ -3480,213 +3480,299 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         );
       })()}
 
-      {/* === CONSOLIDATED CONTACT HISTORY === */}
+      {/* === CONTACT HISTORY === */}
       {(() => {
-        // Parse Vietnamese date "HH:mm:ss dd/M/yyyy" or "dd/M/yyyy HH:mm:ss" to sortable timestamp
+        // Parse Vietnamese date to sortable timestamp
         const parseVNDate = (s) => {
           if (!s) return 0;
-          // Try "HH:mm:ss dd/M/yyyy"
           let m = s.match(/(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
           if (m) return new Date(+m[6], +m[5] - 1, +m[4], +m[1], +m[2], +m[3]).getTime() || 0;
-          // Try "dd/M/yyyy HH:mm:ss"
-          m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})/);
-          if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() || 0;
-          // Try "dd/M/yyyy, HH:mm:ss"
           m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2}):(\d{2})/);
           if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() || 0;
           return 0;
         };
 
-        // Build unified timeline
-        const regEvents = [];
-        const timelineEvents = [];
-
         // Collect registration events
+        const regEvents = [];
         registrations.forEach((reg, ri) => {
           if (reg.leadId === lead.id) {
             regEvents.push({ regNum: ri + 1, totalRegs: registrations.length, date: reg.createdAt || "", campaign: reg.campaign, adsetName: reg.adsetName, adName: reg.adName, projectName: reg.projectName });
           }
         });
 
-        // Collect all events from history
+        // Collect all events from history and sort by date
+        const allEvents = [];
         history.forEach((h) => {
           const isChia = (h.action || "").toLowerCase().includes("chia");
           const isRecall = (h.action || "").toLowerCase().includes("thu h");
           if (isChia) {
             const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
-            timelineEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id, _ts: parseVNDate(h.date) });
+            allEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id, _ts: parseVNDate(h.date) });
           } else if (isRecall) {
-            timelineEvents.push({ type: "recall", action: h.action, saleName: h.saleName, date: h.date, feedback: h.feedback, id: h.id, _ts: parseVNDate(h.date) });
+            allEvents.push({ type: "recall", action: h.action, saleName: h.saleName, date: h.date, feedback: h.feedback, id: h.id, _ts: parseVNDate(h.date) });
           } else {
-            timelineEvents.push({ type: "contact", saleName: h.saleName || "Không rõ", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id, _ts: parseVNDate(h.date) });
+            allEvents.push({ type: "contact", saleName: h.saleName || "Không rõ", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id, _ts: parseVNDate(h.date) });
           }
         });
+        allEvents.sort((a, b) => (a._ts || 0) - (b._ts || 0));
 
-        // Sort ALL events by date (oldest first) for correct chronological order
-        timelineEvents.sort((a, b) => (a._ts || 0) - (b._ts || 0));
+        // === ADMIN/MANAGER VIEW: group by sale blocks ===
+        if (isAdmin) {
+          // Build sale assignment blocks
+          const saleBlocks = []; // { saleName, chiaDate, chiaBy, chiaId, contacts: [], isImplicit }
+          const recalls = [];
+          let currentBlock = null;
 
-        // Re-number contacts sequentially after sorting
-        let contactNum = 0;
-        timelineEvents.forEach(e => { if (e.type === "contact") { contactNum++; e.num = contactNum; } });
+          allEvents.forEach((evt) => {
+            if (evt.type === "chia") {
+              currentBlock = { saleName: evt.saleName, chiaDate: evt.date, chiaBy: evt.assignedBy, chiaId: evt.id, contacts: [], isImplicit: false };
+              saleBlocks.push(currentBlock);
+            } else if (evt.type === "recall") {
+              recalls.push(evt);
+            } else {
+              // Contact — attach to matching block or create implicit
+              const sn = evt.saleName;
+              let target = currentBlock && currentBlock.saleName === sn ? currentBlock : null;
+              if (!target) {
+                for (let i = saleBlocks.length - 1; i >= 0; i--) {
+                  if (saleBlocks[i].saleName === sn) { target = saleBlocks[i]; break; }
+                }
+              }
+              if (!target) {
+                target = { saleName: sn, chiaDate: evt.date, chiaBy: null, chiaId: null, contacts: [], isImplicit: true };
+                saleBlocks.push(target);
+              }
+              target.contacts.push(evt);
+            }
+          });
 
-        // For sale view: show only their own contacts (no chia/recall markers)
-        const visibleEvents = !isAdmin
-          ? timelineEvents.filter(e => e.type === "contact" && e.saleName === user?.displayName)
-          : timelineEvents;
+          // Sort contacts inside each block by date, then number them
+          saleBlocks.forEach(blk => {
+            blk.contacts.sort((a, b) => (a._ts || 0) - (b._ts || 0));
+            blk.contacts.forEach((c, i) => { c.num = i + 1; });
+          });
 
-        // Re-number contacts for the visible view (sale sees their own 1,2,3...)
-        if (!isAdmin) {
-          let saleNum = 0;
-          visibleEvents.forEach(e => { if (e.type === "contact") { saleNum++; e.num = saleNum; } });
+          const hasContent = regEvents.length > 0 || saleBlocks.length > 0 || recalls.length > 0;
+          if (!hasContent) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
+
+          return (
+            <div style={{ paddingBottom: 8 }}>
+              {/* Registration events */}
+              {regEvents.map((reg, ri) => (
+                <div key={`reg-${ri}`} style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a", marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
+                    <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#92400e" }}>
+                      🚩 Đăng ký lần {reg.regNum}
+                      {reg.totalRegs > 1 && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#fef3c7", color: "#b45309" }}>Khách cũ</span>}
+                    </span>
+                    <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.date || "-"}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b></div>
+                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                    Nhóm: {reg.adsetName} | Content: {reg.adName ? (
+                      <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(reg.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{reg.adName}</span>
+                    ) : reg.adName}
+                  </div>
+                </div>
+              ))}
+
+              {/* Recall events */}
+              {recalls.map((h, ri) => (
+                <div key={`recall-${ri}`} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+                  <div style={{ flex: 1, height: 1, background: "#fecaca" }} />
+                  <span style={{ fontSize: 10, color: "#dc2626", fontWeight: 600, whiteSpace: "nowrap" }}>
+                    🔄 {h.action} — {h.saleName} <span style={{ color: "#9ca3af", fontWeight: 400 }}>{h.date || ""}</span>
+                  </span>
+                  <div style={{ flex: 1, height: 1, background: "#fecaca" }} />
+                  {h.id && (
+                    <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(h.id); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0 }}
+                      title="Xóa"><Trash2 size={10} /></button>
+                  )}
+                </div>
+              ))}
+
+              {/* Sale blocks */}
+              {saleBlocks.map((blk, blkIdx) => {
+                const ct = blk.contacts;
+                const lastCt = ct.length > 0 ? ct.reduce((l, c) => (!l || (c._ts || 0) > (l._ts || 0)) ? c : l, null) : null;
+                const lastStLabel = lastCt ? (STATUS_LABELS[lastCt.status] || lastCt.status || "Chưa feedback") : "Chưa feedback";
+                const lastStColor = lastCt ? (STATUS_COLORS[lastCt.status] || "#6b7280") : "#6b7280";
+                const blockKey = `blk-${blkIdx}`;
+                const isExpanded = expandedSaleContact === blockKey;
+
+                return (
+                  <div key={blockKey} style={{ marginBottom: 10, borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+                    {/* Block header */}
+                    <div onClick={() => setExpandedSaleContact(isExpanded ? null : blockKey)}
+                      style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: blk.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{blkIdx + 1}</span>
+                          <b style={{ color: "#e88a2e" }}>{blk.saleName}</b>
+                          {blk.isImplicit && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: "#f3f4f6", color: "#6b7280" }}>Giao ban đầu</span>}
+                          {ct.length > 0 && (
+                            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStColor + "18", color: lastStColor }}>
+                              {lastStLabel}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          {blk.chiaDate && <span>📅 {blk.chiaDate}</span>}
+                          {blk.chiaBy && <span>Người chia: {blk.chiaBy}</span>}
+                          <span>📞 {ct.length} lần gọi</span>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                        {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
+                      </span>
+                    </div>
+
+                    {/* Expanded: calls inside this block */}
+                    {isExpanded && (
+                      <div style={{ padding: isMobile ? "8px 12px 12px 12px" : "8px 14px 14px 14px" }}>
+                        {/* Chia lead info line */}
+                        {blk.chiaId && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+                            <span style={{ fontSize: 10, color: "#e88a2e", fontWeight: 600, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
+                              <Share2 size={10} /> Chia lead cho <b>{blk.saleName}</b>
+                              {blk.chiaBy && <span style={{ color: "#9ca3af", fontWeight: 400 }}>bởi {blk.chiaBy}</span>}
+                              <span style={{ color: "#9ca3af", fontWeight: 400 }}>{blk.chiaDate || ""}</span>
+                            </span>
+                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(blk.chiaId); }}
+                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0 }}
+                              title="Xóa"><Trash2 size={10} /></button>
+                          </div>
+                        )}
+                        {ct.length === 0 && (
+                          <div style={{ color: "#9ca3af", fontSize: 12, fontStyle: "italic", padding: 8 }}>Chưa có lần gọi nào</div>
+                        )}
+                        {ct.map((c, ci) => {
+                          const stLabel = STATUS_LABELS[c.status] || c.status || "Chưa feedback";
+                          const stColor = STATUS_COLORS[c.status] || "#6b7280";
+                          return (
+                            <div key={ci} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: ci < ct.length - 1 ? 6 : 0 }}>
+                              <div style={{ position: "absolute", left: 8, top: 0, bottom: ci < ct.length - 1 ? 0 : "50%", width: 2, background: "#e5e7eb" }} />
+                              <div style={{ position: "absolute", left: 8, top: 14, width: isMobile ? 10 : 12, height: 2, background: "#e5e7eb" }} />
+                              <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
+                              <div style={{ background: ci % 2 ? "#f9fafb" : "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                  <span style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                    Gọi lần {c.num}
+                                    <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
+                                    {c.source && (
+                                      <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
+                                        background: c.source === "telegram" ? "#dbeafe" : c.source === "sheet" ? "#fef9c3" : c.source === "schedule" ? "#f3e8ff" : c.source === "sale" ? "#f0fdf4" : "#e0e7ff",
+                                        color: c.source === "telegram" ? "#1d4ed8" : c.source === "sheet" ? "#a16207" : c.source === "schedule" ? "#7c3aed" : c.source === "sale" ? "#16a34a" : "#4338ca",
+                                      }}>
+                                        {c.source === "telegram" ? "📱 Telegram" : c.source === "sheet" ? "📊 Sheet" : c.source === "schedule" ? "⏰ Tự động" : c.source === "sale" ? "👤 Sale" : "👤 Admin"}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                    <span style={{ fontSize: 10, color: "#9ca3af" }}>{c.date || "-"}</span>
+                                    {c.id && (
+                                      <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(c.id); }}
+                                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                                        title="Xóa"><Trash2 size={12} /></button>
+                                    )}
+                                  </div>
+                                </div>
+                                <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4 }}>
+                                  {c.feedback ? c.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
         }
 
-        const allContacts = visibleEvents.filter(e => e.type === "contact");
-        const totalContacts = allContacts.length;
-        // Find the MOST RECENT contact by date for header status
+        // === SALE VIEW: single consolidated list (unchanged) ===
+        const saleContacts = allEvents.filter(e => e.type === "contact" && e.saleName === user?.displayName);
+        let saleNum = 0;
+        saleContacts.forEach(e => { saleNum++; e.num = saleNum; });
+
+        const totalContacts = saleContacts.length;
         const lastContact = totalContacts > 0
-          ? allContacts.reduce((latest, c) => (!latest || (c._ts || 0) > (latest._ts || 0)) ? c : latest, null)
+          ? saleContacts.reduce((latest, c) => (!latest || (c._ts || 0) > (latest._ts || 0)) ? c : latest, null)
           : null;
         const lastStatusLabel = lastContact ? (STATUS_LABELS[lastContact.status] || lastContact.status || "Chưa feedback") : "Chưa feedback";
         const lastStatusColor = lastContact ? (STATUS_COLORS[lastContact.status] || "#6b7280") : "#6b7280";
 
-        const hasContent = regEvents.length > 0 || visibleEvents.length > 0;
-        if (!hasContent) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
+        if (saleContacts.length === 0) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
 
         const isExpanded = expandedSaleContact === "history";
 
         return (
           <div style={{ paddingBottom: 8 }}>
-            {/* Registration events */}
-            {isAdmin && regEvents.map((reg, ri) => (
-              <div key={`reg-${ri}`} style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a", marginBottom: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4, gap: 4, flexWrap: "wrap" }}>
-                  <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 13, color: "#92400e" }}>
-                    🚩 Đăng ký lần {reg.regNum}
-                    {reg.totalRegs > 1 && <span style={{ marginLeft: 6, fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "#fef3c7", color: "#b45309" }}>Khách cũ</span>}
-                  </span>
-                  <span style={{ fontSize: 10, color: "#9ca3af" }}>{reg.date || "-"}</span>
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280" }}>Dự án: <b>{reg.projectName}</b> | Chiến dịch: <b>{reg.campaign}</b></div>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
-                  Nhóm: {reg.adsetName} | Content: {reg.adName ? (
-                    <span onClick={(e) => { e.stopPropagation(); handleViewAdPreview(reg.adName); }} style={{ color: "#2563eb", textDecoration: "underline", cursor: "pointer" }}>{reg.adName}</span>
-                  ) : reg.adName}
-                </div>
-              </div>
-            ))}
-
-            {/* Consolidated contact history */}
-            {visibleEvents.length > 0 && (
-              <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
-                {/* Header - always visible */}
-                <div onClick={() => setExpandedSaleContact(isExpanded ? null : "history")}
-                  style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>📞</span>
-                      Lịch sử liên hệ
-                      {lastContact && (
-                        <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
-                          {lastStatusLabel}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                      <span>📞 {totalContacts} lần liên hệ</span>
-                      {lastContact && <span>Gần nhất: {lastContact.saleName} — {lastContact.date || "-"}</span>}
-                    </div>
+            <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+              <div onClick={() => setExpandedSaleContact(isExpanded ? null : "history")}
+                style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>📞</span>
+                    Lịch sử liên hệ
+                    {lastContact && (
+                      <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
+                        {lastStatusLabel}
+                      </span>
+                    )}
                   </div>
-                  <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", gap: 4 }}>
-                    {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
-                  </span>
+                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <span>📞 {totalContacts} lần liên hệ</span>
+                    {lastContact && <span>Gần nhất: {lastContact.date || "-"}</span>}
+                  </div>
                 </div>
-
-                {/* Expanded: full chronological timeline */}
-                {isExpanded && (
-                  <div style={{ padding: isMobile ? "8px 12px 12px 12px" : "8px 14px 14px 14px" }}>
-                    {visibleEvents.map((evt, ei) => {
-                      if (evt.type === "chia" && isAdmin) {
-                        return (
-                          <div key={`evt-${ei}`} style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0", paddingLeft: isMobile ? 20 : 24 }}>
-                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
-                            <span style={{ fontSize: 10, color: "#e88a2e", fontWeight: 600, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
-                              <Share2 size={10} /> Chia lead cho <b>{evt.saleName}</b>
-                              {evt.assignedBy && <span style={{ color: "#9ca3af", fontWeight: 400 }}>bởi {evt.assignedBy}</span>}
-                              <span style={{ color: "#9ca3af", fontWeight: 400 }}>{evt.date || ""}</span>
-                            </span>
-                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
-                            {isAdmin && evt.id && (
-                              <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(evt.id); }}
-                                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0 }}
-                                title="Xóa"><Trash2 size={10} /></button>
-                            )}
-                          </div>
-                        );
-                      }
-                      if (evt.type === "recall" && isAdmin) {
-                        return (
-                          <div key={`evt-${ei}`} style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0", paddingLeft: isMobile ? 20 : 24 }}>
-                            <div style={{ flex: 1, height: 1, background: "#fecaca" }} />
-                            <span style={{ fontSize: 10, color: "#dc2626", fontWeight: 600, whiteSpace: "nowrap" }}>
-                              🔄 {evt.action} — {evt.saleName} <span style={{ color: "#9ca3af", fontWeight: 400 }}>{evt.date || ""}</span>
-                            </span>
-                            <div style={{ flex: 1, height: 1, background: "#fecaca" }} />
-                            {isAdmin && evt.id && (
-                              <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(evt.id); }}
-                                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0 }}
-                                title="Xóa"><Trash2 size={10} /></button>
-                            )}
-                          </div>
-                        );
-                      }
-                      if (evt.type === "contact") {
-                        const stLabel = STATUS_LABELS[evt.status] || evt.status || "Chưa feedback";
-                        const stColor = STATUS_COLORS[evt.status] || "#6b7280";
-                        const isLast = ei === visibleEvents.length - 1 || visibleEvents.slice(ei + 1).every(e => e.type !== "contact");
-                        return (
-                          <div key={`evt-${ei}`} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: 6 }}>
-                            {/* Tree branch line */}
-                            <div style={{ position: "absolute", left: 8, top: 0, bottom: isLast ? "50%" : 0, width: 2, background: "#e5e7eb" }} />
-                            <div style={{ position: "absolute", left: 8, top: 14, width: isMobile ? 10 : 12, height: 2, background: "#e5e7eb" }} />
-                            <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
-
-                            <div style={{ background: evt.num % 2 ? "#fff" : "#f9fafb", border: "1px solid #f3f4f6", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span style={{ fontWeight: 600, fontSize: isMobile ? 12 : 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                                  Gọi lần {evt.num}
-                                  <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
-                                  <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: "#fff7ed", color: "#c2410c", fontWeight: 600 }}>👤 {evt.saleName}</span>
-                                  {evt.source && (
-                                    <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
-                                      background: evt.source === "telegram" ? "#dbeafe" : evt.source === "sheet" ? "#fef9c3" : evt.source === "schedule" ? "#f3e8ff" : evt.source === "sale" ? "#f0fdf4" : "#e0e7ff",
-                                      color: evt.source === "telegram" ? "#1d4ed8" : evt.source === "sheet" ? "#a16207" : evt.source === "schedule" ? "#7c3aed" : evt.source === "sale" ? "#16a34a" : "#4338ca",
-                                    }}>
-                                      {evt.source === "telegram" ? "📱 Telegram" : evt.source === "sheet" ? "📊 Sheet" : evt.source === "schedule" ? "⏰ Tự động" : evt.source === "sale" ? "👤 Sale" : "👤 Admin"}
-                                    </span>
-                                  )}
+                <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                  {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
+                </span>
+              </div>
+              {isExpanded && (
+                <div style={{ padding: isMobile ? "8px 12px 12px 12px" : "8px 14px 14px 14px" }}>
+                  {saleContacts.map((evt, ei) => {
+                    const stLabel = STATUS_LABELS[evt.status] || evt.status || "Chưa feedback";
+                    const stColor = STATUS_COLORS[evt.status] || "#6b7280";
+                    const isLast = ei === saleContacts.length - 1;
+                    return (
+                      <div key={ei} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: isLast ? 0 : 6 }}>
+                        <div style={{ position: "absolute", left: 8, top: 0, bottom: isLast ? "50%" : 0, width: 2, background: "#e5e7eb" }} />
+                        <div style={{ position: "absolute", left: 8, top: 14, width: isMobile ? 10 : 12, height: 2, background: "#e5e7eb" }} />
+                        <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
+                        <div style={{ background: evt.num % 2 ? "#fff" : "#f9fafb", border: "1px solid #f3f4f6", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              Gọi lần {evt.num}
+                              <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
+                              {evt.source && (
+                                <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
+                                  background: evt.source === "telegram" ? "#dbeafe" : evt.source === "sheet" ? "#fef9c3" : evt.source === "schedule" ? "#f3e8ff" : evt.source === "sale" ? "#f0fdf4" : "#e0e7ff",
+                                  color: evt.source === "telegram" ? "#1d4ed8" : evt.source === "sheet" ? "#a16207" : evt.source === "schedule" ? "#7c3aed" : evt.source === "sale" ? "#16a34a" : "#4338ca",
+                                }}>
+                                  {evt.source === "telegram" ? "📱 Telegram" : evt.source === "sheet" ? "📊 Sheet" : evt.source === "schedule" ? "⏰ Tự động" : evt.source === "sale" ? "👤 Sale" : "👤 Admin"}
                                 </span>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                                  <span style={{ fontSize: 10, color: "#9ca3af" }}>{evt.date || "-"}</span>
-                                  {isAdmin && evt.id && (
-                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(evt.id); }}
-                                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
-                                      title="Xóa"><Trash2 size={12} /></button>
-                                  )}
-                                </div>
-                              </div>
-                              <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4 }}>
-                                {evt.feedback ? evt.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
-                              </div>
-                            </div>
+                              )}
+                            </span>
+                            <span style={{ fontSize: 10, color: "#9ca3af", flexShrink: 0 }}>{evt.date || "-"}</span>
                           </div>
-                        );
-                      }
-                      return null;
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
+                          <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4 }}>
+                            {evt.feedback ? evt.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
