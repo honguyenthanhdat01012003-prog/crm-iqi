@@ -3482,9 +3482,24 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* === CONSOLIDATED CONTACT HISTORY === */}
       {(() => {
-        // Build unified timeline: contacts, assignments, recalls, registrations
+        // Parse Vietnamese date "HH:mm:ss dd/M/yyyy" or "dd/M/yyyy HH:mm:ss" to sortable timestamp
+        const parseVNDate = (s) => {
+          if (!s) return 0;
+          // Try "HH:mm:ss dd/M/yyyy"
+          let m = s.match(/(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (m) return new Date(+m[6], +m[5] - 1, +m[4], +m[1], +m[2], +m[3]).getTime() || 0;
+          // Try "dd/M/yyyy HH:mm:ss"
+          m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})/);
+          if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() || 0;
+          // Try "dd/M/yyyy, HH:mm:ss"
+          m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s*(\d{1,2}):(\d{2}):(\d{2})/);
+          if (m) return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() || 0;
+          return 0;
+        };
+
+        // Build unified timeline
         const regEvents = [];
-        const timelineEvents = []; // { type: 'contact'|'chia'|'recall', ...data }
+        const timelineEvents = [];
 
         // Collect registration events
         registrations.forEach((reg, ri) => {
@@ -3493,30 +3508,44 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           }
         });
 
-        // Walk history chronologically — build a flat timeline
-        let contactNum = 0;
+        // Collect all events from history
         history.forEach((h) => {
           const isChia = (h.action || "").toLowerCase().includes("chia");
           const isRecall = (h.action || "").toLowerCase().includes("thu h");
           if (isChia) {
             const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
-            timelineEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id });
+            timelineEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id, _ts: parseVNDate(h.date) });
           } else if (isRecall) {
-            timelineEvents.push({ type: "recall", action: h.action, saleName: h.saleName, date: h.date, feedback: h.feedback, id: h.id });
+            timelineEvents.push({ type: "recall", action: h.action, saleName: h.saleName, date: h.date, feedback: h.feedback, id: h.id, _ts: parseVNDate(h.date) });
           } else {
-            contactNum++;
-            timelineEvents.push({ type: "contact", num: contactNum, saleName: h.saleName || "Không rõ", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id });
+            timelineEvents.push({ type: "contact", saleName: h.saleName || "Không rõ", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id, _ts: parseVNDate(h.date) });
           }
         });
 
-        // For sale view: filter contacts to only their own
+        // Sort ALL events by date (oldest first) for correct chronological order
+        timelineEvents.sort((a, b) => (a._ts || 0) - (b._ts || 0));
+
+        // Re-number contacts sequentially after sorting
+        let contactNum = 0;
+        timelineEvents.forEach(e => { if (e.type === "contact") { contactNum++; e.num = contactNum; } });
+
+        // For sale view: show only their own contacts (no chia/recall markers)
         const visibleEvents = !isAdmin
           ? timelineEvents.filter(e => e.type === "contact" && e.saleName === user?.displayName)
           : timelineEvents;
 
+        // Re-number contacts for the visible view (sale sees their own 1,2,3...)
+        if (!isAdmin) {
+          let saleNum = 0;
+          visibleEvents.forEach(e => { if (e.type === "contact") { saleNum++; e.num = saleNum; } });
+        }
+
         const allContacts = visibleEvents.filter(e => e.type === "contact");
         const totalContacts = allContacts.length;
-        const lastContact = totalContacts > 0 ? allContacts[totalContacts - 1] : null;
+        // Find the MOST RECENT contact by date for header status
+        const lastContact = totalContacts > 0
+          ? allContacts.reduce((latest, c) => (!latest || (c._ts || 0) > (latest._ts || 0)) ? c : latest, null)
+          : null;
         const lastStatusLabel = lastContact ? (STATUS_LABELS[lastContact.status] || lastContact.status || "Chưa feedback") : "Chưa feedback";
         const lastStatusColor = lastContact ? (STATUS_COLORS[lastContact.status] || "#6b7280") : "#6b7280";
 
@@ -3555,7 +3584,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>📞</span>
-                      Lịch sử liên hệ khách
+                      Lịch sử liên hệ
                       {lastContact && (
                         <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStatusColor + "18", color: lastStatusColor }}>
                           {lastStatusLabel}
