@@ -3298,8 +3298,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
           ); })()}
         </div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>
+        {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>}
+        {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>}
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
           {lead.adName && lead.adName !== "-" ? (
             <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(lead.adName); }}
@@ -3608,7 +3608,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: "50%", background: blk.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{blkIdx + 1}</span>
+                          {(() => { const saleUser = allUsers.find(u => u.displayName === blk.saleName); return saleUser?.avatarUrl ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "50%", background: `url(${saleUser.avatarUrl}) center/cover`, flexShrink: 0, border: "2px solid #e88a2e" }} />
+                          ) : (
+                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "50%", background: blk.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{(blk.saleName || "?")[0]?.toUpperCase()}</span>
+                          ); })()}
                           <b style={{ color: "#e88a2e" }}>{blk.saleName}</b>
                           {blk.isImplicit && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: "#f3f4f6", color: "#6b7280" }}>Giao ban đầu</span>}
                           {ct.length > 0 && (
