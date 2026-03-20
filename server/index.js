@@ -3257,12 +3257,33 @@ async function handleTelegramWebhook(req, res) {
     if (callback_query?.from) saveChatUser(callback_query.from);
     if (message?.from) saveChatUser(message.from);
 
-    const sendTg = (chatId, text, extra = {}) =>
-      fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown", ...extra }),
-      });
+    const sendTg = async (chatId, text, extra = {}) => {
+      try {
+        const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown", ...extra }),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          console.warn(`[telegram-webhook] sendTg failed (Markdown): ${data.description}`);
+          // Retry without Markdown if parse error
+          if (String(data.description || "").includes("parse")) {
+            const r2 = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: chatId, text, ...extra }),
+            });
+            const d2 = await r2.json();
+            if (!d2.ok) console.warn(`[telegram-webhook] sendTg retry also failed: ${d2.description}`);
+            return r2;
+          }
+        }
+        return r;
+      } catch (e) {
+        console.error(`[telegram-webhook] sendTg error: ${e.message}`);
+      }
+    };
 
     const answerCb = (cbId, text) =>
       fetch(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
