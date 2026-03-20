@@ -3284,9 +3284,16 @@ async function handleTelegramWebhook(req, res) {
       const statusKey = pending.status;
       const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
 
-      // Find sale user
-      const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
-      const saleName = saleUser ? saleUser.display_name : "Sale";
+      // Get lead info (including assigned sale)
+      const lead = await get(db, "SELECT name, phone, sale_name FROM leads WHERE id = ?", [leadId]);
+
+      // Attribute feedback to the lead's assigned sale, not the Telegram sender
+      let saleName = lead?.sale_name || "";
+      if (!saleName) {
+        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        saleName = saleUser ? saleUser.display_name : "Sale";
+      }
+      console.log(`[telegram-webhook] Feedback: leadId=${leadId}, saleName="${saleName}", status=${statusKey}`);
 
       // Save to lead_history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -3307,9 +3314,6 @@ async function handleTelegramWebhook(req, res) {
       // Notify web clients about the change
       lastSyncHash = "";
       emitDataChanged("telegram-feedback");
-
-      // Get lead info for confirmation
-      const lead = await get(db, "SELECT name, phone FROM leads WHERE id = ?", [leadId]);
       await sendTg(chatId, [
         `✅ *Đã lưu feedback thành công!*`,
         ``,
