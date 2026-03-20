@@ -2404,6 +2404,10 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       });
     }
     await db.batch(stmts, "write");
+
+    lastSyncHash = "";
+    emitDataChanged("shuffle-leads");
+
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json({ msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
@@ -3033,6 +3037,9 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [newNorm, status, leadId]);
     }
 
+    lastSyncHash = "";
+    emitDataChanged("lead-history-update");
+
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json(data);
@@ -3117,6 +3124,10 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
     }
 
     await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
+
+    lastSyncHash = "";
+    emitDataChanged("lead-history-delete");
+
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json(data);
