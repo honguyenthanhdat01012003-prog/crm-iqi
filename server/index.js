@@ -3136,14 +3136,20 @@ const TELE_STATUS_LABELS = {
 };
 
 /* ===== Setup Telegram webhook ===== */
-app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, res) => {
+app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (req, res) => {
   try {
     const activeBots = await all(db, "SELECT id, name, token FROM telegram_bots WHERE is_active = 1");
     if (!activeBots || activeBots.length === 0) return res.status(400).json({ error: "Không có bot nào đang hoạt động" });
 
+    // Use the request's host to build webhook URL (auto-detect domain)
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = host ? `https://${host.replace(/:\d+$/, '')}` : 'https://crm-iqid.vn';
+
     const results = [];
     for (const bot of activeBots) {
-      const webhookUrl = `https://crm-iqi.id.vn/api/telegram-webhook/${bot.id}`;
+      const webhookUrl = `${baseUrl}/api/telegram-webhook/${bot.id}`;
+      console.log(`[telegram-webhook/setup] Setting webhook for bot "${bot.name}" → ${webhookUrl}`);
       try {
         const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
           method: "POST",
@@ -3151,9 +3157,11 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, 
           body: JSON.stringify({ url: webhookUrl }),
         });
         const data = await r.json();
-        results.push({ name: bot.name, ok: data.ok, error: data.ok ? null : data.description });
+        console.log(`[telegram-webhook/setup] Bot "${bot.name}" result:`, JSON.stringify(data));
+        results.push({ name: bot.name, webhookUrl, ok: data.ok, error: data.ok ? null : data.description });
       } catch (e) {
-        results.push({ name: bot.name, ok: false, error: e.message });
+        console.error(`[telegram-webhook/setup] Bot "${bot.name}" failed:`, e.message);
+        results.push({ name: bot.name, webhookUrl, ok: false, error: e.message });
       }
     }
 
@@ -3173,6 +3181,7 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (_req, 
 async function handleTelegramWebhook(req, res) {
   try {
     const { callback_query, message } = req.body || {};
+    console.log(`[telegram-webhook] Received: callback_query=${!!callback_query}, message=${!!message}, botId=${req.params.botId || 'none'}`);
 
     // Determine which bot this webhook is for
     let bot;
@@ -3182,7 +3191,10 @@ async function handleTelegramWebhook(req, res) {
     if (!bot) {
       bot = await get(db, "SELECT id, token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
     }
-    if (!bot) return res.json({ ok: true });
+    if (!bot) {
+      console.warn(`[telegram-webhook] No active bot found!`);
+      return res.json({ ok: true });
+    }
     const botToken = bot.token;
     const botId = bot.id;
 
@@ -3231,6 +3243,7 @@ async function handleTelegramWebhook(req, res) {
         const leadId = Number(parts[1]);
         const statusKey = parts[2];
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
+        console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
         // Update pending with chosen status
         await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, ?)", [chatId, leadId, statusKey]);
@@ -3242,6 +3255,8 @@ async function handleTelegramWebhook(req, res) {
           `💬 Bây giờ hãy nhắn tin feedback về khách hàng này.`,
           `VD: _"Khách quan tâm căn 2PN, hẹn xem thứ 7"_`,
         ].join("\n"));
+      } else {
+        console.warn(`[telegram-webhook] Unknown callback_data: "${cbData}"`);
       }
       return res.json({ ok: true });
     }
@@ -3289,6 +3304,10 @@ async function handleTelegramWebhook(req, res) {
       // Clear pending
       await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
 
+      // Notify web clients about the change
+      lastSyncHash = "";
+      emitDataChanged("telegram-feedback");
+
       // Get lead info for confirmation
       const lead = await get(db, "SELECT name, phone FROM leads WHERE id = ?", [leadId]);
       await sendTg(chatId, [
@@ -3313,6 +3332,26 @@ async function handleTelegramWebhook(req, res) {
 }
 app.post("/api/telegram-webhook/:botId", handleTelegramWebhook);
 app.post("/api/telegram-webhook", handleTelegramWebhook);
+
+// Debug: Check webhook status for all bots
+app.get("/api/telegram-webhook/status", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const bots = await all(db, "SELECT id, name, token FROM telegram_bots WHERE is_active = 1");
+    const results = [];
+    for (const bot of bots) {
+      try {
+        const r = await fetch(`https://api.telegram.org/bot${bot.token}/getWebhookInfo`);
+        const data = await r.json();
+        results.push({ name: bot.name, id: bot.id, ...data.result });
+      } catch (e) {
+        results.push({ name: bot.name, id: bot.id, error: e.message });
+      }
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /* ===== Google Sheet Integration (Multi-sheet) ===== */
 
