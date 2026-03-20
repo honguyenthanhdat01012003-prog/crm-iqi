@@ -2980,7 +2980,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 </div>
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} />
+                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
                   </div>
                 )}
               </div>
@@ -3040,7 +3040,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} />
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} allUsers={allUsers} />
                       </td>
                     </tr>
                   );
@@ -3083,7 +3083,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, allUsers = [] }) {
   const history = lead.saleHistory || [];
   const registrations = lead.registrations || [];
   const [showForm, setShowForm] = useState(false);
