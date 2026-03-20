@@ -3954,28 +3954,43 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       <img src={adPreview.imageUrl} alt="Ad Creative" style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }} />
                     </div>
                   )}
-                  {adPreview.previews?.length > 0 && adPreview.previews.map((p, pi) => (
-                    <div key={pi} style={{ marginBottom: 12 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
-                        {p.format === "DESKTOP_FEED_STANDARD" ? "📺 Desktop Feed" : "📱 Mobile Feed"}
+                  {adPreview.previews?.length > 0 && adPreview.previews.map((p, pi) => {
+                    // Inject responsive CSS into the preview HTML for mobile
+                    const responsiveHtml = isMobile
+                      ? `<style>
+                          * { max-width: 100% !important; box-sizing: border-box !important; }
+                          body { margin: 0 !important; padding: 4px !important; overflow-x: hidden !important; width: 100% !important; }
+                          img, video, iframe, canvas { max-width: 100% !important; height: auto !important; }
+                          div, span, p, a, section, article { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
+                          table { max-width: 100% !important; table-layout: fixed !important; }
+                          td, th { word-wrap: break-word !important; }
+                        </style>${p.html}`
+                      : p.html;
+                    return (
+                      <div key={pi} style={{ marginBottom: 12 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
+                          {p.format === "DESKTOP_FEED_STANDARD" ? "📺 Desktop Feed" : "📱 Mobile Feed"}
+                        </div>
+                        <div style={{ width: "100%", overflow: "hidden", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                          <iframe
+                            srcDoc={responsiveHtml}
+                            style={{ width: "100%", minHeight: isMobile ? 400 : (p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600), border: "none", background: "#fff", display: "block" }}
+                            sandbox="allow-scripts allow-same-origin allow-popups"
+                            scrolling={isMobile ? "auto" : "no"}
+                            onLoad={e => {
+                              try {
+                                const doc = e.target.contentDocument || e.target.contentWindow?.document;
+                                if (doc?.body) {
+                                  const h = doc.body.scrollHeight;
+                                  if (h > 100) e.target.style.height = (h + 20) + "px";
+                                }
+                              } catch(err) {}
+                            }}
+                          />
+                        </div>
                       </div>
-                      <iframe
-                        srcDoc={p.html}
-                        style={{ width: "100%", minHeight: isMobile ? 400 : (p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600), border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}
-                        sandbox="allow-scripts allow-same-origin allow-popups"
-                        scrolling="no"
-                        onLoad={e => {
-                          try {
-                            const doc = e.target.contentDocument || e.target.contentWindow?.document;
-                            if (doc?.body) {
-                              const h = doc.body.scrollHeight;
-                              if (h > 100) e.target.style.height = (h + 20) + "px";
-                            }
-                          } catch(err) {}
-                        }}
-                      />
-                    </div>
-                  ))}
+                    );
+                  })}
                   {!adPreview.imageUrl && (!adPreview.previews || adPreview.previews.length === 0) && (
                     <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 13 }}>
                       Không có preview cho quảng cáo này
