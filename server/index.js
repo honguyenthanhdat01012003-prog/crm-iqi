@@ -4,20 +4,25 @@ import crypto from "crypto";
 import express from "express";
 import fs from "fs";
 import helmet from "helmet";
+import http from "http";
 import jwt from "jsonwebtoken";
 import path from "path";
+import { Server as SocketIOServer } from "socket.io";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-03-19-v2";
+const BUILD_VERSION = "2026-03-20-v1";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
 const JWT_SECRET = process.env.JWT_SECRET || "crm-dev-secret-change-in-production";
+
+// Global Socket.IO instance — set up when server starts
+let io = null;
 
 const PUBLISH_BASE =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vR768IcRYeqkD4K4tuy78f8C_Bpue7VB_VZ4GRhVVm_N-JiR-PnIfUz9Tm1EyLXIER2XojzoYrNBGgA/pub";
@@ -1042,14 +1047,16 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   }
 
+  // Detect truly new leads: use Tier 1-3 only (ads_id, phone+name, phone).
+  // Tier 4 (name-only) is too broad — common names would suppress notifications.
   const newPhones = leads.filter(l => {
     const aid = (l.adsId || "").trim();
     const np = normPhone(l.phone);
     const nName = (l.name || "").trim().toLowerCase();
     const pnKey = np && nName ? `${np}||${nName}` : "";
-    return !(aid && adsIdMap.has(aid)) && !(pnKey && phoneNameMap.has(pnKey)) && !(np && phoneMap.has(np)) && !(nName && nameMap.has(nName));
+    return !(aid && adsIdMap.has(aid)) && !(pnKey && phoneNameMap.has(pnKey)) && !(np && phoneMap.has(np));
   }).map(l => normPhone(l.phone));
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch}`);
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch} newPhones=${newPhones.length}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
@@ -1282,9 +1289,11 @@ async function syncProject(db, projectId) {
       // Step 3: Notify managers about NEW leads via Telegram
       // Notify about NEW leads
       if (newPhones && newPhones.length > 0) {
+        console.log(`[syncProject] 🔔 project=${projectId} newPhones=${newPhones.length}: [${newPhones.slice(0, 5).join(', ')}${newPhones.length > 5 ? '...' : ''}]`);
         const normPhone = normalizePhoneKey;
         const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
         const newLeads = allLeads.filter(l => newPhones.includes(normPhone(l.phone)));
+        console.log(`[syncProject] newLeads matched from DB: ${newLeads.length}`);
 
         if (newLeads.length > 0) {
           const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -1292,17 +1301,25 @@ async function syncProject(db, projectId) {
           const projectName = projectRow ? projectRow.name : "-";
           const activeBot = await getBotForProject(projectId);
 
-          if (activeBot && activeBot.token) {
+          if (!activeBot || !activeBot.token) {
+            console.warn(`[syncProject] ⚠️ project=${projectId} NO active Telegram bot! Skipping notification.`);
+          } else {
             // Group new leads by their ACTUAL assigned manager_name (from DB)
             const mgrLeadMap = new Map();
             for (const lead of newLeads) {
               const mgr = managers.find(m => m.display_name === lead.manager_name);
-              if (!mgr) continue; // skip leads without a valid manager match
+              if (!mgr) {
+                console.warn(`[syncProject] ⚠️ Lead "${lead.name}" manager_name="${lead.manager_name}" not matched to any manager`);
+                continue;
+              }
               if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
               mgrLeadMap.get(mgr.id).leads.push(lead);
             }
             for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
-              if (!mgr.telegram_id) continue;
+              if (!mgr.telegram_id) {
+                console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" has NO telegram_id, skip notify`);
+                continue;
+              }
               const leadLines = mgrNewLeads.map((l, i) =>
                 `${i + 1}. 👤 *${l.name || "N/A"}* - 📞 \`${l.phone || "-"}\`${l.product ? ` - ${l.product}` : ""}`
               ).join("\n");
@@ -1316,11 +1333,17 @@ async function syncProject(db, projectId) {
                 `⚡ Vui lòng vào CRM chia lead cho Sale ngay!`,
               ].join("\n");
               try {
-                await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+                const tgRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ chat_id: mgr.telegram_id, text: msg, parse_mode: "Markdown" }),
                 });
+                const tgData = await tgRes.json();
+                if (tgData.ok) {
+                  console.log(`[syncProject] ✅ Telegram sent to ${mgr.display_name} (chat_id=${mgr.telegram_id}): ${mgrNewLeads.length} leads`);
+                } else {
+                  console.error(`[syncProject] ❌ Telegram API error for ${mgr.display_name}: ${JSON.stringify(tgData)}`);
+                }
               } catch (tErr) {
                 console.error(`[sync] Telegram notify manager ${mgr.display_name} failed:`, tErr.message);
               }
@@ -1359,6 +1382,7 @@ async function syncAllProjects(db) {
     const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
     lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
   } catch {}
+  emitDataChanged("sync");
   return { lastSync, syncErrors: errors };
   } finally {
     syncInProgress = false;
@@ -2088,6 +2112,7 @@ app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmi
     await run(db, "UPDATE projects SET mgr_assign_idx = ? WHERE id = ?", [allLeads.length, projectId]);
     // Invalidate sync hash so clients pick up changes
     lastSyncHash = "";
+    emitDataChanged("redistribute");
 
     // Count distribution
     const dist = {};
@@ -2149,6 +2174,13 @@ app.get("/api/data", requireAuth, async (req, res) => {
 // Global sync hash — updated after each sync
 let lastSyncHash = "";
 let syncInProgress = false; // Lock to prevent PUT/sync race condition
+
+// Helper: notify all connected clients that data changed
+function emitDataChanged(reason) {
+  if (io) {
+    io.emit("data-changed", { reason, ts: Date.now() });
+  }
+}
 
 // Lightweight poll endpoint — returns hash only (no DB query if hash unchanged)
 app.get("/api/data/poll", requireAuth, async (req, res) => {
@@ -2337,6 +2369,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     }
 
     lastSyncHash = ""; // invalidate so next poll re-fetches
+    emitDataChanged("chia-lead");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json({ msg: `Đã chia ${leadIds.length} lead cho ${saleName}`, assigned: leadIds.length, ...data });
@@ -2765,6 +2798,7 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
     }
 
     lastSyncHash = ""; // invalidate so next poll re-fetches
+    emitDataChanged("patch-manager");
     res.json({ ok: true, updatedLead: { id: actualId, phone: verified.phone, managerName: verified.manager_name } });
   } catch (err) {
     console.error(`[POST manager] ERROR:`, err);
@@ -2949,10 +2983,12 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         return res.status(500).json({ error: `Ghi DB thất bại: DB="${updated?.manager_name}" nhưng cần="${managerName}"` });
       }
       lastSyncHash = ""; // invalidate so next poll re-fetches
+      emitDataChanged("update-manager");
       return res.json({ updatedLead: { id: actualLeadId, phone: updated.phone, managerName: updated.manager_name } });
     }
 
     lastSyncHash = ""; // invalidate hash after any lead change
+    emitDataChanged("update-lead");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json(data);
@@ -5851,8 +5887,18 @@ if (fs.existsSync(distPath)) {
 
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
-  app.listen(PORT, () => {
-    console.log(`CRM API running at http://localhost:${PORT} [BUILD 2026-03-19-v5]`);
+  const server = http.createServer(app);
+  io = new SocketIOServer(server, { cors: { origin: "*" } });
+
+  io.on("connection", (socket) => {
+    console.log(`[socket.io] Client connected: ${socket.id}`);
+    socket.on("disconnect", () => {
+      console.log(`[socket.io] Client disconnected: ${socket.id}`);
+    });
+  });
+
+  server.listen(PORT, () => {
+    console.log(`CRM API running at http://localhost:${PORT} [BUILD ${BUILD_VERSION}]`);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)

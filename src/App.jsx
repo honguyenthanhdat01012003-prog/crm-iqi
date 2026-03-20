@@ -1,4 +1,5 @@
 ﻿import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { io as socketIOClient } from "socket.io-client";
 import {
   LayoutDashboard, Users, Building2, Megaphone, Trophy, UserCog, IdCard, FileEdit,
   FileText, Calendar, Settings, LogOut, Search, Save, RefreshCw, Pencil, Trash2,
@@ -575,33 +576,33 @@ function CRMApp({ user, updateUser, onLogout }) {
       .catch(() => setServerDown(true));
   }, [applyApiData]);
 
-  // Auto-poll for changes every 10 seconds (lightweight hash check, no full sync)
-  const syncHashRef = React.useRef(syncHash);
-  syncHashRef.current = syncHash;
+  // Socket.IO: real-time data updates (replaces 10s polling)
   useEffect(() => {
-    const interval = setInterval(() => {
-      apiFetch(`${API}/data/poll?hash=${encodeURIComponent(syncHashRef.current)}`)
+    const socket = socketIOClient(window.location.origin, { transports: ["websocket", "polling"] });
+    socket.on("connect", () => {
+      console.log("[socket.io] Connected:", socket.id);
+      setServerDown(false);
+    });
+    socket.on("disconnect", () => {
+      console.log("[socket.io] Disconnected");
+    });
+    socket.on("data-changed", () => {
+      apiFetch(`${API}/data`)
         .then(r => r.ok ? r.json() : Promise.reject())
-        .then(pollResult => {
-          if (!pollResult.changed) return;
-          if (pollResult.hash) setSyncHash(pollResult.hash);
-          return apiFetch(`${API}/data`)
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then(applyApiData);
-        })
+        .then(applyApiData)
         .catch(() => {});
-    }, 10000);
-    return () => clearInterval(interval);
+    });
+    return () => socket.disconnect();
   }, [applyApiData]);
 
-  // Connection health check - detect server down
+  // Connection health check - detect server down (fallback, 30s)
   const [serverDown, setServerDown] = useState(false);
   useEffect(() => {
     const healthIv = setInterval(() => {
       fetch(`${API}/version`, { signal: AbortSignal.timeout(8000) })
         .then(r => { if (r.ok) setServerDown(false); else setServerDown(true); })
         .catch(() => setServerDown(true));
-    }, 15000);
+    }, 30000);
     return () => clearInterval(healthIv);
   }, []);
 
