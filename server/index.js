@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 5; // Bump this when adding new DDL/migrations
+const DB_VERSION = 6; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -295,6 +295,33 @@ async function initDb() {
       const afterCount = await get(db, "SELECT COUNT(*) as c FROM lead_history");
       console.log(`[DB] v3 cleanup: ${beforeCount?.c || 0} -> ${afterCount?.c || 0} history rows (${bloated.length} leads cleaned)`);
     } catch (e) { console.error("[DB] v3 cleanup error:", e.message); }
+  }
+
+  // --- v6: Fix stale lead statuses from latest history entry ---
+  if (dbVersion < 6) {
+    console.log("[DB] v6 migration: fixing lead statuses from latest history...");
+    try {
+      // For each lead, find the most recent history entry with a non-empty status
+      const leadsWithHistory = await all(db, `
+        SELECT l.id, l.status, lh.status as hist_status
+        FROM leads l
+        INNER JOIN lead_history lh ON lh.id = (
+          SELECT id FROM lead_history
+          WHERE lead_id = l.id AND status != ''
+          ORDER BY seq DESC LIMIT 1
+        )
+        WHERE l.status = 'new' OR l.status = '' OR l.status IS NULL
+      `);
+      let fixed = 0;
+      for (const row of leadsWithHistory) {
+        const newStatus = normalizeStatus(row.hist_status);
+        if (newStatus !== row.status) {
+          await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [newStatus, row.hist_status, row.id]);
+          fixed++;
+        }
+      }
+      console.log(`[DB] v6 migration: fixed ${fixed}/${leadsWithHistory.length} leads`);
+    } catch (e) { console.error("[DB] v6 migration error:", e.message); }
   }
 
   // Mark DB version so next cold start skips all this
