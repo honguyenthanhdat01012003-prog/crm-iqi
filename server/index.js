@@ -910,6 +910,26 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // Helper: normalize phone for matching (uses robust +84/0 normalization)
   const normPhone = normalizePhoneKey;
 
+  // 0. BACKUP: Save sale assignments + history before destructive sync
+  try {
+    const backupLeads = await all(db,
+      "SELECT id, name, phone, sale_name, manager_name, status, raw_status FROM leads WHERE project_id = ? AND sale_name != '' AND sale_name != 'Chưa chia'",
+      [projectId]
+    );
+    const backupHistory = await all(db,
+      "SELECT lh.*, l.phone, l.name as lead_name FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ? AND lh.source != 'sheet'",
+      [projectId]
+    );
+    if (backupLeads.length > 0 || backupHistory.length > 0) {
+      const backupData = JSON.stringify({ ts: new Date().toISOString(), projectId, leads: backupLeads, history: backupHistory });
+      await run(db,
+        "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        [`backup_project_${projectId}`, backupData]
+      );
+      console.log(`[replaceProjectData] Backup saved: ${backupLeads.length} sale assignments, ${backupHistory.length} history entries`);
+    }
+  } catch (e) { console.warn("[replaceProjectData] Backup failed:", e.message); }
+
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
@@ -2334,6 +2354,108 @@ app.post("/api/recover-sales", requireAuth, requireAdmin, async (req, res) => {
     res.json({ total: leads.length, fixedSale, fixedStatus, details });
   } catch (err) {
     console.error("[recover-sales] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Recover from backup saved in settings table (created automatically before each sync)
+app.post("/api/recover-from-backup", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    console.log("[recover-from-backup] Starting backup recovery...");
+    const projectId = Number(req.body?.projectId) || 0;
+
+    // Find all backup keys
+    const backupRows = projectId
+      ? [await get(db, "SELECT key, value FROM settings WHERE key = ?", [`backup_project_${projectId}`])]
+      : await all(db, "SELECT key, value FROM settings WHERE key LIKE 'backup_project_%'");
+
+    const validBackups = backupRows.filter(Boolean);
+    if (!validBackups.length) {
+      return res.json({ error: "Không tìm thấy bản backup nào", total: 0, fixedSale: 0, fixedStatus: 0, fixedHistory: 0 });
+    }
+
+    let fixedSale = 0, fixedStatus = 0, fixedHistory = 0, totalLeads = 0;
+
+    for (const row of validBackups) {
+      const backup = JSON.parse(row.value);
+      console.log(`[recover-from-backup] Found backup from ${backup.ts}: ${backup.leads?.length || 0} sale assignments, ${backup.history?.length || 0} history entries`);
+
+      // Build phone → backup lead map for matching
+      const phoneMap = new Map();
+      for (const bl of (backup.leads || [])) {
+        const key = normalizePhoneKey(bl.phone);
+        if (key) phoneMap.set(key, bl);
+      }
+
+      // Get current leads
+      const currentLeads = await all(db,
+        "SELECT id, name, phone, sale_name, status FROM leads WHERE project_id = ?",
+        [backup.projectId]
+      );
+      totalLeads += currentLeads.length;
+
+      // Match by phone and restore sale_name + status
+      for (const cl of currentLeads) {
+        const key = normalizePhoneKey(cl.phone);
+        const bl = phoneMap.get(key);
+        if (!bl) continue;
+
+        let changed = false;
+        let newSale = cl.sale_name;
+        let newStatus = cl.status;
+
+        if ((!cl.sale_name || cl.sale_name === "Chưa chia") && bl.sale_name && bl.sale_name !== "Chưa chia") {
+          newSale = bl.sale_name;
+          changed = true;
+          fixedSale++;
+        }
+
+        if ((!cl.status || cl.status === "new") && bl.status && bl.status !== "new") {
+          newStatus = bl.status;
+          changed = true;
+          fixedStatus++;
+        }
+
+        if (changed) {
+          await run(db, "UPDATE leads SET sale_name = ?, status = ? WHERE id = ?",
+            [newSale, newStatus, cl.id]);
+        }
+      }
+
+      // Restore history entries
+      const phoneToNewId = new Map();
+      for (const cl of currentLeads) {
+        const key = normalizePhoneKey(cl.phone);
+        if (key) phoneToNewId.set(key, cl.id);
+      }
+
+      for (const h of (backup.history || [])) {
+        const key = normalizePhoneKey(h.phone);
+        const newLeadId = phoneToNewId.get(key);
+        if (!newLeadId) continue;
+
+        // Check if this history entry already exists (avoid duplicates)
+        const exists = await get(db,
+          "SELECT 1 FROM lead_history WHERE lead_id = ? AND action = ? AND created_at = ?",
+          [newLeadId, h.action, h.created_at]
+        );
+        if (exists) continue;
+
+        await run(db,
+          `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [newLeadId, h.action, h.status || "", h.sale_name || "", h.feedback || "", h.contact_date || "", h.note || "", h.source || "backup-restore", h.user_name || "", h.created_at || new Date().toISOString()]
+        );
+        fixedHistory++;
+      }
+    }
+
+    lastSyncHash = "";
+    emitDataChanged("recover-from-backup");
+    console.log(`[recover-from-backup] Done: ${fixedSale} sale, ${fixedStatus} status, ${fixedHistory} history restored (${totalLeads} leads)`);
+    res.json({ total: totalLeads, fixedSale, fixedStatus, fixedHistory, backupCount: validBackups.length });
+  } catch (err) {
+    console.error("[recover-from-backup] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

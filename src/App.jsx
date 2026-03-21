@@ -2323,6 +2323,30 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <RefreshCw size={16} /> Khôi phục Sale từ lịch sử
             </button>
           )}
+          {selectedProject && (
+            <button
+              onClick={async () => {
+                if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu.")) return;
+                try {
+                  const r = await apiFetch(`${API}/recover-from-backup`, {
+                    method: "POST",
+                    body: JSON.stringify({ projectId: selectedProject }),
+                  });
+                  const data = await r.json();
+                  if (data.error && data.total === 0) { showToast(data.error, "error"); return; }
+                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                  showToast(`Khôi phục từ backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử (${data.total} lead)`, "success");
+                  const r2 = await apiFetch(`${API}/data`);
+                  const d2 = await r2.json();
+                  applyApiData(d2);
+                } catch (e) {
+                  showToast("Lỗi: " + e.message, "error");
+                }
+              }}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #7c3aed, #5b21b6)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+              <RefreshCw size={16} /> Khôi phục từ Backup
+            </button>
+          )}
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
