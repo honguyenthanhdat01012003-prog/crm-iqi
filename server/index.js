@@ -1448,7 +1448,7 @@ app.use(express.json({ limit: "10mb" }));
 
 // Rate limiters
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: { error: "Quá nhiều lần đăng nhập. Vui lòng thử lại sau 15 phút." }, standardHeaders: true, legacyHeaders: false });
-const apiLimiter = rateLimit({ windowMs: 1 * 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false });
+const apiLimiter = rateLimit({ windowMs: 1 * 60 * 1000, max: 1000, standardHeaders: true, legacyHeaders: false });
 app.use("/api/", apiLimiter);
 
 // --- Serve static build ---
