@@ -2271,6 +2271,73 @@ app.get("/api/data/poll", requireAuth, async (req, res) => {
   res.json({ hash: lastSyncHash, changed: clientHash !== lastSyncHash });
 });
 
+/* ===== Recovery: Restore sale assignments + status from lead_history ===== */
+app.post("/api/recover-sales", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    console.log("[recover-sales] Starting recovery...");
+    const projectId = Number(req.body?.projectId) || 0;
+    const whereClause = projectId ? "WHERE l.project_id = ?" : "";
+    const whereArgs = projectId ? [projectId] : [];
+
+    // Find leads that have no sale assigned but DO have "Chia lead" history
+    const leads = await all(db,
+      `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id FROM leads l ${whereClause}`,
+      whereArgs
+    );
+
+    let fixedSale = 0;
+    let fixedStatus = 0;
+    const details = [];
+
+    for (const lead of leads) {
+      let changed = false;
+      let newSale = lead.sale_name;
+      let newStatus = lead.status;
+
+      // 1. Restore sale_name from latest "Chia lead" history entry
+      if (!lead.sale_name || lead.sale_name === "Chưa chia") {
+        const chiaLead = await get(db,
+          "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1",
+          [lead.id]
+        );
+        if (chiaLead && chiaLead.sale_name) {
+          newSale = chiaLead.sale_name;
+          changed = true;
+          fixedSale++;
+        }
+      }
+
+      // 2. Restore status from latest history entry with non-empty status
+      const latestHist = await get(db,
+        "SELECT status FROM lead_history WHERE lead_id = ? AND status != '' ORDER BY seq DESC LIMIT 1",
+        [lead.id]
+      );
+      if (latestHist && latestHist.status) {
+        const histStatus = normalizeStatus(latestHist.status);
+        if (histStatus !== lead.status) {
+          newStatus = histStatus;
+          changed = true;
+          fixedStatus++;
+        }
+      }
+
+      if (changed) {
+        await run(db, "UPDATE leads SET sale_name = ?, status = ? WHERE id = ?",
+          [newSale, newStatus, lead.id]);
+        details.push({ id: lead.id, name: lead.name, phone: lead.phone, oldSale: lead.sale_name, newSale, oldStatus: lead.status, newStatus });
+      }
+    }
+
+    lastSyncHash = "";
+    emitDataChanged("recover-sales");
+    console.log(`[recover-sales] Done: ${fixedSale} sales restored, ${fixedStatus} statuses fixed out of ${leads.length} leads`);
+    res.json({ total: leads.length, fixedSale, fixedStatus, details });
+  } catch (err) {
+    console.error("[recover-sales] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/sync", requireAuth, async (req, res) => {
   try {
     const clientHash = req.body?.hash || "";
