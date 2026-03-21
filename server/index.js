@@ -454,6 +454,15 @@ const VALID_STATUS_KEYS = new Set([
   "hung_up", "blocked", "has_sale", "lost",
 ]);
 
+const STATUS_LABELS_VI = {
+  new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
+  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Booking/Cọc", booking_other: "Booking sản khác",
+  closed: "Chốt", not_interested: "Không QT", spam: "Phá/rác", sale: "Sale",
+  weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
+  callback: "Gọi lại sau", wrong_phone: "Thuê bao", wrong_number: "Sai số",
+  hung_up: "Tắt máy ngang", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
+};
+
 function normalizeStatus(raw = "") {
   if (VALID_STATUS_KEYS.has(raw)) return raw;
   const v = foldText(raw);
@@ -2948,6 +2957,19 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         if (oldStatus !== newStatus) {
           await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
             [actualLeadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
+
+          // Record status change in lead_history so it's visible in the timeline
+          if (status !== undefined && saleName === undefined) {
+            const statusLabel = STATUS_LABELS_VI[newStatus] || newStatus;
+            const maxSeqH = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [actualLeadId]);
+            const nextSeqH = (maxSeqH?.m ?? -1) + 1;
+            const nowH = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+            const roleLabel = req.user.role === "admin" ? "Admin" : "Quản lý";
+            await run(db,
+              "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+              [actualLeadId, req.user.displayName, `${roleLabel} cập nhật trạng thái`, nowH, statusLabel, `Đổi trạng thái từ "${STATUS_LABELS_VI[oldStatus] || oldStatus}" sang "${statusLabel}"`, nextSeqH, req.user.role]
+            );
+          }
         }
       }
       params.push(actualLeadId);
@@ -3192,14 +3214,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 });
 
 /* ===== Telegram Bot Webhook ===== */
-const TELE_STATUS_LABELS = {
-  new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
-  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Booking/Cọc", booking_other: "Booking sản khác",
-  closed: "Chốt", not_interested: "Không QT", spam: "Phá/rác", sale: "Sale",
-  weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
-  callback: "Gọi lại sau", wrong_phone: "Thuê bao", wrong_number: "Sai số",
-  hung_up: "Tắt máy ngang", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
-};
+const TELE_STATUS_LABELS = STATUS_LABELS_VI; // alias for backward compat
 
 /* ===== Setup Telegram webhook ===== */
 app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (req, res) => {
