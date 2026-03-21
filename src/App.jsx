@@ -2966,11 +2966,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       }}>
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
-                      {l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
+                      {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
                     </div>
                     <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap", alignItems: "center" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone || "-"}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.createdAt || "-"}</span>
+                      {!isSale && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.createdAt || "-"}</span>}
                       {histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
                       {isAdmin && l.saleName && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><User size={12} /> {l.saleName}</span>}
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
@@ -3085,6 +3085,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 }
 
 function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, allUsers = [] }) {
+  const isSale = user.role === "sale";
   const history = lead.saleHistory || [];
   const registrations = lead.registrations || [];
   const [showForm, setShowForm] = useState(false);
@@ -3292,13 +3293,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b>{lead.phone || "-"}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b>{projectName}</b></div>
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b>{lead.product || "-"}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>
-        <div>
+        {!isSale && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>}
+        {!isSale && <div>
           <span style={{ color: "#6b7280", fontSize: 11 }}>Trạng thái lead</span><br />
           {(() => { const t = getLeadTemp(lead.createdAt); return (
             <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
           ); })()}
-        </div>
+        </div>}
         {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>}
         {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>}
         <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
