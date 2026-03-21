@@ -917,7 +917,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       [projectId]
     );
     const backupHistory = await all(db,
-      "SELECT lh.*, l.phone, l.name as lead_name FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ? AND lh.source != 'sheet'",
+      "SELECT lh.lead_id, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.note, lh.source, lh.user_name, lh.created_at, l.phone, l.name as lead_name FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ?",
       [projectId]
     );
     if (backupLeads.length > 0 || backupHistory.length > 0) {
@@ -2434,17 +2434,21 @@ app.post("/api/recover-from-backup", requireAuth, requireAdmin, async (req, res)
         const newLeadId = phoneToNewId.get(key);
         if (!newLeadId) continue;
 
+        const hAction = h.action ?? "";
+        const hCreatedAt = h.created_at ?? "";
+        if (!hAction) continue;
+
         // Check if this history entry already exists (avoid duplicates)
         const exists = await get(db,
           "SELECT 1 FROM lead_history WHERE lead_id = ? AND action = ? AND created_at = ?",
-          [newLeadId, h.action, h.created_at]
+          [newLeadId, hAction, hCreatedAt]
         );
         if (exists) continue;
 
         await run(db,
           `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [newLeadId, h.action, h.status || "", h.sale_name || "", h.feedback || "", h.contact_date || "", h.note || "", h.source || "backup-restore", h.user_name || "", h.created_at || new Date().toISOString()]
+          [newLeadId, hAction, h.status ?? "", h.sale_name ?? "", h.feedback ?? "", h.contact_date ?? "", h.note ?? "", h.source ?? "backup-restore", h.user_name ?? "", hCreatedAt || new Date().toISOString()]
         );
         fixedHistory++;
       }
@@ -2481,11 +2485,19 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
       return res.json({ total: 0, fixedSale: 0, fixedStatus: 0, fixedHistory: 0, message: "Backup không có lead nào có sale" });
     }
 
-    // Read ALL history entries from backup (excluding sheet-generated ones)
-    const backupHistory = await all(backupDb,
-      "SELECT lh.*, l.phone as lead_phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE lh.source != 'sheet' OR lh.source IS NULL"
-    );
+    // Read ALL history entries from backup
+    let backupHistory = [];
+    try {
+      backupHistory = await all(backupDb,
+        "SELECT lh.lead_id, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.note, lh.source, lh.user_name, lh.created_at, l.phone as lead_phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id"
+      );
+    } catch (e) {
+      console.warn("[recover-dbbackup] Could not read history from backup:", e.message);
+    }
     console.log(`[recover-dbbackup] Found ${backupHistory.length} history entries in backup`);
+    // Filter out sheet-generated entries
+    backupHistory = backupHistory.filter(h => (h.source ?? "") !== "sheet");
+    console.log(`[recover-dbbackup] ${backupHistory.length} non-sheet history entries`);
 
     // Build phone → backup lead map
     const phoneMap = new Map();
@@ -2579,17 +2591,21 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
       if (!currentLead) continue;
 
       for (const h of histEntries) {
+        const hAction = h.action ?? "";
+        const hCreatedAt = h.created_at ?? "";
+        if (!hAction) continue;
+
         // Check duplicate by action + created_at
         const exists = await get(db,
           "SELECT 1 FROM lead_history WHERE lead_id = ? AND action = ? AND created_at = ?",
-          [currentLead.id, h.action, h.created_at]
+          [currentLead.id, hAction, hCreatedAt]
         );
         if (exists) continue;
 
         await run(db,
           `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [currentLead.id, h.action, h.status || "", h.sale_name || "", h.feedback || "", h.contact_date || "", h.note || "", h.source || "db-backup", h.user_name || "", h.created_at || ""]
+          [currentLead.id, hAction, h.status ?? "", h.sale_name ?? "", h.feedback ?? "", h.contact_date ?? "", h.note ?? "", h.source ?? "db-backup", h.user_name ?? "", hCreatedAt || new Date().toISOString()]
         );
         fixedHistory++;
       }
