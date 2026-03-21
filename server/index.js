@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 6; // Bump this when adding new DDL/migrations
+const DB_VERSION = 7; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -297,11 +297,11 @@ async function initDb() {
     } catch (e) { console.error("[DB] v3 cleanup error:", e.message); }
   }
 
-  // --- v6: Fix stale lead statuses from latest history entry ---
-  if (dbVersion < 6) {
-    console.log("[DB] v6 migration: fixing lead statuses from latest history...");
+  // --- v6+v7: Fix lead statuses from latest history entry ---
+  if (dbVersion < 7) {
+    console.log("[DB] v7 migration: syncing ALL lead statuses from latest history...");
     try {
-      // For each lead, find the most recent history entry with a non-empty status
+      // For each lead that has history with a non-empty status, use the latest one
       const leadsWithHistory = await all(db, `
         SELECT l.id, l.status, lh.status as hist_status
         FROM leads l
@@ -310,7 +310,6 @@ async function initDb() {
           WHERE lead_id = l.id AND status != ''
           ORDER BY seq DESC LIMIT 1
         )
-        WHERE l.status = 'new' OR l.status = '' OR l.status IS NULL
       `);
       let fixed = 0;
       for (const row of leadsWithHistory) {
@@ -320,8 +319,8 @@ async function initDb() {
           fixed++;
         }
       }
-      console.log(`[DB] v6 migration: fixed ${fixed}/${leadsWithHistory.length} leads`);
-    } catch (e) { console.error("[DB] v6 migration error:", e.message); }
+      console.log(`[DB] v7 migration: fixed ${fixed}/${leadsWithHistory.length} leads`);
+    } catch (e) { console.error("[DB] v7 migration error:", e.message); }
   }
 
   // Mark DB version so next cold start skips all this
@@ -463,8 +462,18 @@ const STATUS_LABELS_VI = {
   hung_up: "Tắt máy ngang", blocked: "Chặn", has_sale: "Có sale khác", lost: "Mất",
 };
 
+// Build reverse map: Vietnamese label → status key
+const LABEL_TO_KEY = {};
+for (const [k, v] of Object.entries(STATUS_LABELS_VI)) {
+  LABEL_TO_KEY[v] = k;
+  LABEL_TO_KEY[v.toLowerCase()] = k;
+}
+
 function normalizeStatus(raw = "") {
   if (VALID_STATUS_KEYS.has(raw)) return raw;
+  // Check exact label match (handles abbreviated labels like "Không QT")
+  if (LABEL_TO_KEY[raw]) return LABEL_TO_KEY[raw];
+  if (LABEL_TO_KEY[raw.trim()]) return LABEL_TO_KEY[raw.trim()];
   const v = foldText(raw);
   if (!v || v === "created" || v === "duplicate" || v.includes("chua xu ly")) return "new";
   if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
