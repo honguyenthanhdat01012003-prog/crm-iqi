@@ -3004,8 +3004,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 <th style={thStyle}>Người quản lý</th>
                 <th style={thStyle}>Sale hiện tại</th>
                 <th style={thStyle}>Dự án</th>
-                <th style={thStyle}>Ngày nhận lead</th>
-                <th style={thStyle}>Trạng thái</th>
+                {!isSale && <th style={thStyle}>Ngày nhận lead</th>}
+                {!isSale && <th style={thStyle}>Trạng thái</th>}
               </tr>
             </thead>
             <tbody>
@@ -3029,18 +3029,18 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     <td style={{ ...tdStyle, fontSize: 12, color: "#4b5563" }}>{l.managerName || "-"}</td>
                     <td style={tdStyle}>{l.saleName || "Chưa chia"}</td>
                     <td style={{ ...tdStyle, fontSize: 11 }}>{projectMap[l.projectId] || "-"}</td>
-                    <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>
-                    <td style={tdStyle}>
+                    {!isSale && <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>}
+                    {!isSale && <td style={tdStyle}>
                       {(() => { const t = getLeadTemp(l.createdAt); return (
                         <span style={{ background: t.bg, color: t.color, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{t.label}</span>
                       ); })()}
-                    </td>
+                    </td>}
                   </tr>,
                 ];
                 if (isOpen) {
                   rows.push(
                     <tr key={`${l.id}-detail`}>
-                      <td colSpan={10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
+                      <td colSpan={isSale ? 8 : 10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
                         <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} allUsers={allUsers} />
                       </td>
                     </tr>

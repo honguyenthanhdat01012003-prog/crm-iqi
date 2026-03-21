@@ -420,7 +420,15 @@ function findVal(obj, candidates) {
   return "";
 }
 
+const VALID_STATUS_KEYS = new Set([
+  "new", "called", "interested", "low_interest", "other_project", "appointment",
+  "booked", "booking_other", "closed", "not_interested", "spam", "sale",
+  "weak_finance", "unreachable", "callback", "wrong_phone", "wrong_number",
+  "hung_up", "blocked", "has_sale", "lost",
+]);
+
 function normalizeStatus(raw = "") {
+  if (VALID_STATUS_KEYS.has(raw)) return raw;
   const v = foldText(raw);
   if (!v || v === "created" || v === "duplicate" || v.includes("chua xu ly")) return "new";
   if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
