@@ -2347,6 +2347,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <RefreshCw size={16} /> Khôi phục từ Backup
             </button>
           )}
+          <button
+            onClick={async () => {
+              if (!window.confirm("Khôi phục CHỈ sale_name từ file crm.db.backup (hôm qua)?\n\n⚠️ Chỉ cập nhật sale cho lead đang 'Chưa chia'.\nKhông ảnh hưởng trạng thái, lịch sử, hay dữ liệu khác.")) return;
+              try {
+                const r = await apiFetch(`${API}/recover-sale-from-dbbackup`, { method: "POST", body: JSON.stringify({}) });
+                const data = await r.json();
+                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedManager} quản lý (từ ${data.backupLeads} lead backup)`, "success");
+                const r2 = await apiFetch(`${API}/data`);
+                const d2 = await r2.json();
+                applyApiData(d2);
+              } catch (e) {
+                showToast("Lỗi: " + e.message, "error");
+              }
+            }}
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #059669, #047857)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+            <RefreshCw size={16} /> Khôi phục Sale từ DB Backup
+          </button>
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>

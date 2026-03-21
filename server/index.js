@@ -2460,6 +2460,82 @@ app.post("/api/recover-from-backup", requireAuth, requireAdmin, async (req, res)
   }
 });
 
+// Recover ONLY sale_name from crm.db.backup file (does NOT touch status, history, or other fields)
+app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const backupPath = path.join(DB_DIR, "crm.db.backup");
+    if (!fs.existsSync(backupPath)) {
+      return res.status(404).json({ error: "Không tìm thấy file crm.db.backup" });
+    }
+
+    console.log("[recover-sale-dbbackup] Opening backup database...");
+    const backupDb = createClient({ url: `file:${backupPath}` });
+
+    // Read all leads with sale assignments from backup
+    const backupLeads = await all(backupDb,
+      "SELECT phone, name, sale_name, manager_name FROM leads WHERE sale_name != '' AND sale_name != 'Chưa chia'"
+    );
+    console.log(`[recover-sale-dbbackup] Found ${backupLeads.length} leads with sale in backup`);
+
+    if (!backupLeads.length) {
+      return res.json({ total: 0, fixedSale: 0, fixedManager: 0, message: "Backup không có lead nào có sale" });
+    }
+
+    // Build phone → backup lead map
+    const phoneMap = new Map();
+    for (const bl of backupLeads) {
+      const key = normalizePhoneKey(bl.phone);
+      if (key) phoneMap.set(key, bl);
+    }
+
+    // Get current leads that have no sale
+    const currentLeads = await all(db,
+      "SELECT id, phone, name, sale_name, manager_name FROM leads WHERE sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL"
+    );
+
+    let fixedSale = 0, fixedManager = 0;
+    const details = [];
+
+    for (const cl of currentLeads) {
+      const key = normalizePhoneKey(cl.phone);
+      const bl = phoneMap.get(key);
+      if (!bl) continue;
+
+      const updates = [];
+      const params = [];
+      let newSale = cl.sale_name, newManager = cl.manager_name;
+
+      if (bl.sale_name && bl.sale_name !== "Chưa chia") {
+        updates.push("sale_name = ?");
+        params.push(bl.sale_name);
+        newSale = bl.sale_name;
+        fixedSale++;
+      }
+
+      if (bl.manager_name && (!cl.manager_name || cl.manager_name === "")) {
+        updates.push("manager_name = ?");
+        params.push(bl.manager_name);
+        newManager = bl.manager_name;
+        fixedManager++;
+      }
+
+      if (updates.length) {
+        params.push(cl.id);
+        await run(db, `UPDATE leads SET ${updates.join(", ")} WHERE id = ?`, params);
+        details.push({ id: cl.id, name: cl.name, phone: cl.phone, sale: newSale, manager: newManager });
+      }
+    }
+
+    lastSyncHash = "";
+    emitDataChanged("recover-sale-dbbackup");
+    console.log(`[recover-sale-dbbackup] Done: ${fixedSale} sale, ${fixedManager} manager restored from backup DB`);
+    res.json({ total: currentLeads.length, fixedSale, fixedManager, backupLeads: backupLeads.length, details });
+  } catch (err) {
+    console.error("[recover-sale-dbbackup] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/sync", requireAuth, async (req, res) => {
   try {
     const clientHash = req.body?.hash || "";
