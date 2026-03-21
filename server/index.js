@@ -2460,7 +2460,7 @@ app.post("/api/recover-from-backup", requireAuth, requireAdmin, async (req, res)
   }
 });
 
-// Recover ONLY sale_name from crm.db.backup file (does NOT touch status, history, or other fields)
+// Recover sale_name + status + history from crm.db.backup file
 app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (req, res) => {
   try {
     const backupPath = path.join(DB_DIR, "crm.db.backup");
@@ -2468,18 +2468,24 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
       return res.status(404).json({ error: "Không tìm thấy file crm.db.backup" });
     }
 
-    console.log("[recover-sale-dbbackup] Opening backup database...");
+    console.log("[recover-dbbackup] Opening backup database...");
     const backupDb = createClient({ url: `file:${backupPath}` });
 
-    // Read all leads with sale assignments from backup
+    // Read ALL leads from backup that have sale assigned
     const backupLeads = await all(backupDb,
-      "SELECT phone, name, sale_name, manager_name FROM leads WHERE sale_name != '' AND sale_name != 'Chưa chia'"
+      "SELECT id, phone, name, sale_name, manager_name, status, raw_status FROM leads WHERE sale_name != '' AND sale_name != 'Chưa chia'"
     );
-    console.log(`[recover-sale-dbbackup] Found ${backupLeads.length} leads with sale in backup`);
+    console.log(`[recover-dbbackup] Found ${backupLeads.length} leads with sale in backup`);
 
     if (!backupLeads.length) {
-      return res.json({ total: 0, fixedSale: 0, fixedManager: 0, message: "Backup không có lead nào có sale" });
+      return res.json({ total: 0, fixedSale: 0, fixedStatus: 0, fixedHistory: 0, message: "Backup không có lead nào có sale" });
     }
+
+    // Read ALL history entries from backup (excluding sheet-generated ones)
+    const backupHistory = await all(backupDb,
+      "SELECT lh.*, l.phone as lead_phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE lh.source != 'sheet' OR lh.source IS NULL"
+    );
+    console.log(`[recover-dbbackup] Found ${backupHistory.length} history entries in backup`);
 
     // Build phone → backup lead map
     const phoneMap = new Map();
@@ -2488,14 +2494,45 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
       if (key) phoneMap.set(key, bl);
     }
 
-    // Get current leads that have no sale
+    // Build backup lead_id → phone map (for history matching)
+    const backupIdToPhone = new Map();
+    for (const bl of backupLeads) {
+      backupIdToPhone.set(bl.id, normalizePhoneKey(bl.phone));
+    }
+
+    // Also map phones for leads NOT in backupLeads (history might reference them)
+    const allBackupLeads = await all(backupDb, "SELECT id, phone FROM leads");
+    for (const bl of allBackupLeads) {
+      if (!backupIdToPhone.has(bl.id)) {
+        backupIdToPhone.set(bl.id, normalizePhoneKey(bl.phone));
+      }
+    }
+
+    // Group history by phone
+    const phoneHistoryMap = new Map();
+    for (const h of backupHistory) {
+      const key = normalizePhoneKey(h.lead_phone);
+      if (!key) continue;
+      if (!phoneHistoryMap.has(key)) phoneHistoryMap.set(key, []);
+      phoneHistoryMap.get(key).push(h);
+    }
+
+    // Get ALL current leads (not just Chưa chia - we need phone→id mapping for history)
     const currentLeads = await all(db,
-      "SELECT id, phone, name, sale_name, manager_name FROM leads WHERE sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL"
+      "SELECT id, phone, name, sale_name, manager_name, status FROM leads"
     );
 
-    let fixedSale = 0, fixedManager = 0;
+    // Build phone → current lead id
+    const phoneToCurrentId = new Map();
+    for (const cl of currentLeads) {
+      const key = normalizePhoneKey(cl.phone);
+      if (key) phoneToCurrentId.set(key, cl);
+    }
+
+    let fixedSale = 0, fixedStatus = 0, fixedManager = 0, fixedHistory = 0;
     const details = [];
 
+    // 1. Restore sale_name + status + manager
     for (const cl of currentLeads) {
       const key = normalizePhoneKey(cl.phone);
       const bl = phoneMap.get(key);
@@ -2503,35 +2540,67 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
 
       const updates = [];
       const params = [];
-      let newSale = cl.sale_name, newManager = cl.manager_name;
+      let newSale = cl.sale_name, newManager = cl.manager_name, newStatus = cl.status;
 
-      if (bl.sale_name && bl.sale_name !== "Chưa chia") {
+      // Restore sale_name if currently empty
+      if ((!cl.sale_name || cl.sale_name === "Chưa chia") && bl.sale_name && bl.sale_name !== "Chưa chia") {
         updates.push("sale_name = ?");
         params.push(bl.sale_name);
         newSale = bl.sale_name;
         fixedSale++;
       }
 
-      if (bl.manager_name && (!cl.manager_name || cl.manager_name === "")) {
+      // Restore manager_name if currently empty
+      if ((!cl.manager_name || cl.manager_name === "") && bl.manager_name) {
         updates.push("manager_name = ?");
         params.push(bl.manager_name);
         newManager = bl.manager_name;
         fixedManager++;
       }
 
+      // Restore status if currently new/empty and backup has real status
+      if ((!cl.status || cl.status === "new") && bl.status && bl.status !== "new") {
+        updates.push("status = ?");
+        params.push(bl.status);
+        newStatus = bl.status;
+        fixedStatus++;
+      }
+
       if (updates.length) {
         params.push(cl.id);
         await run(db, `UPDATE leads SET ${updates.join(", ")} WHERE id = ?`, params);
-        details.push({ id: cl.id, name: cl.name, phone: cl.phone, sale: newSale, manager: newManager });
+        details.push({ id: cl.id, name: cl.name, phone: cl.phone, sale: newSale, manager: newManager, status: newStatus });
+      }
+    }
+
+    // 2. Restore history entries by phone matching
+    for (const [phoneKey, histEntries] of phoneHistoryMap) {
+      const currentLead = phoneToCurrentId.get(phoneKey);
+      if (!currentLead) continue;
+
+      for (const h of histEntries) {
+        // Check duplicate by action + created_at
+        const exists = await get(db,
+          "SELECT 1 FROM lead_history WHERE lead_id = ? AND action = ? AND created_at = ?",
+          [currentLead.id, h.action, h.created_at]
+        );
+        if (exists) continue;
+
+        await run(db,
+          `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [currentLead.id, h.action, h.status || "", h.sale_name || "", h.feedback || "", h.contact_date || "", h.note || "", h.source || "db-backup", h.user_name || "", h.created_at || ""]
+        );
+        fixedHistory++;
       }
     }
 
     lastSyncHash = "";
-    emitDataChanged("recover-sale-dbbackup");
-    console.log(`[recover-sale-dbbackup] Done: ${fixedSale} sale, ${fixedManager} manager restored from backup DB`);
-    res.json({ total: currentLeads.length, fixedSale, fixedManager, backupLeads: backupLeads.length, details });
+    emitDataChanged("recover-dbbackup");
+    console.log(`[recover-dbbackup] Done: ${fixedSale} sale, ${fixedStatus} status, ${fixedManager} manager, ${fixedHistory} history`);
+    res.json({ total: currentLeads.length, fixedSale, fixedStatus, fixedManager, fixedHistory, backupLeads: backupLeads.length, details });
   } catch (err) {
-    console.error("[recover-sale-dbbackup] Error:", err.message);
+    console.error("[recover-dbbackup] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

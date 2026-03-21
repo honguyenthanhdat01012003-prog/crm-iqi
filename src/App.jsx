@@ -2349,12 +2349,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           )}
           <button
             onClick={async () => {
-              if (!window.confirm("Khôi phục CHỈ sale_name từ file crm.db.backup (hôm qua)?\n\n⚠️ Chỉ cập nhật sale cho lead đang 'Chưa chia'.\nKhông ảnh hưởng trạng thái, lịch sử, hay dữ liệu khác.")) return;
+              if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ")) return;
               try {
                 const r = await apiFetch(`${API}/recover-sale-from-dbbackup`, { method: "POST", body: JSON.stringify({}) });
                 const data = await r.json();
                 if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedManager} quản lý (từ ${data.backupLeads} lead backup)`, "success");
+                showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử`, "success");
                 const r2 = await apiFetch(`${API}/data`);
                 const d2 = await r2.json();
                 applyApiData(d2);
