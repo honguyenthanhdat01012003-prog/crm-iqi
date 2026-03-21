@@ -3302,21 +3302,29 @@ async function handleTelegramWebhook(req, res) {
         const data = await r.json();
         if (!data.ok) {
           console.warn(`[telegram-webhook] sendTg failed (Markdown): ${data.description}`);
-          // Retry without Markdown if parse error
-          if (String(data.description || "").includes("parse")) {
-            const r2 = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ chat_id: chatId, text, ...extra }),
-            });
-            const d2 = await r2.json();
-            if (!d2.ok) console.warn(`[telegram-webhook] sendTg retry also failed: ${d2.description}`);
-            return r2;
-          }
+          // Always retry without Markdown on any failure
+          const plainText = text.replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
+          const r2 = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: plainText, ...extra }),
+          });
+          const d2 = await r2.json();
+          if (!d2.ok) console.warn(`[telegram-webhook] sendTg retry also failed: ${d2.description}`);
+          return r2;
         }
         return r;
       } catch (e) {
         console.error(`[telegram-webhook] sendTg error: ${e.message}`);
+        // Last resort: try plain text without any formatting
+        try {
+          const plainText = text.replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
+          return await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, text: plainText }),
+          });
+        } catch (_) {}
       }
     };
 
@@ -3408,12 +3416,13 @@ async function handleTelegramWebhook(req, res) {
       // Notify web clients about the change
       lastSyncHash = "";
       emitDataChanged("telegram-feedback");
+      const escMd = (s) => String(s || "").replace(/([_*`\[\]])/g, "\\$1");
       await sendTg(chatId, [
         `✅ *Đã lưu feedback thành công!*`,
         ``,
-        `👤 Khách: *${lead ? lead.name : "N/A"}*`,
-        `📊 Trạng thái: *${statusLabel}*`,
-        `💬 Feedback: _${feedbackText}_`,
+        `👤 Khách: *${escMd(lead ? lead.name : "N/A")}*`,
+        `📊 Trạng thái: *${escMd(statusLabel)}*`,
+        `💬 Feedback: _${escMd(feedbackText)}_`,
         `⏰ Lúc: ${now}`,
         ``,
         `📋 Feedback đã được lưu vào lịch sử liên hệ trên CRM.`,
