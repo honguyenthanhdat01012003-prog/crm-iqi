@@ -2365,6 +2365,41 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #059669, #047857)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
             <RefreshCw size={16} /> Khôi phục Sale từ DB Backup
           </button>
+          <button
+            onClick={async () => {
+              if (!window.confirm("Backup database ngay bây giờ?")) return;
+              try {
+                const r = await apiFetch(`${API}/backup-now`, { method: "POST" });
+                const data = await r.json();
+                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                showToast(`Backup OK: ${data.filename} (${data.sizeMB}MB)${data.removed ? `, xóa ${data.removed} bản cũ` : ""}`, "success");
+              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+            }}
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #0284c7, #0369a1)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
+            <Save size={16} /> Backup DB
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                const r = await apiFetch(`${API}/backups`);
+                const data = await r.json();
+                if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
+                const list = data.backups.map((b, i) => `${i + 1}. ${b.filename} (${b.sizeMB}MB) - ${new Date(b.date).toLocaleString("vi-VN")}`).join("\n");
+                const choice = window.prompt(`Có ${data.total} bản backup:\n\n${list}\n\nNhập số thứ tự để khôi phục (hoặc bấm Cancel):`);
+                if (!choice) return;
+                const idx = parseInt(choice) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
+                const selected = data.backups[idx];
+                if (!window.confirm(`⚠️ Khôi phục DB từ:\n${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nDB hiện tại sẽ được backup trước khi restore.\nSau khi restore cần RESTART server.`)) return;
+                const r2 = await apiFetch(`${API}/restore-backup`, { method: "POST", body: JSON.stringify({ filename: selected.filename }) });
+                const d2 = await r2.json();
+                if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
+                showToast(d2.message, "success");
+              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+            }}
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
+            <RefreshCw size={16} /> Restore DB
+          </button>
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>

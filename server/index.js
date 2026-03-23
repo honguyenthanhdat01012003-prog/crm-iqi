@@ -1316,7 +1316,7 @@ async function syncProject(db, projectId) {
   // === Round-robin: assign manager_name to ALL unassigned leads ===
   try {
     const managers = await all(db,
-      `SELECT u.id, u.display_name, u.telegram_id FROM users u
+      `SELECT DISTINCT u.id, u.display_name, u.telegram_id FROM users u
        JOIN user_projects up ON u.id = up.user_id
        WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
@@ -2168,7 +2168,7 @@ app.get("/api/debug/project-managers/:projectId", requireAuth, requireAdmin, asy
   try {
     const projectId = Number(req.params.projectId);
     const managers = await all(db,
-      `SELECT u.id, u.display_name, u.role, u.username FROM users u
+      `SELECT DISTINCT u.id, u.display_name, u.role, u.username FROM users u
        JOIN user_projects up ON u.id = up.user_id
        WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
@@ -2186,7 +2186,7 @@ app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmi
   try {
     const projectId = Number(req.params.projectId);
     const managers = await all(db,
-      `SELECT u.id, u.display_name FROM users u
+      `SELECT DISTINCT u.id, u.display_name FROM users u
        JOIN user_projects up ON u.id = up.user_id
        WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
        ORDER BY u.id ASC`, [projectId]);
@@ -2618,6 +2618,86 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
   } catch (err) {
     console.error("[recover-dbbackup] Error:", err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== DATABASE BACKUP SYSTEM ====================
+const BACKUP_DIR = path.join(DB_DIR, "backups");
+const BACKUP_KEEP_DAYS = 7;
+
+function performBackup(label = "auto") {
+  try {
+    if (!fs.existsSync(DB_PATH)) return null;
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const now = new Date();
+    const ts = now.toISOString().replace(/[:.]/g, "-").slice(0, 19); // 2026-03-23T08-00-00
+    const filename = `crm_${label}_${ts}.db`;
+    const dest = path.join(BACKUP_DIR, filename);
+    fs.copyFileSync(DB_PATH, dest);
+    const sizeMB = (fs.statSync(dest).size / 1024 / 1024).toFixed(1);
+    console.log(`[backup] ${filename} (${sizeMB}MB)`);
+
+    // Cleanup: remove backups older than BACKUP_KEEP_DAYS
+    const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      if (!f.startsWith("crm_") || !f.endsWith(".db")) continue;
+      const fPath = path.join(BACKUP_DIR, f);
+      if (fs.statSync(fPath).mtimeMs < cutoff) {
+        fs.unlinkSync(fPath);
+        removed++;
+      }
+    }
+    if (removed) console.log(`[backup] Cleaned ${removed} old backup(s)`);
+
+    return { filename, sizeMB, removed };
+  } catch (e) {
+    console.error("[backup] Error:", e.message);
+    return null;
+  }
+}
+
+// Manual backup
+app.post("/api/backup-now", requireAuth, requireAdmin, (req, res) => {
+  const result = performBackup("manual");
+  if (!result) return res.status(500).json({ error: "Backup failed" });
+  res.json({ success: true, ...result });
+});
+
+// List available backups
+app.get("/api/backups", requireAuth, requireAdmin, (req, res) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return res.json({ backups: [] });
+    const files = fs.readdirSync(BACKUP_DIR)
+      .filter(f => f.startsWith("crm_") && f.endsWith(".db"))
+      .map(f => {
+        const stat = fs.statSync(path.join(BACKUP_DIR, f));
+        return { filename: f, sizeMB: (stat.size / 1024 / 1024).toFixed(1), date: stat.mtime.toISOString() };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+    res.json({ backups: files, total: files.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Restore from a backup file (replaces crm.db)
+app.post("/api/restore-backup", requireAuth, requireAdmin, async (req, res) => {
+  const { filename } = req.body || {};
+  if (!filename || !filename.startsWith("crm_") || !filename.endsWith(".db")) {
+    return res.status(400).json({ error: "Invalid filename" });
+  }
+  const srcPath = path.join(BACKUP_DIR, path.basename(filename));
+  if (!fs.existsSync(srcPath)) return res.status(404).json({ error: "Backup file not found" });
+
+  try {
+    // Safety: backup current DB before restore
+    performBackup("pre-restore");
+    fs.copyFileSync(srcPath, DB_PATH);
+    console.log(`[restore] Restored from ${filename}`);
+    res.json({ success: true, message: `Đã khôi phục từ ${filename}. Cần restart server.` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -6438,6 +6518,12 @@ if (!process.env.VERCEL) {
     }
   }, SYNC_INTERVAL);
   console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s`);
+
+  // Auto-backup every 8 hours (00:00, 08:00, 16:00)
+  const BACKUP_INTERVAL = 8 * 60 * 60 * 1000;
+  performBackup("startup"); // Backup on server start
+  setInterval(() => performBackup("auto"), BACKUP_INTERVAL);
+  console.log(`[auto-backup] Enabled, interval=8h, keep=${BACKUP_KEEP_DAYS} days`);
 }
 
 export default app;
