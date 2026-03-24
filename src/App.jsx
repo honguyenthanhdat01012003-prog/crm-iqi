@@ -1175,6 +1175,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setSelectedProject={setSelectedProject}
             schedules={schedules}
             setSchedules={setSchedules}
+            managerFilter={managerFilter}
+            setManagerFilter={setManagerFilter}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -1963,7 +1965,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter }) {
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
   const expandedPhoneRef = React.useRef(null);
@@ -2095,10 +2097,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
-    const base = filteredLeads;
-    const filtered = tab ? base.filter(tab.filter) : [...base];
+    const filtered = tab ? leads.filter(tab.filter) : [...leads];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
-  }, [filteredLeads, activeTab, LEAD_TABS]);
+  }, [leads, activeTab, LEAD_TABS]);
 
   // Navigate to highlighted lead from notification click
   useEffect(() => {
