@@ -476,12 +476,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [selectedProject, setSelectedProject] = useState(null);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [productFilter, setProductFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [managerFilter, setManagerFilter] = useState("all");
-  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: null }); // {key: 'name'|'phone'|'product'|'status'|'createdAt', direction: 'asc'|'desc'}
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Project modal state
@@ -723,9 +720,6 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (statusFilter !== "all") {
       list = list.filter((l) => l.status === statusFilter);
     }
-    if (productFilter !== "all") {
-      list = list.filter((l) => (l.product || "-") === productFilter);
-    }
     if (searchText.trim()) {
       const q = searchText.toLowerCase();
       list = list.filter(
@@ -757,30 +751,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (managerFilter && managerFilter !== "all") {
       list = list.filter((l) => (l.managerName || "") === managerFilter);
     }
-    // Sort
-    if (sortConfig.key && sortConfig.direction) {
-      const dir = sortConfig.direction === "asc" ? 1 : -1;
-      list = [...list].sort((a, b) => {
-        let va = "", vb = "";
-        if (sortConfig.key === "name") { va = a.name || ""; vb = b.name || ""; }
-        else if (sortConfig.key === "phone") { va = a.phone || ""; vb = b.phone || ""; }
-        else if (sortConfig.key === "product") { va = a.product || ""; vb = b.product || ""; }
-        else if (sortConfig.key === "status") { va = a.status || ""; vb = b.status || ""; }
-        else if (sortConfig.key === "saleName") { va = a.saleName || ""; vb = b.saleName || ""; }
-        else if (sortConfig.key === "managerName") { va = a.managerName || ""; vb = b.managerName || ""; }
-        else if (sortConfig.key === "createdAt") { va = a.createdAt || ""; vb = b.createdAt || ""; }
-        return va.localeCompare(vb, "vi") * dir;
-      });
-    }
     return list;
-  }, [leads, selectedProject, statusFilter, productFilter, searchText, dateFrom, dateTo, managerFilter, sortConfig]);
-
-  // Unique product values for filter
-  const uniqueProducts = useMemo(() => {
-    const set = new Set();
-    (Array.isArray(leads) ? leads : []).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
-    return [...set].sort((a, b) => a.localeCompare(b, "vi"));
-  }, [leads]);
+  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter]);
 
   // --- Cost data ---
   const projectCostMap = useMemo(() => {
@@ -2023,6 +1995,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [activeTab, setActiveTab] = useState("all");
   const [pageSize, setPageSize] = useState(15);
   const [currentPage, setCurrentPage] = useState(1);
+  const [productFilter, setProductFilter] = useState("all");
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
@@ -2113,11 +2088,41 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     { key: "lost", label: "Mất", Icon: Skull, filter: (l) => l.status === "lost" },
   ], []);
 
+  // Unique product values for filter
+  const uniqueProducts = useMemo(() => {
+    const set = new Set();
+    (Array.isArray(leads) ? leads : []).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
+    return [...set].sort((a, b) => a.localeCompare(b, "vi"));
+  }, [leads]);
+
+  // Apply product filter & sort on top of leads from CRMApp
+  const processedLeads = useMemo(() => {
+    let list = Array.isArray(leads) ? [...leads] : [];
+    if (productFilter !== "all") {
+      list = list.filter((l) => (l.product || "-") === productFilter);
+    }
+    if (sortConfig.key && sortConfig.direction) {
+      const dir = sortConfig.direction === "asc" ? 1 : -1;
+      list.sort((a, b) => {
+        let va = "", vb = "";
+        if (sortConfig.key === "name") { va = a.name || ""; vb = b.name || ""; }
+        else if (sortConfig.key === "phone") { va = a.phone || ""; vb = b.phone || ""; }
+        else if (sortConfig.key === "product") { va = a.product || ""; vb = b.product || ""; }
+        else if (sortConfig.key === "status") { va = a.status || ""; vb = b.status || ""; }
+        else if (sortConfig.key === "saleName") { va = a.saleName || ""; vb = b.saleName || ""; }
+        else if (sortConfig.key === "managerName") { va = a.managerName || ""; vb = b.managerName || ""; }
+        else if (sortConfig.key === "createdAt") { va = a.createdAt || ""; vb = b.createdAt || ""; }
+        return va.localeCompare(vb, "vi") * dir;
+      });
+    }
+    return list;
+  }, [leads, productFilter, sortConfig]);
+
   const tabCounts = useMemo(() => {
     const counts = {};
-    LEAD_TABS.forEach((t) => { counts[t.key] = leads.filter(t.filter).length; });
+    LEAD_TABS.forEach((t) => { counts[t.key] = processedLeads.filter(t.filter).length; });
     return counts;
-  }, [leads, LEAD_TABS]);
+  }, [processedLeads, LEAD_TABS]);
 
   const parseDate = (s) => {
     if (!s || s === "-") return 0;
@@ -2128,9 +2133,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
-    const filtered = tab ? leads.filter(tab.filter) : [...leads];
+    const filtered = tab ? processedLeads.filter(tab.filter) : [...processedLeads];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
-  }, [leads, activeTab, LEAD_TABS]);
+  }, [processedLeads, activeTab, LEAD_TABS]);
 
   // Navigate to highlighted lead from notification click
   useEffect(() => {
