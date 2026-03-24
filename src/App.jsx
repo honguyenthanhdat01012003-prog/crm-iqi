@@ -478,12 +478,18 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [managerFilter, setManagerFilter] = useState("all");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Project modal state
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
   const [draftProject, setDraftProject] = useState({ name: "", leadUrl: "", costUrl: "" });
+
+  // Legacy import modal state
+  const [showLegacyModal, setShowLegacyModal] = useState(false);
+  const [legacyDraft, setLegacyDraft] = useState({ name: "", sheetUrl: "" });
+  const [legacyImporting, setLegacyImporting] = useState(false);
 
   // Notification state
   const [notifications, setNotifications] = useState([]);
@@ -741,8 +747,11 @@ function CRMApp({ user, updateUser, onLogout }) {
         return d && d <= to;
       });
     }
+    if (managerFilter && managerFilter !== "all") {
+      list = list.filter((l) => (l.managerName || "") === managerFilter);
+    }
     return list;
-  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo]);
+  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter]);
 
   // --- Cost data ---
   const projectCostMap = useMemo(() => {
@@ -1177,6 +1186,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             apiFetch={apiFetch}
             applyApiData={applyApiData}
             isAdminOnly={isAdminOnly}
+            openLegacyImport={() => { setLegacyDraft({ name: "", sheetUrl: "" }); setShowLegacyModal(true); }}
           />
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} isAdminOnly={isAdminOnly} />}
@@ -1251,6 +1261,58 @@ function CRMApp({ user, updateUser, onLogout }) {
           </div>
         </Modal>
       )}
+
+      {/* Legacy Import Modal */}
+      {showLegacyModal && (
+        <Modal onClose={() => !legacyImporting && setShowLegacyModal(false)} title="Thêm Data Cũ">
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 16, fontSize: 12, color: "#1e40af", lineHeight: 1.6 }}>
+            📋 Sheet cần có các cột: <b>STT, Họ tên khách, SĐT, Nhu cầu, Status, Feedback khách</b><br />
+            Data cũ sẽ hiển thị riêng biệt (badge xanh) và không bị sync tự động.
+          </div>
+          <label style={labelStyle}>Tên dự án (data cũ)</label>
+          <input
+            style={inputStyle}
+            value={legacyDraft.name}
+            onChange={(e) => setLegacyDraft({ ...legacyDraft, name: e.target.value })}
+            placeholder="VD: DATA CŨ - SUN VŨNG TÀU"
+          />
+          <label style={labelStyle}>Google Sheets URL (CSV)</label>
+          <input
+            style={inputStyle}
+            value={legacyDraft.sheetUrl}
+            onChange={(e) => setLegacyDraft({ ...legacyDraft, sheetUrl: e.target.value })}
+            placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?gid=0&single=true&output=csv"
+          />
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button
+              onClick={async () => {
+                if (!legacyDraft.name.trim() || !legacyDraft.sheetUrl.trim()) { showToast("Vui lòng điền đầy đủ", "error"); return; }
+                setLegacyImporting(true);
+                try {
+                  const r = await apiFetch(`${API}/projects/import-legacy`, {
+                    method: "POST",
+                    body: JSON.stringify(legacyDraft),
+                  });
+                  const data = await r.json();
+                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                  applyApiData(data);
+                  showToast(`Import thành công: ${data.imported} khách hàng cũ`, "success");
+                  setShowLegacyModal(false);
+                  setLegacyDraft({ name: "", sheetUrl: "" });
+                } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+                finally { setLegacyImporting(false); }
+              }}
+              disabled={legacyImporting}
+              style={{ ...btnPrimary, flex: 1, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", opacity: legacyImporting ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+            >
+              {legacyImporting && <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
+              {legacyImporting ? "Đang import..." : "Import Data Cũ"}
+            </button>
+            <button onClick={() => !legacyImporting && setShowLegacyModal(false)} disabled={legacyImporting} style={{ ...btnSecondary, flex: 1 }}>Hủy</button>
+          </div>
+        </Modal>
+      )}
+
       <ChatSidebar currentUser={user} />
       <ToastContainer />
       <ConfirmModal_ />
@@ -3028,6 +3090,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             </select>
           </div>
         )}
+        {isAdmin && allManagerNames.length > 0 && (
+          <select
+            value={managerFilter}
+            onChange={(e) => { setManagerFilter(e.target.value); setCurrentPage(1); }}
+            style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 160 }}
+          >
+            <option value="all">Tất cả quản lý</option>
+            {allManagerNames.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        )}
       </div>
 
       <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
@@ -4123,7 +4195,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   );
 }
 
-function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData, isAdminOnly }) {
+function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData, isAdminOnly, openLegacyImport }) {
   const isMobile = useIsMobile();
   const [syncingId, setSyncingId] = React.useState(null);
 
@@ -4150,7 +4222,12 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>{projects.length} dự án</div>
-        {isAdminOnly && <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>}
+        {isAdminOnly && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={openLegacyImport} style={{ ...btnPrimary, background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>+ Thêm Data Cũ</button>
+            <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
@@ -4162,22 +4239,25 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
               key={p.id}
               style={{
                 background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 20,
-                boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderTop: "3px solid #e88a2e",
+                boxShadow: "0 1px 3px rgba(0,0,0,.08)", borderTop: `3px solid ${p.isLegacy ? '#2563eb' : '#e88a2e'}`,
               }}
             >
-              <h4 style={{ margin: "0 0 12px" }}>{p.name}</h4>
+              <h4 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
+                {p.name}
+                {p.isLegacy && <span style={{ fontSize: 10, fontWeight: 700, background: "#dbeafe", color: "#1e40af", padding: "2px 8px", borderRadius: 10 }}>DATA CŨ</span>}
+              </h4>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Chi phí: <b>{formatVND(c.totalSpent)}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Lead: <b>{c.totalLeads || 0}</b> | Booking: <b>{c.totalBooking || 0}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>CPL: <b>{formatVND(c.cpLead)}</b></div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button
+                {!p.isLegacy && <button
                   onClick={() => syncOne(p.id)}
                   disabled={!!syncingId}
                   style={{ ...btnPrimary, flex: 1, fontSize: 12, opacity: syncingId ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
                 >
                   {isSyncing && <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
                   {isSyncing ? "Đồng bộ..." : <><RefreshCw size={14} /> Sync</>}
-                </button>
+                </button>}
                 {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>}
                 {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>}
               </div>

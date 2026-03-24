@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 7; // Bump this when adding new DDL/migrations
+const DB_VERSION = 8; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -324,6 +324,12 @@ async function initDb() {
   }
 
   // Mark DB version so next cold start skips all this
+  // --- v8: Add is_legacy flag to projects ---
+  if (dbVersion < 8) {
+    console.log("[DB] v8 migration: adding is_legacy column to projects...");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN is_legacy INTEGER DEFAULT 0"); } catch (_) {}
+  }
+
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
   console.log(`[DB] Migrations complete, version=${DB_VERSION}`);
 
@@ -1249,6 +1255,7 @@ async function readData(db) {
       costData: JSON.parse(p.cost_data || "{}"),
       fbCode: p.fb_code || "",
       fbPerson: p.fb_person || "",
+      isLegacy: Boolean(p.is_legacy),
     })),
   };
 }
@@ -1256,6 +1263,9 @@ async function readData(db) {
 async function syncProject(db, projectId) {
   const project = await get(db, "SELECT * FROM projects WHERE id = ?", [projectId]);
   if (!project) throw new Error("Project not found: " + projectId);
+
+  // Skip legacy (old data) projects — they don't sync from sheets
+  if (project.is_legacy) return;
 
   const leadUrl = project.lead_url;
   const costUrl = project.cost_url;
@@ -2755,6 +2765,82 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     const data = await readData(db);
     res.json({ ...data, newProjectId: result.lastID });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Import legacy/old data from a simple Google Sheet (STT, Họ tên, SĐT, Nhu cầu, Status, Feedback)
+app.post("/api/projects/import-legacy", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { name, sheetUrl } = req.body;
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Tên dự án không được trống" });
+    if (!sheetUrl) return res.status(400).json({ error: "Sheet URL không được trống" });
+
+    const existing = await get(db, "SELECT id FROM projects WHERE name = ?", [String(name).trim()]);
+    if (existing) return res.status(409).json({ error: "Dự án đã tồn tại" });
+
+    const cleanUrl = sanitizeSheetUrl(sheetUrl);
+    const csvText = await fetchCsvText(cleanUrl);
+    const { headers, rows } = parseCSV(csvText);
+
+    if (rows.length === 0) return res.status(400).json({ error: "Sheet không có dữ liệu" });
+
+    // Create project with is_legacy = 1
+    const projResult = await run(db,
+      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, is_legacy) VALUES(?, '', '', '', '', 1)",
+      [String(name).trim()]
+    );
+    const projectId = projResult.lastInsertRowid ?? projResult.lastID;
+
+    // Map legacy columns: STT, Họ tên khách, SĐT, Nhu cầu, Status, Feedback khách
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    let imported = 0;
+    const stmts = [];
+
+    for (const r of rows) {
+      const customerName = findVal(r, ["ho ten khach", "ho ten", "ten khach", "full name", "ten", "name", "ho va ten"]);
+      if (!customerName) continue;
+
+      let phone = findVal(r, ["sdt", "so dien thoai", "phone", "dien thoai", "so dt", "mobile"]);
+      if (phone.startsWith("p:")) phone = phone.slice(2);
+
+      const product = findVal(r, ["nhu cau", "nhu_cau", "san pham", "loai hinh", "product"]);
+      const rawStatus = findVal(r, ["status", "trang thai", "tinh trang"]);
+      const feedback = findVal(r, ["feedback khach", "feedback", "phan hoi", "ghi chu", "note"]);
+
+      const status = rawStatus ? normalizeStatus(rawStatus) : "new";
+
+      stmts.push({
+        sql: `INSERT INTO leads(project_id, name, phone, product, raw_status, status, created_at, sale_name, manager_name, campaign, source, budget, ads_id, adset_name, ad_name, form_name, sync_at)
+              VALUES(?, ?, ?, ?, ?, ?, ?, '', '', 'Data cũ', 'Legacy', '-', '', '-', '-', '-', ?)`,
+        args: [projectId, customerName, phone || "", product || "-", rawStatus || "", status, now, now]
+      });
+
+      // If there's feedback, create a history entry
+      if (feedback) {
+        stmts.push({
+          sql: `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
+                VALUES((SELECT MAX(id) FROM leads WHERE project_id = ? AND phone = ? AND name = ?), 'Import data cũ', ?, '', ?, '', '', 'legacy-import', ?)`,
+          args: [projectId, phone || "", customerName, status, feedback, now]
+        });
+      }
+      imported++;
+    }
+
+    if (stmts.length > 0) {
+      // Batch in chunks to avoid oversized batches
+      for (let i = 0; i < stmts.length; i += 200) {
+        await db.batch(stmts.slice(i, i + 200), "write");
+      }
+    }
+
+    lastSyncHash = "";
+    emitDataChanged("import-legacy");
+    const data = await readData(db);
+    console.log(`[import-legacy] Created project "${name}" (id=${projectId}) with ${imported} legacy leads`);
+    res.json({ ...data, newProjectId: projectId, imported });
+  } catch (err) {
+    console.error("[import-legacy] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
