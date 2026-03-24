@@ -1948,7 +1948,10 @@ app.put("/api/users/:id/profile", requireAuth, requireAdmin, async (req, res) =>
 const mapBot = b => {
   let projectIds = [];
   if (b.project_id) {
-    try { projectIds = JSON.parse(b.project_id); } catch { projectIds = [Number(b.project_id)].filter(Boolean); }
+    try {
+      const parsed = JSON.parse(b.project_id);
+      projectIds = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
+    } catch { projectIds = [Number(b.project_id)].filter(Boolean); }
   }
   return { id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, projectIds, createdAt: b.created_at };
 };
@@ -1960,7 +1963,10 @@ async function getBotForProject(projectId) {
     for (const bot of bots) {
       if (!bot.project_id) continue;
       let ids = [];
-      try { ids = JSON.parse(bot.project_id); } catch { ids = [Number(bot.project_id)].filter(Boolean); }
+      try {
+        const parsed = JSON.parse(bot.project_id);
+        ids = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
+      } catch { ids = [Number(bot.project_id)].filter(Boolean); }
       if (ids.includes(projectId)) return bot;
     }
   }
