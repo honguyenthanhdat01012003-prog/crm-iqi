@@ -2002,7 +2002,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
   const [shuffleStatus, setShuffleStatus] = useState("all");
-  const [shuffleProduct, setShuffleProduct] = useState("all");
+  const [shuffleProduct, setShuffleProduct] = useState([]);
+  const [shuffleProductOpen, setShuffleProductOpen] = useState(false);
   const [shufflePickCount, setShufflePickCount] = useState("all");
   const [shuffleSelected, setShuffleSelected] = useState(new Set());
   const [shuffling, setShuffling] = useState(false);
@@ -2191,8 +2192,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       if (shuffleStatus === "unassigned") list = list.filter(l => !l.saleName || l.saleName === "Chưa chia");
       else list = list.filter(l => l.status === shuffleStatus);
     }
-    if (shuffleProduct !== "all") {
-      list = list.filter(l => (l.product || "-") === shuffleProduct);
+    if (shuffleProduct.length > 0) {
+      list = list.filter(l => shuffleProduct.includes(l.product || "-"));
     }
     // Filter by date range (lead createdAt within startDate..endDate)
     if (shuffleStartDate) {
@@ -2606,13 +2607,31 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                       </select>
                     </div>
-                    <div style={{ minWidth: 180 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>3b. Lọc theo nhu cầu</label>
-                      <select value={shuffleProduct} onChange={(e) => setShuffleProduct(e.target.value)}
-                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: shuffleProduct !== "all" ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
-                        <option value="all">Tất cả nhu cầu</option>
-                        {shuffleUniqueProducts.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
+                    <div style={{ minWidth: 180, position: "relative" }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>3b. Lọc theo nhu cầu {shuffleProduct.length > 0 && <span style={{ color: "#f59e0b" }}>({shuffleProduct.length})</span>}</label>
+                      <button onClick={() => setShuffleProductOpen(p => !p)}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: shuffleProduct.length > 0 ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937", background: "#fff", cursor: "pointer", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {shuffleProduct.length === 0 ? "Tất cả nhu cầu" : shuffleProduct.join(", ")}
+                      </button>
+                      {shuffleProductOpen && (
+                        <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 50, background: "#fff", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.15)", border: "1px solid #e5e7eb", width: 240, maxHeight: 250, overflow: "auto", marginTop: 2 }}>
+                          <div style={{ padding: "6px 10px", borderBottom: "1px solid #f3f4f6", display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+                            <button onClick={() => setShuffleProduct([...shuffleUniqueProducts])} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 11, padding: 0 }}>Chọn tất cả</button>
+                            <button onClick={() => setShuffleProduct([])} style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 11, padding: 0 }}>Xóa</button>
+                          </div>
+                          {shuffleUniqueProducts.map(p => (
+                            <label key={p} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, background: shuffleProduct.includes(p) ? "#eff6ff" : "transparent" }}>
+                              <input type="checkbox" checked={shuffleProduct.includes(p)}
+                                onChange={() => setShuffleProduct(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])} />
+                              {p}
+                            </label>
+                          ))}
+                          <div style={{ padding: "6px 10px", borderTop: "1px solid #f3f4f6", textAlign: "right" }}>
+                            <button onClick={() => setShuffleProductOpen(false)}
+                              style={{ background: "#2563eb", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 14px", borderRadius: 6 }}>OK</button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div style={{ minWidth: 145 }}>
                       <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Ngày bắt đầu có khách</label>
