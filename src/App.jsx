@@ -2095,9 +2095,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
-    const filtered = tab ? leads.filter(tab.filter) : [...leads];
+    const base = filteredLeads;
+    const filtered = tab ? base.filter(tab.filter) : [...base];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
-  }, [leads, activeTab, LEAD_TABS]);
+  }, [filteredLeads, activeTab, LEAD_TABS]);
 
   // Navigate to highlighted lead from notification click
   useEffect(() => {
