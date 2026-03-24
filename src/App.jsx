@@ -2002,6 +2002,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
   const [shuffleStatus, setShuffleStatus] = useState("all");
+  const [shuffleProduct, setShuffleProduct] = useState("all");
   const [shufflePickCount, setShufflePickCount] = useState("all");
   const [shuffleSelected, setShuffleSelected] = useState(new Set());
   const [shuffling, setShuffling] = useState(false);
@@ -2190,6 +2191,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       if (shuffleStatus === "unassigned") list = list.filter(l => !l.saleName || l.saleName === "Chưa chia");
       else list = list.filter(l => l.status === shuffleStatus);
     }
+    if (shuffleProduct !== "all") {
+      list = list.filter(l => (l.product || "-") === shuffleProduct);
+    }
     // Filter by date range (lead createdAt within startDate..endDate)
     if (shuffleStartDate) {
       const start = new Date(shuffleStartDate + "T00:00:00");
@@ -2214,7 +2218,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       return true;
     });
     return list;
-  }, [leads, shuffleProject, shuffleStatus, shuffleStartDate, shuffleEndDate]);
+  }, [leads, shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
+
+  // Unique products for shuffle project
+  const shuffleUniqueProducts = useMemo(() => {
+    const pid = Number(shuffleProject);
+    if (!pid) return [];
+    const set = new Set();
+    leads.filter(l => l.projectId === pid).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
+    return [...set].sort((a, b) => a.localeCompare(b, "vi"));
+  }, [leads, shuffleProject]);
 
   // Auto-select based on pick count
   useEffect(() => {
@@ -2229,7 +2242,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   }, [shufflePickCount, shuffleFilteredLeads]);
 
   // Reset when project/status/date changes
-  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus, shuffleStartDate, shuffleEndDate]);
+  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
 
   // Calculate schedule preview
   const schedulePreview = useMemo(() => {
@@ -2591,6 +2604,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         <option value="all">Tất cả trạng thái</option>
                         <option value="unassigned">Chưa chia (chưa có sale)</option>
                         {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                    </div>
+                    <div style={{ minWidth: 180 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>3b. Lọc theo nhu cầu</label>
+                      <select value={shuffleProduct} onChange={(e) => setShuffleProduct(e.target.value)}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: shuffleProduct !== "all" ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
+                        <option value="all">Tất cả nhu cầu</option>
+                        {shuffleUniqueProducts.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
                     </div>
                     <div style={{ minWidth: 145 }}>
