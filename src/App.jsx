@@ -2006,8 +2006,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [shuffleSelectedSales, setShuffleSelectedSales] = useState([]);
   const [shuffleStartDate, setShuffleStartDate] = useState("");
   const [shuffleEndDate, setShuffleEndDate] = useState("");
-  const [shuffleDistributeTime, setShuffleDistributeTime] = useState("08:00");
+  const [shuffleDistributeTimes, setShuffleDistributeTimes] = useState(["08:00"]);
   const [shuffleLeadsPerDay, setShuffleLeadsPerDay] = useState(5);
+  const [shuffleNumSlots, setShuffleNumSlots] = useState(1);
   const [scheduleDetailId, setScheduleDetailId] = useState(null);
   const [scheduleDetailData, setScheduleDetailData] = useState(null);
   const [scheduleDetailLoading, setScheduleDetailLoading] = useState(false);
@@ -2227,7 +2228,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           endDate: shuffleEndDate,
           leadsPerDay: shuffleLeadsPerDay,
           leadIds: ids,
-          distributeTime: shuffleDistributeTime,
+          distributeTimes: shuffleDistributeTimes,
         }),
       });
       const data = await r.json();
@@ -2549,13 +2550,38 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
                     </div>
                     <div style={{ minWidth: 120 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>6. Giờ chia lead</label>
-                      <input type="time" value={shuffleDistributeTime} onChange={(e) => setShuffleDistributeTime(e.target.value)}
-                        step="1"
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>6. Lead/ngày/người</label>
+                      <input type="number" min={1} max={100} value={shuffleLeadsPerDay}
+                        onChange={(e) => {
+                          const v = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                          setShuffleLeadsPerDay(v);
+                          if (v < shuffleNumSlots) {
+                            setShuffleNumSlots(v);
+                            setShuffleDistributeTimes(prev => prev.slice(0, v));
+                          }
+                        }}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
                     </div>
+                    <div style={{ minWidth: 130 }}>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>7. Số khung giờ/ngày</label>
+                      <select value={shuffleNumSlots}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          setShuffleNumSlots(n);
+                          setShuffleDistributeTimes(prev => {
+                            const arr = [...prev];
+                            while (arr.length < n) arr.push(arr.length === 0 ? "08:00" : arr.length === 1 ? "12:00" : "18:00");
+                            return arr.slice(0, n);
+                          });
+                        }}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
+                        {Array.from({ length: Math.min(shuffleLeadsPerDay, 10) }, (_, i) => i + 1).map(n => (
+                          <option key={n} value={n}>{n} khung giờ</option>
+                        ))}
+                      </select>
+                    </div>
                     <div style={{ minWidth: 150 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>7. Chọn số lượng lead</label>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>8. Chọn số lượng lead</label>
                       <select value={shufflePickCount} onChange={(e) => setShufflePickCount(e.target.value)}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }}>
                         <option value="all">Tất cả ({shuffleFilteredLeads.length})</option>
@@ -2568,12 +2594,35 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     </div>
                   </div>
 
+                  {/* Time slot pickers */}
+                  {shuffleNumSlots > 0 && (
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12, alignItems: "flex-end" }}>
+                      {shuffleDistributeTimes.map((t, i) => {
+                        const perSlot = Math.ceil(shuffleLeadsPerDay / shuffleNumSlots);
+                        return (
+                          <div key={i} style={{ minWidth: 140 }}>
+                            <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>
+                              Khung {i + 1} ({perSlot} lead/người)
+                            </label>
+                            <input type="time" value={t}
+                              onChange={(e) => {
+                                const arr = [...shuffleDistributeTimes];
+                                arr[i] = e.target.value;
+                                setShuffleDistributeTimes(arr);
+                              }}
+                              style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Date range info */}
                   {shuffleStartDate && shuffleEndDate && (
                     <div style={{ background: "#fefce8", border: "1px solid #fde68a", borderRadius: 8, padding: 8, marginBottom: 10, fontSize: 11, color: "#92400e" }}>
                       📅 Giai đoạn nhận khách: <strong>{shuffleStartDate}</strong> → <strong>{shuffleEndDate}</strong>
                       &nbsp;| Lead trong giai đoạn: <strong>{shuffleFilteredLeads.length}</strong>
-                      &nbsp;| Chia bắt đầu từ hôm nay, 5 lead/ngày/người xoay vòng đến hết.
+                      &nbsp;| Chia {shuffleLeadsPerDay} lead/ngày/người × {shuffleNumSlots} khung giờ ({shuffleDistributeTimes.join(', ')}).
                     </div>
                   )}
 
@@ -2584,14 +2633,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, color: "#374151" }}>
                         <div>👥 Số sale: <strong>{shuffleSelectedSales.length} người</strong></div>
                         <div>📊 Tổng lead: <strong>{shuffleSelected.size}</strong></div>
-                        <div>� Lead/ngày/người: <strong>{schedulePreview.perDay}</strong></div>
+                        <div>📋 Lead/ngày/người: <strong>{schedulePreview.perDay}</strong></div>
                         <div>📝 Lead/ngày tổng: <strong>{schedulePreview.totalPerDay}</strong></div>
+                        <div>🕐 Khung giờ: <strong>{shuffleNumSlots} khung</strong> ({Math.ceil(schedulePreview.perDay / shuffleNumSlots)} lead/khung/người)</div>
+                        <div>⏰ Giờ chia: <strong>{shuffleDistributeTimes.join(' | ')}</strong></div>
                         <div>🔄 Số tour: <strong>{schedulePreview.totalTours} tour</strong> ({schedulePreview.daysNeeded} ngày/tour)</div>
                         <div>⏱️ Tổng số ngày: <strong>{schedulePreview.totalDays} ngày</strong></div>
                         <div>👤 Mỗi người nhận: <strong>tất cả {shuffleSelected.size} lead</strong> (qua {schedulePreview.totalTours} tour)</div>
                       </div>
                       <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
-                        Lead trong giai đoạn {shuffleStartDate} → {shuffleEndDate}. Mỗi tour chia {schedulePreview.perPersonPerTour} lead/người, xoay vòng {schedulePreview.totalTours} tour để tất cả sale đều nhận đủ lead.
+                        Mỗi ngày chia {schedulePreview.perDay} lead/người chia thành {shuffleNumSlots} khung giờ ({shuffleDistributeTimes.map((t, i) => `${t}: ${Math.ceil(schedulePreview.perDay / shuffleNumSlots)} lead`).join(', ')}). Xoay vòng {schedulePreview.totalTours} tour.
                       </div>
                     </div>
                   )}
@@ -2702,7 +2753,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         </div>
                         <div style={{ color: "#6b7280", marginBottom: 4 }}>
                           Sale: {sch.saleNames.join(", ")} | {sch.leadsPerDay} lead/ngày/người
-                          {sch.distributeTime && ` | ⏰ ${sch.distributeTime}`}
+                          {sch.distributeTimes && sch.distributeTimes.length > 0 && ` | ⏰ ${sch.distributeTimes.join(', ')}`}
                           {sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
                         </div>
                         <div style={{ background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 2 }}>
@@ -2748,7 +2799,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                             <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
                               {projName}
                               {sch && sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
-                              {sch && sch.distributeTime && ` | ⏰ ${sch.distributeTime}`}
+                              {sch && sch.distributeTimes && sch.distributeTimes.length > 0 && ` | ⏰ ${sch.distributeTimes.join(', ')}`}
                               {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
                               {sch && sch.totalTours > 1 && ` | Tour ${Math.min((sch.currentTour || 0) + 1, sch.totalTours)}/${sch.totalTours}`}
                             </div>

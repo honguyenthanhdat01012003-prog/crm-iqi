@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 8; // Bump this when adding new DDL/migrations
+const DB_VERSION = 9; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -225,6 +225,7 @@ async function initDb() {
     "ALTER TABLE lead_history ADD COLUMN source TEXT DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN mgr_assign_idx INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN ads_id TEXT DEFAULT ''",
+    "ALTER TABLE lead_schedules ADD COLUMN last_processed_slot INTEGER DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -328,6 +329,20 @@ async function initDb() {
   if (dbVersion < 8) {
     console.log("[DB] v8 migration: adding is_legacy column to projects...");
     try { await run(db, "ALTER TABLE projects ADD COLUMN is_legacy INTEGER DEFAULT 0"); } catch (_) {}
+  }
+
+  // --- v9: Multi time slot support for lead schedules ---
+  if (dbVersion < 9) {
+    console.log("[DB] v9 migration: multi time slot support...");
+    // Convert old single distribute_time to JSON array format
+    try {
+      const scheds = await all(db, "SELECT id, distribute_time FROM lead_schedules");
+      for (const s of scheds) {
+        if (s.distribute_time && !s.distribute_time.startsWith('[')) {
+          await run(db, "UPDATE lead_schedules SET distribute_time = ? WHERE id = ?", [JSON.stringify([s.distribute_time]), s.id]);
+        }
+      }
+    } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3046,38 +3061,54 @@ async function processSchedules(db, triggerUser) {
   let totalAssigned = 0;
 
   for (const sch of schedules) {
-    // Skip if already processed today
-    if (sch.last_processed_date === today) continue;
+    // Parse distribute times (array or legacy single string)
+    let distTimes = [];
+    try { distTimes = JSON.parse(sch.distribute_time || '["08:00"]'); } catch { distTimes = [sch.distribute_time || '08:00']; }
+    if (!Array.isArray(distTimes)) distTimes = [String(distTimes)];
+    const numSlots = distTimes.length;
 
-    // Check if it's time to distribute (only process if current time >= distribute_time)
-    const distTime = (sch.distribute_time || '08:00').slice(0, 5); // normalize to HH:MM
-    if (nowHHMM < distTime) continue;
+    // Determine which slot to process next
+    let lastSlot = sch.last_processed_slot || 0;
+    if (sch.last_processed_date !== today) lastSlot = 0; // new day → reset slot counter
+
+    // Find next unprocessed slot whose time has passed
+    let slotToProcess = -1;
+    for (let s = lastSlot; s < numSlots; s++) {
+      const slotTime = (distTimes[s] || '08:00').slice(0, 5);
+      if (nowHHMM >= slotTime) slotToProcess = s;
+    }
+    if (slotToProcess < 0) continue; // no slot ready yet
+    // If already processed this slot today, skip
+    if (sch.last_processed_date === today && slotToProcess < lastSlot) continue;
+    if (sch.last_processed_date === today && slotToProcess === lastSlot - 1) continue;
 
     const saleList = JSON.parse(sch.sale_names || "[]");
     const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
     if (!saleList.length || !leadIdList.length) continue;
 
     const currentTour = sch.current_tour || 0;
-    const totalTours = saleList.length; // mỗi sale đều nhận hết tất cả lead
+    const totalTours = saleList.length;
 
     const remaining = leadIdList.slice(sch.assigned_index);
     if (!remaining.length) {
-      // Hết lead trong tour hiện tại - kiểm tra còn tour tiếp không
       const nextTour = currentTour + 1;
       if (nextTour >= totalTours) {
-        // Hết tất cả các tour → hoàn thành
         await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
       } else {
-        // Reset về đầu danh sách cho tour mới
         await run(db, "UPDATE lead_schedules SET assigned_index = 0, current_tour = ? WHERE id = ?", [nextTour, sch.id]);
       }
       continue;
     }
 
-    // Calculate how many leads to assign today: leads_per_day * number of sales
+    // Calculate leads for this slot: total perDay split across slots processed so far
     const perDay = sch.leads_per_day || 5;
-    const totalToday = perDay * saleList.length;
-    const batch = remaining.slice(0, totalToday);
+    const slotsProcessedSoFar = sch.last_processed_date === today ? lastSlot : 0;
+    const leadsAlreadyToday = slotsProcessedSoFar * Math.ceil(perDay / numSlots) * saleList.length;
+    const perSlotPerPerson = Math.ceil(perDay / numSlots);
+    // Process all slots from slotsProcessedSoFar to slotToProcess (inclusive)
+    const slotsNow = slotToProcess - slotsProcessedSoFar + 1;
+    const leadsThisBatch = perSlotPerPerson * slotsNow * saleList.length;
+    const batch = remaining.slice(0, leadsThisBatch);
 
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
@@ -3091,7 +3122,7 @@ async function processSchedules(db, triggerUser) {
       if (processedLids.has(lid)) continue;
       processedLids.add(lid);
       // Tour offset: tour 0 → S0,S1,S2; tour 1 → S1,S2,S0; tour 2 → S2,S0,S1
-      const saleIdx = (Math.floor(i / perDay) + currentTour) % saleList.length;
+      const saleIdx = (Math.floor(i / perSlotPerPerson) + currentTour) % saleList.length;
       const saleName = saleList[saleIdx];
 
       // Only set manager if lead has no manager yet
@@ -3119,17 +3150,17 @@ async function processSchedules(db, triggerUser) {
     let isDone = false;
     let newTour = currentTour;
     if (newIndex >= leadIdList.length) {
-      // Hết lead trong tour này
       const nextTour = currentTour + 1;
       if (nextTour >= totalTours) {
-        isDone = true; // Hoàn thành tất cả tour
+        isDone = true;
       } else {
-        newTour = nextTour; // Chuyển sang tour tiếp
+        newTour = nextTour;
       }
     }
+    const newSlot = slotToProcess + 1; // next slot to process
     stmts.push({
-      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, is_active = ?, assignment_log = ?, current_tour = ? WHERE id = ?",
-      args: [isDone ? newIndex : (newIndex >= leadIdList.length ? 0 : newIndex), today, isDone ? 0 : 1, JSON.stringify(updatedLog), newTour, sch.id],
+      sql: "UPDATE lead_schedules SET assigned_index = ?, last_processed_date = ?, last_processed_slot = ?, is_active = ?, assignment_log = ?, current_tour = ? WHERE id = ?",
+      args: [isDone ? newIndex : (newIndex >= leadIdList.length ? 0 : newIndex), today, newSlot, isDone ? 0 : 1, JSON.stringify(updatedLog), newTour, sch.id],
     });
 
     await db.batch(stmts, "write");
@@ -3192,11 +3223,14 @@ async function processSchedules(db, triggerUser) {
 /* POST /api/leads/schedule-distribution - Create a new distribution schedule */
 app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTime } = req.body;
+    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTimes } = req.body;
     if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
     if (!startDate || !endDate) return res.status(400).json({ error: "Cần chọn ngày bắt đầu và ngày kết thúc" });
-    const distTime = distributeTime || '08:00';
+    const distTimesArr = Array.isArray(distributeTimes) && distributeTimes.length > 0
+      ? distributeTimes.map(t => String(t).slice(0, 5))
+      : ['08:00'];
+    const distTimeStr = JSON.stringify(distTimesArr);
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
 
@@ -3226,8 +3260,8 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     }
 
     await run(db,
-      `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log, distribute_time)
-       VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?, ?)`,
+      `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log, distribute_time, last_processed_slot)
+       VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?, ?, 0)`,
       [
         Number(projectId),
         statusFilter || "all",
@@ -3239,7 +3273,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
         uniqueLeadIds.length,
         req.user.displayName || req.user.username,
         JSON.stringify([]),
-        distTime,
+        distTimeStr,
       ]
     );
 
@@ -3248,10 +3282,10 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
 
     const data = await readData(db);
     await filterDataForRole(data, req.user);
-    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    const allSchedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
-      msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người). Giai đoạn: ${startDate} → ${endDate}`,
-      schedules: schedules.map(formatSchedule),
+      msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người, ${distTimesArr.length} khung giờ: ${distTimesArr.join(', ')}). Giai đoạn: ${startDate} → ${endDate}`,
+      schedules: allSchedules.map(formatSchedule),
       ...data,
     });
   } catch (err) {
@@ -3284,6 +3318,9 @@ app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, re
 
 function formatSchedule(s) {
   const saleNames = JSON.parse(s.sale_names || "[]");
+  let distributeTimes = [];
+  try { distributeTimes = JSON.parse(s.distribute_time || '["08:00"]'); } catch { distributeTimes = [s.distribute_time || '08:00']; }
+  if (!Array.isArray(distributeTimes)) distributeTimes = [String(distributeTimes)];
   return {
     id: s.id,
     projectId: s.project_id,
@@ -3300,7 +3337,7 @@ function formatSchedule(s) {
     isActive: Boolean(s.is_active),
     lastProcessedDate: s.last_processed_date || "",
     assignmentLog: JSON.parse(s.assignment_log || "[]"),
-    distributeTime: s.distribute_time || "08:00",
+    distributeTimes,
     currentTour: s.current_tour || 0,
     totalTours: saleNames.length,
   };
