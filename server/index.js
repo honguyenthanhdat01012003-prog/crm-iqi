@@ -3305,6 +3305,37 @@ app.get("/api/leads/schedules", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+/* PATCH /api/leads/schedules/:id - Update leads_per_day and distribute_time for active schedule */
+app.patch("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
+    if (!sch) return res.status(404).json({ error: "Schedule not found" });
+    if (!sch.is_active) return res.status(400).json({ error: "Chỉ có thể cập nhật lịch đang chạy" });
+    const { leadsPerDay, distributeTimes } = req.body;
+    const updates = [];
+    const params = [];
+    if (leadsPerDay !== undefined) {
+      const v = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
+      updates.push("leads_per_day = ?");
+      params.push(v);
+    }
+    if (Array.isArray(distributeTimes) && distributeTimes.length > 0) {
+      const arr = distributeTimes.map(t => String(t).slice(0, 5));
+      updates.push("distribute_time = ?");
+      params.push(JSON.stringify(arr));
+      // Reset last_processed_slot so new slots take effect from now
+      updates.push("last_processed_slot = 0");
+    }
+    if (!updates.length) return res.status(400).json({ error: "Không có gì để cập nhật" });
+    params.push(req.params.id);
+    await run(db, `UPDATE lead_schedules SET ${updates.join(", ")} WHERE id = ?`, params);
+    const allSchedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({ msg: "Đã cập nhật lịch chia lead", schedules: allSchedules.map(formatSchedule) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to update schedule" });
+  }
+});
+
 /* DELETE /api/leads/schedules/:id - Cancel a schedule */
 app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, res) => {
   try {

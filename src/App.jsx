@@ -476,9 +476,12 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [selectedProject, setSelectedProject] = useState(null);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [managerFilter, setManagerFilter] = useState("all");
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: null }); // {key: 'name'|'phone'|'product'|'status'|'createdAt', direction: 'asc'|'desc'}
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Project modal state
@@ -720,6 +723,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (statusFilter !== "all") {
       list = list.filter((l) => l.status === statusFilter);
     }
+    if (productFilter !== "all") {
+      list = list.filter((l) => (l.product || "-") === productFilter);
+    }
     if (searchText.trim()) {
       const q = searchText.toLowerCase();
       list = list.filter(
@@ -727,7 +733,8 @@ function CRMApp({ user, updateUser, onLogout }) {
           (l.name || "").toLowerCase().includes(q) ||
           (l.phone || "").includes(q) ||
           (l.campaign || "").toLowerCase().includes(q) ||
-          (l.saleName || "").toLowerCase().includes(q)
+          (l.saleName || "").toLowerCase().includes(q) ||
+          (l.product || "").toLowerCase().includes(q)
       );
     }
     // Date range filter based on createdAt (col R)
@@ -750,8 +757,30 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (managerFilter && managerFilter !== "all") {
       list = list.filter((l) => (l.managerName || "") === managerFilter);
     }
+    // Sort
+    if (sortConfig.key && sortConfig.direction) {
+      const dir = sortConfig.direction === "asc" ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        let va = "", vb = "";
+        if (sortConfig.key === "name") { va = a.name || ""; vb = b.name || ""; }
+        else if (sortConfig.key === "phone") { va = a.phone || ""; vb = b.phone || ""; }
+        else if (sortConfig.key === "product") { va = a.product || ""; vb = b.product || ""; }
+        else if (sortConfig.key === "status") { va = a.status || ""; vb = b.status || ""; }
+        else if (sortConfig.key === "saleName") { va = a.saleName || ""; vb = b.saleName || ""; }
+        else if (sortConfig.key === "managerName") { va = a.managerName || ""; vb = b.managerName || ""; }
+        else if (sortConfig.key === "createdAt") { va = a.createdAt || ""; vb = b.createdAt || ""; }
+        return va.localeCompare(vb, "vi") * dir;
+      });
+    }
     return list;
-  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter]);
+  }, [leads, selectedProject, statusFilter, productFilter, searchText, dateFrom, dateTo, managerFilter, sortConfig]);
+
+  // Unique product values for filter
+  const uniqueProducts = useMemo(() => {
+    const set = new Set();
+    (Array.isArray(leads) ? leads : []).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
+    return [...set].sort((a, b) => a.localeCompare(b, "vi"));
+  }, [leads]);
 
   // --- Cost data ---
   const projectCostMap = useMemo(() => {
@@ -2016,6 +2045,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleCalMonth, setScheduleCalMonth] = useState(null); // {month, year}
   const [scheduleHistoryPage, setScheduleHistoryPage] = useState(1);
   const [scheduleHistorySearch, setScheduleHistorySearch] = useState("");
+  const [scheduleEditing, setScheduleEditing] = useState(null); // {leadsPerDay, distributeTimes, numSlots}
   const [allUsers, setAllUsers] = useState([]);
   const [redistributing, setRedistributing] = useState(false);
   const isAdmin = user.role === "admin" || user.role === "manager";
@@ -2252,6 +2282,26 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       const data = await r.json();
       if (Array.isArray(data.schedules)) setSchedules(data.schedules);
       setShuffleMsg("[OK] " + (data.msg || "Đã hủy"));
+    } catch (e) {
+      setShuffleMsg("[ERR] " + e.message);
+    }
+  };
+
+  const handleUpdateSchedule = async (scheduleId) => {
+    if (!scheduleEditing) return;
+    try {
+      const r = await apiFetch(`${API}/leads/schedules/${scheduleId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadsPerDay: scheduleEditing.leadsPerDay, distributeTimes: scheduleEditing.distributeTimes }),
+      });
+      const data = await r.json();
+      if (data.error) { setShuffleMsg("[ERR] " + data.error); return; }
+      if (Array.isArray(data.schedules)) setSchedules(data.schedules);
+      setScheduleEditing(null);
+      setShuffleMsg("[OK] " + (data.msg || "Đã cập nhật"));
+      // Refresh detail data
+      handleViewScheduleDetail(scheduleId);
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
     }
@@ -2791,23 +2841,94 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       const sch = schedules.find(s => s.id === scheduleDetailId);
                       const projName = sch ? (projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`) : "";
                       return (
-                        <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-                          <div>
-                            <div style={{ fontWeight: 700, fontSize: 15, color: "#1f2937", display: "flex", alignItems: "center", gap: 6 }}>
-                              <Calendar size={16} /> Lịch chia lead #{scheduleDetailId}
+                        <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", flexShrink: 0 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div>
+                              <div style={{ fontWeight: 700, fontSize: 15, color: "#1f2937", display: "flex", alignItems: "center", gap: 6 }}>
+                                <Calendar size={16} /> Lịch chia lead #{scheduleDetailId}
+                              </div>
+                              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                                {projName}
+                                {sch && sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
+                                {sch && sch.distributeTimes && sch.distributeTimes.length > 0 && ` | ⏰ ${sch.distributeTimes.join(', ')}`}
+                                {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
+                                {sch && sch.totalTours > 1 && ` | Tour ${Math.min((sch.currentTour || 0) + 1, sch.totalTours)}/${sch.totalTours}`}
+                              </div>
                             </div>
-                            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                              {projName}
-                              {sch && sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
-                              {sch && sch.distributeTimes && sch.distributeTimes.length > 0 && ` | ⏰ ${sch.distributeTimes.join(', ')}`}
-                              {sch && ` | ${sch.saleNames.join(", ")} | ${sch.leadsPerDay} lead/ngày/người`}
-                              {sch && sch.totalTours > 1 && ` | Tour ${Math.min((sch.currentTour || 0) + 1, sch.totalTours)}/${sch.totalTours}`}
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {sch && sch.isActive && !scheduleEditing && (
+                                <button onClick={() => setScheduleEditing({ leadsPerDay: sch.leadsPerDay, distributeTimes: [...sch.distributeTimes], numSlots: sch.distributeTimes.length })}
+                                  style={{ background: "#f59e0b", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                                  <Settings size={13} /> Tăng hiệu suất
+                                </button>
+                              )}
+                              <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); setScheduleEditing(null); }}
+                                style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                                <X size={20} color="#6b7280" />
+                              </button>
                             </div>
                           </div>
-                          <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); }}
-                            style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
-                            <X size={20} color="#6b7280" />
-                          </button>
+                          {/* Inline edit form */}
+                          {scheduleEditing && sch && sch.isActive && (
+                            <div style={{ marginTop: 10, padding: 12, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 8 }}>⚡ Tăng hiệu suất (áp dụng từ bây giờ)</div>
+                              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                                <div>
+                                  <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>Lead/ngày/người</label>
+                                  <input type="number" min={1} max={100} value={scheduleEditing.leadsPerDay}
+                                    onChange={e => {
+                                      const v = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                                      setScheduleEditing(prev => ({
+                                        ...prev, leadsPerDay: v,
+                                        numSlots: Math.min(prev.numSlots, v),
+                                        distributeTimes: prev.distributeTimes.slice(0, Math.min(prev.numSlots, v))
+                                      }));
+                                    }}
+                                    style={{ width: 70, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>Khung giờ/ngày</label>
+                                  <select value={scheduleEditing.numSlots}
+                                    onChange={e => {
+                                      const v = Number(e.target.value);
+                                      setScheduleEditing(prev => {
+                                        const defaults = ["08:00", "12:00", "18:00", "09:00", "14:00", "17:00", "10:00", "15:00", "19:00", "20:00"];
+                                        const arr = [...prev.distributeTimes];
+                                        while (arr.length < v) arr.push(defaults[arr.length] || "08:00");
+                                        return { ...prev, numSlots: v, distributeTimes: arr.slice(0, v) };
+                                      });
+                                    }}
+                                    style={{ width: 60, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                    {Array.from({ length: Math.min(scheduleEditing.leadsPerDay, 10) }, (_, i) => i + 1).map(n => (
+                                      <option key={n} value={n}>{n}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {scheduleEditing.distributeTimes.map((t, i) => (
+                                  <div key={i}>
+                                    <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>Khung {i + 1} ({Math.ceil(scheduleEditing.leadsPerDay / scheduleEditing.numSlots)} lead)</label>
+                                    <input type="time" value={t}
+                                      onChange={e => setScheduleEditing(prev => {
+                                        const arr = [...prev.distributeTimes];
+                                        arr[i] = e.target.value;
+                                        return { ...prev, distributeTimes: arr };
+                                      })}
+                                      style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                                <button onClick={() => handleUpdateSchedule(scheduleDetailId)}
+                                  style={{ background: "#059669", color: "#fff", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 6 }}>
+                                  ✓ Áp dụng
+                                </button>
+                                <button onClick={() => setScheduleEditing(null)}
+                                  style={{ background: "none", border: "1px solid #d1d5db", cursor: "pointer", fontSize: 12, color: "#6b7280", padding: "6px 12px", borderRadius: 6 }}>
+                                  Hủy
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -3109,7 +3230,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       <div style={{ display: "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
         <input
           style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
-          placeholder="Tìm tên, SĐT, chiến dịch, sale..."
+          placeholder="Tìm tên, SĐT, chiến dịch, sale, nhu cầu..."
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
         />
@@ -3123,6 +3244,113 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {(dateFrom || dateTo) && (
             <button onClick={() => { setDateFrom(""); setDateTo(""); }}
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày"><X size={14} /></button>
+          )}
+        </div>
+        {/* Nhu cầu filter */}
+        {uniqueProducts.length > 0 && (
+          <select
+            value={productFilter}
+            onChange={(e) => { setProductFilter(e.target.value); setCurrentPage(1); }}
+            style={{ padding: "8px 12px", borderRadius: 8, border: productFilter !== "all" ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 150 }}
+          >
+            <option value="all">Tất cả nhu cầu</option>
+            {uniqueProducts.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        )}
+        {/* Advanced filter button */}
+        <div style={{ position: "relative" }}>
+          <button onClick={() => setShowAdvancedFilter(prev => !prev)}
+            style={{
+              padding: "8px 12px", borderRadius: 8, minHeight: 44,
+              border: (sortConfig.key || productFilter !== "all") ? "2px solid #2563eb" : "1px solid #d1d5db",
+              background: showAdvancedFilter ? "#eff6ff" : "#fff", cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: "#374151", fontWeight: 600,
+            }}
+            title="Bộ lọc nâng cao">
+            <Filter size={15} /> Lọc
+          </button>
+          {/* Advanced filter panel - Google Sheets style */}
+          {showAdvancedFilter && (
+            <div style={{
+              position: "absolute", top: "100%", right: 0, marginTop: 4, zIndex: 100,
+              background: "#fff", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,.18)", border: "1px solid #e5e7eb",
+              width: 280, padding: 0, overflow: "hidden",
+            }} onClick={e => e.stopPropagation()}>
+              {/* Sort options */}
+              <div style={{ borderBottom: "1px solid #f3f4f6" }}>
+                <button onClick={() => { setSortConfig({ key: "name", direction: "asc" }); setShowAdvancedFilter(false); }}
+                  style={{ width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#374151", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 15 }}>↑</span> Sắp xếp A đến Z
+                </button>
+                <button onClick={() => { setSortConfig({ key: "name", direction: "desc" }); setShowAdvancedFilter(false); }}
+                  style={{ width: "100%", textAlign: "left", padding: "10px 14px", background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#374151", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 15 }}>↓</span> Sắp xếp Z đến A
+                </button>
+              </div>
+              {/* Sort by field */}
+              <div style={{ borderBottom: "1px solid #f3f4f6", padding: "8px 14px" }}>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4, fontWeight: 600 }}>Sắp xếp theo</div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {[
+                    { key: "name", label: "Tên" }, { key: "product", label: "Nhu cầu" },
+                    { key: "status", label: "Trạng thái" }, { key: "saleName", label: "Sale" },
+                    { key: "createdAt", label: "Ngày" },
+                  ].map(f => (
+                    <button key={f.key}
+                      onClick={() => setSortConfig(prev => prev.key === f.key ? { key: f.key, direction: prev.direction === "asc" ? "desc" : "asc" } : { key: f.key, direction: "asc" })}
+                      style={{
+                        padding: "3px 8px", borderRadius: 6, fontSize: 11, cursor: "pointer", fontWeight: 600,
+                        border: sortConfig.key === f.key ? "1px solid #2563eb" : "1px solid #e5e7eb",
+                        background: sortConfig.key === f.key ? "#eff6ff" : "#fff",
+                        color: sortConfig.key === f.key ? "#2563eb" : "#6b7280",
+                      }}>
+                      {f.label} {sortConfig.key === f.key && (sortConfig.direction === "asc" ? "↑" : "↓")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Filter by nhu cầu (value list) */}
+              <div style={{ borderBottom: "1px solid #f3f4f6", padding: "8px 14px", maxHeight: 200, overflowY: "auto" }}>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4, fontWeight: 600 }}>Lọc theo nhu cầu</div>
+                <div style={{ marginBottom: 4, fontSize: 12 }}>
+                  <button onClick={() => { setProductFilter("all"); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 12, padding: 0, textDecoration: "underline" }}>
+                    Chọn tất cả
+                  </button>
+                  <span style={{ color: "#d1d5db" }}> - </span>
+                  <button onClick={() => { setProductFilter("-"); }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 12, padding: 0, textDecoration: "underline" }}>
+                    Xóa
+                  </button>
+                </div>
+                {uniqueProducts.map(p => (
+                  <div key={p} onClick={() => { setProductFilter(p); setCurrentPage(1); }}
+                    style={{
+                      padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 12,
+                      background: productFilter === p ? "#eff6ff" : "transparent",
+                      color: productFilter === p ? "#2563eb" : "#374151",
+                      fontWeight: productFilter === p ? 700 : 400,
+                      display: "flex", alignItems: "center", gap: 6,
+                    }}>
+                    <span style={{ width: 14, height: 14, borderRadius: 3, border: "1px solid #d1d5db", background: productFilter === p ? "#2563eb" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 10, color: "#fff" }}>
+                      {productFilter === p && "✓"}
+                    </span>
+                    {p}
+                  </div>
+                ))}
+              </div>
+              {/* Clear all / close */}
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px", gap: 8 }}>
+                <button onClick={() => { setProductFilter("all"); setSortConfig({ key: null, direction: null }); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#ef4444", fontWeight: 600 }}>
+                  Xóa bộ lọc
+                </button>
+                <button onClick={() => setShowAdvancedFilter(false)}
+                  style={{ background: "#2563eb", color: "#fff", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, padding: "5px 16px", borderRadius: 6 }}>
+                  OK
+                </button>
+              </div>
+            </div>
           )}
         </div>
         {setSelectedProject && (
