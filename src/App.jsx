@@ -1992,10 +1992,18 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       }
     }
   }, [leads]);
+
+  // Collapse expanded lead when switching projects
+  React.useEffect(() => {
+    setExpandedId(null);
+    expandedPhoneRef.current = null;
+  }, [selectedProject]);
+
   const [activeTab, setActiveTab] = useState("all");
   const [pageSize, setPageSize] = useState(15);
   const [currentPage, setCurrentPage] = useState(1);
-  const [productFilter, setProductFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState([]);
+  const [productFilterOpen, setProductFilterOpen] = useState(false);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
   const [shuffleOpen, setShuffleOpen] = useState(false);
@@ -2100,8 +2108,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   // Apply product filter & sort on top of leads from CRMApp
   const processedLeads = useMemo(() => {
     let list = Array.isArray(leads) ? [...leads] : [];
-    if (productFilter !== "all") {
-      list = list.filter((l) => (l.product || "-") === productFilter);
+    if (productFilter.length > 0) {
+      list = list.filter((l) => productFilter.includes(l.product || "-"));
     }
     if (sortConfig.key && sortConfig.direction) {
       const dir = sortConfig.direction === "asc" ? 1 : -1;
@@ -2611,7 +2619,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>3b. Lọc theo nhu cầu {shuffleProduct.length > 0 && <span style={{ color: "#f59e0b" }}>({shuffleProduct.length})</span>}</label>
                       <button onClick={() => setShuffleProductOpen(p => !p)}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: shuffleProduct.length > 0 ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937", background: "#fff", cursor: "pointer", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {shuffleProduct.length === 0 ? "Tất cả nhu cầu" : shuffleProduct.join(", ")}
+                        {shuffleProduct.length === 0 ? "Tất cả nhu cầu" : `Nhu cầu (${shuffleProduct.length})`}
                       </button>
                       {shuffleProductOpen && (
                         <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 50, background: "#fff", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.15)", border: "1px solid #e5e7eb", width: 240, maxHeight: 250, overflow: "auto", marginTop: 2 }}>
@@ -3291,23 +3299,43 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#ef4444" }} title="Xóa lọc ngày"><X size={14} /></button>
           )}
         </div>
-        {/* Nhu cầu filter */}
+        {/* Nhu cầu filter - multi-select */}
         {uniqueProducts.length > 0 && (
-          <select
-            value={productFilter}
-            onChange={(e) => { setProductFilter(e.target.value); setCurrentPage(1); }}
-            style={{ padding: "8px 12px", borderRadius: 8, border: productFilter !== "all" ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 150 }}
-          >
-            <option value="all">Tất cả nhu cầu</option>
-            {uniqueProducts.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <div style={{ position: "relative", minWidth: isMobile ? "100%" : 160 }}>
+            <button onClick={() => setProductFilterOpen(p => !p)}
+              style={{ padding: "8px 12px", borderRadius: 8, border: productFilter.length > 0 ? "2px solid #f59e0b" : "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", width: "100%", cursor: "pointer", textAlign: "left", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{productFilter.length === 0 ? "Tất cả nhu cầu" : `Nhu cầu (${productFilter.length})`}</span>
+              <ChevronDown size={14} style={{ flexShrink: 0, color: "#9ca3af" }} />
+            </button>
+            {productFilterOpen && (
+              <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 100, background: "#fff", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.15)", border: "1px solid #e5e7eb", width: Math.max(240, 0), maxHeight: 280, marginTop: 2, display: "flex", flexDirection: "column" }} onClick={e => e.stopPropagation()}>
+                <div style={{ padding: "6px 10px", borderBottom: "1px solid #f3f4f6", display: "flex", justifyContent: "space-between", fontSize: 11, flexShrink: 0 }}>
+                  <button onClick={() => setProductFilter([...uniqueProducts])} style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 11, padding: 0 }}>Chọn tất cả</button>
+                  <button onClick={() => setProductFilter([])} style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 11, padding: 0 }}>Xóa</button>
+                </div>
+                <div style={{ overflowY: "auto", flex: 1 }}>
+                  {uniqueProducts.map(p => (
+                    <label key={p} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, background: productFilter.includes(p) ? "#eff6ff" : "transparent" }}>
+                      <input type="checkbox" checked={productFilter.includes(p)}
+                        onChange={() => { setProductFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]); setCurrentPage(1); }} />
+                      {p}
+                    </label>
+                  ))}
+                </div>
+                <div style={{ padding: "6px 10px", borderTop: "1px solid #f3f4f6", textAlign: "right", flexShrink: 0 }}>
+                  <button onClick={() => setProductFilterOpen(false)}
+                    style={{ background: "#2563eb", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "4px 14px", borderRadius: 6 }}>OK</button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
         {/* Advanced filter button */}
         <div style={{ position: "relative" }}>
           <button onClick={() => setShowAdvancedFilter(prev => !prev)}
             style={{
               padding: "8px 12px", borderRadius: 8, minHeight: 44,
-              border: (sortConfig.key || productFilter !== "all") ? "2px solid #2563eb" : "1px solid #d1d5db",
+              border: (sortConfig.key || productFilter.length > 0) ? "2px solid #2563eb" : "1px solid #d1d5db",
               background: showAdvancedFilter ? "#eff6ff" : "#fff", cursor: "pointer",
               display: "flex", alignItems: "center", gap: 4, fontSize: 13, color: "#374151", fontWeight: 600,
             }}
@@ -3354,39 +3382,35 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   ))}
                 </div>
               </div>
-              {/* Filter by nhu cầu (value list) */}
+              {/* Filter by nhu cầu (value list) - multi-select */}
               <div style={{ borderBottom: "1px solid #f3f4f6", padding: "8px 14px", maxHeight: 200, overflowY: "auto" }}>
-                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4, fontWeight: 600 }}>Lọc theo nhu cầu</div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4, fontWeight: 600 }}>Lọc theo nhu cầu {productFilter.length > 0 && <span style={{ color: "#f59e0b" }}>({productFilter.length})</span>}</div>
                 <div style={{ marginBottom: 4, fontSize: 12 }}>
-                  <button onClick={() => { setProductFilter("all"); }}
+                  <button onClick={() => setProductFilter([...uniqueProducts])}
                     style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 12, padding: 0, textDecoration: "underline" }}>
                     Chọn tất cả
                   </button>
                   <span style={{ color: "#d1d5db" }}> - </span>
-                  <button onClick={() => { setProductFilter("-"); }}
+                  <button onClick={() => setProductFilter([])}
                     style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: 12, padding: 0, textDecoration: "underline" }}>
                     Xóa
                   </button>
                 </div>
                 {uniqueProducts.map(p => (
-                  <div key={p} onClick={() => { setProductFilter(p); setCurrentPage(1); }}
-                    style={{
+                  <label key={p} style={{
                       padding: "4px 8px", borderRadius: 4, cursor: "pointer", fontSize: 12,
-                      background: productFilter === p ? "#eff6ff" : "transparent",
-                      color: productFilter === p ? "#2563eb" : "#374151",
-                      fontWeight: productFilter === p ? 700 : 400,
+                      background: productFilter.includes(p) ? "#eff6ff" : "transparent",
                       display: "flex", alignItems: "center", gap: 6,
                     }}>
-                    <span style={{ width: 14, height: 14, borderRadius: 3, border: "1px solid #d1d5db", background: productFilter === p ? "#2563eb" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 10, color: "#fff" }}>
-                      {productFilter === p && "✓"}
-                    </span>
-                    {p}
-                  </div>
+                    <input type="checkbox" checked={productFilter.includes(p)}
+                      onChange={() => { setProductFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]); setCurrentPage(1); }} />
+                    <span style={{ color: productFilter.includes(p) ? "#2563eb" : "#374151", fontWeight: productFilter.includes(p) ? 700 : 400 }}>{p}</span>
+                  </label>
                 ))}
               </div>
               {/* Clear all / close */}
               <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 14px", gap: 8 }}>
-                <button onClick={() => { setProductFilter("all"); setSortConfig({ key: null, direction: null }); }}
+                <button onClick={() => { setProductFilter([]); setSortConfig({ key: null, direction: null }); }}
                   style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#ef4444", fontWeight: 600 }}>
                   Xóa bộ lọc
                 </button>
