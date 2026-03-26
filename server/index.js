@@ -3222,14 +3222,19 @@ async function processSchedules(db, triggerUser) {
       continue;
     }
 
-    // Calculate leads for this slot: total perDay split across slots processed so far
+    // Calculate leads for this slot: total perDay split EXACTLY across slots
     const perDay = sch.leads_per_day || 5;
     const slotsProcessedSoFar = sch.last_processed_date === today ? lastSlot : 0;
-    const leadsAlreadyToday = slotsProcessedSoFar * Math.ceil(perDay / numSlots) * saleList.length;
-    const perSlotPerPerson = Math.ceil(perDay / numSlots);
-    // Process all slots from slotsProcessedSoFar to slotToProcess (inclusive)
-    const slotsNow = slotToProcess - slotsProcessedSoFar + 1;
-    const leadsThisBatch = perSlotPerPerson * slotsNow * saleList.length;
+    // Exact distribution: first (perDay % numSlots) slots get floor+1, rest get floor
+    const basePerSlot = Math.floor(perDay / numSlots);
+    const extraSlots = perDay % numSlots;
+    // Sum exact leads per person for slots [slotsProcessedSoFar..slotToProcess]
+    let leadsPerPersonThisBatch = 0;
+    for (let s = slotsProcessedSoFar; s <= slotToProcess; s++) {
+      leadsPerPersonThisBatch += (s < extraSlots) ? basePerSlot + 1 : basePerSlot;
+    }
+    if (leadsPerPersonThisBatch <= 0) continue; // no leads for these slots
+    const leadsThisBatch = leadsPerPersonThisBatch * saleList.length;
     const batch = remaining.slice(0, leadsThisBatch);
 
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -3244,7 +3249,7 @@ async function processSchedules(db, triggerUser) {
       if (processedLids.has(lid)) continue;
       processedLids.add(lid);
       // Tour offset: tour 0 → S0,S1,S2; tour 1 → S1,S2,S0; tour 2 → S2,S0,S1
-      const saleIdx = (Math.floor(i / perSlotPerPerson) + currentTour) % saleList.length;
+      const saleIdx = (Math.floor(i / leadsPerPersonThisBatch) + currentTour) % saleList.length;
       const saleName = saleList[saleIdx];
 
       // Only set manager if lead has no manager yet
