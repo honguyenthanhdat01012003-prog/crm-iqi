@@ -1085,17 +1085,15 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let managerName = "";
 
     if (prev) {
-      // Restore meaningful status from old data (don't revert to "new")
-      const sheetStatus = l.status || "new";
-      if (sheetStatus === "new" && prev.status && prev.status !== "new") {
+      // ALWAYS preserve CRM status if user has changed it from "new"
+      if (prev.status && prev.status !== "new") {
         status = prev.status;
         rawStatus = prev.raw_status || rawStatus;
       }
-      // Restore sale assignment if sheet doesn't have one
-      const sheetSale = l.saleName || "";
+      // Restore sale assignment - CRM always wins over sheet
       if (prev.sale_name && prev.sale_name !== "Chưa chia") {
-        saleName = (sheetSale && sheetSale !== "Chưa chia") ? sheetSale : prev.sale_name;
-        saleId = saleName === prev.sale_name ? (prev.sale_id || saleId) : saleId;
+        saleName = prev.sale_name;
+        saleId = prev.sale_id || saleId;
       }
       // Restore notes, hot status, and manager_name
       if (prev.notes) notes = prev.notes;
@@ -2663,6 +2661,130 @@ app.post("/api/recover-sale-from-dbbackup", requireAuth, requireAdmin, async (re
     res.json({ total: currentLeads.length, fixedSale, fixedStatus, fixedManager, fixedHistory, backupLeads: backupLeads.length, details });
   } catch (err) {
     console.error("[recover-dbbackup] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Selective recovery: choose backup file + project, restore only status + feedback
+app.post("/api/recover-selective", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { filename, projectId } = req.body || {};
+    if (!filename || !projectId) return res.status(400).json({ error: "Cần chọn file backup và dự án" });
+    if (!String(filename).startsWith("crm_") || !String(filename).endsWith(".db")) {
+      return res.status(400).json({ error: "Tên file không hợp lệ" });
+    }
+    const backupPath = path.join(BACKUP_DIR, path.basename(String(filename)));
+    if (!fs.existsSync(backupPath)) return res.status(404).json({ error: "File backup không tồn tại" });
+
+    console.log(`[recover-selective] Opening ${filename} for project ${projectId}...`);
+    const backupDb = createClient({ url: `file:${backupPath}` });
+
+    // Read leads from backup for this project
+    const backupLeads = await all(backupDb,
+      "SELECT id, phone, name, sale_name, manager_name, status, raw_status FROM leads WHERE project_id = ?",
+      [projectId]
+    );
+    if (!backupLeads.length) {
+      return res.json({ total: 0, fixedSale: 0, fixedStatus: 0, fixedHistory: 0, message: "Backup không có lead nào cho dự án này" });
+    }
+
+    // Read history entries for this project from backup
+    let backupHistory = [];
+    try {
+      backupHistory = await all(backupDb,
+        `SELECT lh.lead_id, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.note, lh.source, lh.user_name, lh.created_at, l.phone as lead_phone
+         FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ?`,
+        [projectId]
+      );
+    } catch (e) { console.warn("[recover-selective] History read error:", e.message); }
+    backupHistory = backupHistory.filter(h => (h.source ?? "") !== "sheet");
+
+    // Build phone map from backup
+    const phoneMap = new Map();
+    for (const bl of backupLeads) {
+      const key = normalizePhoneKey(bl.phone);
+      if (key) phoneMap.set(key, bl);
+    }
+
+    // Group history by phone
+    const phoneHistoryMap = new Map();
+    for (const h of backupHistory) {
+      const key = normalizePhoneKey(h.lead_phone);
+      if (!key) continue;
+      if (!phoneHistoryMap.has(key)) phoneHistoryMap.set(key, []);
+      phoneHistoryMap.get(key).push(h);
+    }
+
+    // Get current leads for this project
+    const currentLeads = await all(db,
+      "SELECT id, phone, name, sale_name, manager_name, status FROM leads WHERE project_id = ?",
+      [projectId]
+    );
+
+    const phoneToCurrentId = new Map();
+    for (const cl of currentLeads) {
+      const key = normalizePhoneKey(cl.phone);
+      if (key) phoneToCurrentId.set(key, cl);
+    }
+
+    let fixedSale = 0, fixedStatus = 0, fixedManager = 0, fixedHistory = 0;
+
+    // Restore sale_name + status + manager
+    for (const cl of currentLeads) {
+      const key = normalizePhoneKey(cl.phone);
+      const bl = phoneMap.get(key);
+      if (!bl) continue;
+
+      const updates = [];
+      const params = [];
+
+      if ((!cl.sale_name || cl.sale_name === "Chưa chia") && bl.sale_name && bl.sale_name !== "Chưa chia") {
+        updates.push("sale_name = ?"); params.push(bl.sale_name); fixedSale++;
+      }
+      if ((!cl.manager_name || cl.manager_name === "") && bl.manager_name) {
+        updates.push("manager_name = ?"); params.push(bl.manager_name); fixedManager++;
+      }
+      if ((!cl.status || cl.status === "new") && bl.status && bl.status !== "new") {
+        updates.push("status = ?"); params.push(bl.status); fixedStatus++;
+      }
+
+      if (updates.length) {
+        params.push(cl.id);
+        await run(db, `UPDATE leads SET ${updates.join(", ")} WHERE id = ?`, params);
+      }
+    }
+
+    // Restore history entries
+    for (const [phoneKey, histEntries] of phoneHistoryMap) {
+      const currentLead = phoneToCurrentId.get(phoneKey);
+      if (!currentLead) continue;
+
+      for (const h of histEntries) {
+        const hAction = h.action ?? "";
+        const hCreatedAt = h.created_at ?? "";
+        if (!hAction) continue;
+
+        const exists = await get(db,
+          "SELECT 1 FROM lead_history WHERE lead_id = ? AND action = ? AND created_at = ?",
+          [currentLead.id, hAction, hCreatedAt]
+        );
+        if (exists) continue;
+
+        await run(db,
+          `INSERT INTO lead_history(lead_id, action, status, sale_name, feedback, contact_date, note, source, user_name, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [currentLead.id, hAction, h.status ?? "", h.sale_name ?? "", h.feedback ?? "", h.contact_date ?? "", h.note ?? "", h.source ?? "selective-restore", h.user_name ?? "", hCreatedAt || new Date().toISOString()]
+        );
+        fixedHistory++;
+      }
+    }
+
+    lastSyncHash = "";
+    emitDataChanged("recover-selective");
+    console.log(`[recover-selective] Done: ${fixedSale} sale, ${fixedStatus} status, ${fixedManager} manager, ${fixedHistory} history for project ${projectId}`);
+    res.json({ total: currentLeads.length, backupLeads: backupLeads.length, fixedSale, fixedStatus, fixedManager, fixedHistory });
+  } catch (err) {
+    console.error("[recover-selective] Error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

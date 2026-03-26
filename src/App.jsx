@@ -1967,6 +1967,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
 }
 
 function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter }) {
+  const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
   const expandedPhoneRef = React.useRef(null);
@@ -2415,7 +2416,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
             <Shuffle size={16} /> Chia Lead cho Sale
           </button>
-          {selectedProject && (
+          {isAdminOnly && selectedProject && (
             <button
               disabled={redistributing}
               onClick={async () => {
@@ -2442,7 +2443,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <Shield size={16} /> {redistributing ? "Đang chia..." : "Phân chia lại quản lý"}
             </button>
           )}
-          {selectedProject && (
+          {isAdminOnly && selectedProject && (
             <button
               onClick={async () => {
                 if (!window.confirm("Khôi phục lại Sale + Trạng thái từ lịch sử liên hệ?\nDùng khi bị mất dữ liệu sale sau sync lỗi.")) return;
@@ -2465,7 +2466,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <RefreshCw size={16} /> Khôi phục Sale từ lịch sử
             </button>
           )}
-          {selectedProject && (
+          {isAdminOnly && selectedProject && (
             <button
               onClick={async () => {
                 if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu.")) return;
@@ -2489,7 +2490,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <RefreshCw size={16} /> Khôi phục từ Backup
             </button>
           )}
-          <button
+          {isAdminOnly && <button
             onClick={async () => {
               if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ")) return;
               try {
@@ -2506,8 +2507,38 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #059669, #047857)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
             <RefreshCw size={16} /> Khôi phục Sale từ DB Backup
-          </button>
-          <button
+          </button>}
+          {isAdminOnly && <button
+            onClick={async () => {
+              try {
+                const r = await apiFetch(`${API}/backups`);
+                const data = await r.json();
+                if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
+                const projName = projects.find(p => p.id === selectedProject)?.name || "Tất cả";
+                const list = data.backups.map((b, i) => `${i + 1}. ${b.filename} (${b.sizeMB}MB) - ${new Date(b.date).toLocaleString("vi-VN")}`).join("\n");
+                const choice = window.prompt(`Khôi phục feedback cho: ${projName}\nChọn file backup:\n\n${list}\n\nNhập số thứ tự (hoặc Cancel):`);
+                if (!choice) return;
+                const idx = parseInt(choice) - 1;
+                if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
+                const selected = data.backups[idx];
+                if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
+                if (!window.confirm(`Khôi phục feedback/trạng thái cho dự án "${projName}"\ntừ backup: ${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nChỉ khôi phục status + sale + feedback cho dự án này.\nKhông ảnh hưởng dữ liệu khác.`)) return;
+                const r2 = await apiFetch(`${API}/recover-selective`, {
+                  method: "POST",
+                  body: JSON.stringify({ filename: selected.filename, projectId: selectedProject }),
+                });
+                const d2 = await r2.json();
+                if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
+                showToast(`Khôi phục xong: ${d2.fixedSale} sale, ${d2.fixedStatus} trạng thái, ${d2.fixedHistory} lịch sử (${d2.total} lead, backup có ${d2.backupLeads} lead)`, "success");
+                const r3 = await apiFetch(`${API}/data`);
+                const d3 = await r3.json();
+                applyApiData(d3);
+              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+            }}
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #d97706, #b45309)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
+            <RefreshCw size={16} /> Khôi phục theo dự án
+          </button>}
+          {isAdminOnly && <button
             onClick={async () => {
               if (!window.confirm("Backup database ngay bây giờ?")) return;
               try {
@@ -2519,8 +2550,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #0284c7, #0369a1)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <Save size={16} /> Backup DB
-          </button>
-          <button
+          </button>}
+          {isAdminOnly && <button
             onClick={async () => {
               try {
                 const r = await apiFetch(`${API}/backups`);
@@ -2541,7 +2572,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <RefreshCw size={16} /> Restore DB
-          </button>
+          </button>}
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
