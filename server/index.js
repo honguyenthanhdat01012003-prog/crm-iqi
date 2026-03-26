@@ -3250,25 +3250,41 @@ async function processSchedules(db, triggerUser) {
     const logEntries = []; // for assignment_log
 
     // Distribute leads: round-robin 1-by-1 across all sales (with tour offset)
+    // Skip leads already assigned to the target sale (avoid duplicate from parallel schedules)
     const processedLids = new Set();
     const saleCounts = new Array(numSales).fill(0);
-    for (let i = 0; i < batch.length; i++) {
-      const lid = batch[i];
+    let batchIdx = 0;
+    let roundCounter = 0;
+    while (batchIdx < batch.length) {
+      const lid = batch[batchIdx];
+      batchIdx++;
       if (processedLids.has(lid)) continue;
-      processedLids.add(lid);
+
       // Find next sale that still has quota, rotating with tour offset
-      let saleName = saleList[0];
-      const roundIdx = i % numSales;
+      const roundIdx = roundCounter % numSales;
       const saleIdx = (roundIdx + currentTour) % numSales;
-      // If this sale still has quota, assign; otherwise find next available
       let assignedIdx = saleIdx;
       if (saleCounts[assignedIdx] >= saleQuota[assignedIdx]) {
+        let found = false;
         for (let j = 1; j < numSales; j++) {
           const tryIdx = (saleIdx + j) % numSales;
-          if (saleCounts[tryIdx] < saleQuota[tryIdx]) { assignedIdx = tryIdx; break; }
+          if (saleCounts[tryIdx] < saleQuota[tryIdx]) { assignedIdx = tryIdx; found = true; break; }
         }
+        if (!found) break; // all quotas filled
       }
-      saleName = saleList[assignedIdx];
+      const saleName = saleList[assignedIdx];
+
+      // Check if this sale already has this lead (from another schedule or manual assign)
+      const existingLead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      if (existingLead && existingLead.sale_name === saleName) {
+        // Same sale already has this lead → skip, don't re-assign or duplicate history
+        processedLids.add(lid);
+        logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour, skipped: true });
+        continue;
+      }
+
+      processedLids.add(lid);
+      roundCounter++;
       saleCounts[assignedIdx]++;
 
       // Only set manager if lead has no manager yet
