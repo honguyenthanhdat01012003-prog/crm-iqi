@@ -827,6 +827,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "profile", label: "Hồ sơ cá nhân", icon: IdCard, adminOnly: false },
     { key: "messenger_inbox", label: "Hộp thư Messenger", icon: MessageSquare, adminOnly: true },
     { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: postChildren },
+    { key: "guide", label: "Hướng dẫn sử dụng", icon: BookOpen, adminOnly: true },
   ];
 
   const [openSubmenu, setOpenSubmenu] = useState("post_mgmt");
@@ -1201,6 +1202,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "fb_pages_mgmt" && isAdminOnly && <FbPagesPage />}
         {page === "sheet_config" && isAdminOnly && <SheetConfigPage />}
         {page === "messenger_inbox" && isAdminOnly && <MessengerInboxPage />}
+        {page === "guide" && isAdmin && <GuidePage />}
         </div>
       </main>
 
@@ -9994,6 +9996,366 @@ function CalendarPage({ projects }) {
     </div>
   );
 }
+/* ===== Guide Page ===== */
+function GuidePage() {
+  const [openSection, setOpenSection] = useState(null);
+  const toggle = (key) => setOpenSection(prev => prev === key ? null : key);
+
+  const sections = [
+    {
+      key: "overview",
+      icon: "🏠",
+      title: "Tổng quan hệ thống",
+      content: [
+        { type: "text", value: "CRM IQI là hệ thống quản lý khách hàng tiềm năng (lead) tích hợp Google Sheet, Telegram Bot và Facebook Messenger." },
+        { type: "mindmap", items: [
+          { label: "CRM IQI", level: 0 },
+          { label: "Quản lý Lead (Khách hàng)", level: 1 },
+          { label: "Chia lead tự động & thủ công", level: 1 },
+          { label: "Đồng bộ Google Sheet", level: 1 },
+          { label: "Telegram Bot thông báo", level: 1 },
+          { label: "Backup & Khôi phục", level: 1 },
+          { label: "Quản lý dự án đa dự án", level: 1 },
+          { label: "Dashboard & Báo cáo", level: 1 },
+          { label: "Chat nội bộ", level: 1 },
+          { label: "Quản lý bài đăng & Lịch", level: 1 },
+        ]},
+        { type: "roles", items: [
+          { role: "Admin", color: "#dc2626", desc: "Toàn quyền: quản lý dự án, user, chia lead, backup, cấu hình Sheet/Telegram" },
+          { role: "Manager", color: "#d97706", desc: "Xem lead dự án được gán, quản lý sale, không thấy nút backup/khôi phục" },
+          { role: "Sale", color: "#059669", desc: "Chỉ xem lead được chia cho mình, cập nhật trạng thái/feedback" },
+        ]},
+      ]
+    },
+    {
+      key: "leads",
+      icon: "👥",
+      title: "Quản lý khách hàng (Lead)",
+      content: [
+        { type: "text", value: "Lead được import từ Google Sheet hoặc thêm thủ công. Mỗi lead có trạng thái, sale phụ trách, quản lý, và lịch sử liên hệ." },
+        { type: "steps", title: "Quy trình xử lý lead", items: [
+          "Lead mới từ Sheet → trạng thái \"Mới\"",
+          "Admin chia lead cho Sale (thủ công hoặc lịch tự động)",
+          "Sale nhận thông báo Telegram với nút feedback",
+          "Sale bấm nút trạng thái trên Telegram → CRM tự cập nhật",
+          "Hoặc Sale vào CRM cập nhật trạng thái & ghi chú",
+        ]},
+        { type: "statuses", title: "21 trạng thái lead", items: [
+          { key: "new", label: "Mới", color: "#e88a2e" },
+          { key: "called", label: "Đã gọi", color: "#3b82f6" },
+          { key: "interested", label: "Quan tâm", color: "#8b5cf6" },
+          { key: "low_interest", label: "QT hời hợt", color: "#a78bfa" },
+          { key: "other_project", label: "QT DA khác", color: "#6366f1" },
+          { key: "appointment", label: "Hẹn xem", color: "#0ea5e9" },
+          { key: "booked", label: "Giữ chỗ", color: "#14b8a6" },
+          { key: "closed", label: "Chốt", color: "#059669" },
+          { key: "not_interested", label: "Không QT", color: "#6b7280" },
+          { key: "spam", label: "Phá/rác", color: "#ef4444" },
+          { key: "weak_finance", label: "TC yếu", color: "#f59e0b" },
+          { key: "unreachable", label: "Chưa LLĐ", color: "#94a3b8" },
+          { key: "callback", label: "Gọi lại sau", color: "#f97316" },
+          { key: "wrong_number", label: "Sai số", color: "#9ca3af" },
+          { key: "blocked", label: "Chặn", color: "#991b1b" },
+          { key: "has_sale", label: "Có sale khác", color: "#7c3aed" },
+          { key: "lost", label: "Mất", color: "#374151" },
+        ]},
+        { type: "tip", value: "💡 Lead có badge nhiệt độ: Cực nóng (≤24h), Nóng (≤72h), Ấm (≤7 ngày), Lạnh (>7 ngày) — dựa trên ngày tạo lead." },
+      ]
+    },
+    {
+      key: "distribution",
+      icon: "🔀",
+      title: "Chia lead cho Sale",
+      content: [
+        { type: "text", value: "Có 2 cách chia lead: Thủ công (chia ngay) và Lịch tự động (chia theo khung giờ hàng ngày)." },
+        { type: "mindmap", items: [
+          { label: "Chia Lead", level: 0 },
+          { label: "Thủ công (Shuffle)", level: 1 },
+          { label: "Chọn dự án → filter → chọn lead → chọn sale → Chia ngay", level: 2 },
+          { label: "Round-robin đều cho mỗi sale", level: 2 },
+          { label: "Lịch tự động (Schedule)", level: 1 },
+          { label: "Set số lead/ngày/người + khung giờ", level: 2 },
+          { label: "Hệ thống tự chia đúng giờ", level: 2 },
+          { label: "Tour xoay vòng sale qua nhiều ngày", level: 2 },
+        ]},
+        { type: "steps", title: "Cách tạo lịch chia tự động", items: [
+          "Vào tab Khách hàng → mở panel Chia Lead",
+          "Chọn dự án, filter trạng thái/nhu cầu/ngày",
+          "Chọn số lượng lead hoặc chọn tất cả",
+          "Chọn danh sách Sale tham gia",
+          "Set: Ngày bắt đầu, ngày kết thúc, số lead/ngày/người",
+          "Thêm khung giờ chia (VD: 08:00, 14:00, 18:00)",
+          "Bấm \"Tạo lịch chia\" → hệ thống tự chạy",
+        ]},
+        { type: "warning", value: "⚠️ Phân phối chính xác: VD 5 lead/ngày chia 3 khung giờ → slot 1: 2 lead, slot 2: 2 lead, slot 3: 1 lead. Không bao giờ vượt số được set." },
+        { type: "tip", value: "💡 Nếu chạy 2 lịch song song cùng dự án, lead đã chia cho sale A sẽ không chia trùng lại cho sale A — hệ thống tự bỏ qua." },
+        { type: "steps", title: "Tăng hiệu suất (sửa lịch đang chạy)", items: [
+          "Bấm xem chi tiết lịch chia → bấm nút \"Tăng hiệu suất\"",
+          "Sửa số lead/ngày/người hoặc thêm/bớt khung giờ",
+          "Bấm Lưu → áp dụng ngay từ slot tiếp theo",
+        ]},
+      ]
+    },
+    {
+      key: "telegram",
+      icon: "📱",
+      title: "Telegram Bot",
+      content: [
+        { type: "text", value: "Telegram Bot gửi thông báo lead mới cho Sale kèm nút feedback trạng thái trực tiếp." },
+        { type: "steps", title: "Cách cài đặt Telegram Bot", items: [
+          "Tạo bot trên @BotFather → lấy Token",
+          "Vào CRM → Cấu hình Sheet → tab Telegram Bots",
+          "Thêm bot: nhập tên + token + chọn dự án",
+          "Bấm \"Thiết lập Webhook\" → copy URL webhook",
+          "Sale nhắn /start cho bot → hệ thống tự nhận diện",
+        ]},
+        { type: "mindmap", items: [
+          { label: "Telegram Flow", level: 0 },
+          { label: "Lead được chia → Bot gửi tin nhắn cho Sale", level: 1 },
+          { label: "Tin nhắn có 16 nút trạng thái", level: 2 },
+          { label: "Sale bấm nút → CRM cập nhật trạng thái", level: 2 },
+          { label: "Bot hỏi feedback → Sale nhập text → CRM lưu", level: 2 },
+          { label: "Thu hồi lead → Bot xóa tin nhắn cũ + gửi thông báo", level: 1 },
+        ]},
+        { type: "warning", value: "⚠️ Mỗi sale cần nhắn /start cho bot trước khi nhận thông báo. Telegram ID phải khớp với tài khoản CRM." },
+      ]
+    },
+    {
+      key: "sync",
+      icon: "🔄",
+      title: "Đồng bộ Google Sheet",
+      content: [
+        { type: "text", value: "Hệ thống tự đồng bộ dữ liệu lead từ Google Sheet mỗi 3 phút. Có thể đồng bộ thủ công bất cứ lúc nào." },
+        { type: "steps", title: "Cách cấu hình Sheet", items: [
+          "Vào Cấu hình Sheet → chọn dự án",
+          "Dán URL Google Sheet (phải publish ra web: File → Share → Publish to web)",
+          "Sheet lead: chứa cột Họ tên, SĐT, Nhu cầu, Trạng thái",
+          "Sheet chi phí (tuỳ chọn): cột Ngày, Tổng tiền chi tiêu, Tổng số lead",
+          "Bấm Lưu → Đồng bộ ngay",
+        ]},
+        { type: "tip", value: "💡 Khi đồng bộ, CRM luôn giữ nguyên trạng thái + sale đã sửa trên CRM. Sheet chỉ thêm lead mới, không ghi đè dữ liệu CRM." },
+        { type: "warning", value: "⚠️ Trước mỗi lần đồng bộ, hệ thống tự backup dữ liệu cũ. Nếu có lỗi, dùng chức năng Khôi phục để lấy lại." },
+      ]
+    },
+    {
+      key: "backup",
+      icon: "💾",
+      title: "Backup & Khôi phục",
+      content: [
+        { type: "text", value: "Hệ thống có 3 lớp backup tự động + nhiều cách khôi phục dữ liệu." },
+        { type: "mindmap", items: [
+          { label: "Backup & Recovery", level: 0 },
+          { label: "Auto Backup", level: 1 },
+          { label: "Backup trước mỗi lần đồng bộ Sheet (settings table)", level: 2 },
+          { label: "Backup file DB mỗi 8 giờ + khi khởi động server", level: 2 },
+          { label: "Giữ backup 7 ngày gần nhất", level: 2 },
+          { label: "Khôi phục", level: 1 },
+          { label: "Khôi phục chọn lọc: chọn file backup + dự án cụ thể", level: 2 },
+          { label: "Khôi phục từ lịch sử: lấy lại sale/trạng thái từ history", level: 2 },
+          { label: "Khôi phục từ DB backup: toàn bộ dữ liệu từ file .db", level: 2 },
+        ]},
+        { type: "steps", title: "Cách khôi phục chọn lọc", items: [
+          "Vào Khách hàng → mở panel Khôi phục (chỉ Admin thấy)",
+          "Bấm \"Khôi phục chọn lọc từ backup\"",
+          "Bước 1: Chọn dự án cần khôi phục",
+          "Bước 2: Chọn file backup (hiển thị ngày + dung lượng)",
+          "Bấm Khôi phục → chỉ khôi phục sale + trạng thái cho dự án đó",
+        ]},
+        { type: "tip", value: "💡 Khôi phục là additive (cộng dồn), không xoá dữ liệu hiện tại. Có thể khôi phục nhiều lần từ các backup khác nhau." },
+      ]
+    },
+    {
+      key: "schedule_detail",
+      icon: "📅",
+      title: "Lịch chia lead - Chi tiết",
+      content: [
+        { type: "text", value: "Mỗi lịch chia có: dự án, danh sách sale, pool lead, số lead/ngày/người, khung giờ, và hệ thống Tour xoay vòng." },
+        { type: "mindmap", items: [
+          { label: "Lịch chia lead", level: 0 },
+          { label: "Cấu hình", level: 1 },
+          { label: "leads_per_day: số lead mỗi sale nhận/ngày", level: 2 },
+          { label: "distribute_time: khung giờ chia (VD: 08:00, 14:00)", level: 2 },
+          { label: "start_date → end_date: khoảng ngày hoạt động", level: 2 },
+          { label: "sale_names: danh sách sale tham gia", level: 2 },
+          { label: "Tour System", level: 1 },
+          { label: "Tour 1: Sale A nhận lead 1-5, Sale B nhận 6-10...", level: 2 },
+          { label: "Tour 2: Sale B nhận lead 1-5, Sale C nhận 6-10... (xoay)", level: 2 },
+          { label: "Đảm bảo công bằng qua nhiều ngày", level: 2 },
+          { label: "Bảo vệ", level: 1 },
+          { label: "Không vượt quá số lead/ngày/người đã set", level: 2 },
+          { label: "Không chia trùng lead cho cùng 1 sale", level: 2 },
+          { label: "Chia đều khi lead không đủ (chênh lệch max 1)", level: 2 },
+        ]},
+        { type: "table", title: "Ví dụ: 50 lead/ngày, 8 slot, 27 sale", headers: ["Tham số", "Giá trị", "Giải thích"], rows: [
+          ["leads_per_day", "50", "Mỗi sale nhận 50 lead/ngày"],
+          ["Số slot", "8", "Chia làm 8 đợt trong ngày"],
+          ["Lead/slot/sale", "6 hoặc 7", "floor(50/8)=6, 2 slot đầu nhận 7"],
+          ["Tổng/ngày/sale", "Đúng 50", "6×6 + 7×2 = 50 ✓"],
+          ["Nếu còn 455 lead / 27 sale", "16-17/sale", "Chia đều, chênh max 1"],
+        ]},
+      ]
+    },
+    {
+      key: "projects",
+      icon: "🏗️",
+      title: "Quản lý dự án",
+      content: [
+        { type: "text", value: "Mỗi dự án có sheet lead riêng, sheet chi phí riêng, và quản lý riêng. Admin gán manager vào dự án qua bảng user_projects." },
+        { type: "steps", title: "Tạo dự án mới", items: [
+          "Vào Dự án → Thêm dự án",
+          "Nhập tên, URL Google Sheet lead, URL Sheet chi phí (tuỳ chọn)",
+          "Lưu → Đồng bộ lần đầu",
+          "Gán manager: Vào Quản lý tài khoản → sửa user → chọn dự án",
+        ]},
+        { type: "warning", value: "⚠️ Xoá dự án sẽ xoá TOÀN BỘ lead + lịch sử + lịch chia. Không thể hoàn tác. Hãy backup trước!" },
+      ]
+    },
+    {
+      key: "users_mgmt",
+      icon: "👤",
+      title: "Quản lý tài khoản",
+      content: [
+        { type: "text", value: "Admin tạo tài khoản cho Manager và Sale. Sale đăng nhập lần đầu phải đổi mật khẩu." },
+        { type: "steps", title: "Tạo tài khoản sale nhanh", items: [
+          "Vào Quản lý tài khoản → Tạo tự động từ lead",
+          "Hệ thống quét tên sale trong Sheet → tạo tài khoản với mật khẩu mặc định",
+          "Sale đăng nhập → bắt buộc đổi mật khẩu (8+ ký tự, có hoa/thường/số/đặc biệt)",
+        ]},
+        { type: "tip", value: "💡 Có thể gán Telegram ID cho sale trong phần sửa tài khoản. Sale cũng có thể tự cập nhật bằng cách nhắn /start cho bot." },
+      ]
+    },
+    {
+      key: "revoke",
+      icon: "🚫",
+      title: "Thu hồi lead",
+      content: [
+        { type: "text", value: "Admin có thể thu hồi lead đã chia bằng cách xoá entry \"Chia lead\" trong lịch sử." },
+        { type: "steps", title: "Cách thu hồi lead", items: [
+          "Click vào lead → mở lịch sử",
+          "Tìm entry \"Chia lead\" → bấm nút xoá (🗑️)",
+          "Hệ thống tự động: xoá tin nhắn Telegram của sale + gửi thông báo thu hồi",
+          "Lead trở về sale trước đó (nếu có) hoặc về trạng thái chưa chia",
+        ]},
+        { type: "warning", value: "⚠️ Huỷ lịch chia (nút Huỷ) chỉ dừng lịch, KHÔNG thu hồi lead đã chia. Muốn thu hồi phải xoá từng entry lịch sử." },
+      ]
+    },
+    {
+      key: "filters",
+      icon: "🔍",
+      title: "Bộ lọc & Tìm kiếm",
+      content: [
+        { type: "text", value: "CRM hỗ trợ nhiều kiểu lọc: text search, trạng thái, nhu cầu (sản phẩm), ngày, quản lý." },
+        { type: "mindmap", items: [
+          { label: "Bộ lọc", level: 0 },
+          { label: "Tìm kiếm text: tên, SĐT, chiến dịch, sale, nhu cầu", level: 1 },
+          { label: "Tab trạng thái: 22 tab nhanh (tất cả + 21 trạng thái)", level: 1 },
+          { label: "Nhu cầu: multi-select checkbox", level: 1 },
+          { label: "Ngày: từ ngày → đến ngày", level: 1 },
+          { label: "Quản lý: dropdown (chỉ admin/manager thấy)", level: 1 },
+          { label: "Sắp xếp: click header cột", level: 1 },
+        ]},
+      ]
+    },
+  ];
+
+  const renderContent = (items) => items.map((item, idx) => {
+    if (item.type === "text") return <p key={idx} style={{ margin: "8px 0", lineHeight: 1.7, color: "#374151", fontSize: 14 }}>{item.value}</p>;
+    if (item.type === "tip") return <div key={idx} style={{ margin: "10px 0", padding: "12px 16px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 13, color: "#166534", lineHeight: 1.6 }}>{item.value}</div>;
+    if (item.type === "warning") return <div key={idx} style={{ margin: "10px 0", padding: "12px 16px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, fontSize: 13, color: "#92400e", lineHeight: 1.6 }}>{item.value}</div>;
+    if (item.type === "steps") return (
+      <div key={idx} style={{ margin: "12px 0" }}>
+        {item.title && <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3c20", marginBottom: 8 }}>{item.title}</div>}
+        <div style={{ background: "#f8fafb", borderRadius: 8, padding: "12px 16px", border: "1px solid #e5e7eb" }}>
+          {item.items.map((step, si) => (
+            <div key={si} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: si < item.items.length - 1 ? 8 : 0 }}>
+              <span style={{ minWidth: 24, height: 24, borderRadius: "50%", background: "#e88a2e", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0 }}>{si + 1}</span>
+              <span style={{ fontSize: 13, lineHeight: 1.6, color: "#374151", paddingTop: 2 }}>{step}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+    if (item.type === "mindmap") return (
+      <div key={idx} style={{ margin: "12px 0", background: "#f8fafb", borderRadius: 10, padding: 16, border: "1px solid #e5e7eb" }}>
+        {item.items.map((node, ni) => {
+          const colors = ["#1a3c20", "#e88a2e", "#6b7280"];
+          const sizes = [16, 14, 12.5];
+          const weights = [800, 600, 400];
+          const ml = node.level * 28;
+          return (
+            <div key={ni} style={{ marginLeft: ml, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: node.level === 0 ? 10 : 7, height: node.level === 0 ? 10 : 7, borderRadius: "50%", background: colors[node.level] || "#9ca3af", flexShrink: 0 }} />
+              <span style={{ fontSize: sizes[node.level] || 12, fontWeight: weights[node.level] || 400, color: colors[node.level] || "#6b7280" }}>{node.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    );
+    if (item.type === "roles") return (
+      <div key={idx} style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "12px 0" }}>
+        {item.items.map((r, ri) => (
+          <div key={ri} style={{ flex: "1 1 200px", minWidth: 200, background: "#fff", border: `2px solid ${r.color}22`, borderRadius: 10, padding: "14px 16px" }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: r.color, marginBottom: 4 }}>{r.role}</div>
+            <div style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{r.desc}</div>
+          </div>
+        ))}
+      </div>
+    );
+    if (item.type === "statuses") return (
+      <div key={idx} style={{ margin: "12px 0" }}>
+        {item.title && <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3c20", marginBottom: 8 }}>{item.title}</div>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {item.items.map((s, si) => (
+            <span key={si} style={{ padding: "4px 10px", borderRadius: 6, fontSize: 11.5, fontWeight: 600, background: s.color + "18", color: s.color, border: `1px solid ${s.color}33` }}>{s.label}</span>
+          ))}
+        </div>
+      </div>
+    );
+    if (item.type === "table") return (
+      <div key={idx} style={{ margin: "12px 0", overflowX: "auto" }}>
+        {item.title && <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3c20", marginBottom: 8 }}>{item.title}</div>}
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead><tr>{item.headers.map((h, hi) => <th key={hi} style={{ padding: "8px 12px", background: "#f0f4f1", borderBottom: "2px solid #c5d9c8", textAlign: "left", fontWeight: 700, color: "#1a3c20" }}>{h}</th>)}</tr></thead>
+          <tbody>{item.rows.map((row, ri) => <tr key={ri}>{row.map((cell, ci) => <td key={ci} style={{ padding: "8px 12px", borderBottom: "1px solid #e5e7eb", color: "#374151" }}>{cell}</td>)}</tr>)}</tbody>
+        </table>
+      </div>
+    );
+    return null;
+  });
+
+  return (
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, color: "#1a3c20", display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+          <BookOpen size={24} /> Hướng dẫn sử dụng CRM
+        </h1>
+        <p style={{ color: "#6b7280", fontSize: 13, margin: "6px 0 0" }}>Tài liệu hướng dẫn chi tiết các tính năng và cơ chế hoạt động của hệ thống CRM IQI.</p>
+      </div>
+
+      {sections.map(sec => (
+        <div key={sec.key} style={{ marginBottom: 8, borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", background: openSection === sec.key ? "#fff" : "#fafbfc", transition: "background .2s" }}>
+          <button
+            onClick={() => toggle(sec.key)}
+            style={{
+              width: "100%", padding: "16px 20px", border: "none", background: "transparent",
+              display: "flex", alignItems: "center", gap: 12, cursor: "pointer", textAlign: "left",
+            }}
+          >
+            <span style={{ fontSize: 22 }}>{sec.icon}</span>
+            <span style={{ flex: 1, fontSize: 15, fontWeight: 700, color: "#1a3c20" }}>{sec.title}</span>
+            <ChevronDown size={18} style={{ color: "#9ca3af", transition: "transform .2s", transform: openSection === sec.key ? "rotate(180deg)" : "rotate(0)" }} />
+          </button>
+          {openSection === sec.key && (
+            <div style={{ padding: "0 20px 20px", borderTop: "1px solid #e5e7eb" }}>
+              {renderContent(sec.content)}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ===== Shared styles ===== */
 const tableStyle = { width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: 13 };
 const thStyle = {
