@@ -3503,9 +3503,57 @@ app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, re
   try {
     await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [req.params.id]);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: "Đã hủy lịch chia lead", schedules: schedules.map(formatSchedule) });
+    res.json({ msg: "Đã hủy lịch chia lead (lead đã chia giữ nguyên)", schedules: schedules.map(formatSchedule) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to cancel schedule" });
+  }
+});
+
+/* POST /api/leads/schedules/:id/revoke - Revoke all assigned leads from this schedule */
+app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
+    if (!sch) return res.status(404).json({ error: "Không tìm thấy lịch chia" });
+
+    const assignmentLog = JSON.parse(sch.assignment_log || "[]");
+    const assignedEntries = assignmentLog.filter(e => !e.skipped);
+    if (!assignedEntries.length) return res.json({ msg: "Không có lead nào để thu hồi", schedules: (await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")).map(formatSchedule) });
+
+    const stmts = [];
+    let revokedCount = 0;
+
+    for (const entry of assignedEntries) {
+      const lid = entry.leadId;
+      // Delete the "Chia lead" history entry for this schedule
+      const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND feedback LIKE ? ORDER BY seq DESC LIMIT 1",
+        [lid, `%#${sch.id}%`]);
+      if (hist) {
+        stmts.push({ sql: "DELETE FROM lead_history WHERE id = ?", args: [hist.id] });
+      }
+      // Check if this lead still has the sale from this schedule
+      const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      if (lead && lead.sale_name === entry.saleName) {
+        // Revert to previous sale or clear
+        const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND feedback NOT LIKE ? ORDER BY seq DESC LIMIT 1",
+          [lid, `%#${sch.id}%`]);
+        if (prev) {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [prev.sale_name, lid] });
+        } else {
+          stmts.push({ sql: "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", args: [lid] });
+        }
+        revokedCount++;
+      }
+    }
+
+    // Deactivate schedule and clear log
+    stmts.push({ sql: "UPDATE lead_schedules SET is_active = 0, assignment_log = '[]', assigned_index = 0 WHERE id = ?", args: [sch.id] });
+
+    if (stmts.length > 0) await db.batch(stmts, "write");
+
+    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({ msg: `Thu hồi thành công ${revokedCount} lead từ lịch #${sch.id}`, schedules: schedules.map(formatSchedule) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to revoke schedule" });
   }
 });
 

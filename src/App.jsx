@@ -2265,10 +2265,15 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const totalPerDay = perDay * salesCount;
     const totalLeads = shuffleSelected.size;
     const daysNeeded = Math.ceil(totalLeads / totalPerDay);
-    const perPersonPerTour = Math.ceil(totalLeads / salesCount);
+    // Actual per-person: if totalLeads < totalPerDay, distribute evenly
+    const actualPerPerson = totalLeads < totalPerDay
+      ? Math.ceil(totalLeads / salesCount)
+      : perDay;
+    const perPersonPerTour = Math.min(actualPerPerson * daysNeeded, Math.ceil(totalLeads / salesCount));
     const totalTours = salesCount;
     const totalDays = daysNeeded * totalTours;
-    return { daysNeeded, totalPerDay, perPersonPerTour, perDay, totalTours, totalDays };
+    const isReduced = totalLeads < totalPerDay;
+    return { daysNeeded, totalPerDay: Math.min(totalPerDay, totalLeads), perPersonPerTour, perDay: isReduced ? actualPerPerson : perDay, totalTours, totalDays, isReduced, actualPerPerson };
   }, [shuffleSelectedSales, shuffleSelected.size, shuffleLeadsPerDay]);
 
   const handleScheduleDistribution = async () => {
@@ -2313,6 +2318,21 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       const data = await r.json();
       if (Array.isArray(data.schedules)) setSchedules(data.schedules);
       setShuffleMsg("[OK] " + (data.msg || "Đã hủy"));
+    } catch (e) {
+      setShuffleMsg("[ERR] " + e.message);
+    }
+  };
+
+  const handleRevokeSchedule = async (scheduleId) => {
+    if (!window.confirm("Thu hồi TẤT CẢ lead đã chia từ lịch này? Lead sẽ trở về trạng thái chưa chia.")) return;
+    try {
+      const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/revoke`, { method: "POST" });
+      const data = await r.json();
+      if (data.error) { setShuffleMsg("[ERR] " + data.error); return; }
+      if (Array.isArray(data.schedules)) setSchedules(data.schedules);
+      setShuffleMsg(`[OK] ${data.msg}`);
+      // Refresh schedule detail if open
+      if (scheduleDetailId === scheduleId) handleViewScheduleDetail(scheduleId);
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
     }
@@ -2828,12 +2848,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                   {/* Schedule info box */}
                   {schedulePreview && shuffleStartDate && shuffleEndDate && (
-                    <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12 }}>
-                      <div style={{ fontWeight: 700, color: "#1e40af", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}><Info size={14} /> Thông tin lịch chia lead</div>
+                    <div style={{ background: schedulePreview.isReduced ? "#fffbeb" : "#eff6ff", border: `1px solid ${schedulePreview.isReduced ? "#fde68a" : "#bfdbfe"}`, borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 12 }}>
+                      <div style={{ fontWeight: 700, color: schedulePreview.isReduced ? "#92400e" : "#1e40af", marginBottom: 6, display: "flex", alignItems: "center", gap: 4 }}><Info size={14} /> Thông tin lịch chia lead</div>
+                      {schedulePreview.isReduced && (
+                        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "8px 12px", marginBottom: 8, fontSize: 11, color: "#dc2626", fontWeight: 600 }}>
+                          ⚠️ Tổng lead ({shuffleSelected.size}) ít hơn yêu cầu ({(shuffleLeadsPerDay || 5) * shuffleSelectedSales.length}/ngày). Hệ thống sẽ chia đều: ~{schedulePreview.actualPerPerson} lead/người/ngày.
+                        </div>
+                      )}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, color: "#374151" }}>
                         <div>👥 Số sale: <strong>{shuffleSelectedSales.length} người</strong></div>
                         <div>📊 Tổng lead: <strong>{shuffleSelected.size}</strong></div>
-                        <div>📋 Lead/ngày/người: <strong>{schedulePreview.perDay}</strong></div>
+                        <div>📋 Lead/ngày/người: <strong>{schedulePreview.perDay}</strong>{schedulePreview.isReduced && <span style={{ color: "#dc2626", fontSize: 10 }}> (giảm từ {shuffleLeadsPerDay})</span>}</div>
                         <div>📝 Lead/ngày tổng: <strong>{schedulePreview.totalPerDay}</strong></div>
                         <div>🕐 Khung giờ: <strong>{shuffleNumSlots} khung</strong> ({Math.ceil(schedulePreview.perDay / shuffleNumSlots)} lead/khung/người)</div>
                         <div>⏰ Giờ chia: <strong>{shuffleDistributeTimes.join(' | ')}</strong></div>
@@ -2842,7 +2867,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         <div>👤 Mỗi người nhận: <strong>tất cả {shuffleSelected.size} lead</strong> (qua {schedulePreview.totalTours} tour)</div>
                       </div>
                       <div style={{ marginTop: 6, fontSize: 11, color: "#6b7280" }}>
-                        Mỗi ngày chia {schedulePreview.perDay} lead/người chia thành {shuffleNumSlots} khung giờ ({shuffleDistributeTimes.map((t, i) => `${t}: ${Math.ceil(schedulePreview.perDay / shuffleNumSlots)} lead`).join(', ')}). Xoay vòng {schedulePreview.totalTours} tour.
+                        Mỗi ngày chia {schedulePreview.perDay} lead/người chia thành {shuffleNumSlots} khung giờ. Chia đều cho tất cả sale, chênh lệch tối đa 1 lead. Xoay vòng {schedulePreview.totalTours} tour.
                       </div>
                     </div>
                   )}
@@ -3012,6 +3037,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                   <Settings size={13} /> Tăng hiệu suất
                                 </button>
                               )}
+                              {sch && isAdminOnly && (
+                                <button onClick={() => handleRevokeSchedule(sch.id)}
+                                  style={{ background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                                  <Trash2 size={13} /> Thu hồi
+                                </button>
+                              )}
                               <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); setScheduleEditing(null); }}
                                 style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                                 <X size={20} color="#6b7280" />
@@ -3116,9 +3147,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           while (rIdx < remaining.length) {
                             const dayBatch = remaining.slice(rIdx, rIdx + totalPerDay);
                             const dateStr = futureDate.toISOString().slice(0, 10);
-                            for (let i = 0; i < dayBatch.length; i++) {
-                              const saleIdx = (Math.floor(i / perDay) + tour) % sNames.length;
-                              futurePlan.push({ leadId: dayBatch[i], saleName: sNames[saleIdx], date: dateStr, planned: true, tour });
+                            // Even round-robin: distribute dayBatch evenly across all sales
+                            const ns = sNames.length;
+                            const perPerson = Math.floor(dayBatch.length / ns);
+                            const extra = dayBatch.length % ns;
+                            let leadIdx = 0;
+                            for (let si = 0; si < ns; si++) {
+                              const rotatedSi = (si + tour) % ns;
+                              const quota = perPerson + (si < extra ? 1 : 0);
+                              for (let q = 0; q < quota; q++) {
+                                if (leadIdx < dayBatch.length) {
+                                  futurePlan.push({ leadId: dayBatch[leadIdx], saleName: sNames[rotatedSi], date: dateStr, planned: true, tour });
+                                  leadIdx++;
+                                }
+                              }
                             }
                             rIdx += dayBatch.length;
                             futureDate.setDate(futureDate.getDate() + 1);
