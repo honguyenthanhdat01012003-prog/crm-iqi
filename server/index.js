@@ -3234,23 +3234,42 @@ async function processSchedules(db, triggerUser) {
       leadsPerPersonThisBatch += (s < extraSlots) ? basePerSlot + 1 : basePerSlot;
     }
     if (leadsPerPersonThisBatch <= 0) continue; // no leads for these slots
-    const leadsThisBatch = leadsPerPersonThisBatch * saleList.length;
-    const batch = remaining.slice(0, leadsThisBatch);
+    const idealBatch = leadsPerPersonThisBatch * saleList.length;
+    const batch = remaining.slice(0, Math.min(idealBatch, remaining.length));
+
+    // Build per-sale assignment count: distribute evenly, max diff = 1 lead
+    const numSales = saleList.length;
+    const actualPerPerson = Math.floor(batch.length / numSales);
+    const extraLeads = batch.length % numSales;
+    // saleQuota[i] = how many leads sale i gets this batch
+    const saleQuota = saleList.map((_, idx) => actualPerPerson + (idx < extraLeads ? 1 : 0));
 
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     const assignedLeads = []; // {leadId, saleName} for Telegram
     const logEntries = []; // for assignment_log
 
-    // Round-robin with tour offset: mỗi tour shift sale assignment
+    // Distribute leads: round-robin 1-by-1 across all sales (with tour offset)
     const processedLids = new Set();
+    const saleCounts = new Array(numSales).fill(0);
     for (let i = 0; i < batch.length; i++) {
       const lid = batch[i];
       if (processedLids.has(lid)) continue;
       processedLids.add(lid);
-      // Tour offset: tour 0 → S0,S1,S2; tour 1 → S1,S2,S0; tour 2 → S2,S0,S1
-      const saleIdx = (Math.floor(i / leadsPerPersonThisBatch) + currentTour) % saleList.length;
-      const saleName = saleList[saleIdx];
+      // Find next sale that still has quota, rotating with tour offset
+      let saleName = saleList[0];
+      const roundIdx = i % numSales;
+      const saleIdx = (roundIdx + currentTour) % numSales;
+      // If this sale still has quota, assign; otherwise find next available
+      let assignedIdx = saleIdx;
+      if (saleCounts[assignedIdx] >= saleQuota[assignedIdx]) {
+        for (let j = 1; j < numSales; j++) {
+          const tryIdx = (saleIdx + j) % numSales;
+          if (saleCounts[tryIdx] < saleQuota[tryIdx]) { assignedIdx = tryIdx; break; }
+        }
+      }
+      saleName = saleList[assignedIdx];
+      saleCounts[assignedIdx]++;
 
       // Only set manager if lead has no manager yet
       const schLead = await get(db, "SELECT manager_name FROM leads WHERE id = ?", [lid]);
