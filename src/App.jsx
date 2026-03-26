@@ -2096,10 +2096,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     { key: "wrong_phone", label: "Thuê bao", Icon: XCircle, filter: (l) => l.status === "wrong_phone" },
     { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => l.status === "wrong_number" },
     { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => l.status === "hung_up" },
-    { key: "blocked", label: "Chặn", Icon: ShieldOff, filter: (l) => l.status === "blocked" },
     { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => l.status === "has_sale" },
-    { key: "called", label: "Đã gọi", Icon: Phone, filter: (l) => l.status === "called" },
-    { key: "lost", label: "Mất", Icon: Skull, filter: (l) => l.status === "lost" },
   ], []);
 
   // Unique product values for filter
@@ -4188,8 +4185,14 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
           allEvents.forEach((evt) => {
             if (evt.type === "chia") {
-              currentBlock = { saleName: evt.saleName, chiaDate: evt.date, chiaBy: evt.assignedBy, chiaId: evt.id, contacts: [], isImplicit: false };
-              saleBlocks.push(currentBlock);
+              // Merge duplicate chia events for same sale into one block
+              const existingBlock = [...saleBlocks].reverse().find(b => b.saleName === evt.saleName);
+              if (existingBlock) {
+                currentBlock = existingBlock;
+              } else {
+                currentBlock = { saleName: evt.saleName, chiaDate: evt.date, chiaBy: evt.assignedBy, chiaId: evt.id, contacts: [], isImplicit: false };
+                saleBlocks.push(currentBlock);
+              }
             } else if (evt.type === "recall") {
               recalls.push(evt);
             } else {

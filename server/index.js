@@ -3091,12 +3091,11 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
             `Bấm nút bên dưới để cập nhật trạng thái.`,
           ].join("\n");
           const statusList = [
-            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
-            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
-            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
-            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
-            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
-            ["lost", "Mất"],
+            ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
+            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
+            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
+            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
+            ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -3352,12 +3351,11 @@ async function processSchedules(db, triggerUser) {
             `Bấm nút bên dưới để cập nhật trạng thái.`,
           ].join("\n");
           const statusList = [
-            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
-            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
-            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
-            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
-            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
-            ["lost", "Mất"],
+            ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
+            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
+            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
+            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
+            ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -3840,12 +3838,11 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
           // Build inline keyboard with status buttons (3 per row)
           const statusList = [
-            ["called", "Đã gọi"], ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"],
-            ["other_project", "QT DA khác"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
-            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
-            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
-            ["wrong_number", "Sai số"], ["blocked", "Chặn"], ["has_sale", "Có sale khác"],
-            ["lost", "Mất"],
+            ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
+            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
+            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
+            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
+            ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
