@@ -2034,6 +2034,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleEditing, setScheduleEditing] = useState(null); // {leadsPerDay, distributeTimes, numSlots}
   const [allUsers, setAllUsers] = useState([]);
   const [redistributing, setRedistributing] = useState(false);
+  const [recoverModal, setRecoverModal] = useState(null); // { backups: [], step: 1|2, selectedBackup, selectedProject, loading }
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -2514,25 +2515,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 const r = await apiFetch(`${API}/backups`);
                 const data = await r.json();
                 if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
-                const projName = projects.find(p => p.id === selectedProject)?.name || "Tất cả";
-                const list = data.backups.map((b, i) => `${i + 1}. ${b.filename} (${b.sizeMB}MB) - ${new Date(b.date).toLocaleString("vi-VN")}`).join("\n");
-                const choice = window.prompt(`Khôi phục feedback cho: ${projName}\nChọn file backup:\n\n${list}\n\nNhập số thứ tự (hoặc Cancel):`);
-                if (!choice) return;
-                const idx = parseInt(choice) - 1;
-                if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
-                const selected = data.backups[idx];
-                if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
-                if (!window.confirm(`Khôi phục feedback/trạng thái cho dự án "${projName}"\ntừ backup: ${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nChỉ khôi phục status + sale + feedback cho dự án này.\nKhông ảnh hưởng dữ liệu khác.`)) return;
-                const r2 = await apiFetch(`${API}/recover-selective`, {
-                  method: "POST",
-                  body: JSON.stringify({ filename: selected.filename, projectId: selectedProject }),
-                });
-                const d2 = await r2.json();
-                if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
-                showToast(`Khôi phục xong: ${d2.fixedSale} sale, ${d2.fixedStatus} trạng thái, ${d2.fixedHistory} lịch sử (${d2.total} lead, backup có ${d2.backupLeads} lead)`, "success");
-                const r3 = await apiFetch(`${API}/data`);
-                const d3 = await r3.json();
-                applyApiData(d3);
+                setRecoverModal({ backups: data.backups, step: 1, selectedBackup: null, selectedProject: null, loading: false });
               } catch (e) { showToast("Lỗi: " + e.message, "error"); }
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #d97706, #b45309)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
@@ -2573,6 +2556,87 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <RefreshCw size={16} /> Restore DB
           </button>}
+          {/* Selective Recovery Modal */}
+          {recoverModal && (
+            <Modal onClose={() => !recoverModal.loading && setRecoverModal(null)} title="Khôi phục feedback theo dự án">
+              {recoverModal.step === 1 && (<>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Bước 1/2: Chọn dự án cần khôi phục</div>
+                <div style={{ maxHeight: 320, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                  {projects.map(p => (
+                    <div key={p.id} onClick={() => setRecoverModal(prev => ({ ...prev, selectedProject: p.id }))}
+                      style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8,
+                        background: recoverModal.selectedProject === p.id ? "#eff6ff" : "transparent",
+                        fontWeight: recoverModal.selectedProject === p.id ? 700 : 400, fontSize: 13 }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 9, border: recoverModal.selectedProject === p.id ? "2px solid #2563eb" : "1px solid #d1d5db", background: recoverModal.selectedProject === p.id ? "#2563eb" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 10, color: "#fff" }}>
+                        {recoverModal.selectedProject === p.id && "✓"}
+                      </span>
+                      {p.name} {p.is_legacy ? <span style={{ fontSize: 10, background: "#dbeafe", color: "#2563eb", padding: "1px 6px", borderRadius: 6, fontWeight: 600 }}>Data cũ</span> : null}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+                  <button onClick={() => setRecoverModal(null)} style={{ ...btnSecondary, padding: "8px 20px", borderRadius: 8 }}>Hủy</button>
+                  <button disabled={!recoverModal.selectedProject}
+                    onClick={() => setRecoverModal(prev => ({ ...prev, step: 2, selectedBackup: null }))}
+                    style={{ ...btnPrimary, padding: "8px 20px", borderRadius: 8, opacity: recoverModal.selectedProject ? 1 : 0.5 }}>Tiếp theo →</button>
+                </div>
+              </>)}
+              {recoverModal.step === 2 && (<>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+                  Bước 2/2: Chọn bản backup cho <b>{projects.find(p => p.id === recoverModal.selectedProject)?.name}</b>
+                </div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 12 }}>Chỉ khôi phục status + sale + feedback. Không ảnh hưởng dữ liệu khác.</div>
+                <div style={{ maxHeight: 300, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                  {recoverModal.backups.map((b, i) => {
+                    const d = new Date(b.date);
+                    const label = d.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+                    const isStartup = b.filename.includes("startup");
+                    const isManual = b.filename.includes("manual");
+                    return (
+                      <div key={b.filename} onClick={() => setRecoverModal(prev => ({ ...prev, selectedBackup: b.filename }))}
+                        style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 10,
+                          background: recoverModal.selectedBackup === b.filename ? "#fef3c7" : "transparent", fontSize: 13 }}>
+                        <span style={{ width: 18, height: 18, borderRadius: 9, border: recoverModal.selectedBackup === b.filename ? "2px solid #d97706" : "1px solid #d1d5db", background: recoverModal.selectedBackup === b.filename ? "#d97706" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 10, color: "#fff" }}>
+                          {recoverModal.selectedBackup === b.filename && "✓"}
+                        </span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: recoverModal.selectedBackup === b.filename ? 700 : 400 }}>{label}</div>
+                          <div style={{ fontSize: 11, color: "#9ca3af" }}>{b.sizeMB}MB {isStartup && "· Khởi động"}{isManual && "· Thủ công"}{!isStartup && !isManual && "· Tự động"}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 16 }}>
+                  <button onClick={() => setRecoverModal(prev => ({ ...prev, step: 1, selectedBackup: null }))}
+                    style={{ ...btnSecondary, padding: "8px 20px", borderRadius: 8 }}>← Quay lại</button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setRecoverModal(null)} style={{ ...btnSecondary, padding: "8px 20px", borderRadius: 8 }}>Hủy</button>
+                    <button disabled={!recoverModal.selectedBackup || recoverModal.loading}
+                      onClick={async () => {
+                        setRecoverModal(prev => ({ ...prev, loading: true }));
+                        try {
+                          const r = await apiFetch(`${API}/recover-selective`, {
+                            method: "POST",
+                            body: JSON.stringify({ filename: recoverModal.selectedBackup, projectId: recoverModal.selectedProject }),
+                          });
+                          const d = await r.json();
+                          if (!r.ok) { showToast(d.error || "Lỗi", "error"); setRecoverModal(prev => ({ ...prev, loading: false })); return; }
+                          showToast(`Khôi phục xong: ${d.fixedSale} sale, ${d.fixedStatus} trạng thái, ${d.fixedHistory} lịch sử (${d.total} lead)`, "success");
+                          setRecoverModal(null);
+                          const r2 = await apiFetch(`${API}/data`);
+                          const d2 = await r2.json();
+                          applyApiData(d2);
+                        } catch (e) { showToast("Lỗi: " + e.message, "error"); setRecoverModal(prev => ({ ...prev, loading: false })); }
+                      }}
+                      style={{ ...btnPrimary, padding: "8px 20px", borderRadius: 8, background: "linear-gradient(135deg, #d97706, #b45309)", opacity: recoverModal.selectedBackup && !recoverModal.loading ? 1 : 0.5 }}>
+                      {recoverModal.loading ? "Đang khôi phục..." : "Khôi phục"}
+                    </button>
+                  </div>
+                </div>
+              </>)}
+            </Modal>
+          )}
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
