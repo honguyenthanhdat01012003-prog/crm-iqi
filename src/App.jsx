@@ -4318,7 +4318,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         // === ADMIN/MANAGER VIEW: group by sale blocks ===
         if (isAdmin) {
           // Build sale assignment blocks
-          const saleBlocks = []; // { saleName, chiaDate, chiaBy, chiaId, contacts: [], isImplicit }
+          const saleBlocks = []; // { saleName, chiaDate, chiaBy, chiaId, chiaIds: [], contacts: [], isImplicit }
           const recalls = [];
           let currentBlock = null;
 
@@ -4328,8 +4328,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               const existingBlock = [...saleBlocks].reverse().find(b => b.saleName === evt.saleName);
               if (existingBlock) {
                 currentBlock = existingBlock;
+                // Track all chia IDs but only keep latest date
+                if (evt.id) existingBlock.chiaIds.push(evt.id);
+                existingBlock.chiaDate = evt.date || existingBlock.chiaDate;
+                existingBlock.chiaBy = evt.assignedBy || existingBlock.chiaBy;
               } else {
-                currentBlock = { saleName: evt.saleName, chiaDate: evt.date, chiaBy: evt.assignedBy, chiaId: evt.id, contacts: [], isImplicit: false };
+                currentBlock = { saleName: evt.saleName, chiaDate: evt.date, chiaBy: evt.assignedBy, chiaId: evt.id, chiaIds: evt.id ? [evt.id] : [], contacts: [], isImplicit: false };
                 saleBlocks.push(currentBlock);
               }
             } else if (evt.type === "recall") {

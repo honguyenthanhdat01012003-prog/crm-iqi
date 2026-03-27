@@ -3293,12 +3293,16 @@ async function processSchedules(db, triggerUser) {
       } else {
         stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
       }
-      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
-      const nextSeq = (maxSeq?.m ?? -1) + 1;
-      stmts.push({
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`, nextSeq, "schedule"],
-      });
+      // Only create 'Chia lead' history if this sale doesn't already have one for this lead
+      const existingChia = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1", [lid, saleName]);
+      if (!existingChia) {
+        const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
+        const nextSeq = (maxSeq?.m ?? -1) + 1;
+        stmts.push({
+          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+          args: [lid, saleName, "Chia lead", now, "", `Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`, nextSeq, "schedule"],
+        });
+      }
       assignedLeads.push({ leadId: lid, saleName });
       logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour });
     }
@@ -3792,7 +3796,7 @@ function matchSaleName(leadSaleName, userDisplayName) {
 function filterLeadsForSale(data, displayName) {
   data.leads = data.leads.filter(l =>
     matchSaleName(l.saleName, displayName) ||
-    (l.saleHistory && l.saleHistory.some(h => h.action === "Chia lead" && matchSaleName(h.saleName, displayName)))
+    (l.saleHistory && l.saleHistory.some(h => matchSaleName(h.saleName, displayName)))
   );
   return data;
 }
