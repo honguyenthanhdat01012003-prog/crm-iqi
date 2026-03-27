@@ -2328,7 +2328,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       if (data.error) { setShuffleMsg("[ERR] " + data.error); return; }
       if (Array.isArray(data.schedules)) setSchedules(data.schedules);
       setShuffleMsg(`[OK] ${data.msg}`);
-      // Refresh schedule detail if open
+      if (scheduleDetailId === scheduleId) handleViewScheduleDetail(scheduleId);
+    } catch (e) {
+      setShuffleMsg("[ERR] " + e.message);
+    }
+  };
+
+  const handleRestoreSchedule = async (scheduleId) => {
+    if (!window.confirm("Khôi phục lead về sale cũ dựa trên lịch sử feedback? Chỉ khôi phục lead hiện chưa có sale.")) return;
+    try {
+      const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/restore`, { method: "POST" });
+      const data = await r.json();
+      if (data.error) { setShuffleMsg("[ERR] " + data.error); return; }
+      if (Array.isArray(data.schedules)) setSchedules(data.schedules);
+      setShuffleMsg(`[OK] ${data.msg}`);
       if (scheduleDetailId === scheduleId) handleViewScheduleDetail(scheduleId);
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
@@ -3032,6 +3045,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                 <button onClick={() => setScheduleEditing({ leadsPerDay: sch.leadsPerDay, distributeTimes: [...sch.distributeTimes], numSlots: sch.distributeTimes.length })}
                                   style={{ background: "#f59e0b", color: "#fff", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 6, display: "flex", alignItems: "center", gap: 4 }}>
                                   <Settings size={13} /> Tăng hiệu suất
+                                </button>
+                              )}
+                              {sch && isAdminOnly && (
+                                <button onClick={() => handleRestoreSchedule(sch.id)}
+                                  style={{ background: "#f0fdf4", color: "#16a34a", border: "1px solid #86efac", cursor: "pointer", fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 6, display: "flex", alignItems: "center", gap: 4 }}>
+                                  <RefreshCw size={13} /> Khôi phục
                                 </button>
                               )}
                               {sch && isAdminOnly && (

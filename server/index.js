@@ -3555,6 +3555,57 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
   }
 });
 
+/* POST /api/leads/schedules/:id/restore - Restore leads to sales that had feedback history */
+app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
+    if (!sch) return res.status(404).json({ error: "Không tìm thấy lịch chia" });
+
+    const assignmentLog = JSON.parse(sch.assignment_log || "[]");
+    const leadIds = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
+    // Collect all lead IDs from assignment log + lead_ids
+    const allLids = [...new Set([...assignmentLog.filter(e => !e.skipped).map(e => e.leadId), ...leadIds])];
+    if (!allLids.length) return res.json({ msg: "Không có lead nào để khôi phục", schedules: (await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")).map(formatSchedule) });
+
+    const stmts = [];
+    let restoredCount = 0;
+
+    for (const lid of allLids) {
+      const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      if (!lead) continue;
+      // Only restore if lead currently has no sale
+      if (lead.sale_name && lead.sale_name !== '' && lead.sale_name !== 'Chưa chia') continue;
+
+      // Find the last sale that actually gave feedback (not just "Chia lead")
+      const feedbackHist = await get(db,
+        "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action != 'Chia lead' AND action NOT LIKE '%thu h%' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
+        [lid]
+      );
+      if (feedbackHist && feedbackHist.sale_name) {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [feedbackHist.sale_name, lid] });
+        restoredCount++;
+        continue;
+      }
+      // Fallback: find last "Chia lead" history entry
+      const chiaHist = await get(db,
+        "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
+        [lid]
+      );
+      if (chiaHist && chiaHist.sale_name) {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [chiaHist.sale_name, lid] });
+        restoredCount++;
+      }
+    }
+
+    if (stmts.length > 0) await db.batch(stmts, "write");
+
+    const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    res.json({ msg: `Khôi phục thành công ${restoredCount} lead về sale cũ từ lịch #${sch.id}`, schedules: schedules.map(formatSchedule) });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to restore schedule" });
+  }
+});
+
 function formatSchedule(s) {
   const saleNames = JSON.parse(s.sale_names || "[]");
   let distributeTimes = [];
