@@ -2037,6 +2037,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [allUsers, setAllUsers] = useState([]);
   const [redistributing, setRedistributing] = useState(false);
   const [recoverModal, setRecoverModal] = useState(null); // { backups: [], step: 1|2, selectedBackup, selectedProject, loading }
+  const [restoreModal, setRestoreModal] = useState(null); // { step: 'pick'|'preview'|'done', projectId, preview, loading, result }
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -2499,25 +2500,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <RefreshCw size={16} /> Khôi phục Sale từ lịch sử
             </button>
           )}
-          {isAdminOnly && selectedProject && (
+          {isAdminOnly && (
             <button
-              onClick={async () => {
-                if (!window.confirm("Khôi phục tất cả lead chưa có sale về sale cũ dựa trên lịch sử feedback?\nChỉ áp dụng cho lead hiện chưa được gán sale.")) return;
-                try {
-                  const r = await apiFetch(`${API}/leads/restore-by-project`, {
-                    method: "POST",
-                    body: JSON.stringify({ projectId: Number(selectedProject) }),
-                  });
-                  const data = await r.json();
-                  if (data.error) { showToast(data.error, "error"); return; }
-                  showToast(data.msg, "success");
-                  const r2 = await apiFetch(`${API}/data`);
-                  const d2 = await r2.json();
-                  applyApiData(d2);
-                } catch (e) {
-                  showToast("Lỗi: " + e.message, "error");
-                }
-              }}
+              onClick={() => setRestoreModal({ step: 'pick', projectId: selectedProject ? Number(selectedProject) : null, preview: null, loading: false, result: null })}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #16a34a, #15803d)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
               <RefreshCw size={16} /> Khôi phục lead về Sale cũ
             </button>
@@ -2611,6 +2596,118 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <RefreshCw size={16} /> Restore DB
           </button>}
+
+          {/* Restore Lead Modal */}
+          {restoreModal && (
+            <Modal onClose={() => !restoreModal.loading && setRestoreModal(null)} title="Khôi phục lead về Sale cũ">
+              {restoreModal.step === 'pick' && (<>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>Chọn dự án cần khôi phục lead chưa có sale về sale cũ từ lịch sử</div>
+                <div style={{ maxHeight: 320, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12 }}>
+                  {projects.map(p => (
+                    <div key={p.id} onClick={() => setRestoreModal(prev => ({ ...prev, projectId: p.id }))}
+                      style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8,
+                        background: restoreModal.projectId === p.id ? "#f0fdf4" : "transparent",
+                        fontWeight: restoreModal.projectId === p.id ? 700 : 400, fontSize: 13 }}>
+                      <span style={{ width: 18, height: 18, borderRadius: 9, border: restoreModal.projectId === p.id ? "2px solid #16a34a" : "1px solid #d1d5db", background: restoreModal.projectId === p.id ? "#16a34a" : "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 10, color: "#fff" }}>
+                        {restoreModal.projectId === p.id && "✓"}
+                      </span>
+                      {p.name}
+                    </div>
+                  ))}
+                </div>
+                <button disabled={!restoreModal.projectId || restoreModal.loading}
+                  onClick={async () => {
+                    setRestoreModal(prev => ({ ...prev, loading: true }));
+                    try {
+                      const r = await apiFetch(`${API}/leads/restore-preview/${restoreModal.projectId}`);
+                      const data = await r.json();
+                      setRestoreModal(prev => ({ ...prev, step: 'preview', preview: data, loading: false }));
+                    } catch (e) {
+                      showToast("Lỗi: " + e.message, "error");
+                      setRestoreModal(prev => ({ ...prev, loading: false }));
+                    }
+                  }}
+                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10, background: (!restoreModal.projectId || restoreModal.loading) ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}>
+                  {restoreModal.loading ? "Đang kiểm tra..." : "Tiếp theo →"}
+                </button>
+              </>)}
+              {restoreModal.step === 'preview' && restoreModal.preview && (<>
+                <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>📊 Kết quả kiểm tra:</div>
+                  <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                    <div>Lead chưa có sale: <b>{restoreModal.preview.totalUnassigned}</b></div>
+                    <div>Có thể khôi phục: <b style={{ color: "#16a34a" }}>{restoreModal.preview.restorable}</b></div>
+                    {restoreModal.preview.totalUnassigned - restoreModal.preview.restorable > 0 && (
+                      <div style={{ color: "#9ca3af", fontSize: 12 }}>Không có lịch sử: {restoreModal.preview.totalUnassigned - restoreModal.preview.restorable}</div>
+                    )}
+                  </div>
+                  {Object.keys(restoreModal.preview.salesBreakdown || {}).length > 0 && (
+                    <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                      <div style={{ padding: "8px 12px", background: "#f9fafb", borderBottom: "1px solid #e5e7eb", fontSize: 12, fontWeight: 700, display: "flex", justifyContent: "space-between" }}>
+                        <span>Sale</span><span>Số lead nhận lại</span>
+                      </div>
+                      {Object.entries(restoreModal.preview.salesBreakdown).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+                        <div key={name} style={{ padding: "6px 12px", borderBottom: "1px solid #f3f4f6", fontSize: 12, display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontWeight: 600 }}>{name}</span>
+                          <span style={{ color: "#16a34a", fontWeight: 700 }}>{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {restoreModal.preview.restorable === 0 ? (
+                  <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, padding: 16 }}>Không có lead nào để khôi phục</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setRestoreModal(prev => ({ ...prev, step: 'pick', preview: null }))}
+                      style={{ flex: 1, padding: "10px 16px", fontSize: 13, borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontWeight: 600 }}>
+                      ← Quay lại
+                    </button>
+                    <button disabled={restoreModal.loading}
+                      onClick={async () => {
+                        setRestoreModal(prev => ({ ...prev, loading: true }));
+                        try {
+                          const r = await apiFetch(`${API}/leads/restore-by-project`, {
+                            method: "POST",
+                            body: JSON.stringify({ projectId: restoreModal.projectId }),
+                          });
+                          const data = await r.json();
+                          if (data.error) { showToast(data.error, "error"); setRestoreModal(prev => ({ ...prev, loading: false })); return; }
+                          setRestoreModal(prev => ({ ...prev, step: 'done', result: data, loading: false }));
+                          const r2 = await apiFetch(`${API}/data`);
+                          const d2 = await r2.json();
+                          applyApiData(d2);
+                        } catch (e) {
+                          showToast("Lỗi: " + e.message, "error");
+                          setRestoreModal(prev => ({ ...prev, loading: false }));
+                        }
+                      }}
+                      style={{ ...btnPrimary, flex: 2, padding: "10px 16px", fontSize: 13, borderRadius: 10, background: restoreModal.loading ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}>
+                      {restoreModal.loading ? "Đang khôi phục..." : `✓ Khôi phục ${restoreModal.preview.restorable} lead`}
+                    </button>
+                  </div>
+                )}
+              </>)}
+              {restoreModal.step === 'done' && restoreModal.result && (<>
+                <div style={{ textAlign: "center", padding: "20px 0" }}>
+                  <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a", marginBottom: 8 }}>Khôi phục thành công!</div>
+                  <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+                    <div>Lead khôi phục: <b>{restoreModal.result.restored}</b> / {restoreModal.result.total}</div>
+                    <div>Sale nhận lại lead: <b>{restoreModal.result.salesRestored}</b></div>
+                    {restoreModal.result.chiaEntriesAdded > 0 && (
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>Thêm {restoreModal.result.chiaEntriesAdded} lượt chia để sale cũ thấy lead</div>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => setRestoreModal(null)}
+                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10 }}>
+                  Đóng
+                </button>
+              </>)}
+            </Modal>
+          )}
+
           {/* Selective Recovery Modal */}
           {recoverModal && (
             <Modal onClose={() => !recoverModal.loading && setRecoverModal(null)} title="Khôi phục feedback theo dự án">

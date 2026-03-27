@@ -3569,6 +3569,8 @@ app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (r
 
     const stmts = [];
     let restoredCount = 0;
+    let chiaEntriesAdded = 0;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
 
     for (const lid of allLids) {
       const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
@@ -3576,79 +3578,158 @@ app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (r
       // Only restore if lead currently has no sale
       if (lead.sale_name && lead.sale_name !== '' && lead.sale_name !== 'Chưa chia') continue;
 
-      // Find the last sale that actually gave feedback (not just "Chia lead")
-      const feedbackHist = await get(db,
+      // Find ALL distinct sales from history
+      const allSales = await all(db,
+        "SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND sale_name != '' ORDER BY seq ASC",
+        [lid]
+      );
+      if (!allSales.length) continue;
+
+      // Set primary sale_name
+      const lastFeedback = await get(db,
         "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action != 'Chia lead' AND action NOT LIKE '%thu h%' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
         [lid]
       );
-      if (feedbackHist && feedbackHist.sale_name) {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [feedbackHist.sale_name, lid] });
-        restoredCount++;
-        continue;
-      }
-      // Fallback: find last "Chia lead" history entry
-      const chiaHist = await get(db,
+      const lastChia = await get(db,
         "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
         [lid]
       );
-      if (chiaHist && chiaHist.sale_name) {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [chiaHist.sale_name, lid] });
-        restoredCount++;
+      const primarySale = (lastFeedback && lastFeedback.sale_name) || (lastChia && lastChia.sale_name);
+      if (!primarySale) continue;
+
+      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [primarySale, lid] });
+      restoredCount++;
+
+      // Ensure 'Chia lead' entries for all other sales
+      for (const row of allSales) {
+        if (row.sale_name === primarySale) continue;
+        const existing = await get(db,
+          "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1",
+          [lid, row.sale_name]
+        );
+        if (!existing) {
+          const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
+          const nextSeq = (maxSeq?.m ?? -1) + 1;
+          stmts.push({
+            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            args: [lid, row.sale_name, "Chia lead", now, "", "Khôi phục từ lịch sử", nextSeq, "restore"],
+          });
+          chiaEntriesAdded++;
+        }
       }
     }
 
     if (stmts.length > 0) await db.batch(stmts, "write");
 
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: `Khôi phục thành công ${restoredCount} lead về sale cũ từ lịch #${sch.id}`, schedules: schedules.map(formatSchedule) });
+    res.json({ msg: `Khôi phục ${restoredCount} lead về sale cũ từ lịch #${sch.id} (thêm ${chiaEntriesAdded} lượt chia)`, schedules: schedules.map(formatSchedule) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to restore schedule" });
   }
 });
 
-/* POST /api/leads/restore-by-project - Restore unassigned leads to their last feedback sale, by project */
+/* POST /api/leads/restore-by-project - Restore unassigned leads to ALL sales from history */
 app.post("/api/leads/restore-by-project", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { projectId } = req.body || {};
     if (!projectId) return res.status(400).json({ error: "Thiếu projectId" });
 
-    // Get all leads in this project that have no sale
     const unassigned = await all(db,
       "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL)",
       [projectId]
     );
-    if (!unassigned.length) return res.json({ msg: "Không có lead nào cần khôi phục (tất cả đã có sale)", restored: 0 });
+    if (!unassigned.length) return res.json({ msg: "Không có lead nào cần khôi phục (tất cả đã có sale)", restored: 0, salesRestored: 0 });
 
     const stmts = [];
     let restoredCount = 0;
+    let chiaEntriesAdded = 0;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
 
     for (const { id: lid } of unassigned) {
-      // Priority: last sale that gave feedback
-      const feedbackHist = await get(db,
+      // Find ALL distinct sales that ever interacted with this lead
+      const allSales = await all(db,
+        "SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND sale_name != '' ORDER BY seq ASC",
+        [lid]
+      );
+      if (!allSales.length) continue;
+
+      // Set sale_name to the last sale that gave feedback (primary)
+      const lastFeedback = await get(db,
         "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action != 'Chia lead' AND action NOT LIKE '%thu h%' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
         [lid]
       );
-      if (feedbackHist && feedbackHist.sale_name) {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [feedbackHist.sale_name, lid] });
-        restoredCount++;
-        continue;
-      }
-      // Fallback: last "Chia lead" entry
-      const chiaHist = await get(db,
+      const lastChia = await get(db,
         "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
         [lid]
       );
-      if (chiaHist && chiaHist.sale_name) {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [chiaHist.sale_name, lid] });
-        restoredCount++;
+      const primarySale = (lastFeedback && lastFeedback.sale_name) || (lastChia && lastChia.sale_name);
+      if (!primarySale) continue;
+
+      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [primarySale, lid] });
+      restoredCount++;
+
+      // For each OTHER sale, ensure a 'Chia lead' history entry exists so they can see this lead
+      for (const row of allSales) {
+        if (row.sale_name === primarySale) continue;
+        const existing = await get(db,
+          "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1",
+          [lid, row.sale_name]
+        );
+        if (!existing) {
+          const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
+          const nextSeq = (maxSeq?.m ?? -1) + 1;
+          stmts.push({
+            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            args: [lid, row.sale_name, "Chia lead", now, "", "Khôi phục từ lịch sử", nextSeq, "restore"],
+          });
+          chiaEntriesAdded++;
+        }
       }
     }
 
     if (stmts.length > 0) await db.batch(stmts, "write");
 
-    res.json({ msg: `Khôi phục thành công ${restoredCount}/${unassigned.length} lead về sale cũ`, restored: restoredCount, total: unassigned.length });
+    const salesSet = new Set();
+    for (const { id: lid } of unassigned) {
+      const sales = await all(db, "SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND sale_name != ''", [lid]);
+      sales.forEach(s => salesSet.add(s.sale_name));
+    }
+
+    res.json({
+      msg: `Khôi phục ${restoredCount} lead về ${salesSet.size} sale (thêm ${chiaEntriesAdded} lượt chia để sale cũ thấy lead)`,
+      restored: restoredCount,
+      salesRestored: salesSet.size,
+      chiaEntriesAdded,
+      total: unassigned.length,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to restore by project" });
+  }
+});
+
+/* GET /api/leads/restore-preview/:projectId - Preview how many leads can be restored */
+app.get("/api/leads/restore-preview/:projectId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectId = Number(req.params.projectId);
+    const unassigned = await all(db,
+      "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL)",
+      [projectId]
+    );
+    let restorable = 0;
+    const salesMap = {};
+    for (const { id: lid } of unassigned) {
+      const sales = await all(db,
+        "SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND sale_name != ''",
+        [lid]
+      );
+      if (sales.length > 0) {
+        restorable++;
+        sales.forEach(s => { salesMap[s.sale_name] = (salesMap[s.sale_name] || 0) + 1; });
+      }
+    }
+    res.json({ totalUnassigned: unassigned.length, restorable, salesBreakdown: salesMap });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
