@@ -2502,6 +2502,29 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {isAdminOnly && selectedProject && (
             <button
               onClick={async () => {
+                if (!window.confirm("Khôi phục tất cả lead chưa có sale về sale cũ dựa trên lịch sử feedback?\nChỉ áp dụng cho lead hiện chưa được gán sale.")) return;
+                try {
+                  const r = await apiFetch(`${API}/leads/restore-by-project`, {
+                    method: "POST",
+                    body: JSON.stringify({ projectId: Number(selectedProject) }),
+                  });
+                  const data = await r.json();
+                  if (data.error) { showToast(data.error, "error"); return; }
+                  showToast(data.msg, "success");
+                  const r2 = await apiFetch(`${API}/data`);
+                  const d2 = await r2.json();
+                  applyApiData(d2);
+                } catch (e) {
+                  showToast("Lỗi: " + e.message, "error");
+                }
+              }}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #16a34a, #15803d)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
+              <RefreshCw size={16} /> Khôi phục lead về Sale cũ
+            </button>
+          )}
+          {isAdminOnly && selectedProject && (
+            <button
+              onClick={async () => {
                 if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu.")) return;
                 try {
                   const r = await apiFetch(`${API}/recover-from-backup`, {

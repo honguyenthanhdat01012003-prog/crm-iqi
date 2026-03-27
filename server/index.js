@@ -3606,6 +3606,52 @@ app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (r
   }
 });
 
+/* POST /api/leads/restore-by-project - Restore unassigned leads to their last feedback sale, by project */
+app.post("/api/leads/restore-by-project", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId } = req.body || {};
+    if (!projectId) return res.status(400).json({ error: "Thiếu projectId" });
+
+    // Get all leads in this project that have no sale
+    const unassigned = await all(db,
+      "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL)",
+      [projectId]
+    );
+    if (!unassigned.length) return res.json({ msg: "Không có lead nào cần khôi phục (tất cả đã có sale)", restored: 0 });
+
+    const stmts = [];
+    let restoredCount = 0;
+
+    for (const { id: lid } of unassigned) {
+      // Priority: last sale that gave feedback
+      const feedbackHist = await get(db,
+        "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action != 'Chia lead' AND action NOT LIKE '%thu h%' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
+        [lid]
+      );
+      if (feedbackHist && feedbackHist.sale_name) {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [feedbackHist.sale_name, lid] });
+        restoredCount++;
+        continue;
+      }
+      // Fallback: last "Chia lead" entry
+      const chiaHist = await get(db,
+        "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name != '' ORDER BY seq DESC LIMIT 1",
+        [lid]
+      );
+      if (chiaHist && chiaHist.sale_name) {
+        stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [chiaHist.sale_name, lid] });
+        restoredCount++;
+      }
+    }
+
+    if (stmts.length > 0) await db.batch(stmts, "write");
+
+    res.json({ msg: `Khôi phục thành công ${restoredCount}/${unassigned.length} lead về sale cũ`, restored: restoredCount, total: unassigned.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to restore by project" });
+  }
+});
+
 function formatSchedule(s) {
   const saleNames = JSON.parse(s.sale_names || "[]");
   let distributeTimes = [];
