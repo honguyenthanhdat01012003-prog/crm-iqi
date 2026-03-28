@@ -3798,6 +3798,19 @@ function filterLeadsForSale(data, displayName) {
     matchSaleName(l.saleName, displayName) ||
     (l.saleHistory && l.saleHistory.some(h => matchSaleName(h.saleName, displayName)))
   );
+  // Override status: show the sale's own latest feedback status instead of global
+  for (const l of data.leads) {
+    if (l.saleHistory && l.saleHistory.length) {
+      for (let i = l.saleHistory.length - 1; i >= 0; i--) {
+        const h = l.saleHistory[i];
+        if (h.status && h.action !== "Chia lead" && matchSaleName(h.saleName, displayName)) {
+          l.status = normalizeStatus(h.status);
+          l.rawStatus = h.status;
+          break;
+        }
+      }
+    }
+  }
   return data;
 }
 
