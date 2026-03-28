@@ -3287,11 +3287,20 @@ async function processSchedules(db, triggerUser) {
       saleCounts[assignedIdx]++;
 
       // Only set manager if lead has no manager yet
-      const schLead = await get(db, "SELECT manager_name FROM leads WHERE id = ?", [lid]);
+      const schLead = await get(db, "SELECT manager_name, status FROM leads WHERE id = ?", [lid]);
       if (schLead?.manager_name) {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        // Preserve existing status if sale already gave feedback, only reset to 'new' for unprocessed leads
+        if (schLead.status && schLead.status !== "new") {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+        } else {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        }
       } else {
-        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        if (schLead?.status && schLead.status !== "new") {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+        } else {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        }
       }
       // Only create 'Chia lead' history if this sale doesn't already have one for this lead
       const existingChia = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1", [lid, saleName]);
