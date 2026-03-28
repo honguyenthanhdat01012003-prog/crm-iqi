@@ -151,6 +151,10 @@ const STATUS_COLORS = {
   lost: "#dc2626",
 };
 
+// Reverse lookup: label → key for status normalization on frontend
+const STATUS_LABEL_TO_KEY = {};
+Object.entries(STATUS_LABELS).forEach(([k, v]) => { STATUS_LABEL_TO_KEY[v] = k; STATUS_LABEL_TO_KEY[k] = k; });
+
 function formatVND(n) {
   if (!n && n !== 0) return "0 ₫";
   return Number(n).toLocaleString("vi-VN") + " ₫";
@@ -757,6 +761,20 @@ function CRMApp({ user, updateUser, onLogout }) {
         (l.saleName || "") === saleFilter ||
         (l.saleHistory && l.saleHistory.some(h => h.saleName === saleFilter))
       );
+      // Override status: show selected sale's own latest feedback status
+      list = list.map(l => {
+        if (l.saleHistory && l.saleHistory.length) {
+          for (let i = l.saleHistory.length - 1; i >= 0; i--) {
+            const h = l.saleHistory[i];
+            if (h.status && h.action !== "Chia lead" && h.saleName === saleFilter) {
+              const key = STATUS_LABEL_TO_KEY[h.status] || STATUS_LABEL_TO_KEY[h.status.trim()];
+              if (key) return { ...l, status: key, rawStatus: h.status };
+              break;
+            }
+          }
+        }
+        return l;
+      });
     }
     return list;
   }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter, saleFilter]);
