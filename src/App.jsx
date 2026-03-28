@@ -10348,19 +10348,58 @@ function CapiSettingsPage() {
 
       {msg && <div style={{ padding: "8px 14px", borderRadius: 8, marginBottom: 12, fontSize: 13, background: msg.type === "ok" ? "#f0fdf4" : "#fef2f2", color: msg.type === "ok" ? "#16a34a" : "#dc2626", border: `1px solid ${msg.type === "ok" ? "#bbf7d0" : "#fca5a5"}` }}>{msg.text}</div>}
 
+      {/* Hướng dẫn chi tiết */}
+      <div style={{ background: "#fffbeb", borderRadius: 12, padding: 20, border: "1px solid #fde68a", marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12, color: "#92400e" }}>📖 Hướng dẫn lấy Pixel ID & Access Token</h3>
+
+        <div style={{ fontSize: 13, color: "#78350f", lineHeight: 1.8 }}>
+          <p style={{ fontWeight: 700, marginBottom: 4 }}>Bước 1: Lấy Pixel ID</p>
+          <ol style={{ paddingLeft: 20, margin: "0 0 12px 0" }}>
+            <li>Mở <a href="https://business.facebook.com/events_manager" target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontWeight: 600 }}>Meta Events Manager</a></li>
+            <li>Ở cột bên trái, chọn <strong>Data Sources</strong> (Nguồn dữ liệu)</li>
+            <li>Nếu chưa có Pixel, bấm <strong>"Connect Data Sources"</strong> → chọn <strong>"Web"</strong> → đặt tên → bấm <strong>"Create"</strong></li>
+            <li>Click vào Pixel đã tạo → <strong>Pixel ID</strong> là dãy số hiện ngay dưới tên (ví dụ: <code style={{ background: "#fef3c7", padding: "1px 6px", borderRadius: 4 }}>881080645083795</code>)</li>
+            <li>Copy dãy số đó dán vào ô <strong>"Pixel ID"</strong> bên dưới</li>
+          </ol>
+
+          <p style={{ fontWeight: 700, marginBottom: 4 }}>Bước 2: Lấy Access Token</p>
+          <ol style={{ paddingLeft: 20, margin: "0 0 12px 0" }}>
+            <li>Trong Events Manager, click vào Pixel của bạn</li>
+            <li>Bấm tab <strong>"Settings"</strong> (Cài đặt) ở thanh ngang phía trên</li>
+            <li>Kéo xuống phần <strong>"Conversions API"</strong></li>
+            <li>Bấm <strong>"Generate access token"</strong> (Tạo token truy cập)</li>
+            <li>Một chuỗi dài sẽ hiện ra → <strong>copy ngay</strong> vì nó chỉ hiện 1 lần duy nhất</li>
+            <li>Dán vào ô <strong>"Access Token"</strong> bên dưới</li>
+          </ol>
+
+          <p style={{ fontWeight: 700, marginBottom: 4 }}>Bước 3: Kiểm tra kết nối (Test Event)</p>
+          <ol style={{ paddingLeft: 20, margin: "0 0 8px 0" }}>
+            <li>Trong Events Manager → click Pixel → bấm tab <strong>"Test Events"</strong> (Kiểm tra sự kiện)</li>
+            <li>Sẽ thấy mã <strong>Test Event Code</strong> dạng <code style={{ background: "#fef3c7", padding: "1px 6px", borderRadius: 4 }}>TEST12345</code></li>
+            <li>Copy mã đó dán vào ô "Test Event Code" ở phần <strong>Kiểm tra kết nối</strong> bên dưới</li>
+            <li>Bấm <strong>"Gửi test event"</strong> → nếu thành công, quay lại Events Manager sẽ thấy event hiện trong tab Test Events</li>
+          </ol>
+
+          <p style={{ fontSize: 12, color: "#92400e", background: "#fef3c7", padding: "6px 10px", borderRadius: 6, marginTop: 8 }}>
+            💡 <strong>Lưu ý:</strong> Pixel ID là từ trang "Trung tâm khách hàng tiềm năng" (Lead Center) mà bạn đang dùng. 
+            Số trên URL của bạn (<code style={{ fontWeight: 600 }}>asset_id=881080645083795</code>) chính là Pixel/Dataset ID. Bạn có thể dùng luôn số đó.
+          </p>
+        </div>
+      </div>
+
       <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e5e7eb", marginBottom: 16 }}>
         <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>🔧 Cấu hình cơ bản</h3>
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Pixel ID</label>
           <input value={pixelId} onChange={e => setPixelId(e.target.value)} placeholder="Ví dụ: 123456789012345"
             style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
-          <span style={{ fontSize: 11, color: "#9ca3af" }}>Lấy từ Meta Events Manager → Data Sources → Pixel ID</span>
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>Dãy số 15 chữ số từ Events Manager (xem hướng dẫn Bước 1 ở trên)</span>
         </div>
         <div style={{ marginBottom: 12 }}>
           <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Access Token (CAPI)</label>
           <input value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="Nhập token mới (bỏ trống = giữ nguyên token cũ)" type="password"
             style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
-          <span style={{ fontSize: 11, color: "#9ca3af" }}>Events Manager → Settings → Generate access token. Token chỉ hiện 1 lần.</span>
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>Chuỗi dài từ Events Manager → Settings → Generate access token (xem Bước 2)</span>
         </div>
         <button onClick={handleSave} disabled={saving}
           style={{ padding: "8px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13, opacity: saving ? 0.6 : 1 }}>
