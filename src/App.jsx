@@ -753,7 +753,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       list = list.filter((l) => (l.managerName || "") === managerFilter);
     }
     if (saleFilter && saleFilter !== "all") {
-      list = list.filter((l) => (l.saleName || "") === saleFilter);
+      list = list.filter((l) =>
+        (l.saleName || "") === saleFilter ||
+        (l.saleHistory && l.saleHistory.some(h => h.saleName === saleFilter))
+      );
     }
     return list;
   }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter, saleFilter]);
@@ -2191,7 +2194,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const saleNames = useMemo(() => {
     const names = new Set();
-    (Array.isArray(leads) ? leads : []).forEach(l => { if (l.saleName) names.add(l.saleName); });
+    (Array.isArray(leads) ? leads : []).forEach(l => {
+      if (l.saleName) names.add(l.saleName);
+      if (l.saleHistory) l.saleHistory.forEach(h => { if (h.saleName && h.saleName !== "chưa chia") names.add(h.saleName); });
+    });
     return [...names].sort();
   }, [leads]);
 
