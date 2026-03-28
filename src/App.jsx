@@ -852,6 +852,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "profile", label: "Hồ sơ cá nhân", icon: IdCard, adminOnly: false },
     { key: "messenger_inbox", label: "Hộp thư Messenger", icon: MessageSquare, adminOnly: true },
     { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: postChildren },
+    { key: "capi_settings", label: "Facebook CAPI", icon: Zap, adminOnly: true },
     { key: "guide", label: "Hướng dẫn sử dụng", icon: BookOpen, adminOnly: true },
   ];
 
@@ -1230,6 +1231,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "sheet_config" && isAdminOnly && <SheetConfigPage />}
         {page === "messenger_inbox" && isAdminOnly && <MessengerInboxPage />}
         {page === "guide" && isAdmin && <GuidePage />}
+        {page === "capi_settings" && isAdminOnly && <CapiSettingsPage />}
         </div>
       </main>
 
@@ -10265,6 +10267,187 @@ function CalendarPage({ projects }) {
             <span style={{ color: v.color, fontWeight: 600 }}>{v.label}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+/* ===== CAPI Settings Page ===== */
+function CapiSettingsPage() {
+  const [pixelId, setPixelId] = useState("");
+  const [accessToken, setAccessToken] = useState("");
+  const [events, setEvents] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testCode, setTestCode] = useState("");
+  const [logs, setLogs] = useState([]);
+  const [showLogs, setShowLogs] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const defaultEvents = {
+    closed: "Purchase",
+    booked: "InitiateCheckout",
+    booking_other: "InitiateCheckout",
+    appointment: "Schedule",
+    interested: "Lead",
+  };
+
+  const fbEventOptions = ["Purchase", "Lead", "InitiateCheckout", "Schedule", "CompleteRegistration", "ViewContent", "AddToCart", "AddToWishlist", "Contact", "Subscribe", ""];
+
+  useEffect(() => {
+    apiFetch(`${API}/capi-settings`).then(r => r.json()).then(d => {
+      setPixelId(d.pixelId || "");
+      setEvents(d.events || defaultEvents);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const body = { pixelId, events };
+      if (accessToken) body.accessToken = accessToken;
+      const res = await apiFetch(`${API}/capi-settings`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (res.ok) { setMsg({ type: "ok", text: "Đã lưu cấu hình CAPI" }); setAccessToken(""); }
+      else { const e = await res.json(); setMsg({ type: "err", text: e.error || "Lỗi" }); }
+    } catch { setMsg({ type: "err", text: "Lỗi kết nối" }); }
+    setSaving(false);
+  };
+
+  const handleTest = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const res = await apiFetch(`${API}/capi-test`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ testCode }) });
+      const d = await res.json();
+      if (res.ok) setTestResult({ ok: true, text: `Thành công! Events received: ${d.events_received}` });
+      else setTestResult({ ok: false, text: d.error || "Lỗi" });
+    } catch { setTestResult({ ok: false, text: "Lỗi kết nối" }); }
+    setTesting(false);
+  };
+
+  const loadLogs = async () => {
+    try {
+      const res = await apiFetch(`${API}/capi-log`);
+      const d = await res.json();
+      setLogs(Array.isArray(d) ? d : []);
+      setShowLogs(true);
+    } catch { setLogs([]); setShowLogs(true); }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af" }}>Đang tải...</div>;
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
+        <Zap size={22} color="#f59e0b" /> Facebook Conversions API (CAPI)
+      </h2>
+      <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 20 }}>
+        Tự động gửi sự kiện về Meta khi lead thay đổi trạng thái. Facebook ghi nhận để tối ưu quảng cáo — khách hàng <strong>không thấy gì</strong>.
+      </p>
+
+      {msg && <div style={{ padding: "8px 14px", borderRadius: 8, marginBottom: 12, fontSize: 13, background: msg.type === "ok" ? "#f0fdf4" : "#fef2f2", color: msg.type === "ok" ? "#16a34a" : "#dc2626", border: `1px solid ${msg.type === "ok" ? "#bbf7d0" : "#fca5a5"}` }}>{msg.text}</div>}
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e5e7eb", marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>🔧 Cấu hình cơ bản</h3>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Pixel ID</label>
+          <input value={pixelId} onChange={e => setPixelId(e.target.value)} placeholder="Ví dụ: 123456789012345"
+            style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>Lấy từ Meta Events Manager → Data Sources → Pixel ID</span>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Access Token (CAPI)</label>
+          <input value={accessToken} onChange={e => setAccessToken(e.target.value)} placeholder="Nhập token mới (bỏ trống = giữ nguyên token cũ)" type="password"
+            style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>Events Manager → Settings → Generate access token. Token chỉ hiện 1 lần.</span>
+        </div>
+        <button onClick={handleSave} disabled={saving}
+          style={{ padding: "8px 20px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13, opacity: saving ? 0.6 : 1 }}>
+          {saving ? "Đang lưu..." : "💾 Lưu cấu hình"}
+        </button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e5e7eb", marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>📡 Mapping sự kiện</h3>
+        <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 12 }}>Khi lead chuyển sang trạng thái nào → gửi event gì về Meta. Bỏ trống = không gửi.</p>
+        <div style={{ display: "grid", gap: 8 }}>
+          {Object.entries(STATUS_LABELS).filter(([k]) => !["new", "called", "spam", "wrong_phone", "wrong_number", "hung_up", "blocked", "lost"].includes(k)).map(([key, label]) => (
+            <div key={key} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 500, minWidth: 180, color: STATUS_COLORS[key] || "#374151" }}>{label}</span>
+              <span style={{ color: "#9ca3af", fontSize: 12 }}>→</span>
+              <select value={events[key] || ""} onChange={e => setEvents(prev => ({ ...prev, [key]: e.target.value }))}
+                style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, minWidth: 160 }}>
+                <option value="">Không gửi</option>
+                {fbEventOptions.filter(Boolean).map(ev => <option key={ev} value={ev}>{ev}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+        <button onClick={handleSave} disabled={saving} style={{ marginTop: 12, padding: "6px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
+          💾 Lưu mapping
+        </button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e5e7eb", marginBottom: 16 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600, marginBottom: 12 }}>🧪 Kiểm tra kết nối</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <input value={testCode} onChange={e => setTestCode(e.target.value)} placeholder="Test Event Code (tùy chọn, từ Events Manager)"
+            style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
+          <button onClick={handleTest} disabled={testing}
+            style={{ padding: "8px 16px", background: "#059669", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600, fontSize: 13, whiteSpace: "nowrap" }}>
+            {testing ? "Đang test..." : "⚡ Gửi test event"}
+          </button>
+        </div>
+        {testResult && (
+          <div style={{ padding: "8px 14px", borderRadius: 8, fontSize: 13, background: testResult.ok ? "#f0fdf4" : "#fef2f2", color: testResult.ok ? "#16a34a" : "#dc2626" }}>
+            {testResult.text}
+          </div>
+        )}
+        <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 8 }}>
+          Mở <a href="https://business.facebook.com/events_manager" target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>Events Manager</a> → Test Events → lấy Test Event Code để xác minh sự kiện đã nhận đúng.
+        </p>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e5e7eb" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 600 }}>📊 Lịch sử gửi events</h3>
+          <button onClick={loadLogs} style={{ padding: "6px 14px", background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 500 }}>
+            🔄 Tải log
+          </button>
+        </div>
+        {showLogs && (
+          logs.length === 0 ? <p style={{ fontSize: 13, color: "#9ca3af" }}>Chưa có event nào được gửi.</p> : (
+            <div style={{ maxHeight: 300, overflowY: "auto" }}>
+              <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "#f9fafb" }}>
+                    <th style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>Thời gian</th>
+                    <th style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>Event</th>
+                    <th style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>Lead</th>
+                    <th style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>Dự án</th>
+                    <th style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>Kết quả</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map(l => {
+                    const result = (() => { try { return JSON.parse(l.result || "{}"); } catch { return {}; } })();
+                    const ok = result.events_received > 0;
+                    return (
+                      <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{l.created_at || "-"}</td>
+                        <td style={{ padding: "6px 8px" }}><span style={{ padding: "2px 8px", borderRadius: 8, background: "#eff6ff", color: "#2563eb", fontWeight: 600, fontSize: 11 }}>{l.event_name}</span></td>
+                        <td style={{ padding: "6px 8px" }}>{l.lead_name || "-"}</td>
+                        <td style={{ padding: "6px 8px" }}>{l.project || "-"}</td>
+                        <td style={{ padding: "6px 8px" }}><span style={{ color: ok ? "#16a34a" : "#dc2626", fontWeight: 600 }}>{ok ? "✅" : "❌"}</span></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
+        )}
       </div>
     </div>
   );

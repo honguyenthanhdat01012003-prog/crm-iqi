@@ -177,6 +177,10 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER NOT NULL,
       old_status TEXT DEFAULT '', new_status TEXT NOT NULL, changed_by TEXT NOT NULL,
       changed_at TEXT DEFAULT (datetime('now')), FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE)`,
+    `CREATE TABLE IF NOT EXISTS capi_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, event_name TEXT NOT NULL,
+      lead_name TEXT DEFAULT '', lead_phone TEXT DEFAULT '', project TEXT DEFAULT '',
+      status TEXT DEFAULT '', result TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS lead_schedules (
       id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL, status_filter TEXT DEFAULT 'all',
       start_date TEXT NOT NULL DEFAULT '', end_date TEXT NOT NULL, leads_per_day INTEGER DEFAULT 5,
@@ -4004,6 +4008,21 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (result.changes === 0) {
         return res.status(404).json({ error: `Không thể cập nhật lead (ID=${actualLeadId}, 0 rows affected)` });
       }
+
+      // Fire CAPI event if status changed to a trigger status
+      if (status !== undefined && !reassigning) {
+        try {
+          const eventsJson = (await get(db, "SELECT value FROM settings WHERE key='capi_events'"))?.value;
+          const eventMap = eventsJson ? JSON.parse(eventsJson) : CAPI_EVENT_MAP;
+          const eventName = eventMap[status];
+          if (eventName) {
+            const updatedLead = await get(db, "SELECT * FROM leads WHERE id = ?", [actualLeadId]);
+            const capiResult = await sendCapiEvent(db, updatedLead, eventName);
+            await run(db, "INSERT INTO capi_log(lead_id, event_name, lead_name, lead_phone, project, status, result) VALUES(?,?,?,?,?,?,?)",
+              [actualLeadId, eventName, updatedLead?.name || "", updatedLead?.phone || "", updatedLead?.product || "", status, JSON.stringify(capiResult || {})]);
+          }
+        } catch (capiErr) { console.error("[CAPI] Hook error:", capiErr.message); }
+      }
     }
 
     // When admin/manager assigns lead to a sale: save history + send Telegram
@@ -4137,6 +4156,19 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
           [leadId, oldStatus, newNorm, req.user.displayName, new Date().toISOString()]);
       }
       await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [newNorm, status, leadId]);
+
+      // Fire CAPI event if status triggers it
+      try {
+        const eventsJson = (await get(db, "SELECT value FROM settings WHERE key='capi_events'"))?.value;
+        const eventMap = eventsJson ? JSON.parse(eventsJson) : CAPI_EVENT_MAP;
+        const eventName = eventMap[newNorm];
+        if (eventName) {
+          const updatedLead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+          const capiResult = await sendCapiEvent(db, updatedLead, eventName);
+          await run(db, "INSERT INTO capi_log(lead_id, event_name, lead_name, lead_phone, project, status, result) VALUES(?,?,?,?,?,?,?)",
+            [leadId, eventName, lead.name || "", lead.phone || "", updatedLead.product || "", newNorm, JSON.stringify(capiResult || {})]);
+        }
+      } catch (capiErr) { console.error("[CAPI] Hook error:", capiErr.message); }
     }
 
     lastSyncHash = "";
@@ -5265,6 +5297,122 @@ app.get("/api/fb-ads/ad-preview", requireAuth, async (req, res) => {
 });
 
 // ========== MARKET INTELLIGENCE ENGINE ==========
+
+// ========== FACEBOOK CONVERSIONS API (CAPI) ==========
+async function sendCapiEvent(db, lead, eventName) {
+  try {
+    const pixelId = (await get(db, "SELECT value FROM settings WHERE key='capi_pixel_id'"))?.value;
+    const token = (await get(db, "SELECT value FROM settings WHERE key='capi_access_token'"))?.value;
+    if (!pixelId || !token) return;
+
+    const phone = (lead.phone || "").replace(/[^0-9]/g, "");
+    const hashedPhone = phone ? await hashSHA256(phone.startsWith("0") ? "84" + phone.slice(1) : phone) : undefined;
+    const hashedName = lead.name ? await hashSHA256(lead.name.toLowerCase().trim()) : undefined;
+
+    const eventData = {
+      event_name: eventName,
+      event_time: Math.floor(Date.now() / 1000),
+      action_source: "system_generated",
+      user_data: {},
+      custom_data: {
+        content_name: lead.project || "",
+        content_category: "real_estate",
+        status: lead.status || "",
+      },
+    };
+    if (hashedPhone) eventData.user_data.ph = [hashedPhone];
+    if (hashedName) eventData.user_data.fn = [hashedName];
+
+    const url = `https://graph.facebook.com/v22.0/${pixelId}/events?access_token=${encodeURIComponent(token)}`;
+    const fbRes = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: [eventData] }),
+    });
+    const result = await fbRes.json();
+    if (result.error) console.error("[CAPI] Error:", result.error.message);
+    else console.log(`[CAPI] Sent ${eventName} for lead #${lead.id} → events_received: ${result.events_received}`);
+    return result;
+  } catch (err) {
+    console.error("[CAPI] Exception:", err.message);
+  }
+}
+
+async function hashSHA256(value) {
+  const { createHash } = await import("crypto");
+  return createHash("sha256").update(value).digest("hex");
+}
+
+// CAPI trigger status mapping
+const CAPI_EVENT_MAP = {
+  closed: "Purchase",
+  booked: "InitiateCheckout",
+  booking_other: "InitiateCheckout",
+  appointment: "Schedule",
+  interested: "Lead",
+};
+
+// CAPI Settings endpoints
+app.get("/api/capi-settings", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const pixelId = (await get(db, "SELECT value FROM settings WHERE key='capi_pixel_id'"))?.value || "";
+    const token = (await get(db, "SELECT value FROM settings WHERE key='capi_access_token'"))?.value || "";
+    const events = (await get(db, "SELECT value FROM settings WHERE key='capi_events'"))?.value || JSON.stringify(CAPI_EVENT_MAP);
+    res.json({ pixelId, hasToken: !!token, events: JSON.parse(events) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/capi-settings", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { pixelId, accessToken, events } = req.body;
+    if (pixelId !== undefined) {
+      await run(db, "INSERT INTO settings(key, value) VALUES('capi_pixel_id', ?) ON CONFLICT(key) DO UPDATE SET value = ?", [pixelId, pixelId]);
+    }
+    if (accessToken !== undefined) {
+      await run(db, "INSERT INTO settings(key, value) VALUES('capi_access_token', ?) ON CONFLICT(key) DO UPDATE SET value = ?", [accessToken, accessToken]);
+    }
+    if (events !== undefined) {
+      const val = JSON.stringify(events);
+      await run(db, "INSERT INTO settings(key, value) VALUES('capi_events', ?) ON CONFLICT(key) DO UPDATE SET value = ?", [val, val]);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Test CAPI connection
+app.post("/api/capi-test", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const pixelId = (await get(db, "SELECT value FROM settings WHERE key='capi_pixel_id'"))?.value;
+    const token = (await get(db, "SELECT value FROM settings WHERE key='capi_access_token'"))?.value;
+    if (!pixelId || !token) return res.status(400).json({ error: "Chưa cấu hình Pixel ID hoặc Access Token" });
+
+    const testEvent = {
+      event_name: "Lead",
+      event_time: Math.floor(Date.now() / 1000),
+      action_source: "system_generated",
+      user_data: { fn: [await hashSHA256("test")] },
+      custom_data: { content_name: "CRM Test Event", content_category: "test" },
+    };
+    const url = `https://graph.facebook.com/v22.0/${pixelId}/events?access_token=${encodeURIComponent(token)}`;
+    const fbRes = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: [testEvent], test_event_code: req.body.testCode || "" }),
+    });
+    const result = await fbRes.json();
+    if (result.error) return res.status(400).json({ error: result.error.message });
+    res.json({ ok: true, events_received: result.events_received });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// CAPI event log
+app.get("/api/capi-log", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM capi_log ORDER BY id DESC LIMIT 100");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+// =================================================
 
 // Module 1: Ad Library Scraper — Headless Browser (Puppeteer + Stealth)
 async function scrapeAdLibrary(projectName, _adAccountRows) {
