@@ -479,6 +479,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [managerFilter, setManagerFilter] = useState("all");
+  const [saleFilter, setSaleFilter] = useState("all");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Project modal state
@@ -751,8 +752,11 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (managerFilter && managerFilter !== "all") {
       list = list.filter((l) => (l.managerName || "") === managerFilter);
     }
+    if (saleFilter && saleFilter !== "all") {
+      list = list.filter((l) => (l.saleName || "") === saleFilter);
+    }
     return list;
-  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter]);
+  }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter, saleFilter]);
 
   // --- Cost data ---
   const projectCostMap = useMemo(() => {
@@ -1179,6 +1183,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setSchedules={setSchedules}
             managerFilter={managerFilter}
             setManagerFilter={setManagerFilter}
+            saleFilter={saleFilter}
+            setSaleFilter={setSaleFilter}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -1968,7 +1974,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter }) {
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
@@ -2009,6 +2015,15 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [productFilterOpen, setProductFilterOpen] = useState(false);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [saleFilterOpen, setSaleFilterOpen] = useState(false);
+  const [saleFilterSearch, setSaleFilterSearch] = useState("");
+  const saleFilterRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!saleFilterOpen) return;
+    const handler = (e) => { if (saleFilterRef.current && !saleFilterRef.current.contains(e.target)) { setSaleFilterOpen(false); setSaleFilterSearch(""); } };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [saleFilterOpen]);
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
@@ -3724,6 +3739,52 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             <option value="all">Tất cả quản lý</option>
             {allManagerNames.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
+        )}
+        {isAdmin && saleNames.length > 0 && (
+          <div ref={saleFilterRef} style={{ position: "relative" }}>
+            <div
+              onClick={() => setSaleFilterOpen(!saleFilterOpen)}
+              style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 160, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+            >
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{saleFilter === "all" ? "Tất cả sale" : saleFilter}</span>
+              <span style={{ fontSize: 10, color: "#9ca3af" }}>▼</span>
+            </div>
+            {saleFilterOpen && (
+              <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 999, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.12)", minWidth: 220, maxHeight: 320, display: "flex", flexDirection: "column" }}>
+                <div style={{ padding: 8, borderBottom: "1px solid #e5e7eb" }}>
+                  <input
+                    autoFocus
+                    placeholder="Tìm sale..."
+                    value={saleFilterSearch}
+                    onChange={(e) => setSaleFilterSearch(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div style={{ overflowY: "auto", maxHeight: 260 }}>
+                  <div
+                    onClick={() => { setSaleFilter("all"); setSaleFilterOpen(false); setSaleFilterSearch(""); setCurrentPage(1); }}
+                    style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", background: saleFilter === "all" ? "#f0f9ff" : "transparent", fontWeight: saleFilter === "all" ? 600 : 400 }}
+                    onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+                    onMouseLeave={(e) => e.currentTarget.style.background = saleFilter === "all" ? "#f0f9ff" : "transparent"}
+                  >
+                    Tất cả sale
+                  </div>
+                  {saleNames.filter(s => !saleFilterSearch || s.toLowerCase().includes(saleFilterSearch.toLowerCase())).map(s => (
+                    <div
+                      key={s}
+                      onClick={() => { setSaleFilter(s); setSaleFilterOpen(false); setSaleFilterSearch(""); setCurrentPage(1); }}
+                      style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", background: saleFilter === s ? "#f0f9ff" : "transparent", fontWeight: saleFilter === s ? 600 : 400 }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+                      onMouseLeave={(e) => e.currentTarget.style.background = saleFilter === s ? "#f0f9ff" : "transparent"}
+                    >
+                      {s}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
