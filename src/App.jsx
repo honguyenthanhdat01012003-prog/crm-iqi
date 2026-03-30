@@ -2069,6 +2069,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [scheduleDetailLoading, setScheduleDetailLoading] = useState(false);
   const [scheduleCalDay, setScheduleCalDay] = useState(null);
   const [scheduleCalMonth, setScheduleCalMonth] = useState(null); // {month, year}
+  const [scheduleExpandedSales, setScheduleExpandedSales] = useState({}); // { saleName: true }
+  const [scheduleSaleSearch, setScheduleSaleSearch] = useState("");
   const [scheduleHistoryPage, setScheduleHistoryPage] = useState(1);
   const [scheduleHistorySearch, setScheduleHistorySearch] = useState("");
   const [scheduleEditing, setScheduleEditing] = useState(null); // {leadsPerDay, distributeTimes, numSlots}
@@ -3179,7 +3181,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               {/* Schedule Detail Modal - Calendar View */}
               {scheduleDetailId && (
                 <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); }}>
+                  onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); setScheduleExpandedSales({}); setScheduleSaleSearch(""); }}>
                   <div style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 900, maxHeight: "90vh", display: "flex", flexDirection: "column", overflow: "hidden" }}
                     onClick={e => e.stopPropagation()}>
                     {/* Modal header */}
@@ -3220,7 +3222,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                   <Trash2 size={13} /> Thu hồi
                                 </button>
                               )}
-                              <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); setScheduleEditing(null); }}
+                              <button onClick={() => { setScheduleDetailId(null); setScheduleDetailData(null); setScheduleCalDay(null); setScheduleCalMonth(null); setScheduleEditing(null); setScheduleExpandedSales({}); setScheduleSaleSearch(""); }}
                                 style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
                                 <X size={20} color="#6b7280" />
                               </button>
@@ -3427,7 +3429,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                                   return (
                                     <div key={i}
-                                      onClick={() => dayEntries.length > 0 && setScheduleCalDay(isSelected ? null : dateStr)}
+                                      onClick={() => { if (dayEntries.length > 0) { setScheduleCalDay(isSelected ? null : dateStr); setScheduleExpandedSales({}); setScheduleSaleSearch(""); } }}
                                       style={{
                                         minHeight: isMobile ? 50 : 80, padding: 3,
                                         borderBottom: "1px solid #f3f4f6", borderRight: "1px solid #f3f4f6",
@@ -3493,57 +3495,142 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                 if (!bySale[e.saleName]) bySale[e.saleName] = [];
                                 bySale[e.saleName].push(e);
                               });
+                              const saleList = Object.entries(bySale).sort((a, b) => b[1].length - a[1].length);
+                              const filteredSaleList = scheduleSaleSearch
+                                ? saleList.filter(([sale]) => sale.toLowerCase().includes(scheduleSaleSearch.toLowerCase()))
+                                : saleList;
                               return (
-                                <div style={{ marginTop: 12, borderRadius: 8, border: isTodayRow ? "2px solid #93c5fd" : "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+                                <div style={{ marginTop: 12, borderRadius: 10, border: isTodayRow ? "2px solid #93c5fd" : "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
+                                  {/* Header */}
                                   <div style={{
-                                    padding: "8px 12px", fontSize: 13, fontWeight: 700,
+                                    padding: "10px 14px", fontSize: 13, fontWeight: 700,
                                     background: isTodayRow ? "#dbeafe" : isPast ? "#f0fdf4" : "#fefce8",
                                     color: isTodayRow ? "#1d4ed8" : isPast ? "#065f46" : "#92400e",
                                     display: "flex", justifyContent: "space-between", alignItems: "center",
                                   }}>
                                     <span>📅 {scheduleCalDay} {isTodayRow && "— Hôm nay"}</span>
                                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                      <span style={{ fontSize: 12, fontWeight: 600 }}>{entries.length} lead</span>
-                                      <button onClick={() => setScheduleCalDay(null)}
+                                      <span style={{
+                                        fontSize: 11, fontWeight: 700, padding: "2px 10px", borderRadius: 12,
+                                        background: isTodayRow ? "#3b82f6" : isPast ? "#059669" : "#d97706", color: "#fff",
+                                      }}>{entries.length} lead · {saleList.length} sale</span>
+                                      <button onClick={() => { setScheduleCalDay(null); setScheduleExpandedSales({}); setScheduleSaleSearch(""); }}
                                         style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
-                                        <X size={14} color="#6b7280" />
+                                        <X size={16} color="#6b7280" />
                                       </button>
                                     </div>
                                   </div>
-                                  <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(Object.keys(bySale).length, isMobile ? 1 : 3)}, 1fr)`, gap: 0 }}>
-                                    {Object.entries(bySale).map(([sale, saleEntries]) => {
+
+                                  {/* Search sale */}
+                                  {saleList.length > 4 && (
+                                    <div style={{ padding: "8px 14px", borderBottom: "1px solid #f3f4f6", background: "#f9fafb" }}>
+                                      <input
+                                        type="text" placeholder="🔍 Tìm sale..." value={scheduleSaleSearch}
+                                        onChange={e => setScheduleSaleSearch(e.target.value)}
+                                        style={{
+                                          width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #e5e7eb",
+                                          fontSize: 12, outline: "none", background: "#fff", boxSizing: "border-box",
+                                        }}
+                                      />
+                                    </div>
+                                  )}
+
+                                  {/* Expand all / Collapse all */}
+                                  <div style={{ padding: "6px 14px", borderBottom: "1px solid #f3f4f6", background: "#fafbfc", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                                    <button onClick={() => { const all = {}; filteredSaleList.forEach(([s]) => { all[s] = true; }); setScheduleExpandedSales(all); }}
+                                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#3b82f6", fontWeight: 600, padding: "2px 6px" }}>
+                                      Mở tất cả
+                                    </button>
+                                    <span style={{ color: "#d1d5db" }}>|</span>
+                                    <button onClick={() => setScheduleExpandedSales({})}
+                                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#6b7280", fontWeight: 600, padding: "2px 6px" }}>
+                                      Thu gọn
+                                    </button>
+                                  </div>
+
+                                  {/* Sale accordion list */}
+                                  <div style={{ maxHeight: isMobile ? "60vh" : "50vh", overflowY: "auto" }}>
+                                    {filteredSaleList.map(([sale, saleEntries], idx) => {
                                       const si = sNames.indexOf(sale);
                                       const color = saleColors[si >= 0 ? si % saleColors.length : 0];
+                                      const isExpanded = !!scheduleExpandedSales[sale];
+                                      const plannedCount = saleEntries.filter(e => e.planned).length;
+                                      const doneCount = saleEntries.length - plannedCount;
                                       return (
-                                        <div key={sale} style={{ borderRight: "1px solid #f3f4f6" }}>
-                                          <div style={{ padding: "5px 10px", fontSize: 12, fontWeight: 700, color, background: "#f9fafb", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 4 }}>
-                                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: color, display: "inline-block" }} />
-                                            {sale} ({saleEntries.length})
-                                          </div>
-                                          {saleEntries.map((entry, ei) => {
-                                            const lead = leadMap[entry.leadId];
-                                            return (
-                                              <div key={ei} style={{
-                                                padding: "4px 10px", fontSize: 12, borderBottom: "1px solid #f9fafb",
-                                                display: "flex", justifyContent: "space-between", alignItems: "center",
-                                                background: entry.planned ? "#fffbeb" : "#fff",
+                                        <div key={sale} style={{ borderBottom: idx < filteredSaleList.length - 1 ? "1px solid #f3f4f6" : "none" }}>
+                                          {/* Sale header - clickable */}
+                                          <div
+                                            onClick={() => setScheduleExpandedSales(prev => ({ ...prev, [sale]: !prev[sale] }))}
+                                            style={{
+                                              padding: "10px 14px", cursor: "pointer", display: "flex", alignItems: "center",
+                                              justifyContent: "space-between", background: isExpanded ? "#f0f9ff" : "#fff",
+                                              transition: "background 0.15s",
+                                            }}
+                                            onMouseEnter={e => { if (!isExpanded) e.currentTarget.style.background = "#fafbfc"; }}
+                                            onMouseLeave={e => { if (!isExpanded) e.currentTarget.style.background = "#fff"; }}
+                                          >
+                                            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+                                              <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                                              <span style={{ fontWeight: 700, fontSize: 13, color: "#1f2937", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                                {sale}
+                                              </span>
+                                            </div>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                              {doneCount > 0 && (
+                                                <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#d1fae5", color: "#065f46" }}>
+                                                  {doneCount} đã chia
+                                                </span>
+                                              )}
+                                              {plannedCount > 0 && (
+                                                <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#fef3c7", color: "#92400e" }}>
+                                                  {plannedCount} dự kiến
+                                                </span>
+                                              )}
+                                              <span style={{
+                                                fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                                                background: color, color: "#fff", minWidth: 28, textAlign: "center",
                                               }}>
-                                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
-                                                  {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : `#${entry.leadId}`}
-                                                </span>
-                                                <span style={{
-                                                  fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
-                                                  background: entry.planned ? "#fef3c7" : "#d1fae5",
-                                                  color: entry.planned ? "#92400e" : "#065f46",
-                                                }}>
-                                                  {entry.planned ? "Dự kiến" : "✓ Đã chia"}
-                                                </span>
-                                              </div>
-                                            );
-                                          })}
+                                                {saleEntries.length}
+                                              </span>
+                                              <span style={{ fontSize: 12, color: "#9ca3af", transition: "transform 0.15s", transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
+                                            </div>
+                                          </div>
+                                          {/* Expanded lead list */}
+                                          {isExpanded && (
+                                            <div style={{ background: "#f9fafb", borderTop: "1px solid #f0f0f0" }}>
+                                              {saleEntries.map((entry, ei) => {
+                                                const lead = leadMap[entry.leadId];
+                                                return (
+                                                  <div key={ei} style={{
+                                                    padding: isMobile ? "6px 14px 6px 30px" : "5px 14px 5px 30px",
+                                                    fontSize: 12, borderBottom: "1px solid #f3f4f6",
+                                                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                                                    background: entry.planned ? "#fffbeb" : "#fff",
+                                                  }}>
+                                                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                                                      <span style={{ color: "#6b7280", fontSize: 11, marginRight: 4 }}>{ei + 1}.</span>
+                                                      {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : `#${entry.leadId}`}
+                                                    </span>
+                                                    <span style={{
+                                                      fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
+                                                      background: entry.planned ? "#fef3c7" : "#d1fae5",
+                                                      color: entry.planned ? "#92400e" : "#065f46",
+                                                    }}>
+                                                      {entry.planned ? "Dự kiến" : "✓ Đã chia"}
+                                                    </span>
+                                                  </div>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
                                         </div>
                                       );
                                     })}
+                                    {filteredSaleList.length === 0 && (
+                                      <div style={{ padding: "16px 14px", textAlign: "center", color: "#9ca3af", fontSize: 12 }}>
+                                        Không tìm thấy sale "{scheduleSaleSearch}"
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               );
@@ -4258,7 +4345,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editStatus} onChange={(e) => setEditStatus(e.target.value)}
               style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: "#1f2937" }}>
-              {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              {Object.entries(STATUS_LABELS).filter(([k]) => !['called', 'lost', 'blocked'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             <button onClick={handleStatusUpdate} disabled={savingStatus}
               style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
@@ -4345,7 +4432,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
                       style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 15 : 13, padding: isMobile ? "12px 14px" : "8px 10px", minHeight: isMobile ? 48 : "auto" }}>
                       <option value="">-- Chọn trạng thái --</option>
-                      {Object.entries(STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      {Object.entries(STATUS_LABELS).filter(([k]) => !['called', 'lost', 'blocked'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
                   <div style={{ width: "100%" }}>
