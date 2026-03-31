@@ -7309,7 +7309,7 @@ CHÚ Ý:
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "sonar-reasoning",
+        model: "sonar-pro",
         messages: [
           { role: "system", content: "Bạn là Biên tập viên Kinh tế cao cấp của VTV, chuyên bình luận thị trường bất động sản Việt Nam với 15 năm kinh nghiệm. Phong cách: trầm, sắc sảo, có chiều sâu chuyên môn. Bạn KHÔNG tóm tắt tin - bạn PHÂN TÍCH và BÌNH LUẬN. Trả lời bằng tiếng Việt. CHỈ trả về JSON thuần túy." },
           { role: "user", content: prompt },
