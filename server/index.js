@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 12; // Bump this when adding new DDL/migrations
+const DB_VERSION = 13; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -208,6 +208,10 @@ async function initDb() {
       market_cycle TEXT DEFAULT '', sales_script TEXT DEFAULT '',
       big_picture TEXT DEFAULT '',
       editorial_comment TEXT DEFAULT '', action_items TEXT DEFAULT '[]',
+      created_at TEXT DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS marketing_guidelines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, rule_name TEXT NOT NULL,
+      content TEXT NOT NULL, keywords TEXT DEFAULT '', priority INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')))`,
   ];
   for (const sql of ddlStatements) {
@@ -5317,6 +5321,136 @@ app.get("/api/fb-ads/ad-preview", requireAuth, async (req, res) => {
 });
 
 // ========== MARKET INTELLIGENCE ENGINE ==========
+
+// ========== MARKETING GUIDELINES (AI Marketing Advisor) ==========
+
+const MARKETING_KNOWLEDGE = [
+  { category: "Tài khoản QC", rule_name: "Facebook thích tính ổn định", content: "Nên dùng cố định thiết bị và địa chỉ IP thường xuyên đăng nhập. Ở 1 thời điểm không nên dùng quá nhiều tài khoản cùng lúc trên cùng 1 thiết bị. Mỗi 1 trình duyệt nên dùng 1 tài khoản Facebook.", keywords: "ổn định,ip,thiết bị,tài khoản,trình duyệt", priority: 1 },
+  { category: "Tài khoản QC", rule_name: "3 yếu tố chạy quảng cáo", content: "Để chạy được quảng cáo cần 3 yếu tố: Tài khoản Facebook + Tài khoản quảng cáo + Trang bán hàng (Fanpage). Nếu TK Facebook bị hạn chế thì TKQC và Fanpage không dùng được. Nếu TKQC bị vô hiệu hóa thì dùng TKQC khác. Nếu Fanpage bị hạn chế thì dùng Fanpage khác.", keywords: "tài khoản,fanpage,hạn chế,vô hiệu", priority: 2 },
+  { category: "Tài khoản QC", rule_name: "Lưu ý tài khoản mới", content: "1) TKQC mới chỉ lên 1 campaign. 2) TKQC mới nên chạy campaign đó cố gắng duy trì cho cắn được tầm 1 triệu. 3) TKQC mới nên lên campaign 2 nhưng vẫn chạy bài viết cũ của campaign 1. 4) Sau khi TKQC đã chi tiêu tầm trên 2 triệu thì có thể lên campaign tiếp theo cho bài viết mới. 5) Ngân sách tối đa cho 1 chiến dịch nên là 1 triệu. 6) Số nhóm quảng cáo trong 1 chiến dịch không quá 2.", keywords: "tài khoản mới,campaign,ngân sách,chiến dịch,nhóm", priority: 3 },
+  { category: "Fanpage", rule_name: "Tạo Fanpage chuẩn SEO", content: "Tên Fanpage phải chứa từ khóa chính và từ khóa phụ. Username (URL) nên tối ưu. Mô tả chứa từ khóa. Có website. Hạng mục phù hợp ngành nghề. Lượt checkin giúp tăng trust. Page được tạo từ BM agency hoặc BM đã xác minh sẽ khỏe hơn page thông thường.", keywords: "fanpage,seo,từ khóa,page,bm", priority: 2 },
+  { category: "Cấu trúc chiến dịch", rule_name: "3 tầng quảng cáo (Campaign > Ad Set > Ad)", content: "Tầng 1 - Chiến dịch: Đặt tên, mục tiêu, tối ưu ngân sách CBO. Tầng 2 - Nhóm QC: Trang Facebook, ngân sách & lịch chạy, đối tượng target, vị trí quảng cáo. Tầng 3 - Quảng cáo: Sử dụng bài viết có sẵn hoặc tạo QC mới, mẫu tin nhắn.", keywords: "chiến dịch,nhóm,quảng cáo,cấu trúc,tầng,cbo", priority: 3 },
+  { category: "Targeting", rule_name: "Phân tích đối tượng khách hàng BĐS cao cấp", content: "Phân tích khách hàng theo 3 câu hỏi: 1) Họ là ai? (bác sỹ, doanh nhân, chủ DN, quản lý cao cấp, luật sư, Việt kiều). 2) Họ thường làm gì? (du lịch, hạng thương gia, resort cao cấp, golf, tennis). 3) Họ quan tâm gì? (BĐS, tài chính, cổ phiếu, thương hiệu cao cấp: kim cương, vàng, Audi, Bentley, Chanel). Target theo nhóm: hành chính, quản lý, y tế, pháp lý, tài chính, BĐS, đầu tư, luxury, du lịch, golf.", keywords: "target,đối tượng,khách hàng,sở thích,nhóm,bđs,cao cấp", priority: 3 },
+  { category: "Targeting", rule_name: "Mẹo targeting nâng cao", content: "Một người có nhiều sở thích → ưu tiên sở thích bổ sung. Nên loại trừ các tệp đối tượng clone. Chạy location thì chọn dòng và có thể không cần target nếu tệp đối tượng nhỏ. Gõ từ khóa bằng tiếng Anh cho kết quả tốt hơn. Brand (thương hiệu) và thú vui giới siêu giàu là target hiệu quả.", keywords: "target,loại trừ,location,tiếng anh,brand,clone", priority: 2 },
+  { category: "Test & Tối ưu", rule_name: "Xử lý sau AB Test", content: "TH1 - Chỉ có 1 nhóm hiệu quả: Bước 1: Tắt nhóm không hiệu quả, giữ nhóm hiệu quả. Bước 2: Nhân ra 1 chiến dịch mới, tạo khoảng 3 nhóm QC giống nhau. TH2 - Có từ 2 nhóm hiệu quả trở lên: Cách 1: Làm như TH1; Cách 2: Gom chung các nhóm hiệu quả vào 1 nhóm rồi nhân ra nhiều nhóm.", keywords: "test,ab,hiệu quả,nhân bản,nhóm,tối ưu,tắt", priority: 3 },
+  { category: "Test & Tối ưu", rule_name: "Giai đoạn máy học Facebook", content: "Facebook cần 50 sự kiện chuyển đổi trong 7 ngày để hoàn tất giai đoạn máy học. Ví dụ: 1 tin nhắn = 100 nghìn → 50 sự kiện = 5 triệu → 7 ngày = 5 triệu → 1 ngày cần ~714 nghìn ngân sách. Trong giai đoạn máy học, KHÔNG nên chỉnh sửa chiến dịch.", keywords: "máy học,50 sự kiện,7 ngày,ngân sách,chuyển đổi,learning", priority: 3 },
+  { category: "Ngân sách", rule_name: "Quy tắc tăng ngân sách", content: "Tăng ngân sách KHÔNG quá 30% mỗi lần. 1 ngày chỉ tăng không quá 2 lần. Vi phạm quy tắc này sẽ khiến chiến dịch reset giai đoạn máy học.", keywords: "ngân sách,tăng,30%,máy học,budget", priority: 3 },
+  { category: "Ngân sách", rule_name: "Ngân sách tối đa chiến dịch", content: "Ngân sách tối đa cho 1 chiến dịch nên là 1 triệu đồng/ngày. Số nhóm quảng cáo trong 1 chiến dịch không nên quá 2. Với TKQC mới, cắn được 1 triệu chi tiêu trước khi lên campaign mới.", keywords: "ngân sách,chiến dịch,nhóm,tối đa,1 triệu", priority: 2 },
+  { category: "Đối tượng", rule_name: "Đối tượng tùy chỉnh (Custom Audience)", content: "Đối tượng tùy chỉnh là đối tượng mà chúng ta sở hữu, gồm: Trang web (pixel), Danh sách khách hàng (email/phone), Video (người xem), Trang Facebook (người tương tác). Đây là tệp đối tượng mạnh nhất vì đã biết về thương hiệu.", keywords: "custom audience,tùy chỉnh,pixel,danh sách,video,tương tác", priority: 2 },
+  { category: "Đối tượng", rule_name: "Đối tượng tương tự (Lookalike Audience)", content: "Đối tượng tương tự được tạo ra từ đối tượng tùy chỉnh. Facebook sẽ tìm người có hành vi, sở thích tương tự với tệp nguồn. Lookalike 1% là chính xác nhất, tệp càng lớn thì lookalike càng kém chính xác.", keywords: "lookalike,tương tự,tùy chỉnh,1%,tệp", priority: 2 },
+  { category: "Chiến lược", rule_name: "7 chiến lược chạy quảng cáo", content: "1) Chạy target đối tượng khách hàng - cơ bản nhất. 2) Chạy full target - phù hợp khi tệp nhỏ. 3) Chạy loại trừ - tìm kiếm đối tượng mới tinh. 4) Chạy remarketing + đối tượng tương tự. 5) Chạy tăng like page. 6) Chạy tương tác bài viết. 7) Chạy bids thầu - nâng cao.", keywords: "chiến lược,target,remarketing,lookalike,like,tương tác,bids", priority: 3 },
+  { category: "Tối ưu chi phí", rule_name: "Chạy quảng cáo rẻ", content: "Để chi phí rẻ: Tối ưu theo vị trí, tuổi, giới tính, thiết bị, vị trí hiển thị. Xem báo cáo phân tích để biết segment nào cho kết quả tốt nhất rồi tập trung ngân sách vào đó. Tắt các segment kém hiệu quả. Mỗi nick Facebook tạo được 2 tài khoản doanh nghiệp (BM1 và BM2).", keywords: "chi phí,tối ưu,rẻ,vị trí,tuổi,giới tính,segment,bm", priority: 3 },
+  { category: "Nội dung", rule_name: "Cấu trúc bài viết chuẩn Facebook Ads", content: "Bài viết quảng cáo cần: Hook mạnh (câu đầu gây tò mò), nêu pain point, giải pháp (dự án), social proof (số liệu, khách hàng), CTA rõ ràng. Spy content đối thủ để học hỏi. Tránh nội dung vi phạm chính sách Facebook (thuốc, rượu, vũ khí, phân biệt...).", keywords: "nội dung,bài viết,content,hook,cta,spy,vi phạm", priority: 3 },
+];
+
+// Seed marketing guidelines
+app.post("/api/marketing-guidelines/seed", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const existing = await get(db, "SELECT COUNT(*) as cnt FROM marketing_guidelines");
+    if (existing.cnt > 0) {
+      return res.json({ message: "Đã có dữ liệu", count: existing.cnt });
+    }
+    for (const g of MARKETING_KNOWLEDGE) {
+      await run(db, "INSERT INTO marketing_guidelines(category, rule_name, content, keywords, priority) VALUES(?, ?, ?, ?, ?)", 
+        [g.category, g.rule_name, g.content, g.keywords, g.priority]);
+    }
+    res.json({ message: "Đã nạp kiến thức marketing", count: MARKETING_KNOWLEDGE.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/marketing-guidelines", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM marketing_guidelines ORDER BY priority DESC, category");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// AI Campaign Advisor
+app.post("/api/campaign-advisor", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { campaigns: campData } = req.body;
+    if (!campData || !campData.length) return res.status(400).json({ error: "Không có dữ liệu chiến dịch" });
+
+    const guidelines = await all(db, "SELECT * FROM marketing_guidelines ORDER BY priority DESC");
+    if (!guidelines.length) return res.status(400).json({ error: "Chưa nạp kiến thức marketing. Bấm 'Nạp kiến thức' trước." });
+
+    const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
+    if (!apiKey?.value) return res.status(400).json({ error: "Chưa cấu hình API key Perplexity" });
+
+    const guidelinesText = guidelines.map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n");
+    const campSummary = campData.map(c => 
+      `- ${c.name}: Chi ${Number(c.spend||0).toLocaleString("vi-VN")}đ, ${c.fbLeads||0} lead FB, ${c.crmLeads||0} lead CRM, ${c.interested||0} quan tâm (${c.interestPct||0}%), CPL=${c.cpl?Number(c.cpl).toLocaleString("vi-VN")+"đ":"N/A"}, CPM=${c.cpm?Number(c.cpm).toLocaleString("vi-VN")+"đ":"N/A"}, CTR=${c.ctr||"N/A"}%, NS/ngày=${c.dailyBudget?Number(c.dailyBudget).toLocaleString("vi-VN")+"đ":"N/A"}, trạng thái=${c.status||"?"}`
+    ).join("\n");
+
+    const prompt = `Bạn là GIÁM ĐỐC MARKETING với 10 năm kinh nghiệm chạy Facebook Ads BĐS. 
+
+ĐÂY LÀ BỘ QUY TẮC VÀNG CỦA BẠN (học từ kinh nghiệm thực chiến):
+${guidelinesText}
+
+DỮ LIỆU CHIẾN DỊCH HIỆN TẠI:
+${campSummary}
+
+PHÂN TÍCH VÀ ĐƯA RA LỜI KHUYÊN. Quy tắc:
+1. SOI từng chiến dịch: CPL bao nhiêu? So với mức nào là tốt cho BĐS (200-500k)? 
+2. % Quan tâm < 15% → nội dung có vấn đề, trích quy tắc nào cần áp dụng
+3. CPM quá cao (> 80k) → đối tượng bị hẹp hoặc content kém
+4. Chiến dịch nào nên TẮT, chiến dịch nào nên TĂNG ngân sách (nhớ quy tắc 30%)
+5. Ngân sách/ngày có hợp lý không? (max 1 triệu/chiến dịch theo quy tắc)
+6. ĐỀ XUẤT: 3 gợi ý content mới dựa trên chiến dịch hiệu quả nhất
+
+KHÔNG chung chung. PHẢI trích quy tắc cụ thể. PHẢI nêu CON SỐ.
+
+Trả về ĐÚNG JSON thuần (KHÔNG markdown):
+{
+  "overall_verdict": "Tốt|Trung bình|Cần cải thiện|Đang có vấn đề",
+  "overall_score": 75,
+  "summary": "1-2 câu tổng kết tình hình chiến dịch, thẳng thắn",
+  "campaign_reviews": [
+    {
+      "name": "tên chiến dịch",
+      "verdict": "Tốt|TB|Kém",
+      "diagnosis": "Chẩn đoán ngắn gọn: vấn đề chính",
+      "rules_violated": ["Tên quy tắc bị vi phạm"],
+      "advice": "Lời khuyên cụ thể, có con số",
+      "action": "TĂNG ngân sách 20%|TẮT ngay|GIỮ nguyên|GIẢM 30%"
+    }
+  ],
+  "budget_suggestions": [
+    "Đề xuất phân bổ ngân sách cụ thể giữa các chiến dịch"
+  ],
+  "content_ideas": [
+    {
+      "title": "Ý tưởng bài viết",
+      "hook": "Câu hook mở đầu gợi ý",
+      "target": "Đối tượng nên nhắm",
+      "reason": "Tại sao ý tưởng này sẽ hiệu quả (trích quy tắc)"
+    }
+  ]
+}`;
+
+    const ppxRes = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.value}` },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: [
+          { role: "system", content: "Bạn là Giám đốc Marketing BĐS 10 năm kinh nghiệm. Luôn trả lời bằng JSON thuần, không markdown." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+    if (!ppxRes.ok) { const e = await ppxRes.text(); return res.status(500).json({ error: `Perplexity error: ${e}` }); }
+    const ppxData = await ppxRes.json();
+    const raw = (ppxData.choices?.[0]?.message?.content || "").trim();
+    let parsed;
+    try {
+      const jsonStr = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      parsed = JSON.parse(jsonStr);
+    } catch { parsed = { overall_verdict: "Lỗi", summary: raw, campaign_reviews: [], budget_suggestions: [], content_ideas: [] }; }
+    res.json(parsed);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ========== FACEBOOK CONVERSIONS API (CAPI) ==========
 async function sendCapiEvent(db, lead, eventName) {

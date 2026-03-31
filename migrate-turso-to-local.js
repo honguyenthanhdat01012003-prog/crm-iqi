@@ -47,6 +47,7 @@ const TABLES = [
   "sheet_configs",
   "chat_messages",
   "market_intel_cache",
+  "marketing_guidelines",
 ];
 
 async function migrate() {

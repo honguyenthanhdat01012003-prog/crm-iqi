@@ -5088,6 +5088,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [expandedCampaigns, setExpandedCampaigns] = React.useState({});
   const [expandedAdsets, setExpandedAdsets] = React.useState({});
 
+  // AI Marketing Advisor state
+  const [advisorData, setAdvisorData] = useState(null);
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorError, setAdvisorError] = useState("");
+  const [guidelinesSeeded, setGuidelinesSeeded] = useState(false);
+  const [seedingGuidelines, setSeedingGuidelines] = useState(false);
+
   // FB Ads state
   const [adAccounts, setAdAccounts] = useState([]);
   const [selectedAccounts, setSelectedAccounts] = useState([]);
@@ -5126,6 +5133,49 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
   };
   useEffect(() => { loadAdAccounts(); }, []);
+
+  // Seed marketing guidelines
+  const seedGuidelines = async () => {
+    setSeedingGuidelines(true);
+    try {
+      const r = await apiFetch(`${API}/marketing-guidelines/seed`, { method: "POST" });
+      const d = await r.json();
+      if (r.ok) { setGuidelinesSeeded(true); showToast(d.message || "Đã nạp kiến thức", "success"); }
+      else showToast(d.error || "Lỗi", "error");
+    } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+    setSeedingGuidelines(false);
+  };
+
+  // Check guidelines on mount
+  useEffect(() => {
+    apiFetch(`${API}/marketing-guidelines`).then(r => r.json()).then(d => { if (Array.isArray(d) && d.length > 0) setGuidelinesSeeded(true); }).catch(() => {});
+  }, []);
+
+  // Ask AI Advisor
+  const askAdvisor = async (campaignRows, crmByCamp) => {
+    setAdvisorLoading(true); setAdvisorError(""); setAdvisorData(null);
+    try {
+      const campData = campaignRows.map(row => {
+        const la = (row.actions || []).find(a => a.action_type === "lead" || a.action_type === "onsite_conversion.messaging_first_reply");
+        const fbLeads = la ? Number(la.value) : 0;
+        const spend = Number(row.spend || 0);
+        const cl = crmByCamp[row.campaign_name] || [];
+        const interested = cl.filter(l => l.status === "interested").length;
+        return {
+          name: row.campaign_name, spend, fbLeads, crmLeads: cl.length, interested,
+          interestPct: cl.length ? (interested / cl.length * 100).toFixed(1) : "0",
+          cpl: fbLeads ? (spend / fbLeads).toFixed(0) : null,
+          cpm: row.cpm || null, ctr: row.inline_link_click_ctr || null,
+          dailyBudget: row._dailyBudget || null, status: row.status || "",
+        };
+      });
+      const r = await apiFetch(`${API}/campaign-advisor`, { method: "POST", body: JSON.stringify({ campaigns: campData }) });
+      const d = await r.json();
+      if (r.ok) setAdvisorData(d);
+      else setAdvisorError(d.error || "Lỗi phân tích");
+    } catch (e) { setAdvisorError("Lỗi: " + e.message); }
+    setAdvisorLoading(false);
+  };
 
   // Click-outside for account dropdown
   useEffect(() => {
@@ -6556,6 +6606,132 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
 
           {scopedInsights.length === 0 && !fbLoading && (
             <div style={{ textAlign: "center", padding: 30, color: "#9ca3af", fontSize: 13 }}>Không có dữ liệu chiến dịch cho dự án này</div>
+          )}
+
+          {/* === AI Marketing Advisor === */}
+          {scopedInsights.length > 0 && (
+            <div style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)", borderRadius: 16, marginTop: 24, padding: isMobile ? 16 : 24, color: "#fff" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 12, background: "linear-gradient(135deg, #e88a2e, #f59e0b)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <Sparkles size={20} color="#fff" />
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: isMobile ? 15 : 17 }}>Lời khuyên từ Giám đốc Marketing</div>
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>AI phân tích chiến dịch dựa trên 15 quy tắc vàng Facebook Ads BĐS</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {!guidelinesSeeded && (
+                    <button onClick={seedGuidelines} disabled={seedingGuidelines} style={{ padding: "8px 16px", borderRadius: 10, border: "1px solid #475569", background: "transparent", color: "#e2e8f0", cursor: "pointer", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                      {seedingGuidelines ? <><RefreshCw size={13} className="spin" /> Đang nạp...</> : <><BookOpen size={13} /> Nạp kiến thức</>}
+                    </button>
+                  )}
+                  <button onClick={() => askAdvisor(scopedInsights, crmByCamp)} disabled={advisorLoading || !guidelinesSeeded}
+                    style={{ padding: "8px 20px", borderRadius: 10, border: "none", background: advisorLoading ? "#475569" : "linear-gradient(135deg, #e88a2e, #f59e0b)", color: "#fff", cursor: advisorLoading || !guidelinesSeeded ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, opacity: !guidelinesSeeded ? 0.5 : 1 }}>
+                    {advisorLoading ? <><RefreshCw size={14} className="spin" /> Đang phân tích...</> : <><Zap size={14} /> Tối ưu hóa ngay</>}
+                  </button>
+                </div>
+              </div>
+
+              {advisorError && <div style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 10, padding: "10px 14px", fontSize: 13, color: "#fca5a5", marginBottom: 12 }}>{advisorError}</div>}
+
+              {!advisorData && !advisorLoading && !advisorError && (
+                <div style={{ textAlign: "center", padding: 20, color: "#64748b", fontSize: 13 }}>
+                  {guidelinesSeeded ? "Bấm \"Tối ưu hóa ngay\" để AI phân tích chiến dịch" : "Bấm \"Nạp kiến thức\" trước, sau đó \"Tối ưu hóa ngay\""}
+                </div>
+              )}
+
+              {advisorLoading && (
+                <div style={{ textAlign: "center", padding: 30 }}>
+                  <RefreshCw size={28} className="spin" style={{ color: "#e88a2e" }} />
+                  <div style={{ marginTop: 10, fontSize: 13, color: "#94a3b8" }}>Giám đốc Marketing đang soi chiến dịch...</div>
+                </div>
+              )}
+
+              {advisorData && (
+                <div>
+                  {/* Overall verdict */}
+                  <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 200px", background: "rgba(255,255,255,0.06)", borderRadius: 12, padding: 16, border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>ĐÁNH GIÁ TỔNG</div>
+                      <div style={{ fontSize: 22, fontWeight: 800, color: (advisorData.overall_score || 0) >= 70 ? "#4ade80" : (advisorData.overall_score || 0) >= 40 ? "#fbbf24" : "#f87171" }}>
+                        {advisorData.overall_score || 0}<span style={{ fontSize: 14, fontWeight: 400 }}>/100</span>
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginTop: 4, color: (advisorData.overall_score || 0) >= 70 ? "#4ade80" : (advisorData.overall_score || 0) >= 40 ? "#fbbf24" : "#f87171" }}>
+                        {advisorData.overall_verdict || "—"}
+                      </div>
+                    </div>
+                    <div style={{ flex: "2 1 300px", background: "rgba(255,255,255,0.06)", borderRadius: 12, padding: 16, border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 6 }}>TỔNG KẾT</div>
+                      <div style={{ fontSize: 14, lineHeight: 1.6, color: "#e2e8f0" }}>{advisorData.summary || "—"}</div>
+                    </div>
+                  </div>
+
+                  {/* Campaign reviews */}
+                  {(advisorData.campaign_reviews || []).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><Target size={14} /> ĐÁNH GIÁ TỪNG CHIẾN DỊCH</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {(advisorData.campaign_reviews || []).map((cr, idx) => {
+                          const vColor = cr.verdict === "Tốt" ? "#4ade80" : cr.verdict === "TB" ? "#fbbf24" : "#f87171";
+                          const vBg = cr.verdict === "Tốt" ? "rgba(74,222,128,0.15)" : cr.verdict === "TB" ? "rgba(251,191,36,0.15)" : "rgba(248,113,113,0.15)";
+                          return (
+                            <div key={idx} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: isMobile ? 12 : 14, border: "1px solid rgba(255,255,255,0.08)" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+                                <div style={{ fontWeight: 700, fontSize: 13, color: "#e2e8f0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cr.name}</div>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                                  <span style={{ padding: "3px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, color: vColor, background: vBg }}>{cr.verdict}</span>
+                                  {cr.action && <span style={{ padding: "3px 10px", borderRadius: 8, fontSize: 11, fontWeight: 700, background: cr.action.includes("TẮT") ? "rgba(248,113,113,0.2)" : cr.action.includes("TĂNG") ? "rgba(74,222,128,0.2)" : "rgba(148,163,184,0.2)", color: cr.action.includes("TẮT") ? "#f87171" : cr.action.includes("TĂNG") ? "#4ade80" : "#94a3b8" }}>{cr.action}</span>}
+                                </div>
+                              </div>
+                              <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.5, marginBottom: 4 }}><b style={{ color: "#94a3b8" }}>Chẩn đoán:</b> {cr.diagnosis}</div>
+                              <div style={{ fontSize: 12, color: "#cbd5e1", lineHeight: 1.5, marginBottom: 4 }}><b style={{ color: "#94a3b8" }}>Lời khuyên:</b> {cr.advice}</div>
+                              {(cr.rules_violated || []).length > 0 && (
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                                  {cr.rules_violated.map((rv, ri) => <span key={ri} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, background: "rgba(251,191,36,0.15)", color: "#fbbf24" }}>⚠ {rv}</span>)}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Budget suggestions */}
+                  {(advisorData.budget_suggestions || []).length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><Banknote size={14} /> ĐỀ XUẤT NGÂN SÁCH</div>
+                      <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 14, border: "1px solid rgba(255,255,255,0.08)" }}>
+                        {(advisorData.budget_suggestions || []).map((bs, i) => (
+                          <div key={i} style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, marginBottom: i < advisorData.budget_suggestions.length - 1 ? 6 : 0, display: "flex", gap: 8 }}>
+                            <span style={{ color: "#e88a2e", fontWeight: 700, flexShrink: 0 }}>•</span> {bs}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Content ideas */}
+                  {(advisorData.content_ideas || []).length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#94a3b8", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}><Lightbulb size={14} /> Ý TƯỞNG NỘI DUNG MỚI</div>
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+                        {(advisorData.content_ideas || []).map((ci, i) => (
+                          <div key={i} style={{ background: "rgba(232,138,46,0.08)", borderRadius: 10, padding: 14, border: "1px solid rgba(232,138,46,0.2)" }}>
+                            <div style={{ fontWeight: 700, fontSize: 13, color: "#fbbf24", marginBottom: 6 }}>{ci.title}</div>
+                            {ci.hook && <div style={{ fontSize: 12, color: "#e2e8f0", marginBottom: 4, fontStyle: "italic" }}>"{ci.hook}"</div>}
+                            {ci.target && <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}><b>Target:</b> {ci.target}</div>}
+                            {ci.reason && <div style={{ fontSize: 11, color: "#94a3b8" }}><b>Lý do:</b> {ci.reason}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       );
