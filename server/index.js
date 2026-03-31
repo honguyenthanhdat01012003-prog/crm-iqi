@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 10; // Bump this when adding new DDL/migrations
+const DB_VERSION = 12; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -203,6 +203,11 @@ async function initDb() {
       news_summary TEXT DEFAULT '[]', market_trend TEXT DEFAULT '',
       marketing_lesson TEXT DEFAULT '', vocabulary TEXT DEFAULT '',
       source_links TEXT DEFAULT '[]', raw_response TEXT DEFAULT '',
+      spotlight TEXT DEFAULT '{}', market_indicators TEXT DEFAULT '{}',
+      expert_quotes TEXT DEFAULT '[]', market_sentiment INTEGER DEFAULT 50,
+      market_cycle TEXT DEFAULT '', sales_script TEXT DEFAULT '',
+      big_picture TEXT DEFAULT '',
+      editorial_comment TEXT DEFAULT '', action_items TEXT DEFAULT '[]',
       created_at TEXT DEFAULT (datetime('now')))`,
   ];
   for (const sql of ddlStatements) {
@@ -236,6 +241,15 @@ async function initDb() {
     "ALTER TABLE projects ADD COLUMN mgr_assign_idx INTEGER DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN ads_id TEXT DEFAULT ''",
     "ALTER TABLE lead_schedules ADD COLUMN last_processed_slot INTEGER DEFAULT 0",
+    "ALTER TABLE daily_news ADD COLUMN spotlight TEXT DEFAULT '{}'",
+    "ALTER TABLE daily_news ADD COLUMN market_indicators TEXT DEFAULT '{}'",
+    "ALTER TABLE daily_news ADD COLUMN expert_quotes TEXT DEFAULT '[]'",
+    "ALTER TABLE daily_news ADD COLUMN market_sentiment INTEGER DEFAULT 50",
+    "ALTER TABLE daily_news ADD COLUMN market_cycle TEXT DEFAULT ''",
+    "ALTER TABLE daily_news ADD COLUMN sales_script TEXT DEFAULT ''",
+    "ALTER TABLE daily_news ADD COLUMN big_picture TEXT DEFAULT ''",
+    "ALTER TABLE daily_news ADD COLUMN editorial_comment TEXT DEFAULT ''",
+    "ALTER TABLE daily_news ADD COLUMN action_items TEXT DEFAULT '[]'",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -7226,29 +7240,68 @@ async function fetchDailyRealEstateNews() {
   const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
   if (!apiKey?.value) {
     console.log("[daily-news] No Perplexity API key configured, skipping");
-    return null;
+    return { error: "Chưa cấu hình API key Perplexity. Vào tab Cài đặt để thêm." };
   }
 
   const today = new Date().toLocaleDateString("vi-VN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  const prompt = `Hôm nay là ${today}. Tìm kiếm tin tức bất động sản Việt Nam trong 24h qua từ các nguồn uy tín như VnExpress, CafeF, Batdongsan.com.vn, Cafeland, Dân trí.
+  const prompt = `Hôm nay là ${today}.
 
-Trả về ĐÚNG định dạng JSON (không có markdown, không có \`\`\`json) gồm các trường:
+Hãy đóng vai một Biên tập viên Kinh tế cao cấp của VTV hoặc CafeF với 15 năm kinh nghiệm phân tích BĐS.
+Nhiệm vụ: Tổng hợp và BÌNH LUẬN sâu sắc tin tức BĐS Việt Nam trong 24h qua từ VnExpress, CafeF, Batdongsan.com.vn, Cafeland, Dân trí, Thanh Niên.
+
+YÊU CẦU PHÂN TÍCH CHUYÊN SÂU:
+
+1. "headline": Tiêu đề mang tính thời sự cao, phong cách VTV (ví dụ: "Tín hiệu ấm lại: Khi lãi suất hạ nhiệt gặp hạ tầng bùng nổ")
+
+2. "editorial_comment": Đoạn BÌNH LUẬN 150-200 chữ, phong cách VTV/CafeF. KHÔNG tóm tắt tin - mà PHÂN TÍCH: Tại sao những sự kiện hôm nay lại quan trọng? Chúng kết nối với nhau thế nào? Thị trường đang ở đâu trong chu kỳ? Viết với giọng điệu trầm, chuyên gia, có chiều sâu.
+
+3. "key_findings": Mỗi tin PHẢI có phân tích tác động, KHÔNG chỉ tóm tắt. Tìm ra MỐI LIÊN KẾT giữa các tin (Chính sách + Hạ tầng = Cơ hội ở đâu?). Mỗi finding có impact_level: "High" hoặc "Medium".
+
+4. "market_sentiment_label": Đánh giá tâm lý thị trường bằng 1 cụm từ ngắn gọn (ví dụ: "Đang ấm lên", "Thận trọng chờ đợi", "Sôi động cục bộ", "Quan sát kỹ", "Phục hồi rõ rệt")
+
+5. "data_points": Trích xuất ÍT NHẤT 3 con số quan trọng từ tin tức (lãi suất %, diện tích ha, quy mô vốn tỷ đồng, giá trần/sàn, số lượng giao dịch...). Mỗi số phải kèm BỐI CẢNH ngắn.
+
+6. "marketing_strategy": Kịch bản TƯ VẤN thực chiến cho Sale BĐS dựa trên tin hôm nay. Gồm: (a) Mở đầu cuộc gọi thế nào cho thời sự, (b) Dẫn dắt bằng dữ liệu nào, (c) Tạo urgency ra sao, (d) Call-to-action cụ thể. Viết như đang coaching 1-1.
+
+7. "action_items": Danh sách 3-4 việc CỤ THỂ mà Sale nên làm ngay hôm nay dựa trên tin tức (ví dụ: "Gọi lại cho khách đang quan tâm khu vực Đồng Nai vì vừa có tin quy hoạch mới").
+
+8. "new_regulation": CHỈ khi có thông tư/nghị định/quyết định MỚI ban hành trong 24h. Nếu không có, để null.
+
+QUAN TRỌNG: Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
 {
-  "title": "Điểm tin BĐS ngày DD/MM/YYYY",
-  "news_summary": [
-    {"headline": "Tiêu đề tin 1", "summary": "Tóm tắt ngắn gọn 2-3 câu"},
-    {"headline": "Tiêu đề tin 2", "summary": "Tóm tắt ngắn gọn 2-3 câu"},
-    {"headline": "Tiêu đề tin 3", "summary": "Tóm tắt ngắn gọn 2-3 câu"}
+  "headline": "Tiêu đề thời sự phong cách VTV",
+  "editorial_comment": "Bình luận chuyên sâu 150-200 chữ...",
+  "market_sentiment": 65,
+  "market_sentiment_label": "Đang ấm lên",
+  "key_findings": [
+    {"title": "Tiêu đề tin", "analysis": "Phân tích TÁC ĐỘNG chứ không chỉ tóm tắt", "impact_level": "High", "connection": "Mối liên kết với tin khác"},
+    {"title": "Tiêu đề tin 2", "analysis": "Phân tích", "impact_level": "Medium", "connection": "Liên kết"}
   ],
-  "market_trend": "Phân tích xu hướng thị trường BĐS hôm nay trong 3-5 câu, nêu rõ vùng nào đang nóng, phân khúc nào có biến động",
-  "marketing_lesson": "1 bài học marketing/cách tiếp cận khách hàng BĐS dựa trên tình hình thị trường hôm nay (3-4 câu)",
-  "vocabulary": {"term": "Thuật ngữ BĐS hôm nay", "definition": "Giải thích dễ hiểu cho người mới"},
-  "sources": ["https://link-bao-1.com/...", "https://link-bao-2.com/..."]
+  "data_points": [
+    {"figure": "6.8%/năm", "context": "Lãi suất cho vay mua nhà Vietcombank, giảm 0.2% so với tháng trước"},
+    {"figure": "1,200 ha", "context": "Diện tích khu đô thị mới được phê duyệt tại Long An"},
+    {"figure": "15%", "context": "Lượng giao dịch căn hộ TP.HCM tăng so với quý trước"}
+  ],
+  "marketing_strategy": "Kịch bản tư vấn thực chiến chi tiết...",
+  "action_items": [
+    "Gọi lại cho khách quan tâm khu vực X vì vừa có tin Y",
+    "Chuẩn bị bảng so sánh lãi suất mới để gửi khách đang cân nhắc vay",
+    "Đăng bài trên Zalo/Facebook về tin tiêu điểm hôm nay"
+  ],
+  "new_regulation": {"name": "Tên thông tư/NĐ", "summary": "Tóm tắt nội dung mới", "impact": "Ảnh hưởng thế nào đến Sale/khách mua"} hoặc null,
+  "sources": ["link1", "link2"]
 }
 
-Chỉ trả về JSON thuần, không kèm text nào khác.`;
+CHÚ Ý:
+- market_sentiment: số 0-100 (0=sợ hãi, 50=chờ đợi, 100=sôi động)
+- Loại bỏ thuật ngữ/định nghĩa cơ bản. Chỉ giải thích khi có biến số MỚI
+- BÌNH LUẬN chứ không tóm tắt. Tin tức ai cũng đọc được, giá trị ở PHÂN TÍCH
+- Chỉ trả JSON thuần, không kèm text nào khác`;
 
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000);
+
     const response = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: {
@@ -7256,48 +7309,59 @@ Chỉ trả về JSON thuần, không kèm text nào khác.`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "sonar",
+        model: "sonar-reasoning",
         messages: [
-          { role: "system", content: "Bạn là chuyên gia phân tích thị trường bất động sản Việt Nam với 10 năm kinh nghiệm. Trả lời bằng tiếng Việt. Chỉ trả về JSON thuần túy, không markdown." },
+          { role: "system", content: "Bạn là Biên tập viên Kinh tế cao cấp của VTV, chuyên bình luận thị trường bất động sản Việt Nam với 15 năm kinh nghiệm. Phong cách: trầm, sắc sảo, có chiều sâu chuyên môn. Bạn KHÔNG tóm tắt tin - bạn PHÂN TÍCH và BÌNH LUẬN. Trả lời bằng tiếng Việt. CHỈ trả về JSON thuần túy." },
           { role: "user", content: prompt },
         ],
-        temperature: 0.3,
+        temperature: 0.4,
       }),
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errText = await response.text();
       console.error("[daily-news] Perplexity API error:", response.status, errText);
-      return { error: `Perplexity API l\u1ed7i (${response.status}): ${errText.slice(0, 200)}` };
+      return { error: `Perplexity API lỗi (${response.status}): ${errText.slice(0, 200)}` };
     }
 
     const result = await response.json();
     const raw = result.choices?.[0]?.message?.content || "";
 
-    // Parse JSON from response (handle markdown code blocks)
     let cleaned = raw.trim();
     if (cleaned.startsWith("```")) {
       cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
     }
+    // sonar-reasoning may wrap output in <think>...</think> tags
+    cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     const data = JSON.parse(cleaned);
 
-    // Save to DB
-    await run(db, `INSERT INTO daily_news (title, news_summary, market_trend, marketing_lesson, vocabulary, source_links, raw_response, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`, [
-      data.title || `Điểm tin BĐS ngày ${new Date().toLocaleDateString("vi-VN")}`,
-      JSON.stringify(data.news_summary || []),
-      data.market_trend || "",
-      data.marketing_lesson || "",
-      JSON.stringify(data.vocabulary || {}),
+    await run(db, `INSERT INTO daily_news (title, news_summary, market_trend, marketing_lesson, vocabulary, source_links, raw_response, spotlight, market_indicators, expert_quotes, market_sentiment, market_cycle, sales_script, big_picture, editorial_comment, action_items, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`, [
+      data.headline || `Điểm tin BĐS ngày ${new Date().toLocaleDateString("vi-VN")}`,
+      JSON.stringify(data.key_findings || []),
+      "",
+      data.marketing_strategy || "",
+      JSON.stringify(data.new_regulation || null),
       JSON.stringify(data.sources || []),
       raw,
+      "{}",
+      JSON.stringify(data.data_points || []),
+      "[]",
+      typeof data.market_sentiment === "number" ? data.market_sentiment : 50,
+      data.market_sentiment_label || "",
+      "",
+      "",
+      data.editorial_comment || "",
+      JSON.stringify(data.action_items || []),
     ]);
 
-    console.log("[daily-news] Saved daily news:", data.title);
+    console.log("[daily-news] Saved daily news:", data.headline);
     return data;
   } catch (err) {
     console.error("[daily-news] Error fetching news:", err.message);
-    return { error: `L\u1ed7i: ${err.message}` };
+    return { error: `Lỗi: ${err.message}` };
   }
 }
 
@@ -7311,12 +7375,17 @@ app.get("/api/daily-news", requireAuth, async (req, res) => {
     const total = await get(db, "SELECT COUNT(*) as cnt FROM daily_news");
     const rows = await all(db, "SELECT * FROM daily_news ORDER BY created_at DESC LIMIT ? OFFSET ?", [limit, offset]);
 
+    const parseJSON = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
     res.json({
       items: rows.map(r => ({
         ...r,
-        news_summary: JSON.parse(r.news_summary || "[]"),
-        vocabulary: (() => { try { return JSON.parse(r.vocabulary || "{}"); } catch { return r.vocabulary; } })(),
-        source_links: JSON.parse(r.source_links || "[]"),
+        news_summary: parseJSON(r.news_summary, []),
+        vocabulary: parseJSON(r.vocabulary, r.vocabulary),
+        source_links: parseJSON(r.source_links, []),
+        spotlight: parseJSON(r.spotlight, {}),
+        market_indicators: parseJSON(r.market_indicators, []),
+        expert_quotes: parseJSON(r.expert_quotes, []),
+        action_items: parseJSON(r.action_items, []),
       })),
       total: total.cnt,
       page,
@@ -7330,12 +7399,17 @@ app.get("/api/daily-news/latest", requireAuth, async (_req, res) => {
   try {
     const row = await get(db, "SELECT * FROM daily_news ORDER BY created_at DESC LIMIT 1");
     if (!row) return res.json({ item: null });
+    const parseJSON = (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } };
     res.json({
       item: {
         ...row,
-        news_summary: JSON.parse(row.news_summary || "[]"),
-        vocabulary: (() => { try { return JSON.parse(row.vocabulary || "{}"); } catch { return row.vocabulary; } })(),
-        source_links: JSON.parse(row.source_links || "[]"),
+        news_summary: parseJSON(row.news_summary, []),
+        vocabulary: parseJSON(row.vocabulary, row.vocabulary),
+        source_links: parseJSON(row.source_links, []),
+        spotlight: parseJSON(row.spotlight, {}),
+        market_indicators: parseJSON(row.market_indicators, []),
+        expert_quotes: parseJSON(row.expert_quotes, []),
+        action_items: parseJSON(row.action_items, []),
       },
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
