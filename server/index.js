@@ -7246,56 +7246,51 @@ async function fetchDailyRealEstateNews() {
   const today = new Date().toLocaleDateString("vi-VN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const prompt = `Hôm nay là ${today}.
 
-Hãy đóng vai một Biên tập viên Kinh tế cao cấp của VTV hoặc CafeF với 15 năm kinh nghiệm phân tích BĐS.
-Nhiệm vụ: Tổng hợp và BÌNH LUẬN sâu sắc tin tức BĐS Việt Nam trong 24h qua từ VnExpress, CafeF, Batdongsan.com.vn, Cafeland, Dân trí, Thanh Niên.
+Bạn là cố vấn BĐS lão luyện 10+ năm. Đội Sale cần bản briefing thực chiến, KHÔNG cần bài báo đẹp.
 
-YÊU CẦU PHÂN TÍCH CHUYÊN SÂU:
+NHIỆM VỤ: Quét tin BĐS Việt Nam 24h qua từ VnExpress, CafeF, Batdongsan.com.vn, Cafeland, Dân trí, Thanh Niên. Chọn 5-7 tin NÓNG NHẤT và phán xét từng tin.
 
-1. "headline": Tiêu đề mang tính thời sự cao, phong cách VTV (ví dụ: "Tín hiệu ấm lại: Khi lãi suất hạ nhiệt gặp hạ tầng bùng nổ")
+KHÔNG LÀM:
+- Giải thích khái niệm cơ bản (dân 10 năm kinh nghiệm không cần)
+- Tóm tắt chung chung kiểu AI
+- Dùng ngôn ngữ hoa mỹ, sáo rỗng
 
-2. "editorial_comment": Đoạn BÌNH LUẬN 150-200 chữ, phong cách VTV/CafeF. KHÔNG tóm tắt tin - mà PHÂN TÍCH: Tại sao những sự kiện hôm nay lại quan trọng? Chúng kết nối với nhau thế nào? Thị trường đang ở đâu trong chu kỳ? Viết với giọng điệu trầm, chuyên gia, có chiều sâu.
+CẦN LÀM:
+- Mỗi tin phải có link báo gốc THẬT (URL đầy đủ), tên báo
+- Phán xét thẳng: tin này "thơm" (có lợi) hay "độc" (bất lợi) cho dân sale BĐS, kèm lý do sắc gọn
+- Trích số liệu CỤ THỂ từ bài báo gốc (giá, %, diện tích, số giao dịch...)
+- Phân tích MỖI tin: ảnh hưởng thế nào đến khách mua, nhà đầu tư, và đội sale
+- Dự báo ngày mai để chuẩn bị kịch bản marketing
 
-3. "key_findings": Mỗi tin PHẢI có phân tích tác động, KHÔNG chỉ tóm tắt. Tìm ra MỐI LIÊN KẾT giữa các tin (Chính sách + Hạ tầng = Cơ hội ở đâu?). Mỗi finding có impact_level: "High" hoặc "Medium".
-
-4. "market_sentiment_label": Đánh giá tâm lý thị trường bằng 1 cụm từ ngắn gọn (ví dụ: "Đang ấm lên", "Thận trọng chờ đợi", "Sôi động cục bộ", "Quan sát kỹ", "Phục hồi rõ rệt")
-
-5. "data_points": Trích xuất ÍT NHẤT 3 con số quan trọng từ tin tức (lãi suất %, diện tích ha, quy mô vốn tỷ đồng, giá trần/sàn, số lượng giao dịch...). Mỗi số phải kèm BỐI CẢNH ngắn.
-
-6. "marketing_strategy": Kịch bản TƯ VẤN thực chiến cho Sale BĐS dựa trên tin hôm nay. Gồm: (a) Mở đầu cuộc gọi thế nào cho thời sự, (b) Dẫn dắt bằng dữ liệu nào, (c) Tạo urgency ra sao, (d) Call-to-action cụ thể. Viết như đang coaching 1-1.
-
-7. "action_items": Danh sách 3-4 việc CỤ THỂ mà Sale nên làm ngay hôm nay dựa trên tin tức (ví dụ: "Gọi lại cho khách đang quan tâm khu vực Đồng Nai vì vừa có tin quy hoạch mới").
-
-8. "new_regulation": CHỈ khi có thông tư/nghị định/quyết định MỚI ban hành trong 24h. Nếu không có, để null.
-
-QUAN TRỌNG: Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
+Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
 {
-  "headline": "Tiêu đề thời sự phong cách VTV",
-  "editorial_comment": "Bình luận chuyên sâu 150-200 chữ...",
+  "headline": "Briefing ngắn gọn cho ngày — kiểu giao ban, không kiểu báo",
+  "market_pulse": "1-2 câu thẳng thắn: thị trường đang ở trạng thái gì, đà nào",
   "market_sentiment": 65,
-  "market_sentiment_label": "Đang ấm lên",
-  "key_findings": [
-    {"title": "Tiêu đề tin", "analysis": "Phân tích TÁC ĐỘNG chứ không chỉ tóm tắt", "impact_level": "High", "connection": "Mối liên kết với tin khác"},
-    {"title": "Tiêu đề tin 2", "analysis": "Phân tích", "impact_level": "Medium", "connection": "Liên kết"}
+  "news_items": [
+    {
+      "title": "Tiêu đề tin gốc hoặc tóm lược sát nghĩa",
+      "source_name": "VnExpress",
+      "source_url": "https://vnexpress.net/...",
+      "verdict": "thơm",
+      "verdict_reason": "1-2 câu: Tại sao thơm/độc cho sale BĐS",
+      "insight": "Phân tích 3-5 câu: ảnh hưởng thực tế đến khách mua, nhà đầu tư, đội sale. Trích số liệu cụ thể từ bài báo.",
+      "data_citations": ["Lãi suất VCB giảm còn 6.8%/năm (VnExpress)", "Giao dịch Q1 tăng 15% (CBRE)"]
+    }
   ],
-  "data_points": [
-    {"figure": "6.8%/năm", "context": "Lãi suất cho vay mua nhà Vietcombank, giảm 0.2% so với tháng trước"},
-    {"figure": "1,200 ha", "context": "Diện tích khu đô thị mới được phê duyệt tại Long An"},
-    {"figure": "15%", "context": "Lượng giao dịch căn hộ TP.HCM tăng so với quý trước"}
+  "tomorrow_forecast": "Dự báo ngày mai dựa trên diễn biến hôm nay. Sale nên chuẩn bị gì? Kịch bản nào khả thi? 3-5 câu thực chiến, không lý thuyết.",
+  "action_brief": [
+    "Việc cụ thể — ai cần gọi, nói gì, vì sao phải làm HÔM NAY"
   ],
-  "marketing_strategy": "Kịch bản tư vấn thực chiến chi tiết...",
-  "action_items": [
-    "Gọi lại cho khách quan tâm khu vực X vì vừa có tin Y",
-    "Chuẩn bị bảng so sánh lãi suất mới để gửi khách đang cân nhắc vay",
-    "Đăng bài trên Zalo/Facebook về tin tiêu điểm hôm nay"
-  ],
-  "new_regulation": {"name": "Tên thông tư/NĐ", "summary": "Tóm tắt nội dung mới", "impact": "Ảnh hưởng thế nào đến Sale/khách mua"} hoặc null,
   "sources": ["link1", "link2"]
 }
 
 CHÚ Ý:
-- market_sentiment: số 0-100 (0=sợ hãi, 50=chờ đợi, 100=sôi động)
-- Loại bỏ thuật ngữ/định nghĩa cơ bản. Chỉ giải thích khi có biến số MỚI
-- BÌNH LUẬN chứ không tóm tắt. Tin tức ai cũng đọc được, giá trị ở PHÂN TÍCH
+- verdict CHỈ dùng: "thơm", "độc", hoặc "trung_tinh"
+- market_sentiment: 0-100 (0=đóng băng, 50=chờ đợi, 100=sôi động)
+- news_items: 5-7 tin, sắp xếp tin QUAN TRỌNG NHẤT lên đầu
+- source_url: URL đầy đủ của bài báo gốc, PHẢI là link thật
+- data_citations: số liệu TRÍCH TỪ BÀI BÁO, không bịa
 - Chỉ trả JSON thuần, không kèm text nào khác`;
 
   try {
@@ -7311,7 +7306,7 @@ CHÚ Ý:
       body: JSON.stringify({
         model: "sonar-pro",
         messages: [
-          { role: "system", content: "Bạn là Biên tập viên Kinh tế cao cấp của VTV, chuyên bình luận thị trường bất động sản Việt Nam với 15 năm kinh nghiệm. Phong cách: trầm, sắc sảo, có chiều sâu chuyên môn. Bạn KHÔNG tóm tắt tin - bạn PHÂN TÍCH và BÌNH LUẬN. Trả lời bằng tiếng Việt. CHỈ trả về JSON thuần túy." },
+          { role: "system", content: "Bạn là cố vấn BĐS lão luyện với 10+ năm kinh nghiệm. Phong cách: thẳng thắn, thực chiến, không hoa mỹ. Bạn đang brief cho đội sale trước giờ làm việc. Trả lời bằng tiếng Việt. CHỈ trả về JSON thuần túy." },
           { role: "user", content: prompt },
         ],
         temperature: 0.4,
@@ -7339,22 +7334,22 @@ CHÚ Ý:
 
     await run(db, `INSERT INTO daily_news (title, news_summary, market_trend, marketing_lesson, vocabulary, source_links, raw_response, spotlight, market_indicators, expert_quotes, market_sentiment, market_cycle, sales_script, big_picture, editorial_comment, action_items, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`, [
-      data.headline || `Điểm tin BĐS ngày ${new Date().toLocaleDateString("vi-VN")}`,
-      JSON.stringify(data.key_findings || []),
+      data.headline || `Briefing BĐS ${new Date().toLocaleDateString("vi-VN")}`,
+      JSON.stringify(data.news_items || []),
       "",
-      data.marketing_strategy || "",
-      JSON.stringify(data.new_regulation || null),
+      data.market_pulse || "",
+      "null",
       JSON.stringify(data.sources || []),
       raw,
       "{}",
-      JSON.stringify(data.data_points || []),
+      "[]",
       "[]",
       typeof data.market_sentiment === "number" ? data.market_sentiment : 50,
-      data.market_sentiment_label || "",
       "",
       "",
-      data.editorial_comment || "",
-      JSON.stringify(data.action_items || []),
+      "",
+      data.tomorrow_forecast || "",
+      JSON.stringify(data.action_brief || []),
     ]);
 
     console.log("[daily-news] Saved daily news:", data.headline);

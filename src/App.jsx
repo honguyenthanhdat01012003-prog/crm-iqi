@@ -10362,7 +10362,7 @@ function CalendarPage({ projects }) {
   );
 }
 
-/* ===== Điểm tin BĐS & Học tập ===== */
+/* ===== Trạm tin BĐS — News Dashboard ===== */
 function DailyNewsPage({ isAdmin }) {
   const [news, setNews] = useState([]);
   const [latest, setLatest] = useState(null);
@@ -10377,6 +10377,7 @@ function DailyNewsPage({ isAdmin }) {
   const [autoFetchTime, setAutoFetchTime] = useState("07:00");
   const [hasApiKey, setHasApiKey] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
 
   const loadLatest = async () => {
     try {
@@ -10414,6 +10415,7 @@ function DailyNewsPage({ isAdmin }) {
       const res = await apiFetch(`${API}/daily-news/fetch`, { method: "POST" });
       if (res.ok) {
         setMsg({ type: "ok", text: "Đã lấy bản tin thành công!" });
+        setSelectedIdx(0);
         await loadLatest(); await loadHistory(1);
       } else {
         let errMsg = "Lỗi không xác định";
@@ -10452,279 +10454,303 @@ function DailyNewsPage({ isAdmin }) {
 
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af" }}>Đang tải...</div>;
 
-  // Sentiment helpers
-  const getSentimentColor = (v) => v >= 65 ? "#10b981" : v >= 45 ? "#f59e0b" : v >= 25 ? "#f97316" : "#ef4444";
-  const getSentimentBg = (v) => v >= 65 ? "#ecfdf5" : v >= 45 ? "#fffbeb" : v >= 25 ? "#fff7ed" : "#fef2f2";
-  const getSentimentBorder = (v) => v >= 65 ? "#10b981" : v >= 45 ? "#f59e0b" : v >= 25 ? "#f97316" : "#ef4444";
-
-  const cardStyle = { background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", padding: 0, marginBottom: 16, overflow: "hidden" };
-
-  const renderNewsCard = (item, expanded = false) => {
-    if (!item) return null;
-    const findings = Array.isArray(item.news_summary) ? item.news_summary : [];
-    const dataPoints = Array.isArray(item.market_indicators) ? item.market_indicators : [];
-    const actionItems = Array.isArray(item.action_items) ? item.action_items : [];
+  // Extract data from item for dashboard
+  const getItemData = (item) => {
+    if (!item) return { newsItems: [], marketPulse: "", forecast: "", actions: [], sentiment: 50, sources: [] };
+    const newsItems = Array.isArray(item.news_summary) ? item.news_summary : [];
+    const marketPulse = item.marketing_lesson || "";
+    const forecast = item.editorial_comment || "";
+    const actions = Array.isArray(item.action_items) ? item.action_items : [];
+    const sentiment = typeof item.market_sentiment === "number" ? item.market_sentiment : 50;
     const sources = Array.isArray(item.source_links) ? item.source_links : [];
-    const newReg = typeof item.vocabulary === "object" && item.vocabulary && item.vocabulary.name ? item.vocabulary : null;
-    const sentiment = typeof item.market_sentiment === "number" ? item.market_sentiment : null;
-    const sentimentLabel = item.market_cycle || "";
-    const editorial = item.editorial_comment || "";
-    const strategy = item.marketing_lesson || "";
-    const isExpanded = expanded || expandedId === item.id;
+    return { newsItems, marketPulse, forecast, actions, sentiment, sources };
+  };
+
+  const verdictStyle = (v) => {
+    if (v === "thơm" || v === "thom") return { bg: "#ecfdf5", color: "#065f46", border: "#a7f3d0", icon: "▲", label: "THƠM" };
+    if (v === "độc" || v === "doc") return { bg: "#fef2f2", color: "#991b1b", border: "#fecaca", icon: "▼", label: "ĐỘC" };
+    return { bg: "#f8fafc", color: "#475569", border: "#e2e8f0", icon: "●", label: "TRUNG TÍNH" };
+  };
+
+  const getSentimentColor = (v) => v >= 65 ? "#059669" : v >= 40 ? "#d97706" : "#dc2626";
+
+  // Render the two-panel news dashboard for an item
+  const renderDashboard = (item) => {
+    if (!item) return null;
+    const { newsItems, marketPulse, forecast, actions, sentiment, sources } = getItemData(item);
+    const sel = newsItems[selectedIdx] || newsItems[0];
 
     return (
-      <div key={item.id} style={cardStyle}>
-        {/* Header - dark editorial style */}
-        <div
-          onClick={() => !expanded && setExpandedId(isExpanded ? null : item.id)}
-          style={{
-            cursor: expanded ? "default" : "pointer",
-            padding: "20px 22px 16px",
-            background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
-            color: "#fff",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, color: "#94a3b8", marginBottom: 8 }}>
-                BẢN TIN PHÂN TÍCH BĐS
+      <div>
+        {/* Top bar: headline + market pulse */}
+        <div style={{ background: "#0f172a", borderRadius: "10px 10px 0 0", padding: "16px 20px", color: "#fff" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, color: "#64748b", marginBottom: 4 }}>
+                TRẠM TIN BĐS
               </div>
-              <h3 style={{ fontSize: 19, fontWeight: 800, margin: 0, lineHeight: 1.4, color: "#f1f5f9" }}>
-                {item.title || "Điểm tin BĐS"}
-              </h3>
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: "#64748b" }}>{new Date(item.created_at).toLocaleString("vi-VN")}</span>
-                {sentimentLabel && (
-                  <span style={{
-                    padding: "3px 12px", borderRadius: 20, fontSize: 11, fontWeight: 800,
-                    background: getSentimentBg(sentiment || 50), color: getSentimentColor(sentiment || 50),
-                    border: `1px solid ${getSentimentBorder(sentiment || 50)}`,
-                  }}>
-                    ● {sentimentLabel}
-                  </span>
-                )}
-              </div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "#f1f5f9" }}>{item.title || "Briefing BĐS"}</div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-              {!expanded && <span style={{ fontSize: 12, color: "#64748b" }}>{isExpanded ? "▲" : "▼"}</span>}
-              {isAdmin && (
-                <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#ef4444" }}>
-                  <Trash2 size={14} />
-                </button>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 28, fontWeight: 800, color: getSentimentColor(sentiment), lineHeight: 1 }}>{sentiment}</div>
+                <div style={{ fontSize: 9, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Nhiệt thị trường</div>
+              </div>
+              <span style={{ fontSize: 12, color: "#64748b" }}>{new Date(item.created_at).toLocaleDateString("vi-VN")}</span>
+            </div>
+          </div>
+          {marketPulse && (
+            <div style={{ marginTop: 10, fontSize: 13, color: "#94a3b8", lineHeight: 1.5, borderTop: "1px solid #1e293b", paddingTop: 10 }}>
+              {marketPulse}
+            </div>
+          )}
+        </div>
+
+        {/* Two-panel layout */}
+        <div style={{ display: "flex", border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden", minHeight: 400, flexWrap: "wrap" }}>
+
+          {/* LEFT: News list */}
+          <div style={{ width: "100%", maxWidth: 340, minWidth: 260, borderRight: "1px solid #e2e8f0", background: "#fafbfc", flex: "0 0 auto" }}>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid #e2e8f0", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#64748b" }}>
+              Tin nóng 24h ({newsItems.length})
+            </div>
+            <div style={{ maxHeight: 500, overflowY: "auto" }}>
+              {newsItems.length === 0 ? (
+                <div style={{ padding: 20, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Chưa có tin</div>
+              ) : (
+                newsItems.map((n, i) => {
+                  const vs = verdictStyle(n.verdict);
+                  const isActive = i === selectedIdx;
+                  return (
+                    <div key={i} onClick={() => setSelectedIdx(i)}
+                      style={{
+                        padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid #f1f5f9",
+                        borderLeft: isActive ? "3px solid #0f172a" : "3px solid transparent",
+                        background: isActive ? "#fff" : "transparent",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                        <span style={{
+                          flexShrink: 0, marginTop: 2, width: 20, height: 20, borderRadius: 4,
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 10, fontWeight: 800, background: vs.bg, color: vs.color, border: `1px solid ${vs.border}`,
+                        }}>
+                          {vs.icon}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{
+                            fontSize: 13, fontWeight: isActive ? 700 : 500, color: "#1e293b", lineHeight: 1.4,
+                            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden",
+                          }}>
+                            {n.title}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
+                            {n.source_name || "Báo"}
+                            <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, background: vs.bg, color: vs.color, fontWeight: 700 }}>
+                              {vs.label}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
-        </div>
 
-        {isExpanded && (
-          <div style={{ padding: "0 22px 22px" }}>
-
-            {/* Sentiment Bar */}
-            {sentiment !== null && (
-              <div style={{ padding: "16px 0 12px", borderBottom: "1px solid #f1f5f9" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>Chỉ số tâm lý thị trường</span>
-                  <span style={{ fontSize: 18, fontWeight: 800, color: getSentimentColor(sentiment) }}>{sentiment}<span style={{ fontSize: 12, fontWeight: 500 }}>/100</span></span>
-                </div>
-                <div style={{ width: "100%", height: 6, borderRadius: 3, background: "#e5e7eb" }}>
-                  <div style={{ width: `${sentiment}%`, height: "100%", borderRadius: 3, background: `linear-gradient(90deg, #ef4444 0%, #f59e0b 40%, #10b981 75%, #059669 100%)`, transition: "width 0.5s" }} />
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3, fontSize: 9, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  <span>Sợ hãi</span><span>Chờ đợi</span><span>Sôi động</span>
-                </div>
-              </div>
-            )}
-
-            {/* Editorial Comment - THE highlight section */}
-            {editorial && (
-              <div style={{
-                margin: "18px 0", padding: "20px 22px", borderRadius: 12,
-                background: "#f8fafc", borderLeft: "4px solid #1e293b",
-              }}>
-                <div style={{ fontSize: 11, fontWeight: 800, textTransform: "uppercase", letterSpacing: 1.5, color: "#475569", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-                  <Newspaper size={14} /> Bình luận chuyên gia
-                </div>
-                <div style={{ fontSize: 14, color: "#1e293b", lineHeight: 1.8, fontStyle: "italic" }}>
-                  "{editorial}"
-                </div>
-              </div>
-            )}
-
-            {/* Key Findings */}
-            {findings.length > 0 && (
-              <div style={{ margin: "18px 0" }}>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", margin: "0 0 12px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <Target size={16} color="#2563eb" /> Phát hiện chính
-                </h4>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {findings.map((f, i) => (
-                    <div key={i} style={{
-                      padding: "14px 16px", borderRadius: 10,
-                      background: f.impact_level === "High" ? "#fef2f2" : "#f8fafc",
-                      border: `1px solid ${f.impact_level === "High" ? "#fecaca" : "#e2e8f0"}`,
-                    }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{
-                          padding: "1px 8px", borderRadius: 4, fontSize: 10, fontWeight: 800,
-                          background: f.impact_level === "High" ? "#dc2626" : "#6b7280",
-                          color: "#fff", textTransform: "uppercase", letterSpacing: 0.5,
-                        }}>
-                          {f.impact_level || "Medium"}
-                        </span>
-                        <span style={{ fontWeight: 700, fontSize: 13, color: "#1e293b", flex: 1 }}>{f.title}</span>
-                      </div>
-                      <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.6 }}>{f.analysis}</div>
-                      {f.connection && (
-                        <div style={{ fontSize: 11, color: "#7c3aed", marginTop: 8, display: "flex", alignItems: "flex-start", gap: 4, fontWeight: 600 }}>
-                          <Link size={11} style={{ marginTop: 2, flexShrink: 0 }} /> {f.connection}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Data Points - "Số liệu biết nói" */}
-            {dataPoints.length > 0 && (
-              <div style={{ margin: "18px 0" }}>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", margin: "0 0 12px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <BarChart3 size={16} color="#6366f1" /> Số liệu biết nói
-                </h4>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                  {dataPoints.map((dp, i) => (
-                    <div key={i} style={{
-                      padding: "14px 16px", borderRadius: 10, background: "#eef2ff",
-                      border: "1px solid #c7d2fe", textAlign: "center",
-                    }}>
-                      <div style={{ fontSize: 22, fontWeight: 900, color: "#4338ca", marginBottom: 4 }}>
-                        {typeof dp === "string" ? dp : dp.figure}
-                      </div>
-                      {typeof dp === "object" && dp.context && (
-                        <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.4 }}>{dp.context}</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Marketing Strategy - coaching style */}
-            {strategy && (
-              <div style={{ margin: "18px 0" }}>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", margin: "0 0 10px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <Briefcase size={16} color="#dc2626" /> Kịch bản tư vấn hôm nay
-                </h4>
-                <div style={{
-                  padding: "16px 18px", borderRadius: 10,
-                  background: "linear-gradient(135deg, #fef2f2 0%, #fff7ed 100%)",
-                  borderLeft: "4px solid #ef4444", fontSize: 13, color: "#1e293b", lineHeight: 1.7,
-                }}>
-                  {strategy}
-                </div>
-              </div>
-            )}
-
-            {/* Action Items - checklist */}
-            {actionItems.length > 0 && (
-              <div style={{ margin: "18px 0" }}>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", margin: "0 0 10px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <CheckCircle size={16} color="#059669" /> Việc bạn nên làm hôm nay
-                </h4>
-                <div style={{
-                  padding: "14px 16px", borderRadius: 10, background: "#f0fdf4",
-                  border: "1px solid #bbf7d0",
-                }}>
-                  {actionItems.map((item, i) => (
-                    <div key={i} style={{
-                      display: "flex", alignItems: "flex-start", gap: 10,
-                      padding: "8px 0",
-                      borderBottom: i < actionItems.length - 1 ? "1px solid #dcfce7" : "none",
-                    }}>
-                      <div style={{
-                        width: 22, height: 22, borderRadius: 6, border: "2px solid #10b981",
-                        display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                        marginTop: 1, color: "#10b981", fontSize: 12,
-                      }}>
-                        {i + 1}
-                      </div>
-                      <div style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5, fontWeight: 500 }}>{item}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* New Regulation - only if exists */}
-            {newReg && (
-              <div style={{ margin: "18px 0" }}>
-                <h4 style={{ fontSize: 14, fontWeight: 800, color: "#1e293b", margin: "0 0 10px 0", display: "flex", alignItems: "center", gap: 6 }}>
-                  <AlertTriangle size={16} color="#d97706" /> Biến số mới
-                </h4>
-                <div style={{
-                  padding: "14px 16px", borderRadius: 10, background: "#fffbeb",
-                  border: "1px solid #fde68a",
-                }}>
-                  <div style={{ fontWeight: 800, fontSize: 14, color: "#92400e", marginBottom: 6 }}>{newReg.name}</div>
-                  <div style={{ fontSize: 12, color: "#78350f", lineHeight: 1.6, marginBottom: 6 }}>{newReg.summary}</div>
-                  {newReg.impact && (
-                    <div style={{ fontSize: 12, color: "#d97706", fontWeight: 600, fontStyle: "italic" }}>
-                      → Ảnh hưởng: {newReg.impact}
-                    </div>
+          {/* RIGHT: AI Insight */}
+          <div style={{ flex: 1, minWidth: 300, background: "#fff" }}>
+            {sel ? (
+              <div style={{ padding: "20px 24px" }}>
+                {/* Selected news title + source */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", lineHeight: 1.4, marginBottom: 6 }}>
+                    {sel.title}
+                  </div>
+                  {sel.source_url && (
+                    <a href={sel.source_url} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 12, color: "#3b82f6", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      <ExternalLink size={11} /> {sel.source_name || "Xem báo gốc"}
+                    </a>
                   )}
                 </div>
-              </div>
-            )}
 
-            {/* Sources */}
-            {sources.length > 0 && (
-              <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #f1f5f9" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Nguồn</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {sources.map((link, i) => (
-                    <a key={i} href={link} target="_blank" rel="noopener noreferrer"
-                      style={{ fontSize: 11, color: "#3b82f6", wordBreak: "break-all", textDecoration: "none", background: "#eff6ff", padding: "3px 8px", borderRadius: 4 }}
-                      onMouseEnter={e => e.target.style.textDecoration = "underline"}
-                      onMouseLeave={e => e.target.style.textDecoration = "none"}
-                    >
-                      {(() => { try { return new URL(link).hostname; } catch { return link; } })()}
-                    </a>
-                  ))}
+                {/* Verdict */}
+                {(() => {
+                  const vs = verdictStyle(sel.verdict);
+                  return (
+                    <div style={{
+                      padding: "10px 14px", borderRadius: 8, marginBottom: 16,
+                      background: vs.bg, border: `1px solid ${vs.border}`,
+                    }}>
+                      <div style={{ fontSize: 12, fontWeight: 800, color: vs.color, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        {vs.icon} Phán xét: {vs.label}
+                      </div>
+                      <div style={{ fontSize: 13, color: vs.color, lineHeight: 1.5 }}>
+                        {sel.verdict_reason}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* AI insight - main analysis */}
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#64748b", marginBottom: 8 }}>
+                    AI INSIGHT
+                  </div>
+                  <div style={{ fontSize: 14, color: "#1e293b", lineHeight: 1.75 }}>
+                    {sel.insight}
+                  </div>
                 </div>
+
+                {/* Data citations */}
+                {Array.isArray(sel.data_citations) && sel.data_citations.length > 0 && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#64748b", marginBottom: 8 }}>
+                      SỐ LIỆU TRÍCH DẪN
+                    </div>
+                    {sel.data_citations.map((c, i) => (
+                      <div key={i} style={{ fontSize: 13, color: "#334155", lineHeight: 1.6, padding: "4px 0 4px 14px", borderLeft: "2px solid #cbd5e1", marginBottom: 4 }}>
+                        {c}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Divider before forecast */}
+                <div style={{ borderTop: "1px solid #e5e7eb", margin: "20px 0" }} />
+
+                {/* Tomorrow Forecast */}
+                {forecast && (
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#7c3aed", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <Radar size={14} /> DỰ BÁO NGÀY MAI
+                    </div>
+                    <div style={{ fontSize: 14, color: "#1e293b", lineHeight: 1.75, padding: "12px 16px", background: "#f5f3ff", borderRadius: 8, border: "1px solid #e9d5ff" }}>
+                      {forecast}
+                    </div>
+                  </div>
+                )}
+
+                {/* Action Brief */}
+                {actions.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#059669", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                      <Zap size={14} /> VIỆC CẦN LÀM
+                    </div>
+                    {actions.map((a, i) => (
+                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
+                        <span style={{ flexShrink: 0, width: 20, height: 20, borderRadius: "50%", background: "#ecfdf5", color: "#059669", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {i + 1}
+                        </span>
+                        <span style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>{a}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ padding: 40, textAlign: "center", color: "#9ca3af" }}>
+                <div style={{ fontSize: 14 }}>Chọn một tin từ danh sách bên trái</div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Sources footer */}
+        {sources.length > 0 && (
+          <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 600 }}>Nguồn:</span>
+            {sources.map((link, i) => (
+              <a key={i} href={link} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 11, color: "#3b82f6", textDecoration: "none" }}
+                onMouseEnter={e => e.target.style.textDecoration = "underline"}
+                onMouseLeave={e => e.target.style.textDecoration = "none"}
+              >
+                {(() => { try { return new URL(link).hostname; } catch { return link; } })()}
+              </a>
+            ))}
           </div>
         )}
       </div>
     );
   };
 
+  // Render compact history card (collapsible)
+  const renderHistoryCard = (item) => {
+    if (!item) return null;
+    const { newsItems, sentiment } = getItemData(item);
+    const isOpen = expandedId === item.id;
+
+    return (
+      <div key={item.id} style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", marginBottom: 10, overflow: "hidden" }}>
+        <div onClick={() => { setExpandedId(isOpen ? null : item.id); setSelectedIdx(0); }}
+          style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {item.title || "Briefing BĐS"}
+            </div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
+              {new Date(item.created_at).toLocaleDateString("vi-VN")} — {newsItems.length} tin — Nhiệt: {sentiment}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {isAdmin && (
+              <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#ef4444" }}>
+                <Trash2 size={14} />
+              </button>
+            )}
+            <span style={{ fontSize: 12, color: "#94a3b8" }}>{isOpen ? "▲" : "▼"}</span>
+          </div>
+        </div>
+        {isOpen && renderDashboard(item)}
+      </div>
+    );
+  };
+
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto" }}>
-      <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 4, display: "flex", alignItems: "center", gap: 8, color: "#0f172a" }}>
-        <Newspaper size={22} color="#1e293b" /> Bản tin Phân tích BĐS
-      </h2>
-      <p style={{ fontSize: 13, color: "#64748b", marginBottom: 16 }}>
-        Phân tích chuyên sâu thị trường bất động sản — phong cách biên tập viên kinh tế
-      </p>
+    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, display: "flex", alignItems: "center", gap: 8, color: "#0f172a" }}>
+            <Radar size={22} color="#0f172a" /> Trạm tin BĐS
+          </h2>
+          <p style={{ fontSize: 13, color: "#64748b", margin: "2px 0 0" }}>
+            Dữ liệu thô + phán xét sắc — cho dân sale thực chiến
+          </p>
+        </div>
+        {isAdmin && tab === "latest" && (
+          <button onClick={handleFetchNow} disabled={fetching}
+            style={{
+              padding: "8px 16px", borderRadius: 8, border: "none", cursor: fetching ? "default" : "pointer",
+              background: fetching ? "#d1d5db" : "#0f172a", color: "#fff", fontWeight: 600, fontSize: 13,
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+            <RefreshCw size={14} className={fetching ? "spin" : ""} />
+            {fetching ? "Đang quét tin..." : "Quét tin mới"}
+          </button>
+        )}
+      </div>
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "2px solid #e5e7eb", paddingBottom: 0 }}>
+      <div style={{ display: "flex", gap: 0, marginBottom: 16, borderBottom: "2px solid #e5e7eb" }}>
         {[
-          { key: "latest", label: "Hôm nay", icon: Sparkles },
-          { key: "history", label: "Lịch sử", icon: Clock },
-          ...(isAdmin ? [{ key: "settings", label: "Cài đặt", icon: Settings }] : []),
+          { key: "latest", label: "Hôm nay" },
+          { key: "history", label: "Lịch sử" },
+          ...(isAdmin ? [{ key: "settings", label: "Cài đặt" }] : []),
         ].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             style={{
               padding: "8px 16px", fontSize: 13, fontWeight: tab === t.key ? 700 : 500,
-              color: tab === t.key ? "#0f172a" : "#64748b",
+              color: tab === t.key ? "#0f172a" : "#94a3b8",
               background: "none", border: "none", cursor: "pointer",
               borderBottom: tab === t.key ? "2px solid #0f172a" : "2px solid transparent",
-              marginBottom: -2, display: "flex", alignItems: "center", gap: 4,
+              marginBottom: -2,
             }}>
-            {React.createElement(t.icon, { size: 14 })} {t.label}
+            {t.label}
           </button>
         ))}
       </div>
@@ -10742,30 +10768,15 @@ function DailyNewsPage({ isAdmin }) {
       {/* Tab: Hôm nay */}
       {tab === "latest" && (
         <div>
-          {isAdmin && (
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <button onClick={handleFetchNow} disabled={fetching}
-                style={{
-                  padding: "8px 16px", borderRadius: 8, border: "none", cursor: fetching ? "default" : "pointer",
-                  background: fetching ? "#d1d5db" : "#0f172a", color: "#fff", fontWeight: 600, fontSize: 13,
-                  display: "flex", alignItems: "center", gap: 6,
-                }}>
-                <RefreshCw size={14} className={fetching ? "spin" : ""} />
-                {fetching ? "Đang phân tích..." : "Lấy bản tin mới"}
-              </button>
-              {!hasApiKey && (
-                <span style={{ fontSize: 12, color: "#ef4444", fontWeight: 600 }}>⚠️ Chưa cấu hình API key. Vào tab Cài đặt.</span>
-              )}
-            </div>
+          {!hasApiKey && isAdmin && (
+            <div style={{ fontSize: 12, color: "#ef4444", fontWeight: 600, marginBottom: 12 }}>⚠️ Chưa cấu hình API key. Vào tab Cài đặt.</div>
           )}
-          {latest ? renderNewsCard(latest, true) : (
-            <div style={{ ...cardStyle, padding: 20 }}>
-              <div style={{ textAlign: "center", padding: "40px 20px", color: "#94a3b8" }}>
-                <Newspaper size={48} style={{ marginBottom: 8, opacity: 0.3 }} />
-                <div style={{ fontSize: 14, fontWeight: 600 }}>Chưa có bản tin hôm nay</div>
-                <div style={{ fontSize: 12, marginTop: 4 }}>
-                  {isAdmin ? "Bấm \"Lấy bản tin mới\" hoặc chờ hệ thống tự động" : "Bản tin sẽ được cập nhật tự động hàng ngày"}
-                </div>
+          {latest ? renderDashboard(latest) : (
+            <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", padding: "40px 20px", textAlign: "center", color: "#94a3b8" }}>
+              <Radar size={40} style={{ marginBottom: 8, opacity: 0.3 }} />
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Chưa có bản tin hôm nay</div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>
+                {isAdmin ? 'Bấm "Quét tin mới" để bắt đầu' : "Bản tin sẽ được cập nhật tự động hàng ngày"}
               </div>
             </div>
           )}
@@ -10776,12 +10787,12 @@ function DailyNewsPage({ isAdmin }) {
       {tab === "history" && (
         <div>
           {news.length === 0 ? (
-            <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", padding: 40, textAlign: "center", color: "#94a3b8" }}>
               Chưa có lịch sử bản tin
             </div>
           ) : (
             <>
-              {news.map(item => renderNewsCard(item))}
+              {news.map(item => renderHistoryCard(item))}
               {totalPages > 1 && (
                 <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 12 }}>
                   <button onClick={() => { setPage(p => p - 1); loadHistory(page - 1); }} disabled={page <= 1}
@@ -10803,7 +10814,7 @@ function DailyNewsPage({ isAdmin }) {
       {/* Tab: Cài đặt (admin) */}
       {tab === "settings" && isAdmin && (
         <div>
-          <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", padding: 20, marginBottom: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e5e7eb", padding: 20, marginBottom: 16 }}>
             <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
               <Settings size={16} /> Cấu hình Perplexity AI
             </h3>
@@ -10831,14 +10842,14 @@ function DailyNewsPage({ isAdmin }) {
               <Save size={14} /> {savingSettings ? "Đang lưu..." : "Lưu cài đặt"}
             </button>
           </div>
-          <div style={{ background: "#f8fafc", borderRadius: 14, border: "1px solid #e5e7eb", padding: 20 }}>
-            <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#374151" }}>📖 Hướng dẫn lấy API Key</h4>
+          <div style={{ background: "#f8fafc", borderRadius: 10, border: "1px solid #e5e7eb", padding: 20 }}>
+            <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#374151" }}>Hướng dẫn lấy API Key</h4>
             <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#4b5563", lineHeight: 2 }}>
               <li>Truy cập <a href="https://www.perplexity.ai" target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6" }}>perplexity.ai</a> và đăng ký/đăng nhập</li>
               <li>Vào <strong>Settings → API</strong></li>
               <li>Click <strong>"Generate API Key"</strong></li>
               <li>Copy key (bắt đầu bằng <code style={{ background: "#e5e7eb", padding: "1px 4px", borderRadius: 4 }}>pplx-</code>) và dán vào ô trên</li>
-              <li>Chi phí: ~$5/1000 lượt. Dùng model sonar-reasoning nên giá cao hơn sonar (~0.01$/lượt), 1 lượt/ngày rất tiết kiệm</li>
+              <li>Chi phí: ~$5/1000 lượt, model sonar-pro (~0.003$/lượt), 1 lượt/ngày rất tiết kiệm</li>
             </ol>
           </div>
         </div>
