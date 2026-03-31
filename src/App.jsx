@@ -10445,9 +10445,10 @@ function DailyNewsPage({ isAdmin }) {
         setMsg({ type: "ok", text: "Đã lưu cài đặt" });
         setApiKey("");
         setHasApiKey(true);
+        await loadSettings();
       } else {
-        let errMsg = "Lỗi lưu cài đặt";
-        try { const e = await res.json(); errMsg = e.error || errMsg; } catch {}
+        let errMsg = `Lỗi lưu cài đặt (${res.status})`;
+        try { const e = await res.json(); errMsg = e.error || errMsg; } catch { try { const t = await res.text(); if (t) errMsg += ": " + t.slice(0, 100); } catch {} }
         setMsg({ type: "err", text: errMsg });
       }
     } catch (err) {

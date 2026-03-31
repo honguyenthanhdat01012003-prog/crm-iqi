@@ -7351,14 +7351,6 @@ app.post("/api/daily-news/fetch", requireAuth, requireAdminOnly, async (_req, re
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DELETE /api/daily-news/:id - Delete a news entry (admin only)
-app.delete("/api/daily-news/:id", requireAuth, requireAdminOnly, async (req, res) => {
-  try {
-    await run(db, "DELETE FROM daily_news WHERE id = ?", [req.params.id]);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 // GET /api/daily-news/settings - Get Perplexity settings
 app.get("/api/daily-news/settings", requireAuth, requireAdmin, async (_req, res) => {
   try {
@@ -7381,6 +7373,14 @@ app.post("/api/daily-news/settings", requireAuth, requireAdminOnly, async (req, 
     if (autoFetchTime !== undefined) {
       await run(db, "INSERT INTO settings(key, value) VALUES('news_auto_fetch_time', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [autoFetchTime]);
     }
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/daily-news/:id - Delete a news entry (admin only)
+app.delete("/api/daily-news/:id", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM daily_news WHERE id = ?", [req.params.id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
