@@ -6472,7 +6472,13 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                             {campErr && <div style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#fca5a5" }}>{campErr}</div>}
 
                             {/* Results */}
-                            {campAdv && (
+                            {campAdv && (() => {
+                              const cc = campAdv.content_comparison || {};
+                              const cur = cc.current_content || {};
+                              const imp = cc.improved_content || {};
+                              const sevColor = (s) => s === "high" ? "#f87171" : s === "medium" ? "#fbbf24" : "#94a3b8";
+                              const sevBg = (s) => s === "high" ? "rgba(248,113,113,0.15)" : s === "medium" ? "rgba(251,191,36,0.15)" : "rgba(148,163,184,0.1)";
+                              return (
                               <div>
                                 {/* Score + Summary */}
                                 <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
@@ -6487,25 +6493,100 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                   </div>
                                 </div>
 
-                                {/* 3-column analysis */}
-                                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
-                                  {/* Content analysis */}
-                                  {campAdv.content_analysis && (
-                                    <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
-                                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-                                        <FileText size={13} color="#f59e0b" />
-                                        <span style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b" }}>SOI CONTENT</span>
-                                        <span style={{ marginLeft: "auto", fontSize: 10, padding: "2px 8px", borderRadius: 6, background: campAdv.content_analysis.status?.includes("Tốt") ? "rgba(74,222,128,0.15)" : "rgba(248,113,113,0.15)", color: campAdv.content_analysis.status?.includes("Tốt") ? "#4ade80" : "#f87171" }}>{campAdv.content_analysis.status}</span>
-                                      </div>
-                                      {(campAdv.content_analysis.problems||[]).map((p, pi) => (
-                                        <div key={pi} style={{ fontSize: 11, color: "#fca5a5", marginBottom: 3, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>✗</span> {p}</div>
-                                      ))}
-                                      {(campAdv.content_analysis.suggestions||[]).map((s, si) => (
-                                        <div key={si} style={{ fontSize: 11, color: "#86efac", marginBottom: 3, display: "flex", gap: 6 }}><span style={{ flexShrink: 0 }}>→</span> {s}</div>
-                                      ))}
+                                {/* === CONTENT COMPARISON: 2-column left/right === */}
+                                {(cur.hook || imp.hook) && (
+                                  <div style={{ marginBottom: 14 }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                                      <FileText size={14} color="#f59e0b" /> SOI CONTENT QUẢNG CÁO
                                     </div>
-                                  )}
-                                  {/* Targeting analysis */}
+                                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 0, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
+                                      {/* LEFT — Current content with errors */}
+                                      <div style={{ background: "rgba(248,113,113,0.06)", padding: isMobile ? 12 : 16, borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.08)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#f87171" }} />
+                                          <span style={{ fontSize: 12, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: 0.5 }}>Content đang chạy</span>
+                                        </div>
+                                        {/* Hook */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Hook</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>
+                                            {cur.hook || "—"}
+                                          </div>
+                                        </div>
+                                        {/* Body */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Body</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171", whiteSpace: "pre-line" }}>
+                                            {cur.body || "—"}
+                                          </div>
+                                        </div>
+                                        {/* CTA */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>CTA</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>
+                                            {cur.cta || "—"}
+                                          </div>
+                                        </div>
+                                        {/* Error list */}
+                                        {(cur.errors||[]).length > 0 && (
+                                          <div style={{ marginTop: 6 }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#f87171", marginBottom: 4, textTransform: "uppercase" }}>Lỗi phát hiện</div>
+                                            {cur.errors.map((err, ei) => (
+                                              <div key={ei} style={{ display: "flex", gap: 6, marginBottom: 4, padding: "5px 8px", borderRadius: 6, background: sevBg(err.severity) }}>
+                                                <span style={{ fontSize: 11, color: sevColor(err.severity), fontWeight: 700, flexShrink: 0 }}>✗ {err.part?.toUpperCase()}:</span>
+                                                <span style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.4 }}>{err.issue}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {/* RIGHT — Improved content */}
+                                      <div style={{ background: "rgba(74,222,128,0.06)", padding: isMobile ? 12 : 16 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+                                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80" }} />
+                                          <span style={{ fontSize: 12, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: 0.5 }}>Content chuẩn (đề xuất)</span>
+                                        </div>
+                                        {/* Hook */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Hook</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
+                                            {imp.hook || "—"}
+                                          </div>
+                                        </div>
+                                        {/* Body */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Body</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80", whiteSpace: "pre-line" }}>
+                                            {imp.body || "—"}
+                                          </div>
+                                        </div>
+                                        {/* CTA */}
+                                        <div style={{ marginBottom: 10 }}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>CTA</div>
+                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
+                                            {imp.cta || "—"}
+                                          </div>
+                                        </div>
+                                        {/* Improvements list */}
+                                        {(imp.improvements||[]).length > 0 && (
+                                          <div style={{ marginTop: 6 }}>
+                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#4ade80", marginBottom: 4, textTransform: "uppercase" }}>Đã cải thiện</div>
+                                            {imp.improvements.map((impr, ii) => (
+                                              <div key={ii} style={{ display: "flex", gap: 6, marginBottom: 3, padding: "5px 8px", borderRadius: 6, background: "rgba(74,222,128,0.1)" }}>
+                                                <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>✓</span>
+                                                <span style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.4 }}>{impr}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Targeting + Budget: 2-column */}
+                                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10, marginBottom: 14 }}>
                                   {campAdv.targeting_analysis && (
                                     <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
                                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
@@ -6517,7 +6598,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                       {campAdv.targeting_analysis.frequency_warning && <div style={{ fontSize: 10, color: "#fbbf24", marginTop: 4 }}>⚠ Frequency cao - đối tượng đang bão hòa</div>}
                                     </div>
                                   )}
-                                  {/* Budget analysis */}
                                   {campAdv.budget_analysis && (
                                     <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 12, border: "1px solid rgba(255,255,255,0.08)" }}>
                                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
@@ -6548,23 +6628,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                   </div>
                                 )}
 
-                                {/* Content samples */}
-                                {(campAdv.content_samples||[]).length > 0 && (
-                                  <div style={{ marginBottom: 10 }}>
-                                    <div style={{ fontSize: 12, fontWeight: 700, color: "#94a3b8", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}><Lightbulb size={12} /> MẪU CONTENT GỢI Ý</div>
-                                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(240px, 1fr))", gap: 8 }}>
-                                      {campAdv.content_samples.map((cs, ci) => (
-                                        <div key={ci} style={{ background: "rgba(232,138,46,0.08)", borderRadius: 8, padding: 10, border: "1px solid rgba(232,138,46,0.2)" }}>
-                                          <div style={{ fontWeight: 700, fontSize: 12, color: "#fbbf24", marginBottom: 4 }}>"{cs.hook}"</div>
-                                          <div style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 4 }}>{cs.body}</div>
-                                          {cs.cta && <div style={{ fontSize: 11, color: "#4ade80", fontWeight: 600 }}>CTA: {cs.cta}</div>}
-                                          {cs.target_audience && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>Target: {cs.target_audience}</div>}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-
                                 {/* Rules applied */}
                                 {(campAdv.rules_applied||[]).length > 0 && (
                                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -6572,7 +6635,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                   </div>
                                 )}
                               </div>
-                            )}
+                              );
+                            })()}
 
                             {/* Not seeded yet */}
                             {!guidelinesSeeded && !campLoading && !campErr && (

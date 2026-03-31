@@ -5494,40 +5494,54 @@ ${campDetail}
 
 HÃY SOI KỸ chiến dịch này. PHÂN TÍCH SÂU:
 
-1. CHẨN ĐOÁN TỔNG QUAN: Chiến dịch này đang ở tình trạng gì? Điểm mạnh, điểm yếu?
+1. CHẨN ĐOÁN TỔNG QUAN: Điểm mạnh, điểm yếu?
 
-2. SOI CONTENT (quan trọng nhất):
-   - % Quan tâm bao nhiêu? Nếu < 15% thì content ĐANG CÓ VẤN ĐỀ → phân tích cụ thể content đang sai ở đâu
-   - CTR có đủ cao không? CTR < 1% → headline/hình ảnh kém hấp dẫn
-   - CPM cao hay thấp? CPM > 80k → Facebook đánh giá content kém hoặc target quá hẹp
-   - Liệt kê CỤ THỂ content đang sai gì: hook yếu? CTA không rõ? Không có social proof? Thiếu urgency?
-   - Gợi ý FIX content: viết lại hook, CTA, cấu trúc bài viết theo quy tắc nào
+2. SOI CONTENT - QUAN TRỌNG NHẤT:
+   Dựa trên tên chiến dịch "${c.name}" và các chỉ số hiệu suất, hãy:
+   a) ĐOÁN content quảng cáo đang chạy: Viết lại BÀI QUẢNG CÁO mà chiến dịch này ĐANG DÙNG (hook + body + CTA) dựa trên tên camp, ngành BĐS, và phong cách thường thấy. Viết đầy đủ 3-5 câu.
+   b) CHỈ LỖI SAI CỤ THỂ: Đánh dấu TỪNG PHẦN sai trong content đang chạy: hook yếu? thiếu social proof? CTA không rõ? không urgency? format sai?
+   c) VIẾT BÀI CHUẨN: Dựa trên bài cũ, viết lại BÀI MỚI TỐI ƯU (hook + body + CTA) fix hết lỗi. Giữ cùng sản phẩm/dự án nhưng cải thiện cấu trúc, wording, CTA.
+   
+   Phân tích metrics:
+   - % Quan tâm: ${c.interestPct}% ${Number(c.interestPct||0) < 15 ? "→ CONTENT CÓ VẤN ĐỀ" : ""}
+   - CTR: ${c.ctr||"N/A"}% ${Number(c.ctr||0) < 1 ? "→ headline/hình ảnh kém" : ""}
+   - CPM: ${c.cpm?Number(c.cpm).toLocaleString("vi-VN")+"đ":"N/A"} ${Number(c.cpm||0) > 80000 ? "→ FB đánh giá content kém" : ""}
 
 3. SOI TARGETING:
-   - Reach vs Impressions: frequency có cao không? > 3 là bão hòa
-   - CPM cho thấy target có phù hợp không?
-   - Nên mở rộng hay thu hẹp đối tượng?
+   - Frequency: reach ${c.reach||"?"} vs impressions ${c.impressions||"?"} → frequency có > 3?
+   - CPM cho thấy target phù hợp không?
 
 4. SOI NGÂN SÁCH:
-   - Ngân sách/ngày có hợp lý? (quy tắc max 1 triệu/ngày)
-   - Có đang trong giai đoạn máy học không? (cần 50 events/7 ngày)
-   - Nên tăng/giảm bao nhiêu? (nhớ quy tắc 30%)
+   - Ngân sách/ngày có hợp lý? (max 1 triệu/ngày)
+   - Giai đoạn máy học? (cần 50 events/7 ngày)
+   - Quy tắc 30%
 
-5. HÀNH ĐỘNG CỤ THỂ: Liệt kê 3-5 việc cần làm NGAY cho chiến dịch này
+5. HÀNH ĐỘNG: 3-5 việc cần làm NGAY
 
-6. GỢI Ý 3 MẪU CONTENT MỚI: Viết sẵn 3 mẫu hook + body ngắn có thể dùng luôn cho chiến dịch này
-
-KHÔNG chung chung. PHẢI trích quy tắc. PHẢI nêu CON SỐ cụ thể.
+KHÔNG chung chung. PHẢI nêu CON SỐ cụ thể.
 
 Trả về ĐÚNG JSON thuần (KHÔNG markdown):
 {
   "score": 75,
   "verdict": "Tốt|Trung bình|Cần cải thiện|Đang có vấn đề",
   "summary": "1-2 câu tổng kết nhanh",
-  "content_analysis": {
-    "status": "Tốt|Cần cải thiện|Có vấn đề nghiêm trọng",
-    "problems": ["Vấn đề 1 cụ thể", "Vấn đề 2"],
-    "suggestions": ["Gợi ý fix 1", "Gợi ý fix 2"]
+  "content_comparison": {
+    "current_content": {
+      "hook": "Dòng hook quảng cáo ĐANG CHẠY (đoán dựa trên camp name & metrics)",
+      "body": "Nội dung body ĐANG CHẠY 3-5 câu đầy đủ",
+      "cta": "CTA đang dùng",
+      "errors": [
+        {"part": "hook", "issue": "Lỗi cụ thể của hook, ví dụ: quá chung chung, không tạo tò mò", "severity": "high"},
+        {"part": "body", "issue": "Lỗi cụ thể của body", "severity": "medium"},
+        {"part": "cta", "issue": "Lỗi cụ thể của CTA", "severity": "high"}
+      ]
+    },
+    "improved_content": {
+      "hook": "Hook MỚI đã fix lỗi - viết sẵn dùng được luôn",
+      "body": "Body MỚI 3-5 câu đã fix hết lỗi - có social proof, urgency, benefit rõ ràng",
+      "cta": "CTA MỚI mạnh mẽ và rõ ràng",
+      "improvements": ["Cải thiện 1: giải thích ngắn tại sao thay đổi", "Cải thiện 2"]
+    }
   },
   "targeting_analysis": {
     "status": "Tốt|Cần điều chỉnh|Có vấn đề",
@@ -5540,19 +5554,8 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown):
     "recommendation": "Tăng 20%|Giảm 30%|Giữ nguyên|TẮT ngay",
     "detail": "Chi tiết lý do"
   },
-  "actions": [
-    "Việc cần làm ngay 1",
-    "Việc cần làm ngay 2"
-  ],
-  "content_samples": [
-    {
-      "hook": "Câu mở đầu hấp dẫn",
-      "body": "Nội dung ngắn gọn 2-3 câu",
-      "cta": "Call to action",
-      "target_audience": "Đối tượng phù hợp"
-    }
-  ],
-  "rules_applied": ["Tên quy tắc đã trích dẫn"]
+  "actions": ["Việc cần làm 1", "Việc cần làm 2"],
+  "rules_applied": ["Tên quy tắc đã áp dụng"]
 }`;
 
     const ppxRes = await fetch("https://api.perplexity.ai/chat/completions", {
@@ -5574,7 +5577,7 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown):
     try {
       const jsonStr = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       parsed = JSON.parse(jsonStr);
-    } catch { parsed = { score: 0, verdict: "Lỗi", summary: raw, content_analysis: {}, targeting_analysis: {}, budget_analysis: {}, actions: [], content_samples: [], rules_applied: [] }; }
+    } catch { parsed = { score: 0, verdict: "Lỗi", summary: raw, content_comparison: {}, targeting_analysis: {}, budget_analysis: {}, actions: [], rules_applied: [] }; }
     res.json(parsed);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
