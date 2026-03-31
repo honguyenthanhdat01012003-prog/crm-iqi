@@ -5452,6 +5452,133 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown):
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Single campaign deep analysis
+app.post("/api/campaign-advisor/single", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { campaign } = req.body;
+    if (!campaign) return res.status(400).json({ error: "Không có dữ liệu chiến dịch" });
+
+    const guidelines = await all(db, "SELECT * FROM marketing_guidelines ORDER BY priority DESC");
+    if (!guidelines.length) return res.status(400).json({ error: "Chưa nạp kiến thức marketing. Bấm 'Nạp kiến thức' trước." });
+
+    const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
+    if (!apiKey?.value) return res.status(400).json({ error: "Chưa cấu hình API key Perplexity" });
+
+    const guidelinesText = guidelines.map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n");
+    const c = campaign;
+    const campDetail = `Tên: ${c.name}
+Chi tiêu: ${Number(c.spend||0).toLocaleString("vi-VN")}đ
+Leads Facebook: ${c.fbLeads||0}
+Leads CRM: ${c.crmLeads||0}
+Quan tâm: ${c.interested||0} (${c.interestPct||0}%)
+Không quan tâm: ${c.notInterested||0} (${c.notInterestedPct||0}%)
+Spam: ${c.spam||0} (${c.spamPct||0}%)
+Chưa xử lý: ${c.newLead||0}
+CPL: ${c.cpl?Number(c.cpl).toLocaleString("vi-VN")+"đ":"Chưa có lead"}
+CPM: ${c.cpm?Number(c.cpm).toLocaleString("vi-VN")+"đ":"N/A"}
+CTR liên kết: ${c.ctr||"N/A"}%
+CPC: ${c.cpc?Number(c.cpc).toLocaleString("vi-VN")+"đ":"N/A"}
+Ngân sách/ngày: ${c.dailyBudget?Number(c.dailyBudget).toLocaleString("vi-VN")+"đ":"N/A"}
+Lượt tiếp cận: ${c.reach?Number(c.reach).toLocaleString("vi-VN"):"N/A"}
+Lượt hiển thị: ${c.impressions?Number(c.impressions).toLocaleString("vi-VN"):"N/A"}
+Click liên kết: ${c.linkClicks||"N/A"}
+Trạng thái: ${c.status||"?"}`;
+
+    const prompt = `Bạn là GIÁM ĐỐC MARKETING với 10 năm kinh nghiệm chạy Facebook Ads BĐS.
+
+BỘ QUY TẮC VÀNG:
+${guidelinesText}
+
+CHIẾN DỊCH CẦN PHÂN TÍCH CHI TIẾT:
+${campDetail}
+
+HÃY SOI KỸ chiến dịch này. PHÂN TÍCH SÂU:
+
+1. CHẨN ĐOÁN TỔNG QUAN: Chiến dịch này đang ở tình trạng gì? Điểm mạnh, điểm yếu?
+
+2. SOI CONTENT (quan trọng nhất):
+   - % Quan tâm bao nhiêu? Nếu < 15% thì content ĐANG CÓ VẤN ĐỀ → phân tích cụ thể content đang sai ở đâu
+   - CTR có đủ cao không? CTR < 1% → headline/hình ảnh kém hấp dẫn
+   - CPM cao hay thấp? CPM > 80k → Facebook đánh giá content kém hoặc target quá hẹp
+   - Liệt kê CỤ THỂ content đang sai gì: hook yếu? CTA không rõ? Không có social proof? Thiếu urgency?
+   - Gợi ý FIX content: viết lại hook, CTA, cấu trúc bài viết theo quy tắc nào
+
+3. SOI TARGETING:
+   - Reach vs Impressions: frequency có cao không? > 3 là bão hòa
+   - CPM cho thấy target có phù hợp không?
+   - Nên mở rộng hay thu hẹp đối tượng?
+
+4. SOI NGÂN SÁCH:
+   - Ngân sách/ngày có hợp lý? (quy tắc max 1 triệu/ngày)
+   - Có đang trong giai đoạn máy học không? (cần 50 events/7 ngày)
+   - Nên tăng/giảm bao nhiêu? (nhớ quy tắc 30%)
+
+5. HÀNH ĐỘNG CỤ THỂ: Liệt kê 3-5 việc cần làm NGAY cho chiến dịch này
+
+6. GỢI Ý 3 MẪU CONTENT MỚI: Viết sẵn 3 mẫu hook + body ngắn có thể dùng luôn cho chiến dịch này
+
+KHÔNG chung chung. PHẢI trích quy tắc. PHẢI nêu CON SỐ cụ thể.
+
+Trả về ĐÚNG JSON thuần (KHÔNG markdown):
+{
+  "score": 75,
+  "verdict": "Tốt|Trung bình|Cần cải thiện|Đang có vấn đề",
+  "summary": "1-2 câu tổng kết nhanh",
+  "content_analysis": {
+    "status": "Tốt|Cần cải thiện|Có vấn đề nghiêm trọng",
+    "problems": ["Vấn đề 1 cụ thể", "Vấn đề 2"],
+    "suggestions": ["Gợi ý fix 1", "Gợi ý fix 2"]
+  },
+  "targeting_analysis": {
+    "status": "Tốt|Cần điều chỉnh|Có vấn đề",
+    "frequency_warning": true,
+    "detail": "Phân tích targeting chi tiết"
+  },
+  "budget_analysis": {
+    "status": "Hợp lý|Cần điều chỉnh|Quá cao|Quá thấp",
+    "in_learning": false,
+    "recommendation": "Tăng 20%|Giảm 30%|Giữ nguyên|TẮT ngay",
+    "detail": "Chi tiết lý do"
+  },
+  "actions": [
+    "Việc cần làm ngay 1",
+    "Việc cần làm ngay 2"
+  ],
+  "content_samples": [
+    {
+      "hook": "Câu mở đầu hấp dẫn",
+      "body": "Nội dung ngắn gọn 2-3 câu",
+      "cta": "Call to action",
+      "target_audience": "Đối tượng phù hợp"
+    }
+  ],
+  "rules_applied": ["Tên quy tắc đã trích dẫn"]
+}`;
+
+    const ppxRes = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.value}` },
+      body: JSON.stringify({
+        model: "sonar-pro",
+        messages: [
+          { role: "system", content: "Bạn là Giám đốc Marketing BĐS 10 năm kinh nghiệm. Phân tích CHI TIẾT 1 chiến dịch duy nhất. Luôn trả lời bằng JSON thuần, không markdown." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+    if (!ppxRes.ok) { const e = await ppxRes.text(); return res.status(500).json({ error: `Perplexity error: ${e}` }); }
+    const ppxData = await ppxRes.json();
+    const raw = (ppxData.choices?.[0]?.message?.content || "").trim();
+    let parsed;
+    try {
+      const jsonStr = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      parsed = JSON.parse(jsonStr);
+    } catch { parsed = { score: 0, verdict: "Lỗi", summary: raw, content_analysis: {}, targeting_analysis: {}, budget_analysis: {}, actions: [], content_samples: [], rules_applied: [] }; }
+    res.json(parsed);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ========== FACEBOOK CONVERSIONS API (CAPI) ==========
 async function sendCapiEvent(db, lead, eventName) {
   try {
