@@ -10378,6 +10378,13 @@ function DailyNewsPage({ isAdmin }) {
   const [hasApiKey, setHasApiKey] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [selectedIdx, setSelectedIdx] = useState(0);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 700);
+
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 700);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const loadLatest = async () => {
     try {
@@ -10473,6 +10480,7 @@ function DailyNewsPage({ isAdmin }) {
   };
 
   const getSentimentColor = (v) => v >= 65 ? "#059669" : v >= 40 ? "#d97706" : "#dc2626";
+  const getSentimentLabel = (v) => v >= 75 ? "Sôi động" : v >= 60 ? "Ấm lên" : v >= 45 ? "Chờ đợi" : v >= 30 ? "Thận trọng" : "Đóng băng";
 
   // Render the two-panel news dashboard for an item
   const renderDashboard = (item) => {
@@ -10482,23 +10490,32 @@ function DailyNewsPage({ isAdmin }) {
 
     return (
       <div>
-        {/* Top bar: headline + market pulse */}
-        <div style={{ background: "#0f172a", borderRadius: "10px 10px 0 0", padding: "16px 20px", color: "#fff" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, color: "#64748b", marginBottom: 4 }}>
-                TRẠM TIN BĐS
-              </div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: "#f1f5f9" }}>{item.title || "Briefing BĐS"}</div>
+        {/* Top bar: headline + market pulse + heat */}
+        <div style={{ background: "#0f172a", borderRadius: "10px 10px 0 0", padding: isMobile ? "14px 14px" : "16px 20px", color: "#fff" }}>
+          <div style={{ marginBottom: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1.5, color: "#64748b", marginBottom: 4, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>TRẠM TIN BĐS</span>
+              <span style={{ fontSize: 11, color: "#64748b", fontWeight: 400, letterSpacing: 0, textTransform: "none" }}>{new Date(item.created_at).toLocaleDateString("vi-VN")}</span>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color: getSentimentColor(sentiment), lineHeight: 1 }}>{sentiment}</div>
-                <div style={{ fontSize: 9, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Nhiệt thị trường</div>
-              </div>
-              <span style={{ fontSize: 12, color: "#64748b" }}>{new Date(item.created_at).toLocaleDateString("vi-VN")}</span>
+            <div style={{ fontSize: isMobile ? 15 : 17, fontWeight: 700, color: "#f1f5f9", lineHeight: 1.4 }}>{item.title || "Briefing BĐS"}</div>
+          </div>
+
+          {/* Heat indicator bar */}
+          <div style={{ background: "#1e293b", borderRadius: 8, padding: "10px 14px", marginTop: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#94a3b8" }}>Nhiệt thị trường</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: getSentimentColor(sentiment) }}>
+                {sentiment}/100 — {getSentimentLabel(sentiment)}
+              </span>
+            </div>
+            <div style={{ width: "100%", height: 8, borderRadius: 4, background: "#334155", overflow: "hidden" }}>
+              <div style={{ width: `${sentiment}%`, height: "100%", borderRadius: 4, background: `linear-gradient(90deg, #dc2626 0%, #f59e0b 40%, #059669 70%, #047857 100%)`, transition: "width 0.5s" }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4, fontSize: 9, color: "#64748b" }}>
+              <span>Đóng băng</span><span>Thận trọng</span><span>Chờ đợi</span><span>Ấm lên</span><span>Sôi động</span>
             </div>
           </div>
+
           {marketPulse && (
             <div style={{ marginTop: 10, fontSize: 13, color: "#94a3b8", lineHeight: 1.5, borderTop: "1px solid #1e293b", paddingTop: 10 }}>
               {marketPulse}
@@ -10506,15 +10523,15 @@ function DailyNewsPage({ isAdmin }) {
           )}
         </div>
 
-        {/* Two-panel layout */}
-        <div style={{ display: "flex", border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden", minHeight: 400, flexWrap: "wrap" }}>
+        {/* Two-panel layout — stacks on mobile */}
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden", minHeight: isMobile ? "auto" : 400 }}>
 
           {/* LEFT: News list */}
-          <div style={{ width: "100%", maxWidth: 340, minWidth: 260, borderRight: "1px solid #e2e8f0", background: "#fafbfc", flex: "0 0 auto" }}>
+          <div style={{ width: isMobile ? "100%" : 340, borderRight: isMobile ? "none" : "1px solid #e2e8f0", borderBottom: isMobile ? "1px solid #e2e8f0" : "none", background: "#fafbfc", flexShrink: 0 }}>
             <div style={{ padding: "12px 16px", borderBottom: "1px solid #e2e8f0", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: "#64748b" }}>
               Tin nóng 24h ({newsItems.length})
             </div>
-            <div style={{ maxHeight: 500, overflowY: "auto" }}>
+            <div style={{ maxHeight: isMobile ? 240 : 500, overflowY: "auto" }}>
               {newsItems.length === 0 ? (
                 <div style={{ padding: 20, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Chưa có tin</div>
               ) : (
@@ -10561,9 +10578,9 @@ function DailyNewsPage({ isAdmin }) {
           </div>
 
           {/* RIGHT: AI Insight */}
-          <div style={{ flex: 1, minWidth: 300, background: "#fff" }}>
+          <div style={{ flex: 1, minWidth: 0, background: "#fff" }}>
             {sel ? (
-              <div style={{ padding: "20px 24px" }}>
+              <div style={{ padding: isMobile ? "16px 14px" : "20px 24px" }}>
                 {/* Selected news title + source */}
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 16, fontWeight: 700, color: "#0f172a", lineHeight: 1.4, marginBottom: 6 }}>
