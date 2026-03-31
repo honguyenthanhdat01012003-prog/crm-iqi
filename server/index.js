@@ -5584,8 +5584,15 @@ Trạng thái: ${c.status||"?"}`;
       ? `2. SOI CONTENT - DÙNG NỘI DUNG THỰC TẾ:
    Dưới đây là NỘI DUNG THỰC TẾ các bài QC đang chạy. Hãy SOI KỸ TỪNG BÀI:
    - Phân tích TỪNG bài QC: nội dung đang sai ở đâu? Hook yếu? Thiếu social proof? CTA không rõ? Không urgency?
-   - Với MỖI bài QC, viết lại phiên bản CẢI THIỆN: giữ cùng sản phẩm/dự án nhưng fix hết lỗi
    - Nêu rõ TỪNG lỗi cụ thể (đánh dấu severity: high/medium/low)
+   
+   QUAN TRỌNG - VIẾT LẠI BÀI HOÀN CHỈNH:
+   - improved.text phải là BÀI VIẾT ĐẦY ĐỦ dạng Facebook Post, KHÔNG PHẢI đoạn tóm tắt ngắn
+   - Giữ nguyên CẤU TRÚC và ĐỘ DÀI tương tự bài gốc (nếu bài gốc 10 dòng thì bài mới cũng ~10 dòng)
+   - Copy bài gốc làm nền, chỉ SỬA ĐÚNG CHỖ SAI: hook yếu → viết hook mạnh hơn, thiếu social proof → thêm social proof, CTA mờ nhạt → CTA rõ ràng
+   - Dùng emoji, xuống dòng, format giống bài Facebook Ads BĐS thật
+   - Bài cải thiện phải SẴN SÀNG COPY-PASTE chạy quảng cáo luôn
+   - improved.description: mô tả link mới nếu cần sửa
    
    Phân tích metrics:
    - % Quan tâm: ${c.interestPct}% ${Number(c.interestPct||0) < 15 ? "→ CONTENT CÓ VẤN ĐỀ" : ""}
@@ -5598,12 +5605,17 @@ Trạng thái: ${c.status||"?"}`;
       ? `"ads_review": [
     {
       "ad_name": "Tên bài QC",
-      "current": { "text": "Nội dung gốc copy từ bài QC thực tế", "headline": "Headline gốc", "cta": "CTA gốc" },
+      "current": { "text": "Copy nguyên văn nội dung gốc từ bài QC thực tế", "headline": "Headline gốc", "description": "Mô tả gốc", "cta": "CTA gốc" },
       "errors": [
-        {"part": "text|headline|cta", "issue": "Mô tả cụ thể lỗi sai", "severity": "high|medium|low"}
+        {"part": "text|headline|cta|description", "issue": "Mô tả lỗi cụ thể", "severity": "high|medium|low", "original_text": "đoạn text gốc bị lỗi", "fixed_text": "đoạn text đã sửa"}
       ],
-      "improved": { "text": "Nội dung MỚI đã fix hết lỗi - viết sẵn dùng được luôn", "headline": "Headline MỚI", "cta": "CTA MỚI" },
-      "improvements": ["Giải thích ngắn cải thiện 1", "Cải thiện 2"]
+      "improved": {
+        "text": "BÀI VIẾT ĐẦY ĐỦ dạng Facebook Post — cùng độ dài bài gốc, giữ cấu trúc, chỉ sửa chỗ sai. Dùng emoji + xuống dòng. Sẵn sàng copy-paste chạy QC luôn.",
+        "headline": "Headline MỚI hấp dẫn hơn",
+        "description": "Mô tả link mới nếu cần",
+        "cta": "CTA MỚI"
+      },
+      "improvements": ["Dòng 1: Đã sửa [chỗ cụ thể] từ '...' thành '...'", "Dòng 2: Thêm [social proof/urgency/benefit]"]
     }
   ],`
       : `"ads_review": [],`;

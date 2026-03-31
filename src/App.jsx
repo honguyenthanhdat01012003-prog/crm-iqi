@@ -6628,39 +6628,55 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                                 <span style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: 0.5 }}>Phiên bản cải thiện</span>
                                               </div>
                                               {review?.improved ? (<>
-                                                {review.improved.text && (
-                                                  <div style={{ marginBottom: 8 }}>
-                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>NỘI DUNG BÀI VIẾT</div>
-                                                    <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80", whiteSpace: "pre-line", maxHeight: 200, overflowY: "auto" }}>
-                                                      {review.improved.text}
-                                                    </div>
-                                                  </div>
-                                                )}
-                                                {review.improved.headline && (
-                                                  <div style={{ marginBottom: 8 }}>
-                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>HEADLINE</div>
-                                                    <div style={{ fontSize: 12, color: "#e2e8f0", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
-                                                      {review.improved.headline}
-                                                    </div>
-                                                  </div>
-                                                )}
-                                                {review.improved.cta && (
-                                                  <div style={{ marginBottom: 8 }}>
-                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>CTA BUTTON</div>
-                                                    <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, background: "rgba(74,222,128,0.15)", color: "#86efac", fontWeight: 600 }}>{review.improved.cta}</span>
-                                                  </div>
-                                                )}
+                                                {/* Improvements summary at top */}
                                                 {(review.improvements||[]).length > 0 && (
-                                                  <div style={{ marginTop: 6 }}>
-                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#4ade80", marginBottom: 4 }}>ĐÃ CẢI THIỆN</div>
+                                                  <div style={{ marginBottom: 10, padding: "8px 10px", background: "rgba(74,222,128,0.08)", borderRadius: 8, border: "1px solid rgba(74,222,128,0.15)" }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", marginBottom: 4 }}>ĐÃ SỬA {review.improvements.length} CHỖ:</div>
                                                     {review.improvements.map((impr, ii) => (
-                                                      <div key={ii} style={{ display: "flex", gap: 6, marginBottom: 3, padding: "4px 8px", borderRadius: 6, background: "rgba(74,222,128,0.08)" }}>
+                                                      <div key={ii} style={{ display: "flex", gap: 5, marginBottom: 2 }}>
                                                         <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>✓</span>
                                                         <span style={{ fontSize: 10, color: "#e2e8f0", lineHeight: 1.4 }}>{impr}</span>
                                                       </div>
                                                     ))}
                                                   </div>
                                                 )}
+                                                {/* Full rewritten post */}
+                                                {review.improved.text && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                                                      <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b" }}>BÀI VIẾT ĐÃ SỬA (copy-paste được luôn)</div>
+                                                      <button onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(review.improved.text + (review.improved.headline ? "\n\n" + review.improved.headline : "")); }} style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(74,222,128,0.3)", background: "transparent", color: "#4ade80", cursor: "pointer", fontWeight: 600 }}>📋 Copy</button>
+                                                    </div>
+                                                    <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.7, padding: "12px 14px", background: "rgba(255,255,255,0.04)", borderRadius: 8, borderLeft: "3px solid #4ade80", whiteSpace: "pre-line" }}>
+                                                      {review.improved.text}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                {/* Headline + Description + CTA in row */}
+                                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                                  {review.improved.headline && (
+                                                    <div style={{ flex: "1 1 150px" }}>
+                                                      <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>HEADLINE</div>
+                                                      <div style={{ fontSize: 12, color: "#e2e8f0", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
+                                                        {review.improved.headline}
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                  {review.improved.description && (
+                                                    <div style={{ flex: "1 1 150px" }}>
+                                                      <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>MÔ TẢ</div>
+                                                      <div style={{ fontSize: 11, color: "#cbd5e1", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
+                                                        {review.improved.description}
+                                                      </div>
+                                                    </div>
+                                                  )}
+                                                  {review.improved.cta && (
+                                                    <div>
+                                                      <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>CTA</div>
+                                                      <span style={{ fontSize: 11, padding: "4px 12px", borderRadius: 6, background: "rgba(74,222,128,0.15)", color: "#86efac", fontWeight: 600, display: "inline-block" }}>{review.improved.cta}</span>
+                                                    </div>
+                                                  )}
+                                                </div>
                                               </>) : (
                                                 <div style={{ fontSize: 11, color: "#64748b", padding: 12, textAlign: "center" }}>AI chưa có đề xuất cho bài này</div>
                                               )}
