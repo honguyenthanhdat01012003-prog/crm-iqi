@@ -10524,7 +10524,7 @@ function DailyNewsPage({ isAdmin }) {
         </div>
 
         {/* Two-panel layout — stacks on mobile */}
-        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden", minHeight: isMobile ? "auto" : 400 }}>
+        <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", border: "1px solid #e2e8f0", borderTop: "none", overflow: "hidden", minHeight: isMobile ? "auto" : 400 }}>
 
           {/* LEFT: News list */}
           <div style={{ width: isMobile ? "100%" : 340, borderRight: isMobile ? "none" : "1px solid #e2e8f0", borderBottom: isMobile ? "1px solid #e2e8f0" : "none", background: "#fafbfc", flexShrink: 0 }}>
@@ -10635,46 +10635,48 @@ function DailyNewsPage({ isAdmin }) {
                     ))}
                   </div>
                 )}
-
-                {/* Divider before forecast */}
-                <div style={{ borderTop: "1px solid #e5e7eb", margin: "20px 0" }} />
-
-                {/* Tomorrow Forecast */}
-                {forecast && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#7c3aed", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                      <Radar size={14} /> DỰ BÁO NGÀY MAI
-                    </div>
-                    <div style={{ fontSize: 14, color: "#1e293b", lineHeight: 1.75, padding: "12px 16px", background: "#f5f3ff", borderRadius: 8, border: "1px solid #e9d5ff" }}>
-                      {forecast}
-                    </div>
-                  </div>
-                )}
-
-                {/* Action Brief */}
-                {actions.length > 0 && (
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#059669", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
-                      <Zap size={14} /> VIỆC CẦN LÀM
-                    </div>
-                    {actions.map((a, i) => (
-                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6 }}>
-                        <span style={{ flexShrink: 0, width: 20, height: 20, borderRadius: "50%", background: "#ecfdf5", color: "#059669", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          {i + 1}
-                        </span>
-                        <span style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.5 }}>{a}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             ) : (
               <div style={{ padding: 40, textAlign: "center", color: "#9ca3af" }}>
-                <div style={{ fontSize: 14 }}>Chọn một tin từ danh sách bên trái</div>
+                <div style={{ fontSize: 14 }}>Chọn một tin từ danh sách {isMobile ? "bên trên" : "bên trái"}</div>
               </div>
             )}
           </div>
         </div>
+
+        {/* Forecast + Actions — BELOW the 2-panel, shown once */}
+        {(forecast || actions.length > 0) && (
+          <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderTop: "none", borderRadius: "0 0 10px 10px", overflow: "hidden" }}>
+            {/* Tomorrow Forecast */}
+            {forecast && (
+              <div style={{ padding: isMobile ? "14px" : "16px 20px", borderBottom: actions.length > 0 ? "1px solid #f1f5f9" : "none" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#7c3aed", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Radar size={14} /> DỰ BÁO 2-3 NGÀY TỚI
+                </div>
+                <div style={{ fontSize: 14, color: "#1e293b", lineHeight: 1.75, padding: "12px 16px", background: "#f5f3ff", borderRadius: 8, border: "1px solid #e9d5ff" }}>
+                  {forecast}
+                </div>
+              </div>
+            )}
+
+            {/* Action Brief */}
+            {actions.length > 0 && (
+              <div style={{ padding: isMobile ? "14px" : "16px 20px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.8, color: "#059669", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Zap size={14} /> VIỆC CẦN LÀM HÔM NAY
+                </div>
+                {actions.map((a, i) => (
+                  <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8, padding: "8px 12px", background: i % 2 === 0 ? "#f0fdf4" : "#fff", borderRadius: 6 }}>
+                    <span style={{ flexShrink: 0, width: 22, height: 22, borderRadius: "50%", background: "#059669", color: "#fff", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {i + 1}
+                    </span>
+                    <span style={{ fontSize: 13, color: "#1e293b", lineHeight: 1.6 }}>{a}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Sources footer */}
         {sources.length > 0 && (

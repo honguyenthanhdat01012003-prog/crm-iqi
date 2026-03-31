@@ -7254,17 +7254,28 @@ KHÔNG LÀM:
 - Giải thích khái niệm cơ bản (dân 10 năm kinh nghiệm không cần)
 - Tóm tắt chung chung kiểu AI
 - Dùng ngôn ngữ hoa mỹ, sáo rỗng
+- Bịa số liệu hoặc link
 
 CẦN LÀM:
 - Mỗi tin phải có link báo gốc THẬT (URL đầy đủ), tên báo
 - Phán xét thẳng: tin này "thơm" (có lợi) hay "độc" (bất lợi) cho dân sale BĐS, kèm lý do sắc gọn
-- Trích số liệu CỤ THỂ từ bài báo gốc (giá, %, diện tích, số giao dịch...)
-- Phân tích MỖI tin: ảnh hưởng thế nào đến khách mua, nhà đầu tư, và đội sale
-- Dự báo ngày mai để chuẩn bị kịch bản marketing
+- SỐ LIỆU: Mỗi tin PHẢI trích ít nhất 2-3 con số CỤ THỂ từ bài báo gốc. Ghi rõ nguồn và ngày. Ví dụ: "Lãi suất cho vay VCB giảm còn 6.8%/năm từ 01/04 (VnExpress, 31/03)". KHÔNG ghi kiểu mơ hồ đại khái.
+- Phân tích MỖI tin: ảnh hưởng thế nào đến khách mua, nhà đầu tư, đội sale
+
+VỀ DỰ BÁO NGÀY MAI:
+- KHÔNG viết chung chung kiểu "thị trường tiếp tục ấm lên"
+- PHẢI chỉ ra: SỰ KIỆN cụ thể nào sẽ xảy ra ngày mai/tuần tới (đấu giá, cuộc họp, chính sách có hiệu lực, dự án mở bán...)
+- Nêu rõ: "Điều này sẽ khiến [segment khách hàng cụ thể] làm [hành động cụ thể]"
+- Kịch bản marketing dựa trên sự kiện cụ thể đó, không chung chung
+
+VỀ VIỆC CẦN LÀM:
+- Mỗi mục phải có: AI làm + Làm GÌ + TẠI SAO phải làm hôm nay (không để ngày mai được)
+- Ví dụ: "Sale khu vực Long An: Gọi lại 5 khách đã hỏi giá tuần trước, dẫn tin quy hoạch cao tốc mới được duyệt hôm nay để tạo urgency"
+- KHÔNG viết chung chung kiểu "đăng bài lên Facebook", "cập nhật khách hàng"
 
 Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
 {
-  "headline": "Briefing ngắn gọn cho ngày — kiểu giao ban, không kiểu báo",
+  "headline": "Briefing ngắn gọn cho ngày — kiểu giao ban",
   "market_pulse": "1-2 câu thẳng thắn: thị trường đang ở trạng thái gì, đà nào",
   "market_sentiment": 65,
   "news_items": [
@@ -7275,12 +7286,15 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
       "verdict": "thơm",
       "verdict_reason": "1-2 câu: Tại sao thơm/độc cho sale BĐS",
       "insight": "Phân tích 3-5 câu: ảnh hưởng thực tế đến khách mua, nhà đầu tư, đội sale. Trích số liệu cụ thể từ bài báo.",
-      "data_citations": ["Lãi suất VCB giảm còn 6.8%/năm (VnExpress)", "Giao dịch Q1 tăng 15% (CBRE)"]
+      "data_citations": [
+        "Lãi suất cho vay mua nhà VCB giảm còn 6.8%/năm từ 01/04 (VnExpress, 31/03/2026)",
+        "Giá căn hộ Quận 9 trung bình 45 triệu/m2, tăng 8% so với Q4/2025 (Batdongsan.com.vn, 30/03/2026)"
+      ]
     }
   ],
-  "tomorrow_forecast": "Dự báo ngày mai dựa trên diễn biến hôm nay. Sale nên chuẩn bị gì? Kịch bản nào khả thi? 3-5 câu thực chiến, không lý thuyết.",
+  "tomorrow_forecast": "Dự báo 2-3 ngày tới dựa trên SỰ KIỆN cụ thể sắp xảy ra (đấu giá, chính sách có hiệu lực, dự án mở bán, cuộc họp NHNN...). Chỉ rõ segment khách nào sẽ bị tác động và sale cần chuẩn bị kịch bản gì.",
   "action_brief": [
-    "Việc cụ thể — ai cần gọi, nói gì, vì sao phải làm HÔM NAY"
+    "[Ai làm]: [Làm gì cụ thể] — vì [lý do urgency từ tin hôm nay]"
   ],
   "sources": ["link1", "link2"]
 }
@@ -7290,7 +7304,9 @@ CHÚ Ý:
 - market_sentiment: 0-100 (0=đóng băng, 50=chờ đợi, 100=sôi động)
 - news_items: 5-7 tin, sắp xếp tin QUAN TRỌNG NHẤT lên đầu
 - source_url: URL đầy đủ của bài báo gốc, PHẢI là link thật
-- data_citations: số liệu TRÍCH TỪ BÀI BÁO, không bịa
+- data_citations: MỖI con số phải ghi rõ: CON SỐ + ĐƠN VỊ + NGUỒN BÁO + NGÀY ĐĂNG. Nếu không tìm thấy số liệu cụ thể, để mảng rỗng
+- tomorrow_forecast: PHẢI dựa trên sự kiện cụ thể sắp xảy ra, KHÔNG lặp lại nội dung đã phân tích ở trên
+- action_brief: Mỗi mục phải khác nhau, gắn với TIN CỤ THỂ đã nêu, chỉ rõ AI làm + LÀM GÌ + VÌ SAO
 - Chỉ trả JSON thuần, không kèm text nào khác`;
 
   try {
