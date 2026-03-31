@@ -5152,7 +5152,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     apiFetch(`${API}/marketing-guidelines`).then(r => r.json()).then(d => { if (Array.isArray(d) && d.length > 0) setGuidelinesSeeded(true); }).catch(() => {});
   }, []);
 
-  // Ask AI Advisor for a single campaign
+  // Ask AI Advisor for a single campaign — fetches real ads first
   const askAdvisor = async (row, crmByCampLocal) => {
     const campName = row.campaign_name;
     setSelectedCampAdvisor(campName);
@@ -5181,9 +5181,35 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
         reach: row.reach || null, impressions: row.impressions || null,
         linkClicks: row.inline_link_clicks || null,
       };
-      const r = await apiFetch(`${API}/campaign-advisor/single`, { method: "POST", body: JSON.stringify({ campaign: campData }) });
+
+      // Fetch real ads + adsets for this campaign from Facebook
+      let realAds = [];
+      let adsets = [];
+      if (row.campaign_id && row._accountId) {
+        try {
+          const detailRes = await apiFetch(`${API}/fb-ads/campaign-detail/${row._accountId}/${row.campaign_id}?dateFrom=${fbDateFrom}&dateTo=${fbDateTo}`);
+          if (detailRes.ok) {
+            const detail = await detailRes.json();
+            realAds = (detail.ads || []).map(ad => ({
+              ...ad,
+              adsetName: (detail.adsets || []).find(as => as.id === ad.adsetId)?.name || ""
+            }));
+            adsets = detail.adsets || [];
+          }
+        } catch {}
+      }
+
+      const r = await apiFetch(`${API}/campaign-advisor/single`, {
+        method: "POST",
+        body: JSON.stringify({ campaign: campData, ads: realAds })
+      });
       const d = await r.json();
-      if (r.ok) setAdvisorData(prev => ({ ...prev, [campName]: d }));
+      if (r.ok) {
+        // Attach real ads and adsets to the advisor data for UI display
+        d._realAds = realAds;
+        d._adsets = adsets;
+        setAdvisorData(prev => ({ ...prev, [campName]: d }));
+      }
       else setAdvisorError(prev => ({ ...prev, [campName]: d.error || "Lỗi phân tích" }));
     } catch (e) { setAdvisorError(prev => ({ ...prev, [campName]: "Lỗi: " + e.message })); }
     setAdvisorLoading(null);
@@ -6473,9 +6499,9 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
 
                             {/* Results */}
                             {campAdv && (() => {
-                              const cc = campAdv.content_comparison || {};
-                              const cur = cc.current_content || {};
-                              const imp = cc.improved_content || {};
+                              const realAds = campAdv._realAds || [];
+                              const adsets = campAdv._adsets || [];
+                              const adsReview = campAdv.ads_review || [];
                               const sevColor = (s) => s === "high" ? "#f87171" : s === "medium" ? "#fbbf24" : "#94a3b8";
                               const sevBg = (s) => s === "high" ? "rgba(248,113,113,0.15)" : s === "medium" ? "rgba(251,191,36,0.15)" : "rgba(148,163,184,0.1)";
                               return (
@@ -6493,95 +6519,166 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                                   </div>
                                 </div>
 
-                                {/* === CONTENT COMPARISON: 2-column left/right === */}
-                                {(cur.hook || imp.hook) && (
+                                {/* === ADSETS INFO === */}
+                                {adsets.length > 0 && (
+                                  <div style={{ marginBottom: 14 }}>
+                                    <div style={{ fontSize: 12, fontWeight: 700, color: "#60a5fa", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                                      <Crosshair size={12} color="#60a5fa" /> NHÓM QUẢNG CÁO ({adsets.length})
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                      {adsets.map((as, ai) => (
+                                        <div key={ai} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 12px", border: "1px solid rgba(255,255,255,0.08)", fontSize: 11 }}>
+                                          <div style={{ fontWeight: 600, color: "#e2e8f0", marginBottom: 2 }}>{as.name}</div>
+                                          <div style={{ display: "flex", gap: 8, color: "#94a3b8", fontSize: 10 }}>
+                                            <span style={{ padding: "1px 6px", borderRadius: 4, background: as.status === "ACTIVE" ? "rgba(74,222,128,0.15)" : "rgba(148,163,184,0.15)", color: as.status === "ACTIVE" ? "#4ade80" : "#94a3b8" }}>{as.status}</span>
+                                            {as.dailyBudget > 0 && <span>{Number(as.dailyBudget/100).toLocaleString("vi-VN")}đ/ngày</span>}
+                                            {as.optimizationGoal && <span>{as.optimizationGoal}</span>}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* === ADS REVIEW: Each ad = left (real) / right (improved) === */}
+                                {realAds.length > 0 && (
                                   <div style={{ marginBottom: 14 }}>
                                     <div style={{ fontSize: 13, fontWeight: 700, color: "#f59e0b", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
-                                      <FileText size={14} color="#f59e0b" /> SOI CONTENT QUẢNG CÁO
+                                      <FileText size={14} color="#f59e0b" /> SOI CONTENT QUẢNG CÁO ({realAds.length} bài)
                                     </div>
-                                    <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 0, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
-                                      {/* LEFT — Current content with errors */}
-                                      <div style={{ background: "rgba(248,113,113,0.06)", padding: isMobile ? 12 : 16, borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.08)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-                                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#f87171" }} />
-                                          <span style={{ fontSize: 12, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: 0.5 }}>Content đang chạy</span>
-                                        </div>
-                                        {/* Hook */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Hook</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>
-                                            {cur.hook || "—"}
+                                    {realAds.map((ad, adIdx) => {
+                                      const review = adsReview.find(r => r.ad_name === ad.name) || adsReview[adIdx] || null;
+                                      const hasContent = ad.content?.text || ad.content?.headline;
+                                      const adIns = ad.insights;
+                                      return (
+                                        <div key={adIdx} style={{ marginBottom: 12, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)" }}>
+                                          {/* Ad header */}
+                                          <div style={{ background: "rgba(255,255,255,0.06)", padding: "8px 14px", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: "#e2e8f0", flex: 1 }}>#{adIdx + 1} {ad.name}</span>
+                                            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: ad.status === "ACTIVE" ? "rgba(74,222,128,0.15)" : "rgba(148,163,184,0.15)", color: ad.status === "ACTIVE" ? "#4ade80" : "#94a3b8" }}>{ad.status}</span>
+                                            {ad.adsetName && <span style={{ fontSize: 10, color: "#60a5fa" }}>Nhóm: {ad.adsetName}</span>}
                                           </div>
-                                        </div>
-                                        {/* Body */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Body</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171", whiteSpace: "pre-line" }}>
-                                            {cur.body || "—"}
-                                          </div>
-                                        </div>
-                                        {/* CTA */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>CTA</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>
-                                            {cur.cta || "—"}
-                                          </div>
-                                        </div>
-                                        {/* Error list */}
-                                        {(cur.errors||[]).length > 0 && (
-                                          <div style={{ marginTop: 6 }}>
-                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#f87171", marginBottom: 4, textTransform: "uppercase" }}>Lỗi phát hiện</div>
-                                            {cur.errors.map((err, ei) => (
-                                              <div key={ei} style={{ display: "flex", gap: 6, marginBottom: 4, padding: "5px 8px", borderRadius: 6, background: sevBg(err.severity) }}>
-                                                <span style={{ fontSize: 11, color: sevColor(err.severity), fontWeight: 700, flexShrink: 0 }}>✗ {err.part?.toUpperCase()}:</span>
-                                                <span style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.4 }}>{err.issue}</span>
+                                          {/* Ad metrics bar */}
+                                          {adIns && (
+                                            <div style={{ background: "rgba(255,255,255,0.03)", padding: "5px 14px", display: "flex", gap: 12, flexWrap: "wrap", borderBottom: "1px solid rgba(255,255,255,0.06)", fontSize: 10, color: "#94a3b8" }}>
+                                              <span>Spend: <b style={{ color: "#e2e8f0" }}>{Number(adIns.spend||0).toLocaleString("vi-VN")}đ</b></span>
+                                              <span>Impressions: <b style={{ color: "#e2e8f0" }}>{Number(adIns.impressions||0).toLocaleString("vi-VN")}</b></span>
+                                              <span>Clicks: <b style={{ color: "#e2e8f0" }}>{adIns.inline_link_clicks||0}</b></span>
+                                              <span>CTR: <b style={{ color: Number(adIns.inline_link_click_ctr||adIns.ctr||0) < 1 ? "#f87171" : "#4ade80" }}>{adIns.inline_link_click_ctr||adIns.ctr||"—"}%</b></span>
+                                              <span>CPM: <b style={{ color: Number(adIns.cpm||0) > 80000 ? "#f87171" : "#e2e8f0" }}>{Number(adIns.cpm||0).toLocaleString("vi-VN")}đ</b></span>
+                                            </div>
+                                          )}
+                                          {/* 2-column: left = real content, right = AI improved */}
+                                          <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 0 }}>
+                                            {/* LEFT — Real content from Facebook */}
+                                            <div style={{ background: "rgba(248,113,113,0.05)", padding: isMobile ? 12 : 14, borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.06)", borderBottom: isMobile ? "1px solid rgba(255,255,255,0.06)" : "none" }}>
+                                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                                <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#f87171" }} />
+                                                <span style={{ fontSize: 11, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: 0.5 }}>Content thực tế</span>
                                               </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
+                                              {hasContent ? (<>
+                                                {/* Ad text */}
+                                                <div style={{ marginBottom: 8 }}>
+                                                  <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>NỘI DUNG BÀI VIẾT</div>
+                                                  <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171", whiteSpace: "pre-line", maxHeight: 200, overflowY: "auto" }}>
+                                                    {ad.content.text || "(trống)"}
+                                                  </div>
+                                                </div>
+                                                {ad.content.headline && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>HEADLINE</div>
+                                                    <div style={{ fontSize: 12, color: "#e2e8f0", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>
+                                                      {ad.content.headline}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                {ad.content.description && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>MÔ TẢ</div>
+                                                    <div style={{ fontSize: 11, color: "#cbd5e1", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #f87171" }}>{ad.content.description}</div>
+                                                  </div>
+                                                )}
+                                                {ad.content.cta && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>CTA BUTTON</div>
+                                                    <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, background: "rgba(248,113,113,0.15)", color: "#fca5a5", fontWeight: 600 }}>{ad.content.cta}</span>
+                                                  </div>
+                                                )}
+                                                {/* Errors from AI */}
+                                                {review && (review.errors||[]).length > 0 && (
+                                                  <div style={{ marginTop: 6 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#f87171", marginBottom: 4 }}>LỖI PHÁT HIỆN</div>
+                                                    {review.errors.map((err, ei) => (
+                                                      <div key={ei} style={{ display: "flex", gap: 6, marginBottom: 3, padding: "4px 8px", borderRadius: 6, background: sevBg(err.severity) }}>
+                                                        <span style={{ fontSize: 10, color: sevColor(err.severity), fontWeight: 700, flexShrink: 0 }}>✗ {(err.part||"").toUpperCase()}:</span>
+                                                        <span style={{ fontSize: 10, color: "#e2e8f0", lineHeight: 1.4 }}>{err.issue}</span>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </>) : (
+                                                <div style={{ fontSize: 11, color: "#64748b", padding: 12, textAlign: "center" }}>Không lấy được nội dung bài QC</div>
+                                              )}
+                                            </div>
 
-                                      {/* RIGHT — Improved content */}
-                                      <div style={{ background: "rgba(74,222,128,0.06)", padding: isMobile ? 12 : 16 }}>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-                                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#4ade80" }} />
-                                          <span style={{ fontSize: 12, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: 0.5 }}>Content chuẩn (đề xuất)</span>
-                                        </div>
-                                        {/* Hook */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Hook</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
-                                            {imp.hook || "—"}
-                                          </div>
-                                        </div>
-                                        {/* Body */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>Body</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80", whiteSpace: "pre-line" }}>
-                                            {imp.body || "—"}
-                                          </div>
-                                        </div>
-                                        {/* CTA */}
-                                        <div style={{ marginBottom: 10 }}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 3, textTransform: "uppercase" }}>CTA</div>
-                                          <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
-                                            {imp.cta || "—"}
-                                          </div>
-                                        </div>
-                                        {/* Improvements list */}
-                                        {(imp.improvements||[]).length > 0 && (
-                                          <div style={{ marginTop: 6 }}>
-                                            <div style={{ fontSize: 10, fontWeight: 600, color: "#4ade80", marginBottom: 4, textTransform: "uppercase" }}>Đã cải thiện</div>
-                                            {imp.improvements.map((impr, ii) => (
-                                              <div key={ii} style={{ display: "flex", gap: 6, marginBottom: 3, padding: "5px 8px", borderRadius: 6, background: "rgba(74,222,128,0.1)" }}>
-                                                <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>✓</span>
-                                                <span style={{ fontSize: 11, color: "#e2e8f0", lineHeight: 1.4 }}>{impr}</span>
+                                            {/* RIGHT — AI improved version */}
+                                            <div style={{ background: "rgba(74,222,128,0.05)", padding: isMobile ? 12 : 14 }}>
+                                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                                                <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#4ade80" }} />
+                                                <span style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: 0.5 }}>Phiên bản cải thiện</span>
                                               </div>
-                                            ))}
+                                              {review?.improved ? (<>
+                                                {review.improved.text && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>NỘI DUNG BÀI VIẾT</div>
+                                                    <div style={{ fontSize: 12, color: "#e2e8f0", lineHeight: 1.6, padding: "8px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80", whiteSpace: "pre-line", maxHeight: 200, overflowY: "auto" }}>
+                                                      {review.improved.text}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                {review.improved.headline && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>HEADLINE</div>
+                                                    <div style={{ fontSize: 12, color: "#e2e8f0", padding: "6px 10px", background: "rgba(255,255,255,0.04)", borderRadius: 6, borderLeft: "3px solid #4ade80" }}>
+                                                      {review.improved.headline}
+                                                    </div>
+                                                  </div>
+                                                )}
+                                                {review.improved.cta && (
+                                                  <div style={{ marginBottom: 8 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#64748b", marginBottom: 2 }}>CTA BUTTON</div>
+                                                    <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, background: "rgba(74,222,128,0.15)", color: "#86efac", fontWeight: 600 }}>{review.improved.cta}</span>
+                                                  </div>
+                                                )}
+                                                {(review.improvements||[]).length > 0 && (
+                                                  <div style={{ marginTop: 6 }}>
+                                                    <div style={{ fontSize: 10, fontWeight: 600, color: "#4ade80", marginBottom: 4 }}>ĐÃ CẢI THIỆN</div>
+                                                    {review.improvements.map((impr, ii) => (
+                                                      <div key={ii} style={{ display: "flex", gap: 6, marginBottom: 3, padding: "4px 8px", borderRadius: 6, background: "rgba(74,222,128,0.08)" }}>
+                                                        <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 700, flexShrink: 0 }}>✓</span>
+                                                        <span style={{ fontSize: 10, color: "#e2e8f0", lineHeight: 1.4 }}>{impr}</span>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </>) : (
+                                                <div style={{ fontSize: 11, color: "#64748b", padding: 12, textAlign: "center" }}>AI chưa có đề xuất cho bài này</div>
+                                              )}
+                                            </div>
                                           </div>
-                                        )}
-                                      </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+
+                                {/* No real ads found — show AI summary */}
+                                {realAds.length === 0 && adsReview.length > 0 && (
+                                  <div style={{ marginBottom: 14, padding: 12, background: "rgba(255,255,255,0.04)", borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)" }}>
+                                    <div style={{ fontSize: 12, fontWeight: 700, color: "#f59e0b", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                                      <FileText size={13} color="#f59e0b" /> ĐÁNH GIÁ CONTENT (dựa trên tên chiến dịch)
                                     </div>
+                                    <div style={{ fontSize: 11, color: "#cbd5e1", lineHeight: 1.5 }}>Không tìm thấy bài QC thực tế. AI đánh giá dựa trên tên chiến dịch và metrics.</div>
                                   </div>
                                 )}
 

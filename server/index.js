@@ -5320,6 +5320,84 @@ app.get("/api/fb-ads/ad-preview", requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// --- Fetch all adsets + ads + creatives for a specific campaign ---
+app.get("/api/fb-ads/campaign-detail/:accountId/:campaignId", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const acct = await get(db, "SELECT * FROM fb_ad_accounts WHERE account_id=? AND is_active=1", [req.params.accountId]);
+    if (!acct || !acct.access_token) return res.status(400).json({ error: "Ad account not found or no token" });
+
+    const { campaignId } = req.params;
+    const { dateFrom, dateTo } = req.query;
+    const today = new Date().toISOString().slice(0, 10);
+    const since = dateFrom || today;
+    const until = dateTo || today;
+
+    // Fetch adsets under this campaign
+    const adsetFilter = JSON.stringify([{ field: "campaign.id", operator: "EQUAL", value: campaignId }]);
+    const adsetFields = "id,name,status,effective_status,daily_budget,lifetime_budget,targeting,optimization_goal";
+    const adsetUrl = `https://graph.facebook.com/v22.0/act_${acct.account_id}/adsets?filtering=${encodeURIComponent(adsetFilter)}&fields=${encodeURIComponent(adsetFields)}&limit=100&access_token=${acct.access_token}`;
+
+    // Fetch ads under this campaign with creative content
+    const adFilter = JSON.stringify([{ field: "campaign.id", operator: "EQUAL", value: campaignId }]);
+    const adFields = "id,name,status,effective_status,adset_id,creative{id,name,body,title,thumbnail_url,image_url,object_story_spec,asset_feed_spec,link_url}";
+    const adUrl = `https://graph.facebook.com/v22.0/act_${acct.account_id}/ads?filtering=${encodeURIComponent(adFilter)}&fields=${encodeURIComponent(adFields)}&limit=100&access_token=${acct.access_token}`;
+
+    // Fetch ad-level insights
+    const insightFields = "ad_id,ad_name,adset_id,adset_name,spend,impressions,reach,clicks,cpm,cpc,ctr,actions,inline_link_clicks,inline_link_click_ctr";
+    const insightUrl = `https://graph.facebook.com/v22.0/act_${acct.account_id}/insights?fields=${insightFields}&time_range={"since":"${since}","until":"${until}"}&level=ad&filtering=${encodeURIComponent(adFilter)}&limit=100&access_token=${acct.access_token}`;
+
+    const [adsetRes, adRes, insightRes] = await Promise.all([
+      fetch(adsetUrl), fetch(adUrl), fetch(insightUrl)
+    ]);
+    const [adsetData, adData, insightData] = await Promise.all([
+      adsetRes.json(), adRes.json(), insightRes.json()
+    ]);
+
+    // Extract ad content from creative
+    const ads = (adData.data || []).map(ad => {
+      const c = ad.creative || {};
+      const spec = c.object_story_spec || {};
+      const linkData = spec.link_data || {};
+      const videoData = spec.video_data || {};
+      // Get the actual ad text content
+      const adText = linkData.message || videoData.message || c.body || "";
+      const headline = linkData.name || videoData.title || c.title || "";
+      const description = linkData.description || "";
+      const cta = linkData.call_to_action?.type || videoData.call_to_action?.type || "";
+      const imageUrl = linkData.picture || videoData.image_url || c.image_url || c.thumbnail_url || "";
+      const linkUrl = linkData.link || c.link_url || "";
+
+      return {
+        id: ad.id, name: ad.name, adsetId: ad.adset_id,
+        status: ad.effective_status || ad.status,
+        content: { text: adText, headline, description, cta, imageUrl, linkUrl }
+      };
+    });
+
+    // Build insight map by ad_id
+    const insightMap = {};
+    (insightData.data || []).forEach(i => { insightMap[i.ad_id] = i; });
+
+    // Merge ads with insights
+    const adsWithInsights = ads.map(ad => ({
+      ...ad,
+      insights: insightMap[ad.id] || null
+    }));
+
+    // Adsets
+    const adsets = (adsetData.data || []).map(as => ({
+      id: as.id, name: as.name,
+      status: as.effective_status || as.status,
+      dailyBudget: as.daily_budget || 0,
+      lifetimeBudget: as.lifetime_budget || 0,
+      optimizationGoal: as.optimization_goal || "",
+      targeting: as.targeting || {}
+    }));
+
+    res.json({ adsets, ads: adsWithInsights });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ========== MARKET INTELLIGENCE ENGINE ==========
 
 // ========== MARKETING GUIDELINES (AI Marketing Advisor) ==========
@@ -5455,7 +5533,7 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown):
 // Single campaign deep analysis
 app.post("/api/campaign-advisor/single", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { campaign } = req.body;
+    const { campaign, ads } = req.body;
     if (!campaign) return res.status(400).json({ error: "Không có dữ liệu chiến dịch" });
 
     const guidelines = await all(db, "SELECT * FROM marketing_guidelines ORDER BY priority DESC");
@@ -5484,28 +5562,65 @@ Lượt hiển thị: ${c.impressions?Number(c.impressions).toLocaleString("vi-V
 Click liên kết: ${c.linkClicks||"N/A"}
 Trạng thái: ${c.status||"?"}`;
 
+    // Build real ads content section
+    const realAds = (ads || []).filter(a => a.content?.text || a.content?.headline);
+    let adsContent = "";
+    if (realAds.length > 0) {
+      adsContent = "\n\nCÁC BÀI QUẢNG CÁO THỰC TẾ ĐANG CHẠY:\n" + realAds.map((ad, i) => {
+        const ins = ad.insights;
+        const metrics = ins ? `  Metrics: Spend ${Number(ins.spend||0).toLocaleString("vi-VN")}đ | Impressions ${Number(ins.impressions||0).toLocaleString("vi-VN")} | Clicks ${ins.inline_link_clicks||0} | CTR ${ins.inline_link_click_ctr||ins.ctr||"N/A"}% | CPM ${Number(ins.cpm||0).toLocaleString("vi-VN")}đ` : "";
+        return `--- Bài QC #${i+1}: "${ad.name}" (${ad.status}) ---
+  Nhóm QC: ${ad.adsetName||"N/A"}
+  Nội dung bài viết: ${ad.content.text || "(trống)"}
+  Headline: ${ad.content.headline || "(trống)"}
+  Mô tả: ${ad.content.description || "(trống)"}
+  CTA button: ${ad.content.cta || "(không có)"}
+  Link: ${ad.content.linkUrl || "N/A"}${metrics}`;
+      }).join("\n\n");
+    }
+
+    const hasRealContent = realAds.length > 0;
+    const contentInstruction = hasRealContent
+      ? `2. SOI CONTENT - DÙNG NỘI DUNG THỰC TẾ:
+   Dưới đây là NỘI DUNG THỰC TẾ các bài QC đang chạy. Hãy SOI KỸ TỪNG BÀI:
+   - Phân tích TỪNG bài QC: nội dung đang sai ở đâu? Hook yếu? Thiếu social proof? CTA không rõ? Không urgency?
+   - Với MỖI bài QC, viết lại phiên bản CẢI THIỆN: giữ cùng sản phẩm/dự án nhưng fix hết lỗi
+   - Nêu rõ TỪNG lỗi cụ thể (đánh dấu severity: high/medium/low)
+   
+   Phân tích metrics:
+   - % Quan tâm: ${c.interestPct}% ${Number(c.interestPct||0) < 15 ? "→ CONTENT CÓ VẤN ĐỀ" : ""}
+   - CTR: ${c.ctr||"N/A"}% ${Number(c.ctr||0) < 1 ? "→ headline/hình ảnh kém" : ""}  
+   - CPM: ${c.cpm?Number(c.cpm).toLocaleString("vi-VN")+"đ":"N/A"} ${Number(c.cpm||0) > 80000 ? "→ FB đánh giá content kém" : ""}`
+      : `2. SOI CONTENT (không có nội dung thực tế):
+   Đoán content dựa trên tên chiến dịch "${c.name}"`;
+
+    const adsReviewJson = hasRealContent
+      ? `"ads_review": [
+    {
+      "ad_name": "Tên bài QC",
+      "current": { "text": "Nội dung gốc copy từ bài QC thực tế", "headline": "Headline gốc", "cta": "CTA gốc" },
+      "errors": [
+        {"part": "text|headline|cta", "issue": "Mô tả cụ thể lỗi sai", "severity": "high|medium|low"}
+      ],
+      "improved": { "text": "Nội dung MỚI đã fix hết lỗi - viết sẵn dùng được luôn", "headline": "Headline MỚI", "cta": "CTA MỚI" },
+      "improvements": ["Giải thích ngắn cải thiện 1", "Cải thiện 2"]
+    }
+  ],`
+      : `"ads_review": [],`;
+
     const prompt = `Bạn là GIÁM ĐỐC MARKETING với 10 năm kinh nghiệm chạy Facebook Ads BĐS.
 
 BỘ QUY TẮC VÀNG:
 ${guidelinesText}
 
 CHIẾN DỊCH CẦN PHÂN TÍCH CHI TIẾT:
-${campDetail}
+${campDetail}${adsContent}
 
 HÃY SOI KỸ chiến dịch này. PHÂN TÍCH SÂU:
 
 1. CHẨN ĐOÁN TỔNG QUAN: Điểm mạnh, điểm yếu?
 
-2. SOI CONTENT - QUAN TRỌNG NHẤT:
-   Dựa trên tên chiến dịch "${c.name}" và các chỉ số hiệu suất, hãy:
-   a) ĐOÁN content quảng cáo đang chạy: Viết lại BÀI QUẢNG CÁO mà chiến dịch này ĐANG DÙNG (hook + body + CTA) dựa trên tên camp, ngành BĐS, và phong cách thường thấy. Viết đầy đủ 3-5 câu.
-   b) CHỈ LỖI SAI CỤ THỂ: Đánh dấu TỪNG PHẦN sai trong content đang chạy: hook yếu? thiếu social proof? CTA không rõ? không urgency? format sai?
-   c) VIẾT BÀI CHUẨN: Dựa trên bài cũ, viết lại BÀI MỚI TỐI ƯU (hook + body + CTA) fix hết lỗi. Giữ cùng sản phẩm/dự án nhưng cải thiện cấu trúc, wording, CTA.
-   
-   Phân tích metrics:
-   - % Quan tâm: ${c.interestPct}% ${Number(c.interestPct||0) < 15 ? "→ CONTENT CÓ VẤN ĐỀ" : ""}
-   - CTR: ${c.ctr||"N/A"}% ${Number(c.ctr||0) < 1 ? "→ headline/hình ảnh kém" : ""}
-   - CPM: ${c.cpm?Number(c.cpm).toLocaleString("vi-VN")+"đ":"N/A"} ${Number(c.cpm||0) > 80000 ? "→ FB đánh giá content kém" : ""}
+${contentInstruction}
 
 3. SOI TARGETING:
    - Frequency: reach ${c.reach||"?"} vs impressions ${c.impressions||"?"} → frequency có > 3?
@@ -5518,31 +5633,14 @@ HÃY SOI KỸ chiến dịch này. PHÂN TÍCH SÂU:
 
 5. HÀNH ĐỘNG: 3-5 việc cần làm NGAY
 
-KHÔNG chung chung. PHẢI nêu CON SỐ cụ thể.
+KHÔNG chung chung. PHẢI trích CON SỐ cụ thể từ data.
 
-Trả về ĐÚNG JSON thuần (KHÔNG markdown):
+Trả về ĐÚNG JSON thuần (KHÔNG markdown, KHÔNG \`\`\`):
 {
   "score": 75,
   "verdict": "Tốt|Trung bình|Cần cải thiện|Đang có vấn đề",
   "summary": "1-2 câu tổng kết nhanh",
-  "content_comparison": {
-    "current_content": {
-      "hook": "Dòng hook quảng cáo ĐANG CHẠY (đoán dựa trên camp name & metrics)",
-      "body": "Nội dung body ĐANG CHẠY 3-5 câu đầy đủ",
-      "cta": "CTA đang dùng",
-      "errors": [
-        {"part": "hook", "issue": "Lỗi cụ thể của hook, ví dụ: quá chung chung, không tạo tò mò", "severity": "high"},
-        {"part": "body", "issue": "Lỗi cụ thể của body", "severity": "medium"},
-        {"part": "cta", "issue": "Lỗi cụ thể của CTA", "severity": "high"}
-      ]
-    },
-    "improved_content": {
-      "hook": "Hook MỚI đã fix lỗi - viết sẵn dùng được luôn",
-      "body": "Body MỚI 3-5 câu đã fix hết lỗi - có social proof, urgency, benefit rõ ràng",
-      "cta": "CTA MỚI mạnh mẽ và rõ ràng",
-      "improvements": ["Cải thiện 1: giải thích ngắn tại sao thay đổi", "Cải thiện 2"]
-    }
-  },
+  ${adsReviewJson}
   "targeting_analysis": {
     "status": "Tốt|Cần điều chỉnh|Có vấn đề",
     "frequency_warning": true,
@@ -5577,7 +5675,7 @@ Trả về ĐÚNG JSON thuần (KHÔNG markdown):
     try {
       const jsonStr = raw.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       parsed = JSON.parse(jsonStr);
-    } catch { parsed = { score: 0, verdict: "Lỗi", summary: raw, content_comparison: {}, targeting_analysis: {}, budget_analysis: {}, actions: [], rules_applied: [] }; }
+    } catch { parsed = { score: 0, verdict: "Lỗi", summary: raw, ads_review: [], targeting_analysis: {}, budget_analysis: {}, actions: [], rules_applied: [] }; }
     res.json(parsed);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
