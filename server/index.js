@@ -7268,7 +7268,7 @@ Chỉ trả về JSON thuần, không kèm text nào khác.`;
     if (!response.ok) {
       const errText = await response.text();
       console.error("[daily-news] Perplexity API error:", response.status, errText);
-      return null;
+      return { error: `Perplexity API l\u1ed7i (${response.status}): ${errText.slice(0, 200)}` };
     }
 
     const result = await response.json();
@@ -7297,7 +7297,7 @@ Chỉ trả về JSON thuần, không kèm text nào khác.`;
     return data;
   } catch (err) {
     console.error("[daily-news] Error fetching news:", err.message);
-    return null;
+    return { error: `L\u1ed7i: ${err.message}` };
   }
 }
 
@@ -7344,9 +7344,10 @@ app.get("/api/daily-news/latest", requireAuth, async (_req, res) => {
 // POST /api/daily-news/fetch - Manually trigger news fetch (admin only)
 app.post("/api/daily-news/fetch", requireAuth, requireAdminOnly, async (_req, res) => {
   try {
-    const data = await fetchDailyRealEstateNews();
-    if (!data) return res.status(400).json({ error: "Không thể lấy tin. Kiểm tra API key Perplexity trong cài đặt." });
-    res.json({ success: true, data });
+    const result = await fetchDailyRealEstateNews();
+    if (result?.error) return res.status(400).json({ error: result.error });
+    if (!result) return res.status(400).json({ error: "Không thể lấy tin. Kiểm tra API key Perplexity trong cài đặt." });
+    res.json({ success: true, data: result });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

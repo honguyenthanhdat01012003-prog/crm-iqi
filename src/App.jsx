@@ -10420,11 +10420,12 @@ function DailyNewsPage({ isAdmin }) {
         await loadLatest();
         await loadHistory(1);
       } else {
-        const e = await res.json();
-        setMsg({ type: "err", text: e.error || "Lỗi" });
+        let errMsg = "Lỗi không xác định";
+        try { const e = await res.json(); errMsg = e.error || errMsg; } catch { try { errMsg = await res.text(); } catch {} }
+        setMsg({ type: "err", text: errMsg });
       }
-    } catch {
-      setMsg({ type: "err", text: "Lỗi kết nối" });
+    } catch (err) {
+      setMsg({ type: "err", text: `Lỗi kết nối: ${err.message}` });
     }
     setFetching(false);
   };
@@ -10445,11 +10446,12 @@ function DailyNewsPage({ isAdmin }) {
         setApiKey("");
         setHasApiKey(true);
       } else {
-        const e = await res.json();
-        setMsg({ type: "err", text: e.error || "Lỗi" });
+        let errMsg = "Lỗi lưu cài đặt";
+        try { const e = await res.json(); errMsg = e.error || errMsg; } catch {}
+        setMsg({ type: "err", text: errMsg });
       }
-    } catch {
-      setMsg({ type: "err", text: "Lỗi kết nối" });
+    } catch (err) {
+      setMsg({ type: "err", text: `Lỗi kết nối: ${err.message}` });
     }
     setSavingSettings(false);
   };
