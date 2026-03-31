@@ -11,7 +11,7 @@ import {
   Camera, Share2, Shuffle, Link, ClipboardList, Pause, Play, ChevronDown, Info,
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
-  FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair
+  FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 
@@ -853,6 +853,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "messenger_inbox", label: "Hộp thư Messenger", icon: MessageSquare, adminOnly: true },
     { key: "post_mgmt", label: "Quản lý bài đăng", icon: FileEdit, adminOnly: true, children: postChildren },
     { key: "capi_settings", label: "Facebook CAPI", icon: Zap, adminOnly: true },
+    { key: "daily_news", label: "Điểm tin BĐS", icon: Newspaper, adminOnly: false },
     { key: "guide", label: "Hướng dẫn sử dụng", icon: BookOpen, adminOnly: true },
   ];
 
@@ -1232,6 +1233,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "messenger_inbox" && isAdminOnly && <MessengerInboxPage />}
         {page === "guide" && isAdmin && <GuidePage />}
         {page === "capi_settings" && isAdminOnly && <CapiSettingsPage />}
+        {page === "daily_news" && <DailyNewsPage isAdmin={isAdminOnly} />}
         </div>
       </main>
 
@@ -10358,6 +10360,413 @@ function CalendarPage({ projects }) {
     </div>
   );
 }
+
+/* ===== Điểm tin BĐS & Học tập ===== */
+function DailyNewsPage({ isAdmin }) {
+  const [news, setNews] = useState([]);
+  const [latest, setLatest] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fetching, setFetching] = useState(false);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [expandedId, setExpandedId] = useState(null);
+  const [tab, setTab] = useState("latest"); // latest | history | settings
+  const [msg, setMsg] = useState(null);
+  // Settings
+  const [apiKey, setApiKey] = useState("");
+  const [autoFetchTime, setAutoFetchTime] = useState("07:00");
+  const [hasApiKey, setHasApiKey] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  const loadLatest = async () => {
+    try {
+      const res = await apiFetch(`${API}/daily-news/latest`);
+      const d = await res.json();
+      setLatest(d.item);
+    } catch {}
+  };
+
+  const loadHistory = async (p = 1) => {
+    try {
+      const res = await apiFetch(`${API}/daily-news?page=${p}&limit=10`);
+      const d = await res.json();
+      setNews(d.items || []);
+      setTotalPages(d.totalPages || 1);
+      setPage(d.page || 1);
+    } catch {}
+  };
+
+  const loadSettings = async () => {
+    try {
+      const res = await apiFetch(`${API}/daily-news/settings`);
+      const d = await res.json();
+      setHasApiKey(d.hasApiKey);
+      setAutoFetchTime(d.autoFetchTime || "07:00");
+    } catch {}
+  };
+
+  useEffect(() => {
+    Promise.all([loadLatest(), loadHistory(), isAdmin ? loadSettings() : Promise.resolve()])
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleFetchNow = async () => {
+    setFetching(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch(`${API}/daily-news/fetch`, { method: "POST" });
+      if (res.ok) {
+        setMsg({ type: "ok", text: "Đã lấy tin tức thành công!" });
+        await loadLatest();
+        await loadHistory(1);
+      } else {
+        const e = await res.json();
+        setMsg({ type: "err", text: e.error || "Lỗi" });
+      }
+    } catch {
+      setMsg({ type: "err", text: "Lỗi kết nối" });
+    }
+    setFetching(false);
+  };
+
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    setMsg(null);
+    try {
+      const body = { autoFetchTime };
+      if (apiKey) body.apiKey = apiKey;
+      const res = await apiFetch(`${API}/daily-news/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        setMsg({ type: "ok", text: "Đã lưu cài đặt" });
+        setApiKey("");
+        setHasApiKey(true);
+      } else {
+        const e = await res.json();
+        setMsg({ type: "err", text: e.error || "Lỗi" });
+      }
+    } catch {
+      setMsg({ type: "err", text: "Lỗi kết nối" });
+    }
+    setSavingSettings(false);
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm("Xóa bản tin này?")) return;
+    try {
+      await apiFetch(`${API}/daily-news/${id}`, { method: "DELETE" });
+      await loadHistory(page);
+      if (latest?.id === id) await loadLatest();
+    } catch {}
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "#9ca3af" }}>Đang tải...</div>;
+
+  const cardStyle = {
+    background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb",
+    padding: 20, marginBottom: 16,
+  };
+
+  const renderNewsCard = (item, expanded = false) => {
+    if (!item) return null;
+    const newsSummary = Array.isArray(item.news_summary) ? item.news_summary : [];
+    const vocab = typeof item.vocabulary === "object" && item.vocabulary ? item.vocabulary : null;
+    const sources = Array.isArray(item.source_links) ? item.source_links : [];
+    const isExpanded = expanded || expandedId === item.id;
+
+    return (
+      <div key={item.id} style={cardStyle}>
+        {/* Header */}
+        <div
+          onClick={() => !expanded && setExpandedId(isExpanded ? null : item.id)}
+          style={{ cursor: expanded ? "default" : "pointer", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}
+        >
+          <div style={{ flex: 1 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: "#1f2937", margin: 0 }}>
+              📰 {item.title || "Điểm tin BĐS"}
+            </h3>
+            <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>
+              {new Date(item.created_at).toLocaleString("vi-VN")}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            {!expanded && (
+              <span style={{ fontSize: 12, color: "#6b7280", cursor: "pointer" }}>
+                {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
+              </span>
+            )}
+            {isAdmin && (
+              <button onClick={(e) => { e.stopPropagation(); handleDelete(item.id); }}
+                style={{ background: "none", border: "none", cursor: "pointer", padding: 4, color: "#ef4444" }}>
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div style={{ marginTop: 16 }}>
+            {/* Tin chính */}
+            {newsSummary.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 700, color: "#1d4ed8", margin: "0 0 10px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                  <Newspaper size={16} /> Tin chính hôm nay
+                </h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {newsSummary.map((n, i) => (
+                    <div key={i} style={{
+                      padding: "12px 14px", borderRadius: 8, background: "#f0f9ff",
+                      borderLeft: "3px solid #3b82f6",
+                    }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#1e40af", marginBottom: 4 }}>
+                        {i + 1}. {n.headline}
+                      </div>
+                      <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.5 }}>{n.summary}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Xu hướng thị trường */}
+            {item.market_trend && (
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 700, color: "#059669", margin: "0 0 8px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                  <TrendingUp size={16} /> Xu hướng thị trường
+                </h4>
+                <div style={{
+                  padding: "12px 14px", borderRadius: 8, background: "#f0fdf4",
+                  borderLeft: "3px solid #10b981", fontSize: 13, color: "#374151", lineHeight: 1.6,
+                }}>
+                  {item.market_trend}
+                </div>
+              </div>
+            )}
+
+            {/* Bài học Marketing */}
+            {item.marketing_lesson && (
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 700, color: "#d97706", margin: "0 0 8px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                  <Lightbulb size={16} /> Bài học Marketing
+                </h4>
+                <div style={{
+                  padding: "12px 14px", borderRadius: 8, background: "#fffbeb",
+                  borderLeft: "3px solid #f59e0b", fontSize: 13, color: "#374151", lineHeight: 1.6,
+                }}>
+                  {item.marketing_lesson}
+                </div>
+              </div>
+            )}
+
+            {/* Thuật ngữ */}
+            {vocab && vocab.term && (
+              <div style={{ marginBottom: 20 }}>
+                <h4 style={{ fontSize: 14, fontWeight: 700, color: "#7c3aed", margin: "0 0 8px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                  <BookOpen size={16} /> Thuật ngữ hôm nay
+                </h4>
+                <div style={{
+                  padding: "12px 14px", borderRadius: 8, background: "#f5f3ff",
+                  borderLeft: "3px solid #8b5cf6",
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9" }}>📖 {vocab.term}</div>
+                  <div style={{ fontSize: 12, color: "#4b5563", marginTop: 4, lineHeight: 1.5 }}>{vocab.definition}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Nguồn */}
+            {sources.length > 0 && (
+              <div>
+                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#6b7280", margin: "0 0 6px 0" }}>🔗 Nguồn tham khảo</h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {sources.map((link, i) => (
+                    <a key={i} href={link} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 12, color: "#3b82f6", wordBreak: "break-all", textDecoration: "none" }}
+                      onMouseEnter={e => e.target.style.textDecoration = "underline"}
+                      onMouseLeave={e => e.target.style.textDecoration = "none"}
+                    >
+                      {link}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+        <Newspaper size={22} color="#2563eb" /> Điểm tin BĐS & Học tập
+      </h2>
+      <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 16 }}>
+        Tin tức bất động sản Việt Nam được AI tổng hợp hàng ngày
+      </p>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "2px solid #e5e7eb", paddingBottom: 0 }}>
+        {[
+          { key: "latest", label: "Hôm nay", icon: Sparkles },
+          { key: "history", label: "Lịch sử", icon: Clock },
+          ...(isAdmin ? [{ key: "settings", label: "Cài đặt", icon: Settings }] : []),
+        ].map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            style={{
+              padding: "8px 16px", fontSize: 13, fontWeight: tab === t.key ? 700 : 500,
+              color: tab === t.key ? "#2563eb" : "#6b7280",
+              background: "none", border: "none", cursor: "pointer",
+              borderBottom: tab === t.key ? "2px solid #2563eb" : "2px solid transparent",
+              marginBottom: -2, display: "flex", alignItems: "center", gap: 4,
+            }}>
+            {React.createElement(t.icon, { size: 14 })} {t.label}
+          </button>
+        ))}
+      </div>
+
+      {msg && (
+        <div style={{
+          padding: "8px 14px", borderRadius: 8, marginBottom: 12, fontSize: 13, fontWeight: 600,
+          background: msg.type === "ok" ? "#d1fae5" : "#fee2e2",
+          color: msg.type === "ok" ? "#065f46" : "#991b1b",
+        }}>
+          {msg.text}
+        </div>
+      )}
+
+      {/* Tab: Hôm nay */}
+      {tab === "latest" && (
+        <div>
+          {isAdmin && (
+            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+              <button onClick={handleFetchNow} disabled={fetching}
+                style={{
+                  padding: "8px 16px", borderRadius: 8, border: "none", cursor: fetching ? "default" : "pointer",
+                  background: fetching ? "#d1d5db" : "#2563eb", color: "#fff", fontWeight: 600, fontSize: 13,
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                <RefreshCw size={14} className={fetching ? "spin" : ""} />
+                {fetching ? "Đang lấy tin..." : "Lấy tin ngay"}
+              </button>
+              {!hasApiKey && (
+                <span style={{ fontSize: 12, color: "#ef4444", fontWeight: 600 }}>
+                  ⚠️ Chưa cấu hình API key Perplexity. Vào tab Cài đặt để thêm.
+                </span>
+              )}
+            </div>
+          )}
+
+          {latest ? renderNewsCard(latest, true) : (
+            <div style={cardStyle}>
+              <div style={{ textAlign: "center", padding: "40px 20px", color: "#9ca3af" }}>
+                <Newspaper size={48} style={{ marginBottom: 8, opacity: 0.3 }} />
+                <div style={{ fontSize: 14, fontWeight: 600 }}>Chưa có tin tức hôm nay</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  {isAdmin ? "Bấm \"Lấy tin ngay\" hoặc chờ hệ thống tự động lấy" : "Tin tức sẽ được cập nhật tự động hàng ngày"}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Tab: Lịch sử */}
+      {tab === "history" && (
+        <div>
+          {news.length === 0 ? (
+            <div style={{ ...cardStyle, textAlign: "center", padding: 40, color: "#9ca3af" }}>
+              Chưa có lịch sử tin tức
+            </div>
+          ) : (
+            <>
+              {news.map(item => renderNewsCard(item))}
+              {totalPages > 1 && (
+                <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 12 }}>
+                  <button onClick={() => { setPage(p => p - 1); loadHistory(page - 1); }} disabled={page <= 1}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", cursor: page <= 1 ? "default" : "pointer", color: page <= 1 ? "#d1d5db" : "#374151", fontSize: 13 }}>
+                    ← Trước
+                  </button>
+                  <span style={{ padding: "6px 12px", fontSize: 13, color: "#6b7280" }}>
+                    Trang {page}/{totalPages}
+                  </span>
+                  <button onClick={() => { setPage(p => p + 1); loadHistory(page + 1); }} disabled={page >= totalPages}
+                    style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #e5e7eb", background: "#fff", cursor: page >= totalPages ? "default" : "pointer", color: page >= totalPages ? "#d1d5db" : "#374151", fontSize: 13 }}>
+                    Sau →
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Tab: Cài đặt (admin) */}
+      {tab === "settings" && isAdmin && (
+        <div>
+          <div style={cardStyle}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 16, display: "flex", alignItems: "center", gap: 6 }}>
+              <Settings size={16} /> Cấu hình Perplexity AI
+            </h3>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
+                API Key Perplexity
+              </label>
+              <input
+                type="password" placeholder={hasApiKey ? "••••••••• (đã lưu, nhập mới để thay đổi)" : "pplx-xxxxxxxx"}
+                value={apiKey} onChange={e => setApiKey(e.target.value)}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }}
+              />
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+                Lấy API key tại <a href="https://www.perplexity.ai/settings/api" target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6" }}>perplexity.ai/settings/api</a>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
+                Thời gian tự động lấy tin
+              </label>
+              <input
+                type="time" value={autoFetchTime} onChange={e => setAutoFetchTime(e.target.value)}
+                style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}
+              />
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+                Hệ thống sẽ tự động lấy tin mỗi ngày vào giờ này (mặc định 07:00)
+              </div>
+            </div>
+
+            <button onClick={handleSaveSettings} disabled={savingSettings}
+              style={{
+                padding: "8px 20px", borderRadius: 8, border: "none", cursor: savingSettings ? "default" : "pointer",
+                background: savingSettings ? "#d1d5db" : "#2563eb", color: "#fff", fontWeight: 600, fontSize: 13,
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+              <Save size={14} /> {savingSettings ? "Đang lưu..." : "Lưu cài đặt"}
+            </button>
+          </div>
+
+          {/* Hướng dẫn */}
+          <div style={{ ...cardStyle, background: "#f8fafc" }}>
+            <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 10, color: "#374151" }}>📖 Hướng dẫn lấy API Key Perplexity</h4>
+            <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13, color: "#4b5563", lineHeight: 2 }}>
+              <li>Truy cập <a href="https://www.perplexity.ai" target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6" }}>perplexity.ai</a> và đăng ký/đăng nhập</li>
+              <li>Vào <strong>Settings → API</strong> hoặc truy cập trực tiếp <a href="https://www.perplexity.ai/settings/api" target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6" }}>perplexity.ai/settings/api</a></li>
+              <li>Click <strong>"Generate API Key"</strong> để tạo key mới</li>
+              <li>Copy key (bắt đầu bằng <code style={{ background: "#e5e7eb", padding: "1px 4px", borderRadius: 4 }}>pplx-</code>) và dán vào ô phía trên</li>
+              <li>Perplexity tính phí theo lượt gọi API (~$5/1000 lượt). Với 1 lượt/ngày thì rất tiết kiệm</li>
+            </ol>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ===== CAPI Settings Page ===== */
 function CapiSettingsPage() {
   const [pixelId, setPixelId] = useState("");

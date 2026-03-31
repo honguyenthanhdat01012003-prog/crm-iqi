@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 9; // Bump this when adding new DDL/migrations
+const DB_VERSION = 10; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -198,6 +198,12 @@ async function initDb() {
       opportunity_score INTEGER DEFAULT 50, competitor_count INTEGER DEFAULT 0, winning_pages TEXT DEFAULT '[]',
       ad_trend_30d TEXT DEFAULT '[]', cpl_trend_30d TEXT DEFAULT '[]', segment TEXT DEFAULT 'standard',
       scraped_at TEXT DEFAULT (datetime('now')), UNIQUE(project_name))`,
+    `CREATE TABLE IF NOT EXISTS daily_news (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT '',
+      news_summary TEXT DEFAULT '[]', market_trend TEXT DEFAULT '',
+      marketing_lesson TEXT DEFAULT '', vocabulary TEXT DEFAULT '',
+      source_links TEXT DEFAULT '[]', raw_response TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')))`,
   ];
   for (const sql of ddlStatements) {
     await run(db, sql);
@@ -7212,6 +7218,172 @@ app.delete("/api/market-intel/cache/:id", requireAuth, requireAdmin, async (req,
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ============================================================
+// ===== Điểm tin BĐS & Học tập (Perplexity AI) =====
+// ============================================================
+
+async function fetchDailyRealEstateNews() {
+  const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
+  if (!apiKey?.value) {
+    console.log("[daily-news] No Perplexity API key configured, skipping");
+    return null;
+  }
+
+  const today = new Date().toLocaleDateString("vi-VN", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const prompt = `Hôm nay là ${today}. Tìm kiếm tin tức bất động sản Việt Nam trong 24h qua từ các nguồn uy tín như VnExpress, CafeF, Batdongsan.com.vn, Cafeland, Dân trí.
+
+Trả về ĐÚNG định dạng JSON (không có markdown, không có \`\`\`json) gồm các trường:
+{
+  "title": "Điểm tin BĐS ngày DD/MM/YYYY",
+  "news_summary": [
+    {"headline": "Tiêu đề tin 1", "summary": "Tóm tắt ngắn gọn 2-3 câu"},
+    {"headline": "Tiêu đề tin 2", "summary": "Tóm tắt ngắn gọn 2-3 câu"},
+    {"headline": "Tiêu đề tin 3", "summary": "Tóm tắt ngắn gọn 2-3 câu"}
+  ],
+  "market_trend": "Phân tích xu hướng thị trường BĐS hôm nay trong 3-5 câu, nêu rõ vùng nào đang nóng, phân khúc nào có biến động",
+  "marketing_lesson": "1 bài học marketing/cách tiếp cận khách hàng BĐS dựa trên tình hình thị trường hôm nay (3-4 câu)",
+  "vocabulary": {"term": "Thuật ngữ BĐS hôm nay", "definition": "Giải thích dễ hiểu cho người mới"},
+  "sources": ["https://link-bao-1.com/...", "https://link-bao-2.com/..."]
+}
+
+Chỉ trả về JSON thuần, không kèm text nào khác.`;
+
+  try {
+    const response = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey.value}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "sonar",
+        messages: [
+          { role: "system", content: "Bạn là chuyên gia phân tích thị trường bất động sản Việt Nam với 10 năm kinh nghiệm. Trả lời bằng tiếng Việt. Chỉ trả về JSON thuần túy, không markdown." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("[daily-news] Perplexity API error:", response.status, errText);
+      return null;
+    }
+
+    const result = await response.json();
+    const raw = result.choices?.[0]?.message?.content || "";
+
+    // Parse JSON from response (handle markdown code blocks)
+    let cleaned = raw.trim();
+    if (cleaned.startsWith("```")) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
+    }
+    const data = JSON.parse(cleaned);
+
+    // Save to DB
+    await run(db, `INSERT INTO daily_news (title, news_summary, market_trend, marketing_lesson, vocabulary, source_links, raw_response, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`, [
+      data.title || `Điểm tin BĐS ngày ${new Date().toLocaleDateString("vi-VN")}`,
+      JSON.stringify(data.news_summary || []),
+      data.market_trend || "",
+      data.marketing_lesson || "",
+      JSON.stringify(data.vocabulary || {}),
+      JSON.stringify(data.sources || []),
+      raw,
+    ]);
+
+    console.log("[daily-news] Saved daily news:", data.title);
+    return data;
+  } catch (err) {
+    console.error("[daily-news] Error fetching news:", err.message);
+    return null;
+  }
+}
+
+// GET /api/daily-news - List news (paginated)
+app.get("/api/daily-news", requireAuth, async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit) || 10));
+    const offset = (page - 1) * limit;
+
+    const total = await get(db, "SELECT COUNT(*) as cnt FROM daily_news");
+    const rows = await all(db, "SELECT * FROM daily_news ORDER BY created_at DESC LIMIT ? OFFSET ?", [limit, offset]);
+
+    res.json({
+      items: rows.map(r => ({
+        ...r,
+        news_summary: JSON.parse(r.news_summary || "[]"),
+        vocabulary: (() => { try { return JSON.parse(r.vocabulary || "{}"); } catch { return r.vocabulary; } })(),
+        source_links: JSON.parse(r.source_links || "[]"),
+      })),
+      total: total.cnt,
+      page,
+      totalPages: Math.ceil(total.cnt / limit),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/daily-news/latest - Get latest news entry
+app.get("/api/daily-news/latest", requireAuth, async (_req, res) => {
+  try {
+    const row = await get(db, "SELECT * FROM daily_news ORDER BY created_at DESC LIMIT 1");
+    if (!row) return res.json({ item: null });
+    res.json({
+      item: {
+        ...row,
+        news_summary: JSON.parse(row.news_summary || "[]"),
+        vocabulary: (() => { try { return JSON.parse(row.vocabulary || "{}"); } catch { return row.vocabulary; } })(),
+        source_links: JSON.parse(row.source_links || "[]"),
+      },
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/daily-news/fetch - Manually trigger news fetch (admin only)
+app.post("/api/daily-news/fetch", requireAuth, requireAdminOnly, async (_req, res) => {
+  try {
+    const data = await fetchDailyRealEstateNews();
+    if (!data) return res.status(400).json({ error: "Không thể lấy tin. Kiểm tra API key Perplexity trong cài đặt." });
+    res.json({ success: true, data });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/daily-news/:id - Delete a news entry (admin only)
+app.delete("/api/daily-news/:id", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM daily_news WHERE id = ?", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/daily-news/settings - Get Perplexity settings
+app.get("/api/daily-news/settings", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
+    const autoFetchTime = await get(db, "SELECT value FROM settings WHERE key = 'news_auto_fetch_time'");
+    res.json({
+      hasApiKey: !!apiKey?.value,
+      autoFetchTime: autoFetchTime?.value || "07:00",
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/daily-news/settings - Save Perplexity settings
+app.post("/api/daily-news/settings", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { apiKey, autoFetchTime } = req.body;
+    if (apiKey !== undefined) {
+      await run(db, "INSERT INTO settings(key, value) VALUES('perplexity_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [apiKey]);
+    }
+    if (autoFetchTime !== undefined) {
+      await run(db, "INSERT INTO settings(key, value) VALUES('news_auto_fetch_time', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [autoFetchTime]);
+    }
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // --- SPA fallback: serve index.html for non-API routes ---
 if (fs.existsSync(distPath)) {
   app.get(/^(?!\/api).*/, (_req, res) => {
@@ -7258,6 +7430,34 @@ if (!process.env.VERCEL) {
   performBackup("startup"); // Backup on server start
   setInterval(() => performBackup("auto"), BACKUP_INTERVAL);
   console.log(`[auto-backup] Enabled, interval=8h, keep=${BACKUP_KEEP_DAYS} days`);
+
+  // Auto-fetch daily BĐS news (check every 10 min, run once per day at configured time)
+  let lastNewsFetchDate = "";
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const setting = await get(db, "SELECT value FROM settings WHERE key = 'news_auto_fetch_time'");
+      const targetTime = setting?.value || "07:00";
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+      if (todayStr !== lastNewsFetchDate && currentTime >= targetTime) {
+        // Check if already fetched today
+        const existing = await get(db, "SELECT id FROM daily_news WHERE date(created_at) = date('now')");
+        if (!existing) {
+          console.log("[daily-news] Auto-fetching daily news...");
+          await fetchDailyRealEstateNews();
+          lastNewsFetchDate = todayStr;
+        } else {
+          lastNewsFetchDate = todayStr;
+        }
+      }
+    } catch (e) {
+      console.error("[daily-news] Auto-fetch error:", e.message);
+    }
+  }, 10 * 60 * 1000); // Check every 10 minutes
+  console.log("[daily-news] Auto-fetch enabled, checks every 10 min");
 }
 
 export default app;
