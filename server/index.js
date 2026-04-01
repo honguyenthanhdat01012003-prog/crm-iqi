@@ -20,7 +20,7 @@ const BUILD_VERSION = "2026-03-20-v1";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
-const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? (() => { console.error("CRITICAL: JWT_SECRET not set in production! Using random secret (tokens won't survive restarts)"); return crypto.randomBytes(32).toString("hex"); })() : "crm-dev-secret-change-in-production");
+const JWT_SECRET = process.env.JWT_SECRET || "lux-iqi-crm-jwt-2026-xK9mZpQ4vR7wNcE3bY6hT1sA8fJ5gL0d";
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [];
 const TELEGRAM_WEBHOOK_SECRET = crypto.createHash("sha256").update("tg-webhook-" + JWT_SECRET).digest("hex").slice(0, 64);
 
