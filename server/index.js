@@ -4468,6 +4468,8 @@ async function handleTelegramWebhook(req, res) {
       if (feedbackText.startsWith("/")) return res.json({ ok: true });
 
       const pending = await get(db, "SELECT lead_id, status FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+      console.log(`[telegram-webhook] Message from ${chatId}: "${feedbackText.slice(0, 50)}", pending=${JSON.stringify(pending)}`);
+
       if (!pending) {
         await sendTg(chatId, "⚠️ Không có lead nào đang chờ feedback.\nHãy bấm nút trạng thái từ thông báo lead trước.");
         return res.json({ ok: true });
@@ -4478,51 +4480,57 @@ async function handleTelegramWebhook(req, res) {
         return res.json({ ok: true });
       }
 
-      const leadId = pending.lead_id;
-      const statusKey = pending.status;
-      const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
+      try {
+        const leadId = pending.lead_id;
+        const statusKey = pending.status;
+        const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
 
-      // Get lead info (including assigned sale)
-      const lead = await get(db, "SELECT name, phone, sale_name FROM leads WHERE id = ?", [leadId]);
+        // Get lead info (including assigned sale)
+        const lead = await get(db, "SELECT name, phone, sale_name FROM leads WHERE id = ?", [leadId]);
 
-      // Attribute feedback to the lead's assigned sale, not the Telegram sender
-      let saleName = lead?.sale_name || "";
-      if (!saleName) {
-        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
-        saleName = saleUser ? saleUser.display_name : "Sale";
+        // Attribute feedback to the lead's assigned sale, not the Telegram sender
+        let saleName = lead?.sale_name || "";
+        if (!saleName) {
+          const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+          saleName = saleUser ? saleUser.display_name : "Sale";
+        }
+        console.log(`[telegram-webhook] Saving feedback: leadId=${leadId}, saleName="${saleName}", status=${statusKey}, feedback="${feedbackText.slice(0, 50)}"`);
+
+        // Save to lead_history
+        const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+        const nextSeq = (maxSeq?.m ?? -1) + 1;
+        const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+        await run(
+          db,
+          "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+          [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq, "telegram"]
+        );
+
+        // Update lead status
+        await run(db, "UPDATE leads SET status = ? WHERE id = ?", [statusKey, leadId]);
+
+        // Clear pending
+        await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+
+        // Notify web clients about the change
+        lastSyncHash = "";
+        emitDataChanged("telegram-feedback");
+        const escMd = (s) => String(s || "").replace(/([_*`\[\]])/g, "\\$1");
+        await sendTg(chatId, [
+          `✅ *Đã lưu feedback thành công!*`,
+          ``,
+          `👤 Khách: *${escMd(lead ? lead.name : "N/A")}*`,
+          `📊 Trạng thái: *${escMd(statusLabel)}*`,
+          `💬 Feedback: _${escMd(feedbackText)}_`,
+          `⏰ Lúc: ${now}`,
+          ``,
+          `📋 Feedback đã được lưu vào lịch sử liên hệ trên CRM.`,
+        ].join("\n"));
+        console.log(`[telegram-webhook] Feedback saved OK for leadId=${leadId}`);
+      } catch (feedbackErr) {
+        console.error(`[telegram-webhook] Feedback save ERROR for chatId=${chatId}:`, feedbackErr.message, feedbackErr.stack);
+        await sendTg(chatId, `❌ Lỗi khi lưu feedback: ${feedbackErr.message}\nVui lòng thử lại hoặc liên hệ Admin.`);
       }
-      console.log(`[telegram-webhook] Feedback: leadId=${leadId}, saleName="${saleName}", status=${statusKey}`);
-
-      // Save to lead_history
-      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
-      const nextSeq = (maxSeq?.m ?? -1) + 1;
-      const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-      await run(
-        db,
-        "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq, "telegram"]
-      );
-
-      // Update lead status
-      await run(db, "UPDATE leads SET status = ? WHERE id = ?", [statusKey, leadId]);
-
-      // Clear pending
-      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
-
-      // Notify web clients about the change
-      lastSyncHash = "";
-      emitDataChanged("telegram-feedback");
-      const escMd = (s) => String(s || "").replace(/([_*`\[\]])/g, "\\$1");
-      await sendTg(chatId, [
-        `✅ *Đã lưu feedback thành công!*`,
-        ``,
-        `👤 Khách: *${escMd(lead ? lead.name : "N/A")}*`,
-        `📊 Trạng thái: *${escMd(statusLabel)}*`,
-        `💬 Feedback: _${escMd(feedbackText)}_`,
-        `⏰ Lúc: ${now}`,
-        ``,
-        `📋 Feedback đã được lưu vào lịch sử liên hệ trên CRM.`,
-      ].join("\n"));
 
       return res.json({ ok: true });
     }
@@ -7865,6 +7873,27 @@ if (!process.env.VERCEL) {
 
   server.listen(PORT, () => {
     console.log(`CRM API running at http://localhost:${PORT} [BUILD ${BUILD_VERSION}]`);
+
+    // Auto-register Telegram webhooks on startup (ensures secret always matches after restart)
+    setTimeout(async () => {
+      try {
+        const activeBots = await all(db, "SELECT id, name, token FROM telegram_bots WHERE is_active = 1");
+        if (!activeBots || activeBots.length === 0) { console.log("[telegram-webhook/auto] No active bots, skipping"); return; }
+        const baseUrl = process.env.BASE_URL || "https://crm-iqid.vn";
+        for (const bot of activeBots) {
+          const webhookUrl = `${baseUrl}/api/telegram-webhook/${bot.id}`;
+          const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: webhookUrl, secret_token: TELEGRAM_WEBHOOK_SECRET }),
+          });
+          const data = await r.json();
+          console.log(`[telegram-webhook/auto] Bot "${bot.name}" → ${webhookUrl}: ${data.ok ? "OK" : data.description}`);
+        }
+      } catch (e) {
+        console.error("[telegram-webhook/auto] Error:", e.message);
+      }
+    }, 3000);
   });
 
   // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
