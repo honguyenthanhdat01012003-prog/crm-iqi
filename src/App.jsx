@@ -476,7 +476,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
   const [schedules, setSchedules] = useState([]);
-  const [autoRotateEnabled, setAutoRotateEnabled] = useState(false);
+  const [autoRotateProjects, setAutoRotateProjects] = useState({});
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
@@ -547,7 +547,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
     if (Array.isArray(data.projects)) setProjects(data.projects);
     if (Array.isArray(data.schedules)) setSchedules(data.schedules);
-    if (data.autoRotateEnabled !== undefined) setAutoRotateEnabled(data.autoRotateEnabled);
+    if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
   }, [seenLeadKeys]);
 
@@ -1211,8 +1211,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setManagerFilter={setManagerFilter}
             saleFilter={saleFilter}
             setSaleFilter={setSaleFilter}
-            autoRotateEnabled={autoRotateEnabled}
-            setAutoRotateEnabled={setAutoRotateEnabled}
+            autoRotateProjects={autoRotateProjects}
+            setAutoRotateProjects={setAutoRotateProjects}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -2004,7 +2004,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateEnabled, setAutoRotateEnabled }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateProjects, setAutoRotateProjects }) {
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
@@ -2645,28 +2645,6 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <RefreshCw size={16} /> Restore DB
-          </button>}
-
-          {/* Auto-rotate toggle button */}
-          {isAdmin && <button
-            onClick={async () => {
-              try {
-                const r = await apiFetch(`${API}/auto-rotate/toggle`, { method: "POST" });
-                const data = await r.json();
-                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                setAutoRotateEnabled(data.enabled);
-                showToast(data.enabled ? "Đã BẬT tự động xáo lead 3 ngày" : "Đã TẮT tự động xáo lead 3 ngày", data.enabled ? "success" : "info");
-              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
-            }}
-            style={{
-              ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8,
-              background: autoRotateEnabled
-                ? "linear-gradient(135deg, #dc2626, #b91c1c)"
-                : "linear-gradient(135deg, #6b7280, #4b5563)",
-              borderRadius: 12, flex: "1 1 auto", minWidth: 220, justifyContent: "center",
-              boxShadow: autoRotateEnabled ? "0 0 12px rgba(220, 38, 38, 0.3)" : "none",
-            }}>
-            <Shuffle size={16} /> {autoRotateEnabled ? "🔴 Xáo lead 3 ngày: BẬT" : "⚪ Xáo lead 3 ngày: TẮT"}
           </button>}
 
           {/* Restore Lead Modal */}
@@ -3932,7 +3910,42 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
       <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <span>Hiển thị {Math.min(pageSize, tabFiltered.length)} / {tabFiltered.length} khách hàng</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {/* Auto-rotate toggle per project */}
+          {isAdmin && selectedProject && (() => {
+            const isOn = autoRotateProjects[selectedProject] || false;
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: isOn ? "#16a34a" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>Xáo lead 3 ngày:</span>
+                <div
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const r = await apiFetch(`${API}/auto-rotate/toggle`, { method: "POST", body: JSON.stringify({ projectId: Number(selectedProject) }) });
+                      const data = await r.json();
+                      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                      setAutoRotateProjects(prev => ({ ...prev, [selectedProject]: data.enabled }));
+                      showToast(data.enabled ? "Đã BẬT tự động xáo lead 3 ngày cho dự án này" : "Đã TẮT tự động xáo lead 3 ngày cho dự án này", data.enabled ? "success" : "info");
+                    } catch (err) { showToast("Lỗi: " + err.message, "error"); }
+                  }}
+                  style={{
+                    width: 40, height: 22, borderRadius: 11, cursor: "pointer",
+                    background: isOn ? "#16a34a" : "#d1d5db",
+                    position: "relative", transition: "background 0.25s",
+                    boxShadow: isOn ? "0 0 6px rgba(22,163,74,0.3)" : "none",
+                    flexShrink: 0,
+                  }}
+                >
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 9, background: "#fff",
+                    position: "absolute", top: 2, left: isOn ? 20 : 2,
+                    transition: "left 0.25s",
+                    boxShadow: "0 1px 3px rgba(0,0,0,.2)",
+                  }} />
+                </div>
+              </div>
+            );
+          })()}
           <span style={{ fontSize: 12 }}>Số dòng:</span>
           <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
             style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>

@@ -2330,10 +2330,14 @@ app.get("/api/data", requireAuth, async (req, res) => {
         lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
       } catch {}
     }
-    // Include auto-rotate status
-    const autoRotateRow = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
-    const autoRotateEnabled = autoRotateRow?.value === "1";
-    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateEnabled });
+    // Include per-project auto-rotate status
+    const autoRotateRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%'");
+    const autoRotateProjects = {};
+    for (const r of autoRotateRows) {
+      const pid = r.key.replace('auto_rotate_project_', '');
+      autoRotateProjects[pid] = r.value === "1";
+    }
+    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -3196,24 +3200,38 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
 /* ===== Auto-rotate leads (3 days no update → reassign) ===== */
 const LOCKED_STATUSES = new Set(["booked", "booking_other"]);
 
-// Get auto-rotate setting
+// Get auto-rotate setting for a project
 app.get("/api/auto-rotate", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const row = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
-    res.json({ enabled: row?.value === "1" });
+    const projectId = req.query.projectId;
+    if (projectId) {
+      const row = await get(db, "SELECT value FROM settings WHERE key = ?", [`auto_rotate_project_${projectId}`]);
+      return res.json({ enabled: row?.value === "1", projectId: Number(projectId) });
+    }
+    // Return all per-project settings
+    const rows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%'");
+    const map = {};
+    for (const r of rows) {
+      const pid = r.key.replace('auto_rotate_project_', '');
+      map[pid] = r.value === "1";
+    }
+    res.json({ projects: map });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Toggle auto-rotate on/off
+// Toggle auto-rotate on/off for a specific project
 app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const current = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
+    const { projectId } = req.body;
+    if (!projectId) return res.status(400).json({ error: "Cần chọn dự án" });
+    const key = `auto_rotate_project_${projectId}`;
+    const current = await get(db, "SELECT value FROM settings WHERE key = ?", [key]);
     const newVal = current?.value === "1" ? "0" : "1";
-    await upsertSetting(db, "auto_rotate_enabled", newVal);
-    console.log(`[auto-rotate] Toggled to ${newVal === "1" ? "ON" : "OFF"} by ${req.user.displayName}`);
-    res.json({ enabled: newVal === "1" });
+    await upsertSetting(db, key, newVal);
+    console.log(`[auto-rotate] Project ${projectId} toggled to ${newVal === "1" ? "ON" : "OFF"} by ${req.user.displayName}`);
+    res.json({ enabled: newVal === "1", projectId: Number(projectId) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3221,14 +3239,15 @@ app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) 
 
 // Process auto-rotate: find leads where sale hasn't updated status in 3+ days, reassign
 async function processAutoRotate(db) {
-  const setting = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
-  if (setting?.value !== "1") return 0;
+  // Get all projects with auto-rotate enabled
+  const enabledRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%' AND value = '1'");
+  if (!enabledRows.length) return 0;
+  const enabledProjectIds = new Set(enabledRows.map(r => Number(r.key.replace('auto_rotate_project_', ''))));
 
   const now = new Date();
-  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
   const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
 
-  // Get all leads that have a sale assigned and are NOT in locked statuses
+  // Get all leads that have a sale assigned and are NOT in locked statuses, only from enabled projects
   const candidates = await all(db,
     `SELECT l.id, l.sale_name, l.status, l.project_id
      FROM leads l
@@ -3236,11 +3255,13 @@ async function processAutoRotate(db) {
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
      ORDER BY l.id ASC`
   );
+  // Filter to only enabled projects
+  const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id));
 
   let rotated = 0;
   const stmts = [];
 
-  for (const lead of candidates) {
+  for (const lead of filtered) {
     // Check latest history entry for this lead (any action from the assigned sale)
     const latestUpdate = await get(db,
       `SELECT contact_date, action FROM lead_history
