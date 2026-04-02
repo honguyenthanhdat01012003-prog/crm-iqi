@@ -476,6 +476,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
   const [schedules, setSchedules] = useState([]);
+  const [autoRotateEnabled, setAutoRotateEnabled] = useState(false);
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
@@ -546,6 +547,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
     if (Array.isArray(data.projects)) setProjects(data.projects);
     if (Array.isArray(data.schedules)) setSchedules(data.schedules);
+    if (data.autoRotateEnabled !== undefined) setAutoRotateEnabled(data.autoRotateEnabled);
     if (data.lastSync) setLastSync(data.lastSync);
   }, [seenLeadKeys]);
 
@@ -1209,6 +1211,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setManagerFilter={setManagerFilter}
             saleFilter={saleFilter}
             setSaleFilter={setSaleFilter}
+            autoRotateEnabled={autoRotateEnabled}
+            setAutoRotateEnabled={setAutoRotateEnabled}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -2000,7 +2004,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateEnabled, setAutoRotateEnabled }) {
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
@@ -2641,6 +2645,28 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
             <RefreshCw size={16} /> Restore DB
+          </button>}
+
+          {/* Auto-rotate toggle button */}
+          {isAdmin && <button
+            onClick={async () => {
+              try {
+                const r = await apiFetch(`${API}/auto-rotate/toggle`, { method: "POST" });
+                const data = await r.json();
+                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                setAutoRotateEnabled(data.enabled);
+                showToast(data.enabled ? "Đã BẬT tự động xáo lead 3 ngày" : "Đã TẮT tự động xáo lead 3 ngày", data.enabled ? "success" : "info");
+              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+            }}
+            style={{
+              ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8,
+              background: autoRotateEnabled
+                ? "linear-gradient(135deg, #dc2626, #b91c1c)"
+                : "linear-gradient(135deg, #6b7280, #4b5563)",
+              borderRadius: 12, flex: "1 1 auto", minWidth: 220, justifyContent: "center",
+              boxShadow: autoRotateEnabled ? "0 0 12px rgba(220, 38, 38, 0.3)" : "none",
+            }}>
+            <Shuffle size={16} /> {autoRotateEnabled ? "🔴 Xáo lead 3 ngày: BẬT" : "⚪ Xáo lead 3 ngày: TẮT"}
           </button>}
 
           {/* Restore Lead Modal */}
@@ -3924,12 +3950,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
+            const isLocked = l.status === "booked" || l.status === "booking_other";
             return (
-              <div key={l.id} id={`lead-${l.id}`} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : "1px solid #e5e7eb", overflow: "hidden" }}>
+              <div key={l.id} id={`lead-${l.id}`} style={{ background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
                 <div onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>NEW</span>}
                       {l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
@@ -3986,10 +4014,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).flatMap((l, i) => {
                 const isOpen = expandedId === l.id;
                 const globalIdx = (currentPage - 1) * pageSize + i;
+                const isLocked = l.status === "booked" || l.status === "booking_other";
                 const rows = [
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
-                    style={{ background: isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s" }}>
-                    <td style={tdStyle}>{globalIdx + 1}</td>
+                    style={{ background: isLocked ? "#fef2f2" : isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s", borderLeft: isLocked ? "3px solid #dc2626" : "none" }}>
+                    <td style={tdStyle}>{globalIdx + 1} {isLocked && <Lock size={11} style={{ display: "inline", verticalAlign: "middle", color: "#dc2626" }} />}</td>
                     <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>

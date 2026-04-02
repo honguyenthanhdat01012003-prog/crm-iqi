@@ -2330,7 +2330,10 @@ app.get("/api/data", requireAuth, async (req, res) => {
         lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
       } catch {}
     }
-    res.json({ ...config, ...data, schedules, hash: lastSyncHash });
+    // Include auto-rotate status
+    const autoRotateRow = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
+    const autoRotateEnabled = autoRotateRow?.value === "1";
+    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateEnabled });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -3190,6 +3193,142 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+/* ===== Auto-rotate leads (3 days no update → reassign) ===== */
+const LOCKED_STATUSES = new Set(["booked", "booking_other"]);
+
+// Get auto-rotate setting
+app.get("/api/auto-rotate", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const row = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
+    res.json({ enabled: row?.value === "1" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Toggle auto-rotate on/off
+app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const current = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
+    const newVal = current?.value === "1" ? "0" : "1";
+    await upsertSetting(db, "auto_rotate_enabled", newVal);
+    console.log(`[auto-rotate] Toggled to ${newVal === "1" ? "ON" : "OFF"} by ${req.user.displayName}`);
+    res.json({ enabled: newVal === "1" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Process auto-rotate: find leads where sale hasn't updated status in 3+ days, reassign
+async function processAutoRotate(db) {
+  const setting = await get(db, "SELECT value FROM settings WHERE key = 'auto_rotate_enabled'");
+  if (setting?.value !== "1") return 0;
+
+  const now = new Date();
+  const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000).toISOString();
+  const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+
+  // Get all leads that have a sale assigned and are NOT in locked statuses
+  const candidates = await all(db,
+    `SELECT l.id, l.sale_name, l.status, l.project_id
+     FROM leads l
+     WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
+       AND l.status NOT IN ('booked', 'booking_other', 'closed')
+     ORDER BY l.id ASC`
+  );
+
+  let rotated = 0;
+  const stmts = [];
+
+  for (const lead of candidates) {
+    // Check latest history entry for this lead (any action from the assigned sale)
+    const latestUpdate = await get(db,
+      `SELECT contact_date, action FROM lead_history
+       WHERE lead_id = ? AND sale_name = ?
+       ORDER BY seq DESC LIMIT 1`,
+      [lead.id, lead.sale_name]
+    );
+
+    if (!latestUpdate) continue; // No history, skip (newly assigned)
+
+    // Parse the Vietnamese date format or ISO format
+    let lastDate = null;
+    const dateStr = latestUpdate.contact_date || "";
+    // Try ISO format first
+    const isoMatch = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) {
+      lastDate = new Date(dateStr);
+    } else {
+      // Vietnamese format: dd/mm/yyyy HH:mm:ss or similar
+      const vnMatch = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (vnMatch) {
+        lastDate = new Date(`${vnMatch[3]}-${vnMatch[2].padStart(2, '0')}-${vnMatch[1].padStart(2, '0')}`);
+      }
+    }
+
+    if (!lastDate || isNaN(lastDate.getTime())) continue;
+
+    // Check if the latest action was a status change (not just "Chia lead")
+    // If the latest action is "Chia lead" and it's >3 days old, AND no other status update exists → rotate
+    const latestStatusChange = await get(db,
+      `SELECT contact_date FROM lead_history
+       WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
+       ORDER BY seq DESC LIMIT 1`,
+      [lead.id, lead.sale_name]
+    );
+
+    let checkDate = lastDate;
+    if (latestStatusChange) {
+      const scDateStr = latestStatusChange.contact_date || "";
+      const scIso = scDateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (scIso) {
+        checkDate = new Date(scDateStr);
+      } else {
+        const scVn = scDateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (scVn) {
+          checkDate = new Date(`${scVn[3]}-${scVn[2].padStart(2, '0')}-${scVn[1].padStart(2, '0')}`);
+        }
+      }
+    }
+
+    if (isNaN(checkDate.getTime())) continue;
+
+    // If less than 3 days since last update, skip
+    if (now.getTime() - checkDate.getTime() < 3 * 24 * 60 * 60 * 1000) continue;
+
+    // Find other sales in the same project to rotate to
+    const projectSales = await all(db,
+      `SELECT DISTINCT u.display_name FROM users u
+       INNER JOIN user_projects up ON up.user_id = u.id
+       WHERE up.project_id = ? AND u.role = 'sale' AND u.display_name != ?`,
+      [lead.project_id, lead.sale_name]
+    );
+
+    if (!projectSales.length) continue; // No other sales available
+
+    // Pick next sale (round-robin based on lead ID)
+    const nextSale = projectSales[lead.id % projectSales.length].display_name;
+
+    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [nextSale, lead.id] });
+    const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+    const nextSeq = (maxSeq?.m ?? -1) + 1;
+    stmts.push({
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, nextSale, "Chia lead", nowStr, "", `Tự động xáo lead (sale ${lead.sale_name} không cập nhật >3 ngày)`, nextSeq, "auto-rotate"],
+    });
+    rotated++;
+  }
+
+  if (stmts.length > 0) {
+    await db.batch(stmts, "write");
+    lastSyncHash = "";
+    emitDataChanged("auto-rotate");
+    console.log(`[auto-rotate] Rotated ${rotated} leads`);
+  }
+
+  return rotated;
+}
+
 /* ===== Scheduled lead distribution (round-robin 5 lead/day/person) ===== */
 
 // Get today's date string YYYY-MM-DD in Vietnam timezone
@@ -3286,6 +3425,13 @@ async function processSchedules(db, triggerUser) {
       const lid = batch[batchIdx];
       batchIdx++;
       if (processedLids.has(lid)) continue;
+
+      // Skip locked leads (booking/cọc) — they should not be auto-redistributed
+      const lockCheck = await get(db, "SELECT status FROM leads WHERE id = ?", [lid]);
+      if (lockCheck && (lockCheck.status === "booked" || lockCheck.status === "booking_other")) {
+        processedLids.add(lid);
+        continue;
+      }
 
       // Find next sale that still has quota, rotating with tour offset
       const roundIdx = roundCounter % numSales;
@@ -7919,6 +8065,19 @@ if (!process.env.VERCEL) {
   performBackup("startup"); // Backup on server start
   setInterval(() => performBackup("auto"), BACKUP_INTERVAL);
   console.log(`[auto-backup] Enabled, interval=8h, keep=${BACKUP_KEEP_DAYS} days`);
+
+  // Auto-rotate leads every 30 minutes (checks 3-day inactivity)
+  const AUTO_ROTATE_INTERVAL = 30 * 60 * 1000; // 30 min
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const rotated = await processAutoRotate(db);
+      if (rotated > 0) console.log(`[auto-rotate] Processed: ${rotated} leads rotated`);
+    } catch (e) {
+      console.error("[auto-rotate] Error:", e.message);
+    }
+  }, AUTO_ROTATE_INTERVAL);
+  console.log(`[auto-rotate] Enabled, interval=30min`);
 
   // Auto-fetch daily BĐS news (check every 10 min, run once per day at configured time)
   let lastNewsFetchDate = "";
