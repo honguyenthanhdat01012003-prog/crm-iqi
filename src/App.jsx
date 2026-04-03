@@ -4691,7 +4691,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               if (existingBlock) {
                 currentBlock = existingBlock;
                 // Track all chia IDs but only keep latest date
-                if (evt.id) existingBlock.chiaIds.push(evt.id);
+                if (evt.id) (existingBlock.chiaIds = existingBlock.chiaIds || []).push(evt.id);
                 existingBlock.chiaDate = evt.date || existingBlock.chiaDate;
                 existingBlock.chiaBy = evt.assignedBy || existingBlock.chiaBy;
               } else {
@@ -4710,7 +4710,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 }
               }
               if (!target) {
-                target = { saleName: sn, chiaDate: evt.date, chiaBy: null, chiaId: null, contacts: [], isImplicit: true };
+                target = { saleName: sn, chiaDate: evt.date, chiaBy: null, chiaId: null, chiaIds: [], contacts: [], isImplicit: true };
                 saleBlocks.push(target);
               }
               target.contacts.push(evt);
