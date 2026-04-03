@@ -2085,6 +2085,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [redistributing, setRedistributing] = useState(false);
   const [recoverModal, setRecoverModal] = useState(null); // { backups: [], step: 1|2, selectedBackup, selectedProject, loading }
   const [restoreModal, setRestoreModal] = useState(null); // { step: 'pick'|'preview'|'done', projectId, preview, loading, result }
+  const [crossRefOpen, setCrossRefOpen] = useState(false);
+  const [crossRefInput, setCrossRefInput] = useState("");
+  const [crossRefResults, setCrossRefResults] = useState(null); // array of matched leads
+  const [crossRefExpandedId, setCrossRefExpandedId] = useState(null);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -2647,6 +2651,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             <RefreshCw size={16} /> Restore DB
           </button>}
 
+          {isAdminOnly && (
+          <button onClick={() => { setCrossRefOpen(true); setCrossRefResults(null); setCrossRefInput(""); setCrossRefExpandedId(null); }}
+            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+            <ClipboardList size={16} /> Đối chiếu form KH
+          </button>)}
+
           {/* Restore Lead Modal */}
           {restoreModal && (
             <Modal onClose={() => !restoreModal.loading && setRestoreModal(null)} title="Khôi phục lead về Sale cũ">
@@ -2839,6 +2849,139 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </>)}
             </Modal>
           )}
+
+          {/* Cross-reference form modal */}
+          {crossRefOpen && (
+            <div onClick={() => setCrossRefOpen(false)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 32px" : 28, width: isMobile ? "100%" : 960, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)", animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><ClipboardList size={20} /> Đối chiếu form khách hàng đăng ký</h3>
+                  <button onClick={() => setCrossRefOpen(false)} style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}><X size={18} /></button>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 2fr", gap: 16, alignItems: "start" }}>
+                  {/* Left: Input names */}
+                  <div>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6, display: "block" }}>Danh sách tên khách hàng <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 400 }}>(mỗi dòng 1 tên)</span></label>
+                    <textarea value={crossRefInput} onChange={e => setCrossRefInput(e.target.value)}
+                      placeholder={"Nguyễn Văn A\nTrần Thị B\nLê Văn C\n..."}
+                      style={{ width: "100%", minHeight: 260, padding: 12, borderRadius: 10, border: "1px solid #d1d5db", fontSize: 13, lineHeight: 1.7, resize: "vertical", fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
+                    <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                      <button onClick={() => {
+                        const names = crossRefInput.split(/\n/).map(n => n.trim()).filter(Boolean);
+                        if (!names.length) return;
+                        const normalize = s => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+                        const results = [];
+                        for (const inputName of names) {
+                          const norm = normalize(inputName);
+                          const matched = leads.filter(l => {
+                            const ln = normalize(l.name);
+                            return ln === norm || ln.includes(norm) || norm.includes(ln);
+                          });
+                          if (matched.length > 0) {
+                            for (const m of matched) results.push({ inputName, lead: m, found: true });
+                          } else {
+                            results.push({ inputName, lead: null, found: false });
+                          }
+                        }
+                        setCrossRefResults(results);
+                        setCrossRefExpandedId(null);
+                      }}
+                        style={{ ...btnPrimary, padding: "10px 20px", fontSize: 13, borderRadius: 10, flex: 1, background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>
+                        <Search size={14} /> Đối chiếu
+                      </button>
+                      <button onClick={() => { setCrossRefInput(""); setCrossRefResults(null); }}
+                        style={{ ...btnSecondary, padding: "10px 14px", fontSize: 13, borderRadius: 10 }}>
+                        Xóa
+                      </button>
+                    </div>
+                    {crossRefResults && (() => {
+                      const total = [...new Set(crossRefResults.map(r => r.inputName))].length;
+                      const found = [...new Set(crossRefResults.filter(r => r.found).map(r => r.inputName))].length;
+                      const notFound = total - found;
+                      return (
+                        <div style={{ marginTop: 10, fontSize: 12, color: "#6b7280", display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          <span>Tổng: <b>{total}</b></span>
+                          <span style={{ color: "#16a34a" }}>Tìm thấy: <b>{found}</b></span>
+                          <span style={{ color: "#ef4444" }}>Không thấy: <b>{notFound}</b></span>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Right: Results */}
+                  <div>
+                    {!crossRefResults ? (
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: 260, color: "#9ca3af", fontSize: 13, border: "2px dashed #e5e7eb", borderRadius: 12, textAlign: "center", padding: 20 }}>
+                        <div>
+                          <Search size={32} style={{ marginBottom: 8, opacity: 0.4 }} />
+                          <div>Nhập danh sách tên bên trái và bấm <b>Đối chiếu</b></div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", maxHeight: isMobile ? 400 : 500, overflowY: "auto" }}>
+                        {/* Table header */}
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(100px,1fr) minmax(100px,1fr) 110px 60px", gap: 0, background: "#f9fafb", borderBottom: "1px solid #e5e7eb", padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "#6b7280", position: "sticky", top: 0, zIndex: 1 }}>
+                          <span>Tên nhập</span>
+                          <span>Tên trong CRM</span>
+                          <span>Trạng thái</span>
+                          <span style={{ textAlign: "center" }}>LS</span>
+                        </div>
+                        {crossRefResults.map((r, i) => (
+                          <div key={i}>
+                            <div style={{ display: "grid", gridTemplateColumns: "minmax(100px,1fr) minmax(100px,1fr) 110px 60px", gap: 0, padding: "8px 12px", borderBottom: "1px solid #f3f4f6", fontSize: 12, alignItems: "center", background: !r.found ? "#fef2f2" : i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                              <span style={{ fontWeight: 600, color: r.found ? "#1f2937" : "#ef4444" }}>{r.inputName}</span>
+                              {r.found ? (
+                                <>
+                                  <span style={{ color: "#374151" }}>{r.lead.name} {r.lead.phone ? <span style={{ color: "#9ca3af", fontSize: 11 }}>({r.lead.phone})</span> : null}</span>
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[r.lead.status] || "#6b7280") + "18", color: STATUS_COLORS[r.lead.status] || "#6b7280", whiteSpace: "nowrap", textAlign: "center" }}>
+                                    {STATUS_LABELS[r.lead.status] || r.lead.status || "Chưa feedback"}
+                                  </span>
+                                  <button onClick={() => setCrossRefExpandedId(crossRefExpandedId === `${i}` ? null : `${i}`)}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
+                                    <ChevronDown size={14} style={{ transform: crossRefExpandedId === `${i}` ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+                                    {(r.lead.saleHistory || []).length}
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <span style={{ color: "#ef4444", fontStyle: "italic" }}>Không tìm thấy</span>
+                                  <span></span>
+                                  <span></span>
+                                </>
+                              )}
+                            </div>
+                            {/* Expanded: sale history */}
+                            {r.found && crossRefExpandedId === `${i}` && (r.lead.saleHistory || []).length > 0 && (
+                              <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "6px 12px 10px 24px" }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>Lịch sử tương tác ({r.lead.saleHistory.length})</div>
+                                {r.lead.saleHistory.slice().reverse().map((h, hi) => (
+                                  <div key={hi} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0", borderBottom: hi < r.lead.saleHistory.length - 1 ? "1px solid #f0f0f0" : "none", fontSize: 11 }}>
+                                    <span style={{ color: h.status === "Chia lead" || h.action === "Chia lead" ? "#e88a2e" : "#16a34a", fontSize: 10, marginTop: 2 }}>●</span>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                                        <span style={{ fontWeight: 600 }}>{h.action || "Cập nhật"}</span>
+                                        {h.status && <span style={{ padding: "1px 6px", borderRadius: 6, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[h.status] || "#6b7280") + "15", color: STATUS_COLORS[h.status] || "#6b7280" }}>{STATUS_LABELS[h.status] || h.status}</span>}
+                                        {h.saleName && <span style={{ color: "#2563eb", fontSize: 10 }}>👤 {h.saleName}</span>}
+                                        <span style={{ color: "#9ca3af", fontSize: 10 }}>{h.date || ""}</span>
+                                      </div>
+                                      {h.feedback && <div style={{ color: "#6b7280", marginTop: 2, wordBreak: "break-word" }}>{h.feedback}</div>}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {shuffleOpen && (
             <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 12, padding: 16, marginTop: 8, fontSize: 13, width: "100%" }}>
               <div style={{ fontWeight: 700, marginBottom: 12, color: "#9a3412", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}><Shuffle size={18} /> Chia Lead cho Sale (Xoay vòng tự động)</div>
