@@ -2087,8 +2087,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [restoreModal, setRestoreModal] = useState(null); // { step: 'pick'|'preview'|'done', projectId, preview, loading, result }
   const [crossRefOpen, setCrossRefOpen] = useState(false);
   const [crossRefInput, setCrossRefInput] = useState("");
-  const [crossRefResults, setCrossRefResults] = useState(null); // array of matched leads
+  const [crossRefResults, setCrossRefResults] = useState(null);
   const [crossRefExpandedId, setCrossRefExpandedId] = useState(null);
+  const [rotateHistOpen, setRotateHistOpen] = useState(false);
+  const [rotateHistData, setRotateHistData] = useState(null);
+  const [rotateHistLoading, setRotateHistLoading] = useState(false);
+  const [rotateHistMonth, setRotateHistMonth] = useState(() => { const d = new Date(); return { month: d.getMonth(), year: d.getFullYear() }; });
+  const [rotateHistDay, setRotateHistDay] = useState(null);
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -2978,6 +2983,147 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     )}
                   </div>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* Auto-rotate history calendar modal */}
+          {rotateHistOpen && (
+            <div onClick={() => setRotateHistOpen(false)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 32px" : 28, width: isMobile ? "100%" : 700, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)", animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Clock size={20} /> Lịch sử xáo lead tự động</h3>
+                  <button onClick={() => setRotateHistOpen(false)} style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}><X size={18} /></button>
+                </div>
+                {rotateHistLoading ? (
+                  <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Đang tải...</div>
+                ) : !rotateHistData || rotateHistData.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Chưa có lượt xáo lead nào</div>
+                ) : (() => {
+                  // Group history by date (YYYY-MM-DD)
+                  const parseDate = (d) => {
+                    const iso = (d || "").match(/(\d{4})-(\d{2})-(\d{2})/);
+                    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+                    const vn = (d || "").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+                    if (vn) return `${vn[3]}-${vn[2].padStart(2, '0')}-${vn[1].padStart(2, '0')}`;
+                    return null;
+                  };
+                  const byDate = {};
+                  const projFilter = selectedProject ? Number(selectedProject) : null;
+                  rotateHistData.forEach(h => {
+                    if (projFilter && h.projectId !== projFilter) return;
+                    const dk = parseDate(h.date);
+                    if (dk) { if (!byDate[dk]) byDate[dk] = []; byDate[dk].push(h); }
+                  });
+
+                  // Calendar
+                  const m = rotateHistMonth.month;
+                  const y = rotateHistMonth.year;
+                  const firstDay = new Date(y, m, 1).getDay(); // 0=Sun
+                  const daysInMonth = new Date(y, m + 1, 0).getDate();
+                  const weeks = [];
+                  let week = [];
+                  for (let i = 0; i < firstDay; i++) week.push(null);
+                  for (let d = 1; d <= daysInMonth; d++) {
+                    week.push(d);
+                    if (week.length === 7) { weeks.push(week); week = []; }
+                  }
+                  if (week.length) { while (week.length < 7) week.push(null); weeks.push(week); }
+
+                  const monthNames = ["Tháng 1", "Tháng 2", "Tháng 3", "Tháng 4", "Tháng 5", "Tháng 6", "Tháng 7", "Tháng 8", "Tháng 9", "Tháng 10", "Tháng 11", "Tháng 12"];
+                  const today = new Date();
+                  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+                  const selectedDayStr = rotateHistDay ? `${y}-${String(m + 1).padStart(2, '0')}-${String(rotateHistDay).padStart(2, '0')}` : null;
+                  const selectedDayItems = selectedDayStr ? (byDate[selectedDayStr] || []) : [];
+
+                  return (
+                    <div>
+                      {/* Month nav */}
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 12 }}>
+                        <button onClick={() => setRotateHistMonth(p => { const nm = p.month === 0 ? 11 : p.month - 1; return { month: nm, year: p.month === 0 ? p.year - 1 : p.year }; })}
+                          style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 8, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}><ChevronLeft size={16} /></button>
+                        <span style={{ fontWeight: 700, fontSize: 15, minWidth: 140, textAlign: "center" }}>{monthNames[m]} {y}</span>
+                        <button onClick={() => setRotateHistMonth(p => { const nm = p.month === 11 ? 0 : p.month + 1; return { month: nm, year: p.month === 11 ? p.year + 1 : p.year }; })}
+                          style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 8, width: 32, height: 32, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280" }}><ChevronRight size={16} /></button>
+                      </div>
+
+                      {/* Calendar grid */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2, marginBottom: 16 }}>
+                        {["CN", "T2", "T3", "T4", "T5", "T6", "T7"].map(d => (
+                          <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: "#9ca3af", padding: "6px 0" }}>{d}</div>
+                        ))}
+                        {weeks.flat().map((day, i) => {
+                          if (!day) return <div key={`e${i}`} />;
+                          const dk = `${y}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                          const count = (byDate[dk] || []).length;
+                          const isToday = dk === todayStr;
+                          const isSelected = rotateHistDay === day;
+                          return (
+                            <div key={day} onClick={() => count > 0 ? setRotateHistDay(isSelected ? null : day) : null}
+                              style={{
+                                textAlign: "center", padding: "6px 2px", borderRadius: 10, fontSize: 12,
+                                cursor: count > 0 ? "pointer" : "default",
+                                background: isSelected ? "#2563eb" : count > 0 ? "#eff6ff" : "transparent",
+                                color: isSelected ? "#fff" : isToday ? "#2563eb" : count > 0 ? "#1e40af" : "#9ca3af",
+                                fontWeight: isToday || isSelected ? 700 : count > 0 ? 600 : 400,
+                                border: isToday && !isSelected ? "2px solid #2563eb" : "2px solid transparent",
+                                transition: "all .15s",
+                                position: "relative",
+                              }}>
+                              {day}
+                              {count > 0 && (
+                                <div style={{ fontSize: 9, fontWeight: 700, color: isSelected ? "#93c5fd" : "#e88a2e", lineHeight: 1 }}>{count} lead</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Day detail */}
+                      {selectedDayStr && (
+                        <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
+                          <div style={{ background: "#f9fafb", padding: "8px 14px", borderBottom: "1px solid #e5e7eb", fontWeight: 700, fontSize: 13, color: "#374151" }}>
+                            📅 Ngày {rotateHistDay}/{m + 1}/{y} — {selectedDayItems.length} lead đã xáo
+                          </div>
+                          {selectedDayItems.length === 0 ? (
+                            <div style={{ padding: 16, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có lượt xáo nào</div>
+                          ) : (
+                            <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0, padding: "6px 14px", borderBottom: "1px solid #e5e7eb", fontSize: 11, fontWeight: 700, color: "#6b7280", position: "sticky", top: 0, background: "#fafafa" }}>
+                                <span>Khách hàng</span>
+                                <span>Sale cũ → Sale mới</span>
+                                <span>Thời gian</span>
+                              </div>
+                              {selectedDayItems.map((h, i) => (
+                                <div key={h.id || i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 0, padding: "8px 14px", borderBottom: "1px solid #f3f4f6", fontSize: 12, alignItems: "center", background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                                  <div>
+                                    <div style={{ fontWeight: 600 }}>{h.leadName}</div>
+                                    <div style={{ fontSize: 10, color: "#9ca3af" }}>{h.leadPhone}</div>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                                    <span style={{ color: "#ef4444", fontWeight: 600 }}>{h.fromSale || "?"}</span>
+                                    <span style={{ color: "#9ca3af" }}>→</span>
+                                    <span style={{ color: "#16a34a", fontWeight: 600 }}>{h.toSale}</span>
+                                  </div>
+                                  <span style={{ fontSize: 11, color: "#6b7280" }}>{h.date}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Summary */}
+                      <div style={{ marginTop: 12, fontSize: 12, color: "#6b7280", display: "flex", gap: 16, flexWrap: "wrap" }}>
+                        <span>Tổng tháng này: <b style={{ color: "#1f2937" }}>{Object.entries(byDate).filter(([k]) => k.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).reduce((s, [, v]) => s + v.length, 0)}</b> lead</span>
+                        <span>Số ngày có xáo: <b style={{ color: "#1f2937" }}>{Object.keys(byDate).filter(k => k.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).length}</b></span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -4089,6 +4235,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </div>
             );
           })()}
+          {isAdmin && selectedProject && autoRotateProjects[selectedProject] && (
+            <button onClick={async () => {
+              setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null);
+              try {
+                const r = await apiFetch(`${API}/auto-rotate/history`);
+                const data = await r.json();
+                setRotateHistData(data.history || []);
+              } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }
+              setRotateHistLoading(false);
+            }}
+              style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 8, padding: "3px 10px", fontSize: 11, color: "#6b7280", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
+              <Clock size={12} /> Lịch sử xáo
+            </button>
+          )}
           <span style={{ fontSize: 12 }}>Số dòng:</span>
           <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
             style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>

@@ -3262,6 +3262,37 @@ app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) 
   }
 });
 
+/* ===== Auto-rotate history (calendar) ===== */
+app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const rows = await all(db,
+      `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, l.name as lead_name, l.phone as lead_phone, l.project_id
+       FROM lead_history lh
+       JOIN leads l ON lh.lead_id = l.id
+       WHERE lh.source = 'auto-rotate'
+       ORDER BY lh.id DESC
+       LIMIT 500`
+    );
+    // Parse old sale name from feedback: "Tự động xáo lead (sale X không cập nhật >3 ngày)"
+    const history = rows.map(r => {
+      const oldSaleMatch = (r.feedback || "").match(/sale\s+(.+?)\s+không cập nhật/);
+      return {
+        id: r.id,
+        leadId: r.lead_id,
+        leadName: r.lead_name || "",
+        leadPhone: r.lead_phone || "",
+        projectId: r.project_id,
+        fromSale: oldSaleMatch ? oldSaleMatch[1] : "",
+        toSale: r.sale_name || "",
+        date: r.contact_date || "",
+      };
+    });
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Process auto-rotate: find leads where sale hasn't updated status in 3+ days, reassign
 async function processAutoRotate(db) {
   // Get all projects with auto-rotate enabled
