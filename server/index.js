@@ -1195,6 +1195,31 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
+  // Post-sync: re-sync lead statuses from latest history to fix race conditions
+  // (e.g. sale updates status during sync → sync overwrites with old status)
+  try {
+    const leadsWithHistory = await all(db, `
+      SELECT l.id, l.status, lh.status as hist_status
+      FROM leads l
+      INNER JOIN lead_history lh ON lh.id = (
+        SELECT id FROM lead_history
+        WHERE lead_id = l.id AND status != ''
+        ORDER BY seq DESC LIMIT 1
+      )
+      WHERE l.project_id = ?`, [projectId]);
+    const fixStmts = [];
+    for (const row of leadsWithHistory) {
+      const correctStatus = normalizeStatus(row.hist_status);
+      if (correctStatus !== row.status) {
+        fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, row.hist_status, row.id] });
+      }
+    }
+    if (fixStmts.length) {
+      await db.batch(fixStmts, "write");
+      console.log(`[replaceProjectData] Re-synced ${fixStmts.length}/${leadsWithHistory.length} lead statuses from history`);
+    }
+  } catch (e) { console.error("[replaceProjectData] Post-sync status fix error:", e.message); }
+
   return { newPhones };
 }
 
@@ -4316,6 +4341,11 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 /* ===== Lead history (manual entry) ===== */
 app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
   try {
+    // Wait for any running sync to finish to avoid race condition (sync overwrites status)
+    if (syncInProgress) {
+      const t0 = Date.now();
+      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+    }
     const leadId = Number(req.params.id);
     const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
