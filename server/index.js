@@ -5639,8 +5639,16 @@ app.get("/api/fb-ads/campaign-detail/:accountId/:campaignId", requireAuth, requi
 });
 
 /* ===== Announcements (scrolling banner) ===== */
+const ensureAnnouncementsTable = async () => {
+  await run(db, `CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
+    is_active INTEGER DEFAULT 1, created_by TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')))`);
+};
+
 app.get("/api/announcements", requireAuth, async (_req, res) => {
   try {
+    await ensureAnnouncementsTable();
     const rows = await all(db, "SELECT * FROM announcements WHERE is_active = 1 ORDER BY created_at DESC");
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -5648,6 +5656,7 @@ app.get("/api/announcements", requireAuth, async (_req, res) => {
 
 app.get("/api/announcements/all", requireAuth, requireAdmin, async (_req, res) => {
   try {
+    await ensureAnnouncementsTable();
     const rows = await all(db, "SELECT * FROM announcements ORDER BY created_at DESC");
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -5655,6 +5664,7 @@ app.get("/api/announcements/all", requireAuth, requireAdmin, async (_req, res) =
 
 app.post("/api/announcements", requireAuth, requireAdminOnly, async (req, res) => {
   try {
+    await ensureAnnouncementsTable();
     const { content } = req.body;
     if (!content || !content.trim()) return res.status(400).json({ error: "Chưa nhập nội dung thông báo" });
     await run(db, "INSERT INTO announcements (content, created_by) VALUES (?, ?)", [content.trim(), req.user.display_name || req.user.username]);
