@@ -5557,14 +5557,21 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [acctDraft, setAcctDraft] = useState({ name: "", accountId: "", accessToken: "" });
   const [savingAcct, setSavingAcct] = useState(false);
 
-  // Content Review (AI QC) state
+  // Content Review (AI Editorial Workflow) state
+  const [crStep, setCrStep] = useState(1); // Step 1, 2, 3 wizard
   const [crInput, setCrInput] = useState("");
   const [crResult, setCrResult] = useState(null);
   const [crLoading, setCrLoading] = useState(false);
   const [crError, setCrError] = useState("");
+  const [crSelectedVersion, setCrSelectedVersion] = useState("gat"); // "gat" | "ke_chuyen" | "truc_dien"
+  // Step 1: Thông tin cơ bản
+  const [crProjectName, setCrProjectName] = useState("");
+  const [crCategory, setCrCategory] = useState("can_ho"); // "can_ho" | "nha_pho" | "biet_thu" | "shophouse"
+  // Step 2: Insight
   const [crTarget, setCrTarget] = useState("mua_o"); // "mua_o" | "dau_tu"
-  const [crGoal, setCrGoal] = useState("loc_khach"); // "loc_khach" | "to_mo"
-  const [crTitleType, setCrTitleType] = useState("bao_gia"); // "bao_gia" | "gay_to_mo" | "tiec_nuoi"
+  const [crPsychology, setCrPsychology] = useState("fomo"); // "mat_tien" | "loi_nhuan" | "fomo" | "dang_cap"
+  // Step 3: Content Ads
+  const [crAdType, setCrAdType] = useState("bao_gia"); // "event" | "bao_gia" | "khan_hiem" | "tiec_nuoi"
   const [crHow, setCrHow] = useState(""); // Giá/Vốn thực
 
   // OpenAI API Key state
@@ -7663,161 +7670,331 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     );
   }
 
-  // === Content Review Tab (AI Editorial Workflow) ===
+  // === Content Review Tab (AI Editorial Workflow — Step-by-Step) ===
   if (tab === "content_review" && isAdminOnly) {
-    const handleContentReview = async () => {
-      if (!crInput.trim()) { showToast("Vui lòng nhập nội dung bài viết", "warning"); return; }
+    const handleContentGenerate = async () => {
+      if (!crProjectName.trim()) { showToast("Vui lòng nhập tên dự án", "warning"); return; }
       setCrLoading(true); setCrError(""); setCrResult(null);
       try {
-        const r = await apiFetch(`${API}/content-review`, { method: "POST", body: JSON.stringify({ content: crInput, target: crTarget, goal: crGoal, titleType: crTitleType, how: crHow }) });
+        const r = await apiFetch(`${API}/content-review`, {
+          method: "POST",
+          body: JSON.stringify({
+            content: crInput.trim() || null,
+            projectName: crProjectName,
+            category: crCategory,
+            target: crTarget,
+            psychology: crPsychology,
+            adType: crAdType,
+            how: crHow,
+          }),
+        });
         const d = await r.json();
-        if (!r.ok) { setCrError(d.error || "Lỗi đánh giá"); setCrLoading(false); return; }
+        if (!r.ok) { setCrError(d.error || "Lỗi AI"); setCrLoading(false); return; }
         setCrResult(d);
+        setCrStep(4); // Jump to results
       } catch (e) { setCrError("Lỗi kết nối: " + e.message); }
       setCrLoading(false);
     };
 
-    const severityColor = { high: "#dc2626", medium: "#f59e0b", low: "#6b7280" };
-    const severityBg = { high: "#fef2f2", medium: "#fffbeb", low: "#f9fafb" };
-    const severityLabel = { high: "Nghiêm trọng", medium: "Cần sửa", low: "Gợi ý" };
-    const errorTypeLabel = { my_tu_sao_rong: "Mỹ từ sáo rỗng", thieu_gia_von: "Thiếu giá/vốn", thieu_fomo: "Thiếu FOMO", qua_nhieu_san_pham: "Quá nhiều SP", tieu_de_yeu: "Tiêu đề yếu", thieu_social_proof: "Thiếu Social Proof", vi_pham_ty_le: "Vi phạm tỷ lệ 80/20" };
-    const scoringLabels = { tieu_de: "Tiêu đề lọc khách", insight_vs_sp: "Tỷ lệ Insight/SP (80/20)", con_so_cu_the: "Con số biết nói", cta_fomo: "CTA & FOMO", social_proof: "Social Proof", cam_tu_sao_rong: "Không mỹ từ sáo rỗng" };
     const scoreBarColor = (s) => s >= 8 ? "#16a34a" : s >= 6 ? "#f59e0b" : s >= 4 ? "#ea580c" : "#dc2626";
+    const scoringLabels = { tieu_de: "Tiêu đề lọc khách", insight_vs_sp: "Tỷ lệ Insight/SP (80/20)", con_so_cu_the: "Con số biết nói", cta_fomo: "CTA & FOMO", social_proof: "Social Proof", cam_tu_sao_rong: "Không mỹ từ sáo rỗng" };
 
-    const optBtn = (value, current, setter, label) => (
+    const optCard = (value, current, setter, emoji, label, desc) => (
       <button onClick={() => setter(value)} style={{
-        padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
-        border: current === value ? "2px solid #8b5cf6" : "1px solid #d1d5db",
-        background: current === value ? "#f5f3ff" : "#fff",
-        color: current === value ? "#7c3aed" : "#374151",
-        transition: "all .15s",
-      }}>{label}</button>
+        flex: 1, minWidth: isMobile ? "100%" : 140, padding: "14px 12px", borderRadius: 12, cursor: "pointer",
+        border: current === value ? "2px solid #8b5cf6" : "1.5px solid #e5e7eb",
+        background: current === value ? "linear-gradient(135deg, #f5f3ff, #ede9fe)" : "#fff",
+        boxShadow: current === value ? "0 2px 8px #8b5cf620" : "0 1px 3px rgba(0,0,0,.04)",
+        transition: "all .2s", textAlign: "center",
+      }}>
+        <div style={{ fontSize: 24, marginBottom: 4 }}>{emoji}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: current === value ? "#7c3aed" : "#374151" }}>{label}</div>
+        {desc && <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 2 }}>{desc}</div>}
+      </button>
+    );
+
+    const stepIndicator = (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0, marginBottom: 20 }}>
+        {[
+          { n: 1, label: "Dự án" },
+          { n: 2, label: "Insight" },
+          { n: 3, label: "Content Ads" },
+          { n: 4, label: "Kết quả" },
+        ].map((s, i, arr) => (
+          <React.Fragment key={s.n}>
+            <div onClick={() => { if (s.n < crStep || (s.n <= 3 && !crLoading)) setCrStep(s.n); }} style={{
+              display: "flex", alignItems: "center", gap: 6, cursor: s.n <= 3 ? "pointer" : "default",
+              padding: "6px 12px", borderRadius: 20,
+              background: crStep === s.n ? "#8b5cf6" : crStep > s.n ? "#e9d5ff" : "#f3f4f6",
+              transition: "all .2s",
+            }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: "50%", fontSize: 11, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: crStep === s.n ? "#fff" : crStep > s.n ? "#8b5cf6" : "#d1d5db",
+                color: crStep === s.n ? "#8b5cf6" : crStep > s.n ? "#fff" : "#6b7280",
+              }}>
+                {crStep > s.n ? <Check size={12} /> : s.n}
+              </div>
+              {!isMobile && <span style={{ fontSize: 12, fontWeight: 600, color: crStep === s.n ? "#fff" : crStep > s.n ? "#7c3aed" : "#6b7280" }}>{s.label}</span>}
+            </div>
+            {i < arr.length - 1 && <div style={{ width: isMobile ? 16 : 32, height: 2, background: crStep > s.n ? "#8b5cf6" : "#e5e7eb" }} />}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+
+    const navButtons = (canNext) => (
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20 }}>
+        <button onClick={() => setCrStep(crStep - 1)} disabled={crStep === 1} style={{
+          ...btnSecondary, padding: "10px 20px", fontSize: 13, opacity: crStep === 1 ? 0.4 : 1,
+          display: "flex", alignItems: "center", gap: 6,
+        }}>
+          <ChevronLeft size={14} /> Quay lại
+        </button>
+        {crStep < 3 ? (
+          <button onClick={() => { if (canNext) setCrStep(crStep + 1); }} disabled={!canNext} style={{
+            ...btnPrimary, padding: "10px 20px", fontSize: 13,
+            background: canNext ? "linear-gradient(135deg, #8b5cf6, #6d28d9)" : "#d1d5db",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            Tiếp tục <ChevronRight size={14} />
+          </button>
+        ) : (
+          <button onClick={handleContentGenerate} disabled={crLoading} style={{
+            ...btnPrimary, padding: "10px 24px", fontSize: 13,
+            background: crLoading ? "#9ca3af" : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+            display: "flex", alignItems: "center", gap: 6,
+          }}>
+            {crLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang tạo 3 bản...</> : <><Sparkles size={14} /> Tạo Content AI</>}
+          </button>
+        )}
+      </div>
     );
 
     return (
       <div>
         {tabBar}
         <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          {/* Header */}
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <FileEdit size={18} color="#fff" />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: 16, color: "#1a3c20" }}>AI Editorial Workflow — Đánh giá Content Thực Chiến</h3>
-              <div style={{ fontSize: 12, color: "#6b7280" }}>Quy trình 3 bước: Phân tích → Đối chiếu Quy tắc Vàng → Viết lại & Chấm điểm</div>
+              <h3 style={{ margin: 0, fontSize: 16, color: "#1a3c20" }}>AI Content Generator — Thư viện mẫu QC thực chiến</h3>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Lắp ghép thông số → AI viết 3 phiên bản → Chọn bản tốt nhất</div>
             </div>
           </div>
 
           {!hasOpenaiKey && (
             <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#dc2626" }}>
               <AlertCircle size={16} style={{ flexShrink: 0 }} />
-              <span>Chưa cấu hình OpenAI API Key. Vào tab <b>Cài đặt tài khoản</b> → kéo xuống mục <b>"OpenAI API Key"</b> để thêm.</span>
+              <span>Chưa cấu hình OpenAI API Key. Vào tab <b>Cài đặt tài khoản</b> → mục <b>"OpenAI API Key"</b> để thêm.</span>
             </div>
           )}
 
-          {/* Option selectors */}
-          <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
-              {/* Tệp khách hàng */}
+          {/* Step indicator */}
+          {stepIndicator}
+
+          {/* === STEP 1: Thông tin cơ bản === */}
+          {crStep === 1 && (
+            <div style={{ background: "#fff", borderRadius: 14, padding: 24, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 15, display: "flex", alignItems: "center", gap: 6, color: "#7c3aed" }}>
+                <Building size={17} /> Bước 1 — Thông tin dự án
+              </h4>
+
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>Tên dự án *</label>
+                <input
+                  value={crProjectName}
+                  onChange={e => setCrProjectName(e.target.value)}
+                  placeholder="VD: Beacon Tower, Vinhomes Grand Park, The Global City..."
+                  style={{ ...inputStyle, marginTop: 0, fontSize: 14, padding: "12px 14px" }}
+                />
+              </div>
+
               <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
-                  <Target size={13} /> Tệp khách hàng
-                </label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {optBtn("mua_o", crTarget, setCrTarget, "🏠 Mua ở (an cư)")}
-                  {optBtn("dau_tu", crTarget, setCrTarget, "📈 Đầu tư (ROI)")}
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>Loại hình bất động sản</label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {optCard("can_ho", crCategory, setCrCategory, "🏢", "Căn hộ", "Chung cư, duplex")}
+                  {optCard("nha_pho", crCategory, setCrCategory, "🏘️", "Nhà phố", "Liền kề, nhà phố TM")}
+                  {optCard("biet_thu", crCategory, setCrCategory, "🏛️", "Biệt thự", "Villa, biệt thự song lập")}
+                  {optCard("shophouse", crCategory, setCrCategory, "🏪", "Shophouse", "Nhà phố thương mại")}
                 </div>
               </div>
 
-              {/* Mục tiêu */}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
-                  <Crosshair size={13} /> Mục tiêu quảng cáo
-                </label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {optBtn("loc_khach", crGoal, setCrGoal, "🎯 Lọc khách nét")}
-                  {optBtn("to_mo", crGoal, setCrGoal, "👀 Tìm khách tò mò")}
+              {navButtons(crProjectName.trim().length > 0)}
+            </div>
+          )}
+
+          {/* === STEP 2: Xác định Insight === */}
+          {crStep === 2 && (
+            <div style={{ background: "#fff", borderRadius: 14, padding: 24, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 15, display: "flex", alignItems: "center", gap: 6, color: "#7c3aed" }}>
+                <Target size={17} /> Bước 2 — Xác định Insight khách hàng
+              </h4>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>Tệp khách hàng mục tiêu</label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {optCard("mua_o", crTarget, setCrTarget, "🏠", "Mua ở (An cư)", "Tiện ích, trường học, an ninh")}
+                  {optCard("dau_tu", crTarget, setCrTarget, "📈", "Đầu tư (ROI)", "Lợi nhuận, tăng giá, dòng tiền")}
                 </div>
               </div>
 
-              {/* Loại tiêu đề */}
               <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
-                  <FileText size={13} /> Loại tiêu đề
-                </label>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {optBtn("bao_gia", crTitleType, setCrTitleType, "💰 Báo giá thẳng")}
-                  {optBtn("gay_to_mo", crTitleType, setCrTitleType, "🤔 Gây tò mò")}
-                  {optBtn("tiec_nuoi", crTitleType, setCrTitleType, "⏰ Tiếc nuối (FOMO)")}
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>Tâm lý nhắm tới</label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {optCard("mat_tien", crPsychology, setCrPsychology, "😰", "Sợ mất tiền", "Tiền gửi ngân hàng mất giá, lạm phát ăn mòn")}
+                  {optCard("loi_nhuan", crPsychology, setCrPsychology, "🤑", "Tham lợi nhuận", "Lãi vốn, cho thuê, tăng giá 20-30%")}
+                  {optCard("fomo", crPsychology, setCrPsychology, "⏰", "FOMO - Sợ mất cơ hội", "Hết hàng, giá tăng, người khác đã mua")}
+                  {optCard("dang_cap", crPsychology, setCrPsychology, "👑", "Thể hiện đẳng cấp", "Vị thế gia chủ, thương hiệu sống")}
                 </div>
               </div>
 
-              {/* Giá/Vốn */}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
-                  <DollarSign size={13} /> Thông số Giá/Vốn thực
+              {navButtons(true)}
+            </div>
+          )}
+
+          {/* === STEP 3: Thể loại Content Ads === */}
+          {crStep === 3 && (
+            <div style={{ background: "#fff", borderRadius: 14, padding: 24, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+              <h4 style={{ margin: "0 0 16px", fontSize: 15, display: "flex", alignItems: "center", gap: 6, color: "#7c3aed" }}>
+                <Megaphone size={17} /> Bước 3 — Thể loại quảng cáo
+              </h4>
+
+              <div style={{ marginBottom: 20 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>Mục tiêu bài viết</label>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  {optCard("event", crAdType, setCrAdType, "🎪", "Đăng ký Event", "Mời tham quan, sự kiện mở bán")}
+                  {optCard("bao_gia", crAdType, setCrAdType, "💰", "Báo giá CĐT", "Show giá thẳng, lọc khách tài chính")}
+                  {optCard("khan_hiem", crAdType, setCrAdType, "🔥", "Chào hàng khan hiếm", "Suất nội bộ, giá F0, đợt cuối")}
+                  {optCard("tiec_nuoi", crAdType, setCrAdType, "😢", "Khơi gợi tiếc nuối", "Ai mua đợt trước đã lời X%, nay hết rồi")}
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 18 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                  <DollarSign size={13} style={{ verticalAlign: "middle" }} /> Thông số Giá/Vốn thực *
                 </label>
                 <input
-                  style={{ ...inputStyle, marginTop: 0, fontSize: 13 }}
                   value={crHow}
                   onChange={e => setCrHow(e.target.value)}
-                  placeholder="VD: 2.5 tỷ/căn, vốn ban đầu 800tr, góp 25tr/tháng"
+                  placeholder="VD: 2.5 tỷ/căn, vốn ban đầu 800tr, góp 25tr/tháng, CK 15%"
+                  style={{ ...inputStyle, marginTop: 0, fontSize: 14, padding: "12px 14px" }}
                 />
-                <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 4 }}>Nhập giá thật để AI không viết ảo. Bỏ trống = AI cảnh báo lỗi.</div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>💡 Nhập giá thật để AI viết con số cụ thể, không viết ảo.</div>
               </div>
-            </div>
-          </div>
 
-          {/* Content input */}
-          <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>
-            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
-              <Pencil size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              Dán nội dung bài viết quảng cáo cần đánh giá
-            </label>
-            <textarea
-              value={crInput}
-              onChange={e => setCrInput(e.target.value)}
-              placeholder={"VD: 🏡 CƠ HỘI SỞ HỮU CĂN HỘ CAO CẤP TẠI QUẬN 2!\n\nGiá chỉ từ 2.5 tỷ/căn, chiết khấu lên đến 15%...\n\n👉 Liên hệ ngay: 0901234567"}
-              style={{
-                width: "100%", minHeight: 180, padding: 14, borderRadius: 10,
-                border: "1px solid #d1d5db", fontSize: 13.5, lineHeight: 1.7,
-                resize: "vertical", fontFamily: "inherit", boxSizing: "border-box",
-                outline: "none", transition: "border-color .2s",
-              }}
-              onFocus={e => e.target.style.borderColor = "#8b5cf6"}
-              onBlur={e => e.target.style.borderColor = "#d1d5db"}
-            />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-              <span style={{ fontSize: 11, color: "#9ca3af" }}>{crInput.length} ký tự</span>
-              <div style={{ display: "flex", gap: 8 }}>
-                {crInput && <button onClick={() => { setCrInput(""); setCrResult(null); setCrError(""); }} style={{ ...btnSecondary, padding: "8px 16px", fontSize: 13 }}>Xóa</button>}
-                <button onClick={handleContentReview} disabled={crLoading || !crInput.trim()} style={{
-                  ...btnPrimary, padding: "8px 20px", fontSize: 13,
-                  background: crLoading ? "#9ca3af" : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
-                  display: "flex", alignItems: "center", gap: 6, opacity: !crInput.trim() ? 0.5 : 1,
-                }}>
-                  {crLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang phân tích...</> : <><Sparkles size={14} /> Phân tích &amp; Viết lại</>}
-                </button>
+              <div>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                  <Pencil size={13} style={{ verticalAlign: "middle" }} /> Bài viết gốc (tuỳ chọn — để AI đánh giá + viết lại)
+                </label>
+                <textarea
+                  value={crInput}
+                  onChange={e => setCrInput(e.target.value)}
+                  placeholder={"Dán bài viết cũ vào đây nếu muốn AI đánh giá và viết lại.\nBỏ trống = AI viết hoàn toàn mới từ thông số bạn chọn."}
+                  style={{
+                    width: "100%", minHeight: 120, padding: 14, borderRadius: 10,
+                    border: "1px solid #d1d5db", fontSize: 13.5, lineHeight: 1.7,
+                    resize: "vertical", fontFamily: "inherit", boxSizing: "border-box",
+                    outline: "none", transition: "border-color .2s",
+                  }}
+                  onFocus={e => e.target.style.borderColor = "#8b5cf6"}
+                  onBlur={e => e.target.style.borderColor = "#d1d5db"}
+                />
               </div>
+
+              {/* Summary of selections */}
+              <div style={{ marginTop: 16, background: "#f5f3ff", borderRadius: 10, padding: 14, fontSize: 12, color: "#4b5563" }}>
+                <div style={{ fontWeight: 700, color: "#7c3aed", marginBottom: 6 }}>📋 Tóm tắt cấu hình:</div>
+                <div>🏗️ <b>{crProjectName}</b> — {{ can_ho: "Căn hộ", nha_pho: "Nhà phố", biet_thu: "Biệt thự", shophouse: "Shophouse" }[crCategory]}</div>
+                <div>🎯 {{ mua_o: "Khách mua ở (an cư)", dau_tu: "Khách đầu tư (ROI)" }[crTarget]} — {{ mat_tien: "Tâm lý: Sợ mất tiền", loi_nhuan: "Tâm lý: Tham lợi nhuận", fomo: "Tâm lý: FOMO", dang_cap: "Tâm lý: Đẳng cấp" }[crPsychology]}</div>
+                <div>📝 {{ event: "Đăng ký Event", bao_gia: "Báo giá CĐT", khan_hiem: "Chào hàng khan hiếm", tiec_nuoi: "Khơi gợi tiếc nuối" }[crAdType]} {crHow && `— ${crHow}`}</div>
+              </div>
+
+              {navButtons(crHow.trim().length > 0)}
             </div>
-          </div>
+          )}
 
           {/* Error */}
           {crError && (
-            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: "#dc2626", fontSize: 13 }}>
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginTop: 16, display: "flex", alignItems: "center", gap: 8, color: "#dc2626", fontSize: 13 }}>
               <AlertCircle size={16} /> {crError}
             </div>
           )}
 
-          {/* Results */}
-          {crResult && (
+          {/* Loading */}
+          {crLoading && (
+            <div style={{ background: "#fff", borderRadius: 14, padding: 40, border: "1px solid #e5e7eb", marginTop: 16, textAlign: "center" }}>
+              <RefreshCw size={32} color="#8b5cf6" style={{ animation: "spin 1s linear infinite", marginBottom: 12 }} />
+              <div style={{ fontSize: 15, fontWeight: 600, color: "#374151" }}>Đang tạo 3 phiên bản content...</div>
+              <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>AI đang phân tích thông số và viết bài theo quy tắc thực chiến</div>
+            </div>
+          )}
+
+          {/* === STEP 4: Results — 3 versions === */}
+          {crStep === 4 && crResult && !crLoading && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-              {/* Step 1: Analysis */}
+              {/* Version selector tabs */}
+              <div style={{ background: "#fff", borderRadius: 14, padding: 16, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 10 }}>Chọn phiên bản:</div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {[
+                    { key: "gat", emoji: "🔥", label: "Bản GẮT", desc: "FOMO + số liệu mạnh" },
+                    { key: "ke_chuyen", emoji: "📖", label: "Bản Kể chuyện", desc: "Khơi gợi tiếc nuối" },
+                    { key: "truc_dien", emoji: "💰", label: "Bản Trực diện", desc: "Show giá + ưu đãi" },
+                  ].map(v => (
+                    <button key={v.key} onClick={() => setCrSelectedVersion(v.key)} style={{
+                      flex: 1, minWidth: isMobile ? "100%" : 160, padding: "12px 16px", borderRadius: 10, cursor: "pointer",
+                      border: crSelectedVersion === v.key ? "2px solid #8b5cf6" : "1.5px solid #e5e7eb",
+                      background: crSelectedVersion === v.key ? "linear-gradient(135deg, #f5f3ff, #ede9fe)" : "#fff",
+                      transition: "all .2s", textAlign: "left",
+                    }}>
+                      <div style={{ fontSize: 18, marginBottom: 2 }}>{v.emoji}</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: crSelectedVersion === v.key ? "#7c3aed" : "#374151" }}>{v.label}</div>
+                      <div style={{ fontSize: 11, color: "#9ca3af" }}>{v.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Selected version content */}
+              {(() => {
+                const ver = crResult.versions?.[crSelectedVersion];
+                if (!ver) return null;
+                return (
+                  <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <h4 style={{ margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#16a34a" }}>
+                        <CheckCircle size={16} /> {{ gat: "🔥 Bản GẮT", ke_chuyen: "📖 Bản Kể chuyện", truc_dien: "💰 Bản Trực diện" }[crSelectedVersion]}
+                      </h4>
+                      <button onClick={() => { navigator.clipboard.writeText(ver.content); showToast("Đã copy bài viết", "success"); }} style={{ ...btnSecondary, padding: "6px 14px", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                        <ClipboardList size={13} /> Copy bài
+                      </button>
+                    </div>
+                    <div style={{
+                      background: "#f0fdf4", borderRadius: 10, padding: 16, border: "1px solid #bbf7d0",
+                      fontSize: 13.5, lineHeight: 1.8, whiteSpace: "pre-wrap", color: "#1f2937",
+                    }}>
+                      {ver.content}
+                    </div>
+                    {ver.strategy && (
+                      <div style={{ marginTop: 10, background: "#f5f3ff", borderRadius: 8, padding: "10px 14px", fontSize: 12, color: "#4b5563" }}>
+                        <b style={{ color: "#7c3aed" }}>💡 Chiến lược:</b> {ver.strategy}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Analysis (if reviewing existing content) */}
               {crResult.analysis && (
                 <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
                   <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#7c3aed" }}>
-                    <Search size={16} /> Bước 1 — Phân tích Input
+                    <Search size={16} /> Phân tích bài viết gốc
                   </h4>
                   <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
                     {[["What (Sản phẩm)", crResult.analysis.what], ["Where (Vị trí)", crResult.analysis.where], ["How (Giá/Vốn)", crResult.analysis.how], ["Why (Lý do mua)", crResult.analysis.why]].map(([label, val], i) => (
@@ -7827,61 +8004,22 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                       </div>
                     ))}
                   </div>
-                  {crResult.analysis.target_match && (
-                    <div style={{ marginTop: 10, fontSize: 12, color: "#4b5563", background: "#f5f3ff", borderRadius: 8, padding: "8px 12px" }}>
-                      <b>Tệp khách:</b> {crResult.analysis.target_match}
-                    </div>
-                  )}
                 </div>
               )}
 
-              {/* Step 2: Errors */}
+              {/* Errors from original content */}
               {crResult.errors?.length > 0 && (
                 <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
                   <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#ea580c" }}>
-                    <AlertTriangle size={16} /> Bước 2 — Đối chiếu Quy tắc Vàng ({crResult.errors.length} lỗi)
+                    <AlertTriangle size={16} /> Lỗi bài viết gốc ({crResult.errors.length})
                   </h4>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {crResult.errors.map((err, i) => (
-                      <div key={i} style={{ background: severityBg[err.severity] || "#f9fafb", borderRadius: 10, padding: 14, borderLeft: `3px solid ${severityColor[err.severity] || "#6b7280"}` }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
-                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: `${severityColor[err.severity]}15`, color: severityColor[err.severity] }}>
-                            {severityLabel[err.severity] || err.severity}
-                          </span>
-                          <span style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, background: "#f5f3ff", padding: "2px 8px", borderRadius: 6 }}>
-                            {errorTypeLabel[err.type] || err.type}
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{err.issue}</div>
-                        {err.original_text && (
-                          <div style={{ background: `${severityColor[err.severity]}08`, borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#374151", marginBottom: 4, borderLeft: `2px solid ${severityColor[err.severity]}40` }}>
-                            <span style={{ fontWeight: 600, color: "#6b7280", fontSize: 11 }}>Đoạn gốc: </span>"{err.original_text}"
-                          </div>
-                        )}
-                        {err.rule && <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 2 }}>📌 Quy tắc: {err.rule}</div>}
-                        {err.fix && <div style={{ fontSize: 12, color: "#16a34a", fontWeight: 500 }}>✅ Cách sửa: {err.fix}</div>}
+                      <div key={i} style={{ background: err.severity === "high" ? "#fef2f2" : err.severity === "medium" ? "#fffbeb" : "#f9fafb", borderRadius: 8, padding: 12, borderLeft: `3px solid ${err.severity === "high" ? "#dc2626" : err.severity === "medium" ? "#f59e0b" : "#6b7280"}` }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937", marginBottom: 2 }}>{err.issue}</div>
+                        {err.fix && <div style={{ fontSize: 12, color: "#16a34a" }}>✅ {err.fix}</div>}
                       </div>
                     ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Step 3: Improved content + Scoring */}
-              {crResult.improved_content && (
-                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <h4 style={{ margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#16a34a" }}>
-                      <CheckCircle size={16} /> Bước 3 — Bài viết thực chiến
-                    </h4>
-                    <button onClick={() => { navigator.clipboard.writeText(crResult.improved_content); showToast("Đã copy bài viết", "success"); }} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
-                      <ClipboardList size={13} /> Copy
-                    </button>
-                  </div>
-                  <div style={{
-                    background: "#f0fdf4", borderRadius: 10, padding: 16, border: "1px solid #bbf7d0",
-                    fontSize: 13.5, lineHeight: 1.8, whiteSpace: "pre-wrap", color: "#1f2937",
-                  }}>
-                    {crResult.improved_content}
                   </div>
                 </div>
               )}
@@ -7890,11 +8028,11 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               {crResult.scoring && (
                 <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
                   <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-                    <Award size={16} color="#f59e0b" /> Bảng chấm điểm thực chiến
+                    <Award size={16} color="#f59e0b" /> Chấm điểm thực chiến (Bản {crSelectedVersion === "gat" ? "GẮT" : crSelectedVersion === "ke_chuyen" ? "Kể chuyện" : "Trực diện"})
                   </h4>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {Object.entries(scoringLabels).map(([key, label]) => {
-                      const item = crResult.scoring[key];
+                      const item = crResult.scoring?.[key];
                       if (!item) return null;
                       const sc = Number(item.score) || 0;
                       return (
@@ -7906,7 +8044,6 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                             </div>
                             <span style={{ fontSize: 13, fontWeight: 700, color: scoreBarColor(sc), minWidth: 32, textAlign: "right" }}>{sc}/10</span>
                           </div>
-                          <div style={{ fontSize: 11, color: "#6b7280", maxWidth: isMobile ? 100 : 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.comment}>{item.comment}</div>
                         </div>
                       );
                     })}
@@ -7922,22 +8059,19 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 </div>
               )}
 
-              {/* Changes summary */}
-              {crResult.changes_summary?.length > 0 && (
-                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
-                  <h4 style={{ margin: "0 0 10px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-                    <Lightbulb size={16} color="#f59e0b" /> Tóm tắt thay đổi
-                  </h4>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {crResult.changes_summary.map((c, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "#374151" }}>
-                        <Check size={14} color="#16a34a" style={{ marginTop: 2, flexShrink: 0 }} />
-                        <span>{c}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {/* Back to edit */}
+              <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 8 }}>
+                <button onClick={() => { setCrStep(1); setCrResult(null); setCrError(""); }} style={{ ...btnSecondary, padding: "10px 20px", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                  <RefreshCw size={14} /> Tạo bài mới
+                </button>
+                <button onClick={handleContentGenerate} disabled={crLoading} style={{
+                  ...btnPrimary, padding: "10px 20px", fontSize: 13,
+                  background: "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                  <Sparkles size={14} /> Tạo lại 3 bản
+                </button>
+              </div>
             </div>
           )}
         </div>
