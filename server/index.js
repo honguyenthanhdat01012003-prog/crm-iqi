@@ -5634,6 +5634,96 @@ app.get("/api/fb-ads/campaign-detail/:accountId/:campaignId", requireAuth, requi
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ===== Content Review (GPT-5.4 nano) ===== */
+app.post("/api/content-review", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content || !content.trim()) return res.status(400).json({ error: "Chưa nhập nội dung bài viết" });
+
+    const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'openai_api_key'");
+    if (!apiKey?.value) return res.status(400).json({ error: "Chưa cấu hình OpenAI API key. Vào Cài đặt tài khoản (tab Chiến dịch) để thêm." });
+
+    // Fetch marketing guidelines for content rules
+    const guidelines = await all(db, "SELECT * FROM marketing_guidelines WHERE category IN ('Nội dung', 'Chiến lược', 'Tối ưu chi phí') ORDER BY priority DESC");
+    const guidelinesText = guidelines.length > 0
+      ? guidelines.map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n")
+      : MARKETING_KNOWLEDGE.filter(g => ["Nội dung", "Chiến lược", "Tối ưu chi phí"].includes(g.category)).map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n");
+
+    const prompt = `Bạn là CHUYÊN GIA CONTENT MARKETING BĐS với 10 năm kinh nghiệm viết bài quảng cáo Facebook cho bất động sản Việt Nam.
+
+=== QUY TẮC VIẾT CONTENT CHUẨN ===
+${guidelinesText}
+
+=== BÀI VIẾT CẦN ĐÁNH GIÁ ===
+${content.trim()}
+
+=== YÊU CẦU ===
+Phân tích bài viết trên và trả về JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
+{
+  "score": <điểm 0-100>,
+  "verdict": "<Xuất sắc|Tốt|Trung bình|Cần cải thiện|Yếu>",
+  "errors": [
+    {
+      "part": "<hook|pain_point|solution|social_proof|cta|structure|tone|policy>",
+      "issue": "<mô tả lỗi cụ thể>",
+      "severity": "<high|medium|low>",
+      "original_text": "<đoạn text bị lỗi (trích nguyên văn)>",
+      "explanation": "<giải thích TẠI SAO sai, dựa trên quy tắc nào>"
+    }
+  ],
+  "improved_content": "<BÀI VIẾT ĐÃ SỬA HOÀN CHỈNH - giữ ý chính nhưng sửa theo đúng cấu trúc chuẩn: Hook mạnh → Pain point → Giải pháp → Social proof → CTA rõ ràng>",
+  "changes_summary": [
+    "<mô tả ngắn gọn thay đổi 1>",
+    "<mô tả ngắn gọn thay đổi 2>"
+  ]
+}
+
+Lưu ý:
+- Phân tích TỪNG PHẦN của bài viết (hook, pain point, solution, social proof, CTA)
+- Nếu thiếu phần nào thì báo lỗi severity=high
+- Bài sửa phải THỰC TẾ, giữ thông tin dự án gốc, chỉ cải thiện cách viết
+- Trả lời bằng tiếng Việt`;
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 30000);
+
+    const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey.value}` },
+      body: JSON.stringify({
+        model: "gpt-4.1-nano",
+        messages: [
+          { role: "system", content: "Bạn là chuyên gia content marketing BĐS. Luôn trả lời bằng JSON thuần, không markdown, không ```." },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.3,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!gptRes.ok) {
+      const errData = await gptRes.json().catch(() => ({}));
+      return res.status(502).json({ error: `OpenAI API lỗi: ${errData.error?.message || gptRes.status}` });
+    }
+
+    const gptData = await gptRes.json();
+    const raw = (gptData.choices?.[0]?.message?.content || "").trim();
+    // Parse JSON from response
+    let result;
+    try {
+      const jsonStr = raw.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim();
+      result = JSON.parse(jsonStr);
+    } catch {
+      return res.status(502).json({ error: "AI trả về không đúng format", raw });
+    }
+
+    res.json(result);
+  } catch (err) {
+    if (err.name === "AbortError") return res.status(504).json({ error: "AI xử lý quá lâu (>30s), thử lại" });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== MARKET INTELLIGENCE ENGINE ==========
 
 // ========== MARKETING GUIDELINES (AI Marketing Advisor) ==========
@@ -8051,8 +8141,10 @@ app.get("/api/daily-news/settings", requireAuth, requireAdmin, async (_req, res)
   try {
     const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
     const autoFetchTime = await get(db, "SELECT value FROM settings WHERE key = 'news_auto_fetch_time'");
+    const openaiKey = await get(db, "SELECT value FROM settings WHERE key = 'openai_api_key'");
     res.json({
       hasApiKey: !!apiKey?.value,
+      hasOpenaiKey: !!openaiKey?.value,
       autoFetchTime: autoFetchTime?.value || "07:00",
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -8061,9 +8153,12 @@ app.get("/api/daily-news/settings", requireAuth, requireAdmin, async (_req, res)
 // POST /api/daily-news/settings - Save Perplexity settings
 app.post("/api/daily-news/settings", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { apiKey, autoFetchTime } = req.body;
+    const { apiKey, autoFetchTime, openaiKey } = req.body;
     if (apiKey !== undefined) {
       await run(db, "INSERT INTO settings(key, value) VALUES('perplexity_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [apiKey]);
+    }
+    if (openaiKey !== undefined) {
+      await run(db, "INSERT INTO settings(key, value) VALUES('openai_api_key', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [openaiKey]);
     }
     if (autoFetchTime !== undefined) {
       await run(db, "INSERT INTO settings(key, value) VALUES('news_auto_fetch_time', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [autoFetchTime]);

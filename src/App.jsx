@@ -5465,6 +5465,17 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [acctDraft, setAcctDraft] = useState({ name: "", accountId: "", accessToken: "" });
   const [savingAcct, setSavingAcct] = useState(false);
 
+  // Content Review (AI QC) state
+  const [crInput, setCrInput] = useState("");
+  const [crResult, setCrResult] = useState(null);
+  const [crLoading, setCrLoading] = useState(false);
+  const [crError, setCrError] = useState("");
+
+  // OpenAI API Key state
+  const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
+  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
+  const [savingOpenaiKey, setSavingOpenaiKey] = useState(false);
+
   // Market Intelligence state
   const [miSearch, setMiSearch] = useState("");
   const [miData, setMiData] = useState(null);
@@ -5479,6 +5490,22 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     try { const r = await apiFetch(`${API}/fb-ad-accounts`); if (r.ok) setAdAccounts(await r.json()); } catch {}
   };
   useEffect(() => { loadAdAccounts(); }, []);
+
+  // Check OpenAI key status
+  useEffect(() => {
+    apiFetch(`${API}/daily-news/settings`).then(r => r.json()).then(d => { if (d.hasOpenaiKey) setHasOpenaiKey(true); }).catch(() => {});
+  }, []);
+
+  const handleSaveOpenaiKey = async () => {
+    if (!openaiKeyDraft.trim()) { showToast("Vui lòng nhập API key", "warning"); return; }
+    setSavingOpenaiKey(true);
+    try {
+      const r = await apiFetch(`${API}/daily-news/settings`, { method: "POST", body: JSON.stringify({ openaiKey: openaiKeyDraft }) });
+      if (r.ok) { showToast("Đã lưu OpenAI API key", "success"); setHasOpenaiKey(true); setOpenaiKeyDraft(""); }
+      else { const d = await r.json(); showToast(d.error || "Lỗi", "error"); }
+    } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+    setSavingOpenaiKey(false);
+  };
 
   // Seed marketing guidelines
   const seedGuidelines = async () => {
@@ -5819,6 +5846,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const tabBar = (
     <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16, flexWrap: "wrap" }}>
       {isAdminOnly && tabBtn("market_intel", "Phân tích thị trường", <Radar size={15} />)}
+      {isAdminOnly && tabBtn("content_review", "Đánh giá Content", <FileEdit size={15} />)}
       {tabBtn("leads", "Lead theo chiến dịch", <Target size={15} />)}
       {tabBtn("fb_ads", "Hiệu quả quảng cáo FB", <Activity size={15} />)}
       {!isManager && tabBtn("settings", "Cài đặt tài khoản", <Settings size={15} />)}
@@ -7539,6 +7567,175 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     );
   }
 
+  // === Content Review Tab (AI QC) ===
+  if (tab === "content_review" && isAdminOnly) {
+    const handleContentReview = async () => {
+      if (!crInput.trim()) { showToast("Vui lòng nhập nội dung bài viết", "warning"); return; }
+      setCrLoading(true); setCrError(""); setCrResult(null);
+      try {
+        const r = await apiFetch(`${API}/content-review`, { method: "POST", body: JSON.stringify({ content: crInput }) });
+        const d = await r.json();
+        if (!r.ok) { setCrError(d.error || "Lỗi đánh giá"); return; }
+        setCrResult(d);
+      } catch (e) { setCrError("Lỗi kết nối: " + e.message); }
+      setCrLoading(false);
+    };
+
+    const severityColor = { high: "#dc2626", medium: "#f59e0b", low: "#6b7280" };
+    const severityBg = { high: "#fef2f2", medium: "#fffbeb", low: "#f9fafb" };
+    const severityLabel = { high: "Nghiêm trọng", medium: "Cần sửa", low: "Gợi ý" };
+    const scoreColor = (s) => s >= 80 ? "#16a34a" : s >= 60 ? "#f59e0b" : s >= 40 ? "#ea580c" : "#dc2626";
+    const scoreGradient = (s) => s >= 80 ? "linear-gradient(135deg, #10b981, #059669)" : s >= 60 ? "linear-gradient(135deg, #f59e0b, #d97706)" : s >= 40 ? "linear-gradient(135deg, #ea580c, #c2410c)" : "linear-gradient(135deg, #dc2626, #b91c1c)";
+
+    return (
+      <div>
+        {tabBar}
+        <div style={{ maxWidth: 900, margin: "0 auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <FileEdit size={18} color="#fff" />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16, color: "#1a3c20" }}>Đánh giá &amp; Sửa Content QC</h3>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>AI phân tích bài viết quảng cáo BĐS, chấm điểm và sửa lại cho chuẩn</div>
+            </div>
+          </div>
+
+          {/* Input section */}
+          <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
+              <Pencil size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
+              Dán nội dung bài viết quảng cáo cần đánh giá
+            </label>
+            <textarea
+              value={crInput}
+              onChange={e => setCrInput(e.target.value)}
+              placeholder={"VD: 🏡 CƠ HỘI SỞ HỮU CĂN HỘ CAO CẤP TẠI QUẬN 2!\n\nGiá chỉ từ 2.5 tỷ/căn, chiết khấu lên đến 15%...\n\n👉 Liên hệ ngay: 0901234567"}
+              style={{
+                width: "100%", minHeight: 180, padding: 14, borderRadius: 10,
+                border: "1px solid #d1d5db", fontSize: 13.5, lineHeight: 1.7,
+                resize: "vertical", fontFamily: "inherit", boxSizing: "border-box",
+                outline: "none", transition: "border-color .2s",
+              }}
+              onFocus={e => e.target.style.borderColor = "#8b5cf6"}
+              onBlur={e => e.target.style.borderColor = "#d1d5db"}
+            />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
+              <span style={{ fontSize: 11, color: "#9ca3af" }}>{crInput.length} ký tự</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                {crInput && <button onClick={() => { setCrInput(""); setCrResult(null); setCrError(""); }} style={{ ...btnSecondary, padding: "8px 16px", fontSize: 13 }}>Xóa</button>}
+                <button onClick={handleContentReview} disabled={crLoading || !crInput.trim()} style={{
+                  ...btnPrimary, padding: "8px 20px", fontSize: 13,
+                  background: crLoading ? "#9ca3af" : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
+                  display: "flex", alignItems: "center", gap: 6, opacity: !crInput.trim() ? 0.5 : 1,
+                }}>
+                  {crLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang phân tích...</> : <><Sparkles size={14} /> Đánh giá bằng AI</>}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Error */}
+          {crError && (
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 8, color: "#dc2626", fontSize: 13 }}>
+              <AlertCircle size={16} /> {crError}
+            </div>
+          )}
+
+          {/* Results */}
+          {crResult && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {/* Score card */}
+              <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                  <div style={{
+                    width: 72, height: 72, borderRadius: "50%", background: scoreGradient(crResult.score),
+                    display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column",
+                    color: "#fff", boxShadow: `0 4px 16px ${scoreColor(crResult.score)}40`,
+                  }}>
+                    <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{crResult.score}</span>
+                    <span style={{ fontSize: 9, opacity: 0.9 }}>/100</span>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: scoreColor(crResult.score) }}>{crResult.verdict}</div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                      {crResult.errors?.length || 0} lỗi phát hiện · {crResult.changes_summary?.length || 0} thay đổi được áp dụng
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Errors list */}
+              {crResult.errors?.length > 0 && (
+                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                    <AlertTriangle size={16} color="#f59e0b" /> Lỗi phát hiện ({crResult.errors.length})
+                  </h4>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {crResult.errors.map((err, i) => (
+                      <div key={i} style={{ background: severityBg[err.severity] || "#f9fafb", borderRadius: 10, padding: 14, border: `1px solid ${severityColor[err.severity] || "#e5e7eb"}25`, borderLeft: `3px solid ${severityColor[err.severity] || "#6b7280"}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: `${severityColor[err.severity]}15`, color: severityColor[err.severity], textTransform: "uppercase" }}>
+                            {severityLabel[err.severity] || err.severity}
+                          </span>
+                          <span style={{ fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>{err.part}</span>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{err.issue}</div>
+                        {err.original_text && (
+                          <div style={{ background: `${severityColor[err.severity]}08`, borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#374151", marginBottom: 4, borderLeft: `2px solid ${severityColor[err.severity]}40` }}>
+                            <span style={{ fontWeight: 600, color: "#6b7280", fontSize: 11 }}>Đoạn gốc: </span>"{err.original_text}"
+                          </div>
+                        )}
+                        {err.explanation && <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.5 }}>💡 {err.explanation}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Improved content */}
+              {crResult.improved_content && (
+                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                    <h4 style={{ margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                      <CheckCircle size={16} color="#16a34a" /> Bài viết đã sửa
+                    </h4>
+                    <button onClick={() => { navigator.clipboard.writeText(crResult.improved_content); showToast("Đã copy bài viết", "success"); }} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
+                      <ClipboardList size={13} /> Copy
+                    </button>
+                  </div>
+                  <div style={{
+                    background: "#f0fdf4", borderRadius: 10, padding: 16, border: "1px solid #bbf7d0",
+                    fontSize: 13.5, lineHeight: 1.8, whiteSpace: "pre-wrap", color: "#1f2937",
+                  }}>
+                    {crResult.improved_content}
+                  </div>
+                </div>
+              )}
+
+              {/* Changes summary */}
+              {crResult.changes_summary?.length > 0 && (
+                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                  <h4 style={{ margin: "0 0 10px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Lightbulb size={16} color="#f59e0b" /> Tóm tắt thay đổi
+                  </h4>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {crResult.changes_summary.map((c, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, color: "#374151" }}>
+                        <Check size={14} color="#16a34a" style={{ marginTop: 2, flexShrink: 0 }} />
+                        <span>{c}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   // === Settings Tab ===
   if (tab === "settings" && !isManager) {
     return (
@@ -7736,6 +7933,37 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             </table>
           </div>
         )}
+
+        {/* OpenAI API Key settings */}
+        <div style={{ marginTop: 28, borderTop: "1px solid #e5e7eb", paddingTop: 20 }}>
+          <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
+            <Sparkles size={16} /> OpenAI API Key (Đánh giá Content AI)
+          </h3>
+          <div style={{ background: hasOpenaiKey ? "#f0fdf4" : "#fffbeb", border: `1px solid ${hasOpenaiKey ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              {hasOpenaiKey ? <CheckCircle size={14} color="#16a34a" /> : <AlertCircle size={14} color="#f59e0b" />}
+              <span style={{ fontWeight: 600, color: hasOpenaiKey ? "#16a34a" : "#92400e" }}>
+                {hasOpenaiKey ? "Đã kết nối OpenAI" : "Chưa cấu hình OpenAI API Key"}
+              </span>
+            </div>
+            <div style={{ color: "#6b7280", fontSize: 11.5 }}>
+              Cần API key để sử dụng tính năng "Đánh giá Content" (GPT-4.1-nano, rất rẻ ~$0.20/1M token).
+              Lấy key tại <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: "#8b5cf6" }}>platform.openai.com/api-keys</a>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              style={{ ...inputStyle, flex: 1, marginTop: 0 }}
+              type="password"
+              value={openaiKeyDraft}
+              onChange={e => setOpenaiKeyDraft(e.target.value)}
+              placeholder={hasOpenaiKey ? "Nhập key mới để thay đổi..." : "sk-..."}
+            />
+            <button onClick={handleSaveOpenaiKey} disabled={savingOpenaiKey || !openaiKeyDraft.trim()} style={{ ...btnPrimary, padding: "10px 20px", opacity: !openaiKeyDraft.trim() ? 0.5 : 1, whiteSpace: "nowrap" }}>
+              {savingOpenaiKey ? "Đang lưu..." : "Lưu Key"}
+            </button>
+          </div>
+        </div>
 
         {showAccountForm && (
           <Modal onClose={() => { setShowAccountForm(false); setEditingAccount(null); }} title={editingAccount ? "Sửa tài khoản QC" : "Thêm tài khoản QC"}>
