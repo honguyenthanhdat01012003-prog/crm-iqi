@@ -502,6 +502,11 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
+
+  // Announcement marquee state
+  const [announcements, setAnnouncements] = useState([]);
+  const [showAnnounceMgmt, setShowAnnounceMgmt] = useState(false);
+  const [announceDraft, setAnnounceDraft] = useState("");
   const [syncCountdown, setSyncCountdown] = useState(0);
   const [syncHash, setSyncHash] = useState("");
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
@@ -591,6 +596,11 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [applyApiData]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
+  const fetchAnnouncements = useCallback(() => {
+    apiFetch(`${API}/announcements`).then(r => r.ok ? r.json() : []).then(d => setAnnouncements(Array.isArray(d) ? d : [])).catch(() => {});
+  }, []);
+  useEffect(() => { fetchAnnouncements(); }, [fetchAnnouncements]);
+
   useEffect(() => {
     const socket = socketIOClient(window.location.origin, { transports: ["websocket", "polling"] });
     socket.on("connect", () => {
@@ -606,8 +616,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         .then(applyApiData)
         .catch(() => {});
     });
+    socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData]);
+  }, [applyApiData, fetchAnnouncements]);
 
   // Connection health check - detect server down (fallback, 30s)
   const [serverDown, setServerDown] = useState(false);
@@ -1156,6 +1167,17 @@ function CRMApp({ user, updateUser, onLogout }) {
                   </>
                 )}
               </div>
+              {/* Announcement management button (admin only) */}
+              {isAdminOnly && (
+                <button onClick={() => setShowAnnounceMgmt(true)} title="Quản lý thông báo chạy" style={{
+                  background: announcements.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #e5e7eb",
+                  borderRadius: 10, width: 40, height: 40, cursor: "pointer",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  transition: "background .2s",
+                }}>
+                  <Megaphone size={18} style={{ color: announcements.length > 0 ? "#d97706" : "#6b7280" }} />
+                </button>
+              )}
               <button
                 onClick={handleSync}
                 disabled={syncing}
@@ -1181,6 +1203,26 @@ function CRMApp({ user, updateUser, onLogout }) {
             </div>
           )}
         </div>
+
+        {/* Scrolling announcement marquee */}
+        {announcements.length > 0 && (
+          <div style={{
+            background: "linear-gradient(90deg, #fef3c7, #fffbeb, #fef3c7)", borderBottom: "1px solid #fde68a",
+            padding: "8px 0", overflow: "hidden", position: "relative",
+          }}>
+            <div style={{
+              display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap",
+              animation: `marqueeScroll ${Math.max(15, announcements.map(a => a.content).join("   •   ").length * 0.18)}s linear infinite`,
+            }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, paddingLeft: "100%" }}>
+                <Megaphone size={14} color="#d97706" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>
+                  {announcements.map(a => a.content).join("   •   ")}
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
 
         <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20 }}>
         {page === "dashboard" && (
@@ -1241,6 +1283,56 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "daily_news" && <DailyNewsPage isAdmin={isAdminOnly} />}
         </div>
       </main>
+
+      {/* Announcement Management Modal */}
+      {showAnnounceMgmt && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", backdropFilter: "blur(4px)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setShowAnnounceMgmt(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 500, maxWidth: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
+            <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}><Megaphone size={18} color="#d97706" /> Thông báo chạy trên màn hình</h3>
+              <button onClick={() => setShowAnnounceMgmt(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} color="#6b7280" /></button>
+            </div>
+            <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
+              {/* Add new announcement */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>Thêm thông báo mới</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    style={{ ...inputStyle, flex: 1, marginTop: 0 }}
+                    value={announceDraft}
+                    onChange={e => setAnnounceDraft(e.target.value)}
+                    placeholder="VD: Họp team lúc 14h chiều nay tại phòng A..."
+                    onKeyDown={e => { if (e.key === "Enter" && announceDraft.trim()) { apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } }); } }}
+                  />
+                  <button onClick={() => { if (!announceDraft.trim()) return; apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } }); }} disabled={!announceDraft.trim()} style={{ ...btnPrimary, padding: "8px 16px", whiteSpace: "nowrap", opacity: !announceDraft.trim() ? 0.5 : 1 }}>
+                    <Plus size={14} /> Thêm
+                  </button>
+                </div>
+              </div>
+
+              {/* List active announcements */}
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>Đang hiển thị ({announcements.length})</div>
+              {announcements.length === 0 ? (
+                <div style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontSize: 13 }}>
+                  <Megaphone size={32} style={{ opacity: 0.3, marginBottom: 8 }} /><br />
+                  Chưa có thông báo nào. Thêm thông báo để hiện chạy trên màn hình.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {announcements.map(a => (
+                    <div key={a.id} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                      <Megaphone size={14} color="#d97706" style={{ flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 13, color: "#92400e" }}>{a.content}</span>
+                      <button onClick={() => { apiFetch(`${API}/announcements/${a.id}`, { method: "PUT", body: JSON.stringify({ is_active: false }) }).then(r => { if (r.ok) { fetchAnnouncements(); showToast("Đã tắt thông báo", "success"); } }); }} title="Tắt" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Pause size={14} color="#f59e0b" /></button>
+                      <button onClick={() => { apiFetch(`${API}/announcements/${a.id}`, { method: "DELETE" }).then(r => { if (r.ok) { fetchAnnouncements(); showToast("Đã xóa", "success"); } }); }} title="Xóa" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Trash2 size={14} color="#dc2626" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Project Modal */}
       {showProjectModal && (
@@ -7600,6 +7692,14 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <div style={{ fontSize: 12, color: "#6b7280" }}>AI phân tích bài viết quảng cáo BĐS, chấm điểm và sửa lại cho chuẩn</div>
             </div>
           </div>
+
+          {/* Warning if no OpenAI key */}
+          {!hasOpenaiKey && (
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#dc2626" }}>
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
+              <span>Chưa cấu hình OpenAI API Key. Vào tab <b>Cài đặt tài khoản</b> (bên phải) → kéo xuống mục <b>"OpenAI API Key"</b> để thêm.</span>
+            </div>
+          )}
 
           {/* Input section */}
           <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>

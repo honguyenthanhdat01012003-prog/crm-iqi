@@ -213,6 +213,10 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT NOT NULL, rule_name TEXT NOT NULL,
       content TEXT NOT NULL, keywords TEXT DEFAULT '', priority INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
+      is_active INTEGER DEFAULT 1, created_by TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')))`,
   ];
   for (const sql of ddlStatements) {
     await run(db, sql);
@@ -5631,6 +5635,49 @@ app.get("/api/fb-ads/campaign-detail/:accountId/:campaignId", requireAuth, requi
     }));
 
     res.json({ adsets, ads: adsWithInsights });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ===== Announcements (scrolling banner) ===== */
+app.get("/api/announcements", requireAuth, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM announcements WHERE is_active = 1 ORDER BY created_at DESC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/announcements/all", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const rows = await all(db, "SELECT * FROM announcements ORDER BY created_at DESC");
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post("/api/announcements", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content || !content.trim()) return res.status(400).json({ error: "Chưa nhập nội dung thông báo" });
+    await run(db, "INSERT INTO announcements (content, created_by) VALUES (?, ?)", [content.trim(), req.user.display_name || req.user.username]);
+    if (io) io.emit("announcement-changed");
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { content, is_active } = req.body;
+    if (content !== undefined) await run(db, "UPDATE announcements SET content = ? WHERE id = ?", [content.trim(), req.params.id]);
+    if (is_active !== undefined) await run(db, "UPDATE announcements SET is_active = ? WHERE id = ?", [is_active ? 1 : 0, req.params.id]);
+    if (io) io.emit("announcement-changed");
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    await run(db, "DELETE FROM announcements WHERE id = ?", [req.params.id]);
+    if (io) io.emit("announcement-changed");
+    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

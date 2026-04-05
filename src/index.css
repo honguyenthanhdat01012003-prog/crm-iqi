@@ -95,6 +95,11 @@ select:focus, input:focus, button:focus {
   to { transform: translateX(0); opacity: 1; }
 }
 
+@keyframes marqueeScroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
 /* ===== Brand-consistent interactive states ===== */
 
 /* Buttons: hover lift + darken */
