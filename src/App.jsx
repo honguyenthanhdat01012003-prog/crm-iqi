@@ -5562,6 +5562,10 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   const [crResult, setCrResult] = useState(null);
   const [crLoading, setCrLoading] = useState(false);
   const [crError, setCrError] = useState("");
+  const [crTarget, setCrTarget] = useState("mua_o"); // "mua_o" | "dau_tu"
+  const [crGoal, setCrGoal] = useState("loc_khach"); // "loc_khach" | "to_mo"
+  const [crTitleType, setCrTitleType] = useState("bao_gia"); // "bao_gia" | "gay_to_mo" | "tiec_nuoi"
+  const [crHow, setCrHow] = useState(""); // Giá/Vốn thực
 
   // OpenAI API Key state
   const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
@@ -7659,15 +7663,15 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     );
   }
 
-  // === Content Review Tab (AI QC) ===
+  // === Content Review Tab (AI Editorial Workflow) ===
   if (tab === "content_review" && isAdminOnly) {
     const handleContentReview = async () => {
       if (!crInput.trim()) { showToast("Vui lòng nhập nội dung bài viết", "warning"); return; }
       setCrLoading(true); setCrError(""); setCrResult(null);
       try {
-        const r = await apiFetch(`${API}/content-review`, { method: "POST", body: JSON.stringify({ content: crInput }) });
+        const r = await apiFetch(`${API}/content-review`, { method: "POST", body: JSON.stringify({ content: crInput, target: crTarget, goal: crGoal, titleType: crTitleType, how: crHow }) });
         const d = await r.json();
-        if (!r.ok) { setCrError(d.error || "Lỗi đánh giá"); return; }
+        if (!r.ok) { setCrError(d.error || "Lỗi đánh giá"); setCrLoading(false); return; }
         setCrResult(d);
       } catch (e) { setCrError("Lỗi kết nối: " + e.message); }
       setCrLoading(false);
@@ -7676,8 +7680,19 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
     const severityColor = { high: "#dc2626", medium: "#f59e0b", low: "#6b7280" };
     const severityBg = { high: "#fef2f2", medium: "#fffbeb", low: "#f9fafb" };
     const severityLabel = { high: "Nghiêm trọng", medium: "Cần sửa", low: "Gợi ý" };
-    const scoreColor = (s) => s >= 80 ? "#16a34a" : s >= 60 ? "#f59e0b" : s >= 40 ? "#ea580c" : "#dc2626";
-    const scoreGradient = (s) => s >= 80 ? "linear-gradient(135deg, #10b981, #059669)" : s >= 60 ? "linear-gradient(135deg, #f59e0b, #d97706)" : s >= 40 ? "linear-gradient(135deg, #ea580c, #c2410c)" : "linear-gradient(135deg, #dc2626, #b91c1c)";
+    const errorTypeLabel = { my_tu_sao_rong: "Mỹ từ sáo rỗng", thieu_gia_von: "Thiếu giá/vốn", thieu_fomo: "Thiếu FOMO", qua_nhieu_san_pham: "Quá nhiều SP", tieu_de_yeu: "Tiêu đề yếu", thieu_social_proof: "Thiếu Social Proof", vi_pham_ty_le: "Vi phạm tỷ lệ 80/20" };
+    const scoringLabels = { tieu_de: "Tiêu đề lọc khách", insight_vs_sp: "Tỷ lệ Insight/SP (80/20)", con_so_cu_the: "Con số biết nói", cta_fomo: "CTA & FOMO", social_proof: "Social Proof", cam_tu_sao_rong: "Không mỹ từ sáo rỗng" };
+    const scoreBarColor = (s) => s >= 8 ? "#16a34a" : s >= 6 ? "#f59e0b" : s >= 4 ? "#ea580c" : "#dc2626";
+
+    const optBtn = (value, current, setter, label) => (
+      <button onClick={() => setter(value)} style={{
+        padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+        border: current === value ? "2px solid #8b5cf6" : "1px solid #d1d5db",
+        background: current === value ? "#f5f3ff" : "#fff",
+        color: current === value ? "#7c3aed" : "#374151",
+        transition: "all .15s",
+      }}>{label}</button>
+    );
 
     return (
       <div>
@@ -7688,20 +7703,72 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               <FileEdit size={18} color="#fff" />
             </div>
             <div>
-              <h3 style={{ margin: 0, fontSize: 16, color: "#1a3c20" }}>Đánh giá &amp; Sửa Content QC</h3>
-              <div style={{ fontSize: 12, color: "#6b7280" }}>AI phân tích bài viết quảng cáo BĐS, chấm điểm và sửa lại cho chuẩn</div>
+              <h3 style={{ margin: 0, fontSize: 16, color: "#1a3c20" }}>AI Editorial Workflow — Đánh giá Content Thực Chiến</h3>
+              <div style={{ fontSize: 12, color: "#6b7280" }}>Quy trình 3 bước: Phân tích → Đối chiếu Quy tắc Vàng → Viết lại & Chấm điểm</div>
             </div>
           </div>
 
-          {/* Warning if no OpenAI key */}
           {!hasOpenaiKey && (
             <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#dc2626" }}>
               <AlertCircle size={16} style={{ flexShrink: 0 }} />
-              <span>Chưa cấu hình OpenAI API Key. Vào tab <b>Cài đặt tài khoản</b> (bên phải) → kéo xuống mục <b>"OpenAI API Key"</b> để thêm.</span>
+              <span>Chưa cấu hình OpenAI API Key. Vào tab <b>Cài đặt tài khoản</b> → kéo xuống mục <b>"OpenAI API Key"</b> để thêm.</span>
             </div>
           )}
 
-          {/* Input section */}
+          {/* Option selectors */}
+          <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
+              {/* Tệp khách hàng */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                  <Target size={13} /> Tệp khách hàng
+                </label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {optBtn("mua_o", crTarget, setCrTarget, "🏠 Mua ở (an cư)")}
+                  {optBtn("dau_tu", crTarget, setCrTarget, "📈 Đầu tư (ROI)")}
+                </div>
+              </div>
+
+              {/* Mục tiêu */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                  <Crosshair size={13} /> Mục tiêu quảng cáo
+                </label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {optBtn("loc_khach", crGoal, setCrGoal, "🎯 Lọc khách nét")}
+                  {optBtn("to_mo", crGoal, setCrGoal, "👀 Tìm khách tò mò")}
+                </div>
+              </div>
+
+              {/* Loại tiêu đề */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                  <FileText size={13} /> Loại tiêu đề
+                </label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {optBtn("bao_gia", crTitleType, setCrTitleType, "💰 Báo giá thẳng")}
+                  {optBtn("gay_to_mo", crTitleType, setCrTitleType, "🤔 Gây tò mò")}
+                  {optBtn("tiec_nuoi", crTitleType, setCrTitleType, "⏰ Tiếc nuối (FOMO)")}
+                </div>
+              </div>
+
+              {/* Giá/Vốn */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                  <DollarSign size={13} /> Thông số Giá/Vốn thực
+                </label>
+                <input
+                  style={{ ...inputStyle, marginTop: 0, fontSize: 13 }}
+                  value={crHow}
+                  onChange={e => setCrHow(e.target.value)}
+                  placeholder="VD: 2.5 tỷ/căn, vốn ban đầu 800tr, góp 25tr/tháng"
+                />
+                <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 4 }}>Nhập giá thật để AI không viết ảo. Bỏ trống = AI cảnh báo lỗi.</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Content input */}
           <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", marginBottom: 16 }}>
             <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>
               <Pencil size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
@@ -7729,7 +7796,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                   background: crLoading ? "#9ca3af" : "linear-gradient(135deg, #8b5cf6, #6d28d9)",
                   display: "flex", alignItems: "center", gap: 6, opacity: !crInput.trim() ? 0.5 : 1,
                 }}>
-                  {crLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang phân tích...</> : <><Sparkles size={14} /> Đánh giá bằng AI</>}
+                  {crLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang phân tích...</> : <><Sparkles size={14} /> Phân tích &amp; Viết lại</>}
                 </button>
               </div>
             </div>
@@ -7745,40 +7812,45 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
           {/* Results */}
           {crResult && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              {/* Score card */}
-              <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{
-                    width: 72, height: 72, borderRadius: "50%", background: scoreGradient(crResult.score),
-                    display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column",
-                    color: "#fff", boxShadow: `0 4px 16px ${scoreColor(crResult.score)}40`,
-                  }}>
-                    <span style={{ fontSize: 24, fontWeight: 800, lineHeight: 1 }}>{crResult.score}</span>
-                    <span style={{ fontSize: 9, opacity: 0.9 }}>/100</span>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: scoreColor(crResult.score) }}>{crResult.verdict}</div>
-                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                      {crResult.errors?.length || 0} lỗi phát hiện · {crResult.changes_summary?.length || 0} thay đổi được áp dụng
-                    </div>
-                  </div>
-                </div>
-              </div>
 
-              {/* Errors list */}
+              {/* Step 1: Analysis */}
+              {crResult.analysis && (
+                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#7c3aed" }}>
+                    <Search size={16} /> Bước 1 — Phân tích Input
+                  </h4>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 10 }}>
+                    {[["What (Sản phẩm)", crResult.analysis.what], ["Where (Vị trí)", crResult.analysis.where], ["How (Giá/Vốn)", crResult.analysis.how], ["Why (Lý do mua)", crResult.analysis.why]].map(([label, val], i) => (
+                      <div key={i} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 2 }}>{label}</div>
+                        <div style={{ fontSize: 13, color: val === "THIẾU" ? "#dc2626" : "#1f2937", fontWeight: val === "THIẾU" ? 700 : 400 }}>{val || "—"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {crResult.analysis.target_match && (
+                    <div style={{ marginTop: 10, fontSize: 12, color: "#4b5563", background: "#f5f3ff", borderRadius: 8, padding: "8px 12px" }}>
+                      <b>Tệp khách:</b> {crResult.analysis.target_match}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 2: Errors */}
               {crResult.errors?.length > 0 && (
                 <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
-                  <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-                    <AlertTriangle size={16} color="#f59e0b" /> Lỗi phát hiện ({crResult.errors.length})
+                  <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#ea580c" }}>
+                    <AlertTriangle size={16} /> Bước 2 — Đối chiếu Quy tắc Vàng ({crResult.errors.length} lỗi)
                   </h4>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                     {crResult.errors.map((err, i) => (
-                      <div key={i} style={{ background: severityBg[err.severity] || "#f9fafb", borderRadius: 10, padding: 14, border: `1px solid ${severityColor[err.severity] || "#e5e7eb"}25`, borderLeft: `3px solid ${severityColor[err.severity] || "#6b7280"}` }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: `${severityColor[err.severity]}15`, color: severityColor[err.severity], textTransform: "uppercase" }}>
+                      <div key={i} style={{ background: severityBg[err.severity] || "#f9fafb", borderRadius: 10, padding: 14, borderLeft: `3px solid ${severityColor[err.severity] || "#6b7280"}` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, background: `${severityColor[err.severity]}15`, color: severityColor[err.severity] }}>
                             {severityLabel[err.severity] || err.severity}
                           </span>
-                          <span style={{ fontSize: 11, color: "#6b7280", fontStyle: "italic" }}>{err.part}</span>
+                          <span style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600, background: "#f5f3ff", padding: "2px 8px", borderRadius: 6 }}>
+                            {errorTypeLabel[err.type] || err.type}
+                          </span>
                         </div>
                         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>{err.issue}</div>
                         {err.original_text && (
@@ -7786,19 +7858,20 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                             <span style={{ fontWeight: 600, color: "#6b7280", fontSize: 11 }}>Đoạn gốc: </span>"{err.original_text}"
                           </div>
                         )}
-                        {err.explanation && <div style={{ fontSize: 12, color: "#4b5563", lineHeight: 1.5 }}>💡 {err.explanation}</div>}
+                        {err.rule && <div style={{ fontSize: 11.5, color: "#6b7280", marginBottom: 2 }}>📌 Quy tắc: {err.rule}</div>}
+                        {err.fix && <div style={{ fontSize: 12, color: "#16a34a", fontWeight: 500 }}>✅ Cách sửa: {err.fix}</div>}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Improved content */}
+              {/* Step 3: Improved content + Scoring */}
               {crResult.improved_content && (
                 <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <h4 style={{ margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
-                      <CheckCircle size={16} color="#16a34a" /> Bài viết đã sửa
+                    <h4 style={{ margin: 0, fontSize: 14, display: "flex", alignItems: "center", gap: 6, color: "#16a34a" }}>
+                      <CheckCircle size={16} /> Bước 3 — Bài viết thực chiến
                     </h4>
                     <button onClick={() => { navigator.clipboard.writeText(crResult.improved_content); showToast("Đã copy bài viết", "success"); }} style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
                       <ClipboardList size={13} /> Copy
@@ -7810,6 +7883,42 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                   }}>
                     {crResult.improved_content}
                   </div>
+                </div>
+              )}
+
+              {/* Scoring table */}
+              {crResult.scoring && (
+                <div style={{ background: "#fff", borderRadius: 14, padding: 20, border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)" }}>
+                  <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Award size={16} color="#f59e0b" /> Bảng chấm điểm thực chiến
+                  </h4>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {Object.entries(scoringLabels).map(([key, label]) => {
+                      const item = crResult.scoring[key];
+                      if (!item) return null;
+                      const sc = Number(item.score) || 0;
+                      return (
+                        <div key={key} style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                          <div style={{ width: isMobile ? 120 : 180, fontSize: 12, fontWeight: 600, color: "#374151", flexShrink: 0 }}>{label}</div>
+                          <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ flex: 1, height: 8, background: "#f3f4f6", borderRadius: 4, overflow: "hidden" }}>
+                              <div style={{ width: `${sc * 10}%`, height: "100%", background: scoreBarColor(sc), borderRadius: 4, transition: "width .5s ease" }} />
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: scoreBarColor(sc), minWidth: 32, textAlign: "right" }}>{sc}/10</span>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#6b7280", maxWidth: isMobile ? 100 : 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.comment}>{item.comment}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {crResult.scoring.total && (
+                    <div style={{ marginTop: 12, padding: "12px 16px", background: "#f5f3ff", borderRadius: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#7c3aed" }}>Tổng điểm: {crResult.scoring.total}</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: crResult.scoring.verdict === "Thực chiến" ? "#16a34a" : crResult.scoring.verdict === "Khá tốt" ? "#f59e0b" : "#dc2626" }}>
+                        {crResult.scoring.verdict}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 

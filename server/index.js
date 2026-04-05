@@ -5691,58 +5691,101 @@ app.delete("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, 
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-/* ===== Content Review (GPT-5.4 nano) ===== */
+/* ===== Content Review (AI Editorial Workflow) ===== */
 app.post("/api/content-review", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { content } = req.body;
+    const { content, target, goal, titleType, how } = req.body;
     if (!content || !content.trim()) return res.status(400).json({ error: "Chưa nhập nội dung bài viết" });
 
     const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'openai_api_key'");
     if (!apiKey?.value) return res.status(400).json({ error: "Chưa cấu hình OpenAI API key. Vào Cài đặt tài khoản (tab Chiến dịch) để thêm." });
 
-    // Fetch marketing guidelines for content rules
-    const guidelines = await all(db, "SELECT * FROM marketing_guidelines WHERE category IN ('Nội dung', 'Chiến lược', 'Tối ưu chi phí') ORDER BY priority DESC");
+    const guidelines = await all(db, "SELECT * FROM marketing_guidelines WHERE category IN ('Nội dung', 'Chiến lược', 'Tối ưu chi phí', 'Targeting') ORDER BY priority DESC");
     const guidelinesText = guidelines.length > 0
       ? guidelines.map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n")
-      : MARKETING_KNOWLEDGE.filter(g => ["Nội dung", "Chiến lược", "Tối ưu chi phí"].includes(g.category)).map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n");
+      : MARKETING_KNOWLEDGE.filter(g => ["Nội dung", "Chiến lược", "Tối ưu chi phí", "Targeting"].includes(g.category)).map(g => `[${g.category}] ${g.rule_name}: ${g.content}`).join("\n");
 
-    const prompt = `Bạn là CHUYÊN GIA CONTENT MARKETING BĐS với 10 năm kinh nghiệm viết bài quảng cáo Facebook cho bất động sản Việt Nam.
+    const targetLabel = target === "dau_tu" ? "Khách ĐẦU TƯ (quan tâm ROI, tăng giá, dòng tiền)" : "Khách MUA Ở (quan tâm tiện ích, môi trường sống, an cư)";
+    const goalLabel = goal === "to_mo" ? "Tìm khách tò mò (video đẹp, hình ảnh cuốn hút)" : "Tìm khách nét (giá thầu cao, lọc ngay từ tiêu đề)";
+    const titleLabel = titleType === "gay_to_mo" ? "Gây tò mò (không nói giá, tạo curiosity gap)" : titleType === "tiec_nuoi" ? "Khơi gợi tiếc nuối (FOMO, sắp hết, đã tăng giá)" : "Báo giá thẳng (lọc khách bằng con số thật)";
 
-=== QUY TẮC VIẾT CONTENT CHUẨN ===
-${guidelinesText}
+    const systemPrompt = `Bạn là CHUYÊN GIA CONTENT BĐS THỰC CHIẾN với 10 năm kinh nghiệm.
 
-=== BÀI VIẾT CẦN ĐÁNH GIÁ ===
+=== NGUYÊN TẮC CỨNG (BẮT BUỘC) ===
+1. KHÔNG chạy truyền thông cho CĐT — phải chạy BÁN HÀNG. Content phải lọc được khách thật.
+2. Tiêu đề PHẢI có giá/vốn nếu mục tiêu là lọc khách. Tiêu đề là bộ lọc đầu tiên.
+3. Tỷ lệ BẮT BUỘC: 80% Insight khách hàng - 20% Sản phẩm. Viết về NỖI ĐAU và MONG MUỐN của khách, KHÔNG viết về sản phẩm.
+4. LOẠI BỎ 100% MỸ TỪ SÁO RỖNG: "nơi bắt đầu chuẩn sống", "không gian mơ ước", "đẳng cấp thượng lưu", "cuộc sống xanh", "thiên đường nghỉ dưỡng", "kiến trúc sang trọng", "phong cách sống đỉnh cao", "an cư lạc nghiệp" — TẤT CẢ ĐỀU BỊ CẤM.
+5. CTA phải tạo FOMO CỰC MẠNH bằng CON SỐ CỤ THỂ: "Chỉ còn 3 căn cuối", "Giá này chỉ áp dụng đến 15/04", "23 người đang xem tin này".
+6. Social proof phải là CON SỐ BIẾT NÓI: "87% căn đã bán trong 2 tuần", "Tăng 23% sau 18 tháng", KHÔNG nói chung chung.
+
+=== DANH SÁCH ĐEN — CÁC CỤM TỪ BỊ CẤM TUYỆT ĐỐI ===
+"nơi bắt đầu chuẩn sống", "không gian mơ ước", "đẳng cấp thượng lưu", "cuộc sống xanh", "thiên đường nghỉ dưỡng", "kiến trúc sang trọng", "phong cách sống đỉnh cao", "an cư lạc nghiệp", "tọa lạc tại vị trí đắc địa", "hệ sinh thái tiện ích đẳng cấp", "không gian sống hoàn hảo", "cơ hội vàng", "siêu phẩm", "đáng sống nhất", "sống đẳng cấp"
+
+=== QUY TẮC MARKETING THỰC CHIẾN ===
+${guidelinesText}`;
+
+    const userPrompt = `=== THÔNG SỐ ĐẦU VÀO ===
+- Tệp khách hàng: ${targetLabel}
+- Mục tiêu quảng cáo: ${goalLabel}
+- Loại tiêu đề: ${titleLabel}
+- Thông số How (Giá/Vốn thực): ${how || "KHÔNG CÓ — AI phải cảnh báo lỗi 'Đuối tài chính: thiếu con số giá/vốn cụ thể'"}
+
+=== BÀI VIẾT GỐC ===
 ${content.trim()}
 
-=== YÊU CẦU ===
-Phân tích bài viết trên và trả về JSON thuần (KHÔNG markdown, KHÔNG \`\`\`json):
+=== QUY TRÌNH XỬ LÝ 3 BƯỚC ===
+
+BƯỚC 1 — PHÂN TÍCH INPUT:
+- Xác định tệp khách: Mua ở hay Đầu tư?
+- Trích xuất 4 thông số: What (Sản phẩm gì?), Where (Vị trí ở đâu?), How (Giá/Vốn bao nhiêu?), Why (Lý do mua ngay?)
+- Nếu thiếu "How" → cảnh báo lỗi "Đuối tài chính: không có giá/vốn cụ thể"
+
+BƯỚC 2 — ĐỐI CHIẾU QUY TẮC VÀNG:
+- Kiểm tra tỷ lệ 80% Insight - 20% Sản phẩm
+- Quét và liệt kê TẤT CẢ "mỹ từ sáo rỗng" trong bài gốc
+- Đánh giá tiêu đề có lọc được khách không (có số/giá không)
+- Kiểm tra CTA có FOMO mạnh không
+
+BƯỚC 3 — VIẾT LẠI & CHẤM ĐIỂM:
+- Viết lại theo cấu trúc: Tiêu đề lọc khách → Tổng quan ngắn → Chính sách hot → 3 Key chốt "con số biết nói" → CTA khan hiếm
+- Chấm điểm thực chiến
+
+=== OUTPUT FORMAT (JSON thuần, KHÔNG markdown, KHÔNG \`\`\`json) ===
 {
-  "score": <điểm 0-100>,
-  "verdict": "<Xuất sắc|Tốt|Trung bình|Cần cải thiện|Yếu>",
+  "analysis": {
+    "what": "<Sản phẩm gì>",
+    "where": "<Vị trí>",
+    "how": "<Giá/Vốn — hoặc 'THIẾU' nếu không có>",
+    "why": "<Lý do mua ngay>",
+    "target_match": "<Phân tích tệp khách phù hợp hay không>"
+  },
   "errors": [
     {
-      "part": "<hook|pain_point|solution|social_proof|cta|structure|tone|policy>",
-      "issue": "<mô tả lỗi cụ thể>",
+      "type": "<my_tu_sao_rong|thieu_gia_von|thieu_fomo|qua_nhieu_san_pham|tieu_de_yeu|thieu_social_proof|vi_pham_ty_le>",
       "severity": "<high|medium|low>",
-      "original_text": "<đoạn text bị lỗi (trích nguyên văn)>",
-      "explanation": "<giải thích TẠI SAO sai, dựa trên quy tắc nào>"
+      "original_text": "<đoạn text bị lỗi>",
+      "issue": "<mô tả lỗi>",
+      "rule": "<quy tắc nào bị vi phạm>",
+      "fix": "<cách sửa>"
     }
   ],
-  "improved_content": "<BÀI VIẾT ĐÃ SỬA HOÀN CHỈNH - giữ ý chính nhưng sửa theo đúng cấu trúc chuẩn: Hook mạnh → Pain point → Giải pháp → Social proof → CTA rõ ràng>",
-  "changes_summary": [
-    "<mô tả ngắn gọn thay đổi 1>",
-    "<mô tả ngắn gọn thay đổi 2>"
-  ]
-}
-
-Lưu ý:
-- Phân tích TỪNG PHẦN của bài viết (hook, pain point, solution, social proof, CTA)
-- Nếu thiếu phần nào thì báo lỗi severity=high
-- Bài sửa phải THỰC TẾ, giữ thông tin dự án gốc, chỉ cải thiện cách viết
-- Trả lời bằng tiếng Việt`;
+  "improved_content": "<BÀI VIẾT HOÀN CHỈNH ĐÃ SỬA — cấu trúc: Tiêu đề lọc khách → Tổng quan → Chính sách → 3 Key con số → CTA khan hiếm. GIỮ NGUYÊN thông tin dự án gốc, chỉ viết lại cho chuẩn thực chiến>",
+  "scoring": {
+    "tieu_de": { "score": "<0-10>", "comment": "<nhận xét>" },
+    "insight_vs_sp": { "score": "<0-10>", "comment": "<tỷ lệ insight/sản phẩm>" },
+    "con_so_cu_the": { "score": "<0-10>", "comment": "<có con số thật không>" },
+    "cta_fomo": { "score": "<0-10>", "comment": "<CTA có tạo urgency không>" },
+    "social_proof": { "score": "<0-10>", "comment": "<bằng chứng xã hội>" },
+    "cam_tu_sao_rong": { "score": "<0-10>", "comment": "<còn mỹ từ sáo rỗng không>" },
+    "total": "<tổng điểm /60>",
+    "verdict": "<Thực chiến|Khá tốt|Trung bình|Cần sửa nhiều|Viết lại hoàn toàn>"
+  },
+  "changes_summary": ["<thay đổi 1>", "<thay đổi 2>"]
+}`;
 
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 30000);
+    setTimeout(() => controller.abort(), 45000);
 
     const gptRes = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -5750,10 +5793,10 @@ Lưu ý:
       body: JSON.stringify({
         model: "gpt-4.1-nano",
         messages: [
-          { role: "system", content: "Bạn là chuyên gia content marketing BĐS. Luôn trả lời bằng JSON thuần, không markdown, không ```." },
-          { role: "user", content: prompt },
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
         ],
-        temperature: 0.3,
+        temperature: 0.25,
       }),
       signal: controller.signal,
     });
