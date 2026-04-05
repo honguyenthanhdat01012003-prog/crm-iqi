@@ -1302,9 +1302,9 @@ function CRMApp({ user, updateUser, onLogout }) {
                     value={announceDraft}
                     onChange={e => setAnnounceDraft(e.target.value)}
                     placeholder="VD: Họp team lúc 14h chiều nay tại phòng A..."
-                    onKeyDown={e => { if (e.key === "Enter" && announceDraft.trim()) { apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } }); } }}
+                    onKeyDown={e => { if (e.key === "Enter" && announceDraft.trim()) { apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(async r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } else { const d = await r.json().catch(() => ({})); showToast(d.error || "Lỗi thêm thông báo", "error"); } }).catch(err => showToast("Lỗi: " + err.message, "error")); } }}
                   />
-                  <button onClick={() => { if (!announceDraft.trim()) return; apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } }); }} disabled={!announceDraft.trim()} style={{ ...btnPrimary, padding: "8px 16px", whiteSpace: "nowrap", opacity: !announceDraft.trim() ? 0.5 : 1 }}>
+                  <button onClick={() => { if (!announceDraft.trim()) return; apiFetch(`${API}/announcements`, { method: "POST", body: JSON.stringify({ content: announceDraft }) }).then(async r => { if (r.ok) { setAnnounceDraft(""); fetchAnnouncements(); showToast("Đã thêm thông báo", "success"); } else { const d = await r.json().catch(() => ({})); showToast(d.error || "Lỗi thêm thông báo", "error"); } }).catch(err => showToast("Lỗi: " + err.message, "error")); }} disabled={!announceDraft.trim()} style={{ ...btnPrimary, padding: "8px 16px", whiteSpace: "nowrap", opacity: !announceDraft.trim() ? 0.5 : 1 }}>
                     <Plus size={14} /> Thêm
                   </button>
                 </div>
