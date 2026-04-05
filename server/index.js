@@ -5753,13 +5753,29 @@ ${eventHistory ? `- SOCIAL PROOF TỪ ĐỢT TRƯỚC: "${eventHistory}" — Dù
 - KHÔNG dùng mỹ từ sáo rỗng về "đẳng cấp thượng lưu" — thay bằng con số và sự thật.`;
     }
 
-    const systemPrompt = `Bạn là CHUYÊN GIA CONTENT BĐS THỰC CHIẾN với 10 năm kinh nghiệm viết quảng cáo bất động sản.
+    const systemPrompt = `Bạn là BIÊN TẬP VIÊN CAO CẤP & CHUYÊN GIA CONTENT BĐS THỰC CHIẾN với 10 năm kinh nghiệm.
 
 === NHIỆM VỤ ===
 Viết 3 PHIÊN BẢN quảng cáo cho cùng 1 dự án, mỗi bản có phong cách khác nhau:
 1. BẢN "GẮT" (gat): Đánh mạnh FOMO, số liệu chạy, tạo áp lực mua ngay.
-2. BẢN "KỂ CHUYỆN" (ke_chuyen): Khơi gợi tiếc nuối từ đợt mở bán trước, storytelling.  
-3. BẢN "TRỰC DIỆN" (truc_dien): Show thẳng giá và chính sách ưu đãi, không vòng vo.
+2. BẢN "KỂ CHUYỆN" (ke_chuyen): Khơi gợi tiếc nuối từ đợt mở bán trước, storytelling sâu.  
+3. BẢN "TRỰC DIỆN" (truc_dien): Show thẳng giá và chính sách ưu đãi, phân tích rõ ràng.
+
+=== YÊU CẦU ĐỘ DÀI & ĐỘ SÂU (BẮT BUỘC) ===
+- Mỗi bản phải TỐI THIỂU 300-400 chữ (khoảng 1.5 màn hình điện thoại). TUYỆT ĐỐI KHÔNG viết ngắn hơn!
+- Mỗi bản phải có TỐI THIỂU 4-5 đoạn văn riêng biệt, mỗi đoạn ít nhất 3 câu.
+- CẤU TRÚC BẮT BUỘC cho mỗi bản:
+  a) TIÊU ĐỀ gây sốc (1-2 dòng)
+  b) MỞ BÀI — Hook tâm lý, kéo khách đọc tiếp (2-3 câu)
+  c) PHÂN TÍCH SÂU — Tại sao mua lúc này lại thắng? Con số lợi nhuận từ đâu? (2 đoạn văn)
+  d) 3 KEY CHỐT con số biết nói (bullet points)
+  e) CTA khan hiếm + FOMO mạnh
+
+- Với bài "Khơi gợi tiếc nuối" hoặc "Event":
+  + PHẢI có ÍT NHẤT 2 đoạn văn phân tích tâm lý đám đông tại sự kiện cũ.
+  + PHẢI có mục SO SÁNH: "Tại sao mua lúc này lại thắng?" (Lợi nhuận X% từ đâu mà có?)
+  + Bài viết phải đủ "ĐỘ NGẤM" để khách sành sỏi cũng phải suy nghĩ
+  + KHÔNG viết dạng bullet list khô khan — phải là đoạn văn có chiều sâu cảm xúc
 
 === NGUYÊN TẮC CỨNG (BẮT BUỘC CHO CẢ 3 BẢN) ===
 1. KHÔNG chạy truyền thông cho CĐT — phải chạy BÁN HÀNG. Content phải lọc được khách thật.
@@ -5788,7 +5804,8 @@ ${hasOriginalContent ? `\n=== BÀI VIẾT GỐC (Cần đánh giá + viết lạ
 === YÊU CẦU ===
 ${hasOriginalContent ? "1. Phân tích bài viết gốc (analysis + errors)\n2. Viết 3 phiên bản mới dựa trên thông số đầu vào\n3. Chấm điểm bản GẮT" : "1. Viết 3 phiên bản mới hoàn toàn dựa trên thông số đầu vào\n2. Chấm điểm bản GẮT"}
 
-Mỗi bản phải có: Tiêu đề lọc khách → Tổng quan ngắn → 3 Key con số biết nói → CTA khan hiếm.
+Mỗi bản phải có: Tiêu đề lọc khách → Mở bài hook tâm lý (2-3 câu) → Phân tích sâu "Tại sao mua lúc này thắng?" (2 đoạn văn) → 3 Key con số biết nói → CTA khan hiếm.
+ĐỘ DÀI TỐI THIỂU: 300-400 chữ mỗi bản. KHÔNG ĐƯỢC viết ngắn!
 
 === OUTPUT FORMAT (JSON thuần, KHÔNG markdown, KHÔNG \`\`\`json) ===
 {
@@ -5840,6 +5857,7 @@ Mỗi bản phải có: Tiêu đề lọc khách → Tổng quan ngắn → 3 Ke
           { role: "user", content: userPrompt },
         ],
         temperature: 0.35,
+        max_tokens: 4096,
       }),
       signal: controller.signal,
     });
