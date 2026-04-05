@@ -5573,6 +5573,9 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   // Step 3: Content Ads
   const [crAdType, setCrAdType] = useState("bao_gia"); // "event" | "bao_gia" | "khan_hiem" | "tiec_nuoi"
   const [crHow, setCrHow] = useState(""); // Giá/Vốn thực
+  // Event-specific fields
+  const [crEventHistory, setCrEventHistory] = useState(""); // Thành công đợt trước
+  const [crEventPerks, setCrEventPerks] = useState(""); // Đặc quyền sự kiện lần này
 
   // OpenAI API Key state
   const [openaiKeyDraft, setOpenaiKeyDraft] = useState("");
@@ -7686,6 +7689,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
             psychology: crPsychology,
             adType: crAdType,
             how: crHow,
+            eventHistory: crAdType === "event" || crAdType === "tiec_nuoi" ? crEventHistory : "",
+            eventPerks: crAdType === "event" ? crEventPerks : "",
           }),
         });
         const d = await r.json();
@@ -7874,6 +7879,37 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 </div>
               </div>
 
+              {/* Event-specific fields */}
+              {(crAdType === "event" || crAdType === "tiec_nuoi") && (
+                <div style={{ marginBottom: 18, background: "#fffbeb", borderRadius: 12, padding: 16, border: "1px solid #fde68a" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Trophy size={14} /> Thông tin sự kiện (AI dùng làm Social Proof)
+                  </div>
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>🔥 Thành công đợt trước</label>
+                    <input
+                      value={crEventHistory}
+                      onChange={e => setCrEventHistory(e.target.value)}
+                      placeholder="VD: Cháy hàng tại Vũng Tàu, 300+ booking, 600 khách tham dự"
+                      style={{ ...inputStyle, marginTop: 0, fontSize: 13 }}
+                    />
+                    <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 2 }}>AI sẽ dùng dữ liệu này làm "đòn bẩy" tâm lý nuối tiếc</div>
+                  </div>
+                  {crAdType === "event" && (
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>🎁 Đặc quyền sự kiện lần này</label>
+                      <input
+                        value={crEventPerks}
+                        onChange={e => setCrEventPerks(e.target.value)}
+                        placeholder="VD: Ra mắt quỹ căn VIP mặt sông, CK 2% duy nhất tại New World"
+                        style={{ ...inputStyle, marginTop: 0, fontSize: 13 }}
+                      />
+                      <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 2 }}>AI sẽ dùng thông tin này làm "mồi nhử" để khách đăng ký</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div style={{ marginBottom: 18 }}>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
                   <DollarSign size={13} style={{ verticalAlign: "middle" }} /> Thông số Giá/Vốn thực *
@@ -7912,6 +7948,8 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
                 <div>🏗️ <b>{crProjectName}</b> — {{ can_ho: "Căn hộ", nha_pho: "Nhà phố", biet_thu: "Biệt thự", shophouse: "Shophouse" }[crCategory]}</div>
                 <div>🎯 {{ mua_o: "Khách mua ở (an cư)", dau_tu: "Khách đầu tư (ROI)" }[crTarget]} — {{ mat_tien: "Tâm lý: Sợ mất tiền", loi_nhuan: "Tâm lý: Tham lợi nhuận", fomo: "Tâm lý: FOMO", dang_cap: "Tâm lý: Đẳng cấp" }[crPsychology]}</div>
                 <div>📝 {{ event: "Đăng ký Event", bao_gia: "Báo giá CĐT", khan_hiem: "Chào hàng khan hiếm", tiec_nuoi: "Khơi gợi tiếc nuối" }[crAdType]} {crHow && `— ${crHow}`}</div>
+                {crEventHistory && <div>🏆 Đợt trước: {crEventHistory}</div>}
+                {crAdType === "event" && crEventPerks && <div>🎁 Đặc quyền: {crEventPerks}</div>}
               </div>
 
               {navButtons(crHow.trim().length > 0)}

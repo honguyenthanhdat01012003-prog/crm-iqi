@@ -5694,7 +5694,7 @@ app.delete("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, 
 /* ===== Content Review (AI Editorial Workflow) ===== */
 app.post("/api/content-review", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { content, projectName, category, target, psychology, adType, how } = req.body;
+    const { content, projectName, category, target, psychology, adType, how, eventHistory, eventPerks } = req.body;
     if (!projectName || !projectName.trim()) return res.status(400).json({ error: "Chưa nhập tên dự án" });
 
     const apiKey = await get(db, "SELECT value FROM settings WHERE key = 'openai_api_key'");
@@ -5714,12 +5714,29 @@ app.post("/api/content-review", requireAuth, requireAdminOnly, async (req, res) 
     // Dynamic rules based on selections
     let filterRules = "";
     if (adType === "event") {
-      filterRules += `\n- BẮT BUỘC bắt đầu bằng nhắc lại sự kiện cũ hoặc đợt mở bán trước để tạo Social Proof.
-- Sử dụng mẫu câu: "Thật đáng tiếc nếu bạn bỏ lỡ...", "Đừng để lịch sử lặp lại...", "600 khách đã đến sự kiện trước..."
-- CTA: Chào hàng + Độ khan hiếm + Gây áp lực sợ mất cơ hội.`;
+      filterRules += `\n=== BỘ KHUNG SỰ KIỆN (BẮT BUỘC KHI VIẾT CONTENT EVENT) ===
+CẤU TRÚC BÀI VIẾT: "Nuối tiếc + Cơ hội"
+
+1. MỞ BÀI — SOCIAL PROOF TỪ SỰ KIỆN TRƯỚC:
+${eventHistory ? `   - SỰ THẬT: "${eventHistory}" — BẮT BUỘC nhắc ngay dòng đầu tiên để khách thấy mình đã bỏ lỡ thứ rất giá trị.` : '   - Nhắc sự kiện trước bùng nổ, nhiều khách bỏ lỡ vì hết chỗ.'}
+   - Mẫu câu: "Bạn đã hụt mất suất ưu đãi?", "600+ khách vây kín sự kiện", "Thật đáng tiếc nếu bạn bỏ lỡ..."
+   - TUYỆT ĐỐI KHÔNG mở bài bằng "Chào mừng bạn đến với..." — ĐI THẲNG VÀO VẤN ĐỀ!
+
+2. THÂN BÀI — GIẢI PHÁP "CÁNH CỬA CUỐI CÙNG":
+${eventPerks ? `   - ĐẶC QUYỀN SỰ KIỆN: "${eventPerks}" — Dùng làm mồi nhử chính.` : '   - Thông báo sự kiện lần này là cơ hội cuối cùng.'}
+   - Nhấn mạnh: "Đừng để kịch bản đó lặp lại", "Cánh cửa cuối cùng"
+
+3. KEY CHỐT — SHOW CON SỐ HOW:
+   - Đưa ngay vốn ban đầu, chính sách ân hạn, chiết khấu (từ thông số Giá/Vốn)
+
+4. CTA — ÉP ĐĂNG KÝ:
+   - "Nhấn ĐĂNG KÝ để nhận thiệp mời VIP"
+   - "Số lượng ghế ngồi tại [địa điểm] CỰC KỲ GIỚI HẠN"
+   - Gây áp lực: con số chỗ ngồi có hạn, deadline đăng ký`;
     }
     if (adType === "tiec_nuoi") {
       filterRules += `\n- BẮT BUỘC nhắc đợt mở bán trước: ai mua đã lời bao nhiêu %, giá đã tăng bao nhiêu.
+${eventHistory ? `- SOCIAL PROOF TỪ ĐỢT TRƯỚC: "${eventHistory}" — Dùng dữ liệu này làm đòn bẩy tâm lý, khách phải thấy mình đã bỏ lỡ cơ hội thật.` : ''}
 - Mẫu câu: "Khách mua đợt 1 đã lời 25% sau 18 tháng", "Giá đã tăng từ X lên Y", "Lần này là cơ hội cuối...".`;
     }
     if (target === "dau_tu") {
@@ -5765,6 +5782,8 @@ ${guidelinesText}`;
 - Tâm lý nhắm tới: ${psychLabel}
 - Thể loại Content Ads: ${adTypeLabel}
 - Giá/Vốn thực (How): ${how || "CHƯA CÓ — hãy dùng giả định hợp lý và ghi rõ [cần cập nhật giá thật]"}
+${eventHistory ? `- 🔥 LỊCH SỬ SỰ KIỆN / THÀNH CÔNG ĐỢT TRƯỚC: "${eventHistory}" — BẮT BUỘC dùng làm Social Proof ngay dòng đầu tiên!` : ""}
+${eventPerks ? `- 🎁 ĐẶC QUYỀN SỰ KIỆN LẦN NÀY: "${eventPerks}" — Dùng làm mồi nhử chính để khách đăng ký!` : ""}
 ${hasOriginalContent ? `\n=== BÀI VIẾT GỐC (Cần đánh giá + viết lại) ===\n${content.trim()}\n` : ""}
 === YÊU CẦU ===
 ${hasOriginalContent ? "1. Phân tích bài viết gốc (analysis + errors)\n2. Viết 3 phiên bản mới dựa trên thông số đầu vào\n3. Chấm điểm bản GẮT" : "1. Viết 3 phiên bản mới hoàn toàn dựa trên thông số đầu vào\n2. Chấm điểm bản GẮT"}
