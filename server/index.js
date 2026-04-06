@@ -1167,32 +1167,34 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       ],
     });
 
-    // Restore CRM history for matched phone
+    // Insert sheet history FIRST (lower seq) so CRM entries always have higher priority
     const crmHist = phoneHistMap.get(np);
-    if (crmHist && crmHist.length) {
-      for (let si = 0; si < crmHist.length; si++) {
-        const h = crmHist[si];
-        stmts.push({
-          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
-          args: [h.sale_name, h.action, h.contact_date, h.status, h.feedback, si, h.source || "crm"],
-        });
-      }
-    }
-
-    // Add sheet history (skip duplicates with restored CRM history)
+    let seqCounter = 0;
     if (l.saleHistory && l.saleHistory.length) {
-      const crmHistCount = (crmHist && crmHist.length) || 0;
+      const crmHistEntries = crmHist || [];
       for (let si = 0; si < l.saleHistory.length; si++) {
         const sh = l.saleHistory[si];
-        const isDup = crmHist && crmHist.some(h =>
+        const isDup = crmHistEntries.some(h =>
           h.sale_name === sh.saleName && h.action === sh.action && h.contact_date === sh.date
         );
         if (!isDup) {
           stmts.push({
             sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
-            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, crmHistCount + si, "sheet"],
+            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, seqCounter, "sheet"],
           });
+          seqCounter++;
         }
+      }
+    }
+
+    // Then restore CRM history (higher seq = higher priority in post-sync fix)
+    if (crmHist && crmHist.length) {
+      for (let si = 0; si < crmHist.length; si++) {
+        const h = crmHist[si];
+        stmts.push({
+          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
+          args: [h.sale_name, h.action, h.contact_date, h.status, h.feedback, seqCounter + si, h.source || "crm"],
+        });
       }
     }
   }
@@ -1210,28 +1212,47 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
-  // Post-sync: re-sync lead statuses from latest history to fix race conditions
-  // (e.g. sale updates status during sync → sync overwrites with old status)
+  // Post-sync: re-sync lead statuses from CRM history (ignore sheet, respect Chia lead boundaries)
   try {
-    const leadsWithHistory = await all(db, `
-      SELECT l.id, l.status, lh.status as hist_status
-      FROM leads l
-      INNER JOIN lead_history lh ON lh.id = (
-        SELECT id FROM lead_history
-        WHERE lead_id = l.id AND status != ''
-        ORDER BY seq DESC LIMIT 1
-      )
-      WHERE l.project_id = ?`, [projectId]);
+    const leadsInProject = await all(db, "SELECT id, status FROM leads WHERE project_id = ?", [projectId]);
+    const allHistory = await all(db, `
+      SELECT lead_id, action, status, seq, source
+      FROM lead_history
+      WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)
+      ORDER BY lead_id, seq DESC`, [projectId]);
+
+    // Group history by lead_id (already sorted by seq DESC)
+    const histByLead = new Map();
+    for (const h of allHistory) {
+      if (!histByLead.has(h.lead_id)) histByLead.set(h.lead_id, []);
+      histByLead.get(h.lead_id).push(h);
+    }
+
     const fixStmts = [];
-    for (const row of leadsWithHistory) {
-      const correctStatus = normalizeStatus(row.hist_status);
-      if (correctStatus !== row.status) {
-        fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, row.hist_status, row.id] });
+    for (const lead of leadsInProject) {
+      const entries = histByLead.get(lead.id) || [];
+      let correctHistStatus = null;
+
+      // Walk from newest to oldest CRM entry, stop at "Chia lead" boundary
+      for (const h of entries) {
+        if (h.source === "sheet") continue; // Ignore sheet entries
+        if (h.action === "Chia lead") break; // Don't cross assignment boundary
+        if (h.status && h.status.trim()) {
+          correctHistStatus = h.status;
+          break;
+        }
+      }
+
+      if (correctHistStatus) {
+        const correctStatus = normalizeStatus(correctHistStatus);
+        if (correctStatus !== lead.status) {
+          fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
+        }
       }
     }
     if (fixStmts.length) {
       await db.batch(fixStmts, "write");
-      console.log(`[replaceProjectData] Re-synced ${fixStmts.length}/${leadsWithHistory.length} lead statuses from history`);
+      console.log(`[replaceProjectData] Re-synced ${fixStmts.length}/${leadsInProject.length} lead statuses from CRM history`);
     }
   } catch (e) { console.error("[replaceProjectData] Post-sync status fix error:", e.message); }
 
@@ -4338,7 +4359,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
             [actualLeadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
 
           // Record status change in lead_history so it's visible in the timeline
-          if (status !== undefined && saleName === undefined) {
+          if (status !== undefined) {
             const statusLabel = STATUS_LABELS_VI[newStatus] || newStatus;
             const maxSeqH = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [actualLeadId]);
             const nextSeqH = (maxSeqH?.m ?? -1) + 1;
