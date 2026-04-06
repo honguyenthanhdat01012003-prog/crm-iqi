@@ -913,14 +913,24 @@ function parseCostSheet(rawHeaders, rawRows) {
   }
 
   let totalSpent = 0, totalLeads = 0, totalBooking = 0;
+  const daily = [];
 
   for (const cols of rawRows) {
     const dateVal = dateIdx >= 0 ? (cols[dateIdx] || "").trim() : "";
-    if (!dateVal || !/\d{1,2}\/\d{1,2}\/\d{4}/.test(dateVal)) continue;
+    const dm = dateVal.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!dm) continue;
 
-    totalSpent += parseVnNumber(spentIdx >= 0 ? cols[spentIdx] : "");
-    totalLeads += Math.round(parseVnNumber(leadsIdx >= 0 ? cols[leadsIdx] : ""));
-    totalBooking += Math.round(parseVnNumber(bookingIdx >= 0 ? cols[bookingIdx] : ""));
+    const daySpent = parseVnNumber(spentIdx >= 0 ? cols[spentIdx] : "");
+    const dayLeads = Math.round(parseVnNumber(leadsIdx >= 0 ? cols[leadsIdx] : ""));
+    const dayBooking = Math.round(parseVnNumber(bookingIdx >= 0 ? cols[bookingIdx] : ""));
+
+    totalSpent += daySpent;
+    totalLeads += dayLeads;
+    totalBooking += dayBooking;
+
+    // Store ISO date (yyyy-mm-dd) for easy range filtering
+    const isoDate = `${dm[3]}-${dm[2].padStart(2, "0")}-${dm[1].padStart(2, "0")}`;
+    daily.push({ date: isoDate, spent: daySpent, leads: dayLeads, booking: dayBooking });
   }
 
   return {
@@ -928,6 +938,7 @@ function parseCostSheet(rawHeaders, rawRows) {
     totalLeads,
     totalBooking,
     cpLead: totalLeads > 0 ? Math.round(totalSpent / totalLeads) : 0,
+    daily,
   };
 }
 
@@ -2254,13 +2265,20 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
       if (!pids.includes(Number(projectId))) return res.status(403).json({ error: "Không có quyền" });
     }
 
-    let sql = "SELECT * FROM leads WHERE project_id = ?";
-    const params = [Number(projectId)];
+    // Fetch ALL leads then filter in JS (created_at is dd/mm/yyyy from Sheets, can't compare in SQL)
+    const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [Number(projectId)]);
 
-    if (startDate) { sql += " AND created_at >= ?"; params.push(startDate); }
-    if (endDate) { sql += " AND created_at <= ?"; params.push(endDate + "T23:59:59"); }
+    const sdTime = startDate ? new Date(startDate + "T00:00:00").getTime() : null;
+    const edTime = endDate ? new Date(endDate + "T23:59:59").getTime() : null;
 
-    const leads = await all(db, sql, params);
+    const leads = allLeads.filter(l => {
+      const dt = parseLeadDate(l.created_at);
+      if (!dt) return false;
+      const t = dt.getTime();
+      if (sdTime && t < sdTime) return false;
+      if (edTime && t > edTime) return false;
+      return true;
+    });
 
     // Groupings based on user's requirement
     const interested = leads.filter(l => ["interested", "low_interest", "appointment"].includes(l.status));
@@ -2272,16 +2290,24 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
     const total = leads.length;
     const pct = (n) => total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0;
 
-    // Cost data from project
+    // Cost data from project — filter daily breakdown by date range
     const project = await get(db, "SELECT name, cost_data FROM projects WHERE id = ?", [Number(projectId)]);
     const costData = project ? JSON.parse(project.cost_data || "{}") : {};
 
-    // Try to calculate spend for date range from campaigns
-    const campaigns = await all(db, "SELECT spent FROM campaigns WHERE project_id = ?", [Number(projectId)]);
-    const totalCampaignSpent = campaigns.reduce((s, c) => s + (c.spent || 0), 0);
+    let totalSpent = 0;
+    if (costData.daily && costData.daily.length > 0) {
+      // Filter daily cost by date range (daily[].date is yyyy-mm-dd)
+      const filtered = costData.daily.filter(d => {
+        if (startDate && d.date < startDate) return false;
+        if (endDate && d.date > endDate) return false;
+        return true;
+      });
+      totalSpent = filtered.reduce((s, d) => s + (d.spent || 0), 0);
+    } else {
+      // Fallback: use total (old format without daily breakdown)
+      totalSpent = costData.totalSpent || 0;
+    }
 
-    // Use cost_data totalSpent if available, else campaign spent
-    const totalSpent = costData.totalSpent || totalCampaignSpent || 0;
     const cpLead = total > 0 ? Math.round(totalSpent / total) : 0;
 
     res.json({
