@@ -2290,22 +2290,34 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
     const total = leads.length;
     const pct = (n) => total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0;
 
-    // Cost data from project — filter daily breakdown by date range
-    const project = await get(db, "SELECT name, cost_data FROM projects WHERE id = ?", [Number(projectId)]);
-    const costData = project ? JSON.parse(project.cost_data || "{}") : {};
+    // Cost: fetch cost sheet CSV directly and sum by selected date range
+    const project = await get(db, "SELECT name, cost_url, cost_data FROM projects WHERE id = ?", [Number(projectId)]);
 
     let totalSpent = 0;
-    if (costData.daily && costData.daily.length > 0) {
-      // Filter daily cost by date range (daily[].date is yyyy-mm-dd)
-      const filtered = costData.daily.filter(d => {
-        if (startDate && d.date < startDate) return false;
-        if (endDate && d.date > endDate) return false;
-        return true;
-      });
-      totalSpent = filtered.reduce((s, d) => s + (d.spent || 0), 0);
-    } else {
-      // Fallback: use total (old format without daily breakdown)
-      totalSpent = costData.totalSpent || 0;
+    if (project && project.cost_url) {
+      try {
+        const rawCost = await fetchCsvText(project.cost_url);
+        const { rawHeaders: costRH, rawRows: costRR } = parseCSV(rawCost);
+        const foldedH = costRH.map(h => foldText(h));
+        let dateIdx = -1, spentIdx = -1;
+        for (let i = 0; i < foldedH.length; i++) {
+          if (dateIdx < 0 && foldedH[i] === "ngay") dateIdx = i;
+          if (spentIdx < 0 && foldedH[i].includes("tong tien chi tieu")) spentIdx = i;
+        }
+        for (const cols of costRR) {
+          const dateVal = dateIdx >= 0 ? (cols[dateIdx] || "").trim() : "";
+          const dm = dateVal.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (!dm) continue;
+          const isoDate = `${dm[3]}-${dm[2].padStart(2, "0")}-${dm[1].padStart(2, "0")}`;
+          if (startDate && isoDate < startDate) continue;
+          if (endDate && isoDate > endDate) continue;
+          totalSpent += parseVnNumber(spentIdx >= 0 ? cols[spentIdx] : "");
+        }
+      } catch (e) {
+        // Fallback to stored cost_data
+        const costData = project ? JSON.parse(project.cost_data || "{}") : {};
+        totalSpent = costData.totalSpent || 0;
+      }
     }
 
     const cpLead = total > 0 ? Math.round(totalSpent / total) : 0;
