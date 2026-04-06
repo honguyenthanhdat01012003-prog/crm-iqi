@@ -2186,6 +2186,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [rotateHistLoading, setRotateHistLoading] = useState(false);
   const [rotateHistMonth, setRotateHistMonth] = useState(() => { const d = new Date(); return { month: d.getMonth(), year: d.getFullYear() }; });
   const [rotateHistDay, setRotateHistDay] = useState(null);
+  // Lead quality report
+  const [leadReportOpen, setLeadReportOpen] = useState(false);
+  const [leadReportData, setLeadReportData] = useState(null);
+  const [leadReportLoading, setLeadReportLoading] = useState(false);
+  const [leadReportStart, setLeadReportStart] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 10); });
+  const [leadReportEnd, setLeadReportEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
@@ -3216,6 +3222,129 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     </div>
                   );
                 })()}
+              </div>
+            </div>
+          )}
+
+          {/* Lead Quality Report Modal */}
+          {leadReportOpen && (
+            <div onClick={() => setLeadReportOpen(false)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease" }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 32px" : 28, width: isMobile ? "100%" : 560, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)", animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><BarChart3 size={20} /> Thống kê chất lượng Lead</h3>
+                  <button onClick={() => setLeadReportOpen(false)} style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}><X size={18} /></button>
+                </div>
+
+                {/* Date range picker */}
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 2 }}>Từ ngày</label>
+                    <input type="date" value={leadReportStart} onChange={e => setLeadReportStart(e.target.value)}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 2 }}>Đến ngày</label>
+                    <input type="date" value={leadReportEnd} onChange={e => setLeadReportEnd(e.target.value)}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }} />
+                  </div>
+                  <button onClick={async () => {
+                    setLeadReportLoading(true); setLeadReportData(null);
+                    try {
+                      const r = await apiFetch(`${API}/lead-report?projectId=${selectedProject}&startDate=${leadReportStart}&endDate=${leadReportEnd}`);
+                      const d = await r.json();
+                      if (!r.ok) { showToast(d.error || "Lỗi", "error"); setLeadReportLoading(false); return; }
+                      setLeadReportData(d);
+                    } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+                    setLeadReportLoading(false);
+                  }} disabled={leadReportLoading}
+                    style={{ ...btnPrimary, padding: "8px 16px", fontSize: 13, marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: leadReportLoading ? "#9ca3af" : "linear-gradient(135deg, #8b5cf6, #6d28d9)" }}>
+                    {leadReportLoading ? <><RefreshCw size={14} style={{ animation: "spin 1s linear infinite" }} /> Đang tải...</> : <><BarChart3 size={14} /> Xuất thống kê</>}
+                  </button>
+                </div>
+
+                {/* Results */}
+                {leadReportData && (() => {
+                  const d = leadReportData;
+                  const grps = d.groups;
+                  const fmtMoney = (n) => n ? n.toLocaleString("vi-VN") : "0";
+                  const fmtDate = (s) => s ? new Date(s).toLocaleDateString("vi-VN") : "—";
+
+                  const barStyle = (pct, color) => ({
+                    height: 6, borderRadius: 3, background: "#f3f4f6", overflow: "hidden", flex: 1,
+                  });
+                  const barFill = (pct, color) => ({
+                    width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width .5s ease",
+                  });
+
+                  const rows = [
+                    { ...grps.interested, color: "#16a34a", emoji: "✅" },
+                    { ...grps.noFeedback, color: "#f59e0b", emoji: "⏳" },
+                    { ...grps.notInterested, color: "#dc2626", emoji: "❌" },
+                    { ...grps.booked, color: "#8b5cf6", emoji: "🎉" },
+                    { ...grps.other, color: "#6b7280", emoji: "📋" },
+                  ];
+
+                  // Copy text
+                  const copyText = `Thống kê ${d.projectName} từ ${fmtDate(d.startDate)} đến ${fmtDate(d.endDate)}:\n- Tổng số lead: ${d.total}\n+ ${grps.interested.label}: ${grps.interested.count} (~${grps.interested.pct}%)\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(d.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(d.cpLead)}`;
+
+                  return (
+                    <div>
+                      {/* Header */}
+                      <div style={{ background: "linear-gradient(135deg, #f5f3ff, #ede9fe)", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#7c3aed", marginBottom: 4 }}>{d.projectName}</div>
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>Từ {fmtDate(d.startDate)} đến {fmtDate(d.endDate)}</div>
+                        <div style={{ display: "flex", gap: 16, marginTop: 10, flexWrap: "wrap" }}>
+                          <div style={{ background: "#fff", borderRadius: 10, padding: "10px 16px", flex: 1, minWidth: 100, textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: "#1f2937" }}>{d.total}</div>
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>Tổng lead</div>
+                          </div>
+                          <div style={{ background: "#fff", borderRadius: 10, padding: "10px 16px", flex: 1, minWidth: 100, textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: "#dc2626" }}>{fmtMoney(d.totalSpent)}</div>
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>Tổng chi tiêu (VNĐ)</div>
+                          </div>
+                          <div style={{ background: "#fff", borderRadius: 10, padding: "10px 16px", flex: 1, minWidth: 100, textAlign: "center" }}>
+                            <div style={{ fontSize: 24, fontWeight: 800, color: "#ea580c" }}>{fmtMoney(d.cpLead)}</div>
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>Chi phí/lead</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Breakdown */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {rows.map((row, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            <span style={{ fontSize: 16, width: 24, textAlign: "center" }}>{row.emoji}</span>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                                <span style={{ color: "#374151", fontWeight: 600 }}>{row.label}</span>
+                                <span style={{ fontWeight: 700, color: row.color }}>{row.count} <span style={{ fontWeight: 400, color: "#9ca3af" }}>(~{row.pct}%)</span></span>
+                              </div>
+                              <div style={barStyle(row.pct, row.color)}>
+                                <div style={barFill(row.pct, row.color)} />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Copy button */}
+                      <div style={{ marginTop: 16, display: "flex", gap: 8 }}>
+                        <button onClick={() => { navigator.clipboard.writeText(copyText); showToast("Đã copy thống kê", "success"); }}
+                          style={{ ...btnSecondary, padding: "8px 16px", fontSize: 12, display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center" }}>
+                          <ClipboardList size={14} /> Copy văn bản
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {!leadReportData && !leadReportLoading && (
+                  <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 13 }}>
+                    Chọn khoảng thời gian và bấm <b>Xuất thống kê</b>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -4339,6 +4468,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             }}
               style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 8, padding: "3px 10px", fontSize: 11, color: "#6b7280", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
               <Clock size={12} /> Lịch sử xáo
+            </button>
+          )}
+          {isAdmin && selectedProject && selectedProject !== "all" && (
+            <button onClick={() => { setLeadReportOpen(true); setLeadReportData(null); }}
+              style={{ background: "none", border: "1px solid #8b5cf6", borderRadius: 8, padding: "3px 10px", fontSize: 11, color: "#8b5cf6", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", fontWeight: 600 }}>
+              <BarChart3 size={12} /> Xuất thống kê
             </button>
           )}
           <span style={{ fontSize: 12 }}>Số dòng:</span>

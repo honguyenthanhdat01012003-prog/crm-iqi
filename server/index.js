@@ -2242,6 +2242,66 @@ app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ========== LEAD QUALITY REPORT ==========
+app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId, startDate, endDate } = req.query;
+    if (!projectId) return res.status(400).json({ error: "Thiếu projectId" });
+
+    // Manager: check access
+    if (req.user.role === "manager") {
+      const pids = await getUserProjectIds(req.user.userId);
+      if (!pids.includes(Number(projectId))) return res.status(403).json({ error: "Không có quyền" });
+    }
+
+    let sql = "SELECT * FROM leads WHERE project_id = ?";
+    const params = [Number(projectId)];
+
+    if (startDate) { sql += " AND created_at >= ?"; params.push(startDate); }
+    if (endDate) { sql += " AND created_at <= ?"; params.push(endDate + "T23:59:59"); }
+
+    const leads = await all(db, sql, params);
+
+    // Groupings based on user's requirement
+    const interested = leads.filter(l => ["interested", "low_interest", "appointment"].includes(l.status));
+    const notInterested = leads.filter(l => ["not_interested", "spam", "sale", "callback"].includes(l.status));
+    const noFeedback = leads.filter(l => l.status === "new" || !l.status);
+    const booked = leads.filter(l => ["booked", "booking_other", "closed"].includes(l.status));
+    const other = leads.filter(l => !["interested", "low_interest", "appointment", "not_interested", "spam", "sale", "callback", "new", "booked", "booking_other", "closed", null, undefined, ""].includes(l.status));
+
+    const total = leads.length;
+    const pct = (n) => total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0;
+
+    // Cost data from project
+    const project = await get(db, "SELECT name, cost_data FROM projects WHERE id = ?", [Number(projectId)]);
+    const costData = project ? JSON.parse(project.cost_data || "{}") : {};
+
+    // Try to calculate spend for date range from campaigns
+    const campaigns = await all(db, "SELECT spent FROM campaigns WHERE project_id = ?", [Number(projectId)]);
+    const totalCampaignSpent = campaigns.reduce((s, c) => s + (c.spent || 0), 0);
+
+    // Use cost_data totalSpent if available, else campaign spent
+    const totalSpent = costData.totalSpent || totalCampaignSpent || 0;
+    const cpLead = total > 0 ? Math.round(totalSpent / total) : 0;
+
+    res.json({
+      projectName: project?.name || "",
+      startDate: startDate || null,
+      endDate: endDate || null,
+      total,
+      groups: {
+        interested: { count: interested.length, pct: pct(interested.length), label: "Quan tâm (Quan tâm + QT hời hợt + Hẹn xem)" },
+        notInterested: { count: notInterested.length, pct: pct(notInterested.length), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
+        noFeedback: { count: noFeedback.length, pct: pct(noFeedback.length), label: "Chưa nhập feedback (Mới)" },
+        booked: { count: booked.length, pct: pct(booked.length), label: "Booking/Cọc/Chốt" },
+        other: { count: other.length, pct: pct(other.length), label: "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)" },
+      },
+      totalSpent,
+      cpLead,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* ---------- Public health ---------- */
 app.get("/api/health", async (_req, res) => {
   let counts = {};
