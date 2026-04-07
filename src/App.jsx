@@ -2362,21 +2362,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     if (shuffleProduct.length > 0) {
       list = list.filter(l => shuffleProduct.includes(l.product || "-"));
     }
-    // Filter by date range (lead createdAt within startDate..endDate)
-    if (shuffleStartDate) {
-      const start = new Date(shuffleStartDate + "T00:00:00");
-      list = list.filter(l => {
-        const d = parseLeadDate(l.createdAt);
-        return d && d >= start;
-      });
-    }
-    if (shuffleEndDate) {
-      const end = new Date(shuffleEndDate + "T23:59:59");
-      list = list.filter(l => {
-        const d = parseLeadDate(l.createdAt);
-        return d && d <= end;
-      });
-    }
+    // NOTE: Do NOT filter by date — dates are for schedule timing only, not lead filtering
     // Deduplicate by phone to prevent assigning same customer twice
     const seen = new Set();
     list = list.filter(l => {
@@ -2386,7 +2372,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       return true;
     });
     return list;
-  }, [leads, shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
+  }, [leads, shuffleProject, shuffleStatus, shuffleProduct]);
 
   // Unique products for shuffle project
   const shuffleUniqueProducts = useMemo(() => {
@@ -2410,7 +2396,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   }, [shufflePickCount, shuffleFilteredLeads]);
 
   // Reset when project/status/date changes
-  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
+  useEffect(() => { setShufflePickCount("all"); }, [shuffleProject, shuffleStatus, shuffleProduct]);
 
   // Calculate schedule preview
   const schedulePreview = useMemo(() => {
@@ -3449,12 +3435,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       )}
                     </div>
                     <div style={{ minWidth: 145 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Ngày bắt đầu có khách</label>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>4. Chia từ ngày</label>
                       <input type="date" value={shuffleStartDate} onChange={(e) => setShuffleStartDate(e.target.value)}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
                     </div>
                     <div style={{ minWidth: 145 }}>
-                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>5. Ngày ngừng nhận lead</label>
+                      <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>5. Chia đến ngày</label>
                       <input type="date" value={shuffleEndDate} onChange={(e) => setShuffleEndDate(e.target.value)}
                         min={shuffleStartDate || undefined}
                         style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, marginTop: 4, width: "100%", color: "#1f2937" }} />
