@@ -4536,7 +4536,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap", alignItems: "center" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone || "-"}</span>
                       {!isSale && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.createdAt || "-"}</span>}
-                      {histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
+                      {!isSale && histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
                       {isAdmin && l.saleName && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><User size={12} /> {l.saleName}</span>}
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
