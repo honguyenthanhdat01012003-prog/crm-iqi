@@ -12626,22 +12626,58 @@ function GuidePage() {
       title: "Tổng quan hệ thống",
       content: [
         { type: "text", value: "CRM IQI là hệ thống quản lý khách hàng tiềm năng (lead) tích hợp Google Sheet, Telegram Bot và Facebook Messenger." },
-        { type: "mindmap", items: [
-          { label: "CRM IQI", level: 0 },
-          { label: "Quản lý Lead (Khách hàng)", level: 1 },
-          { label: "Chia lead tự động & thủ công", level: 1 },
-          { label: "Đồng bộ Google Sheet", level: 1 },
-          { label: "Telegram Bot thông báo", level: 1 },
-          { label: "Backup & Khôi phục", level: 1 },
-          { label: "Quản lý dự án đa dự án", level: 1 },
-          { label: "Dashboard & Báo cáo", level: 1 },
-          { label: "Chat nội bộ", level: 1 },
-          { label: "Quản lý bài đăng & Lịch", level: 1 },
+        { type: "architecture", title: "Sơ đồ kiến trúc hệ thống", groups: [
+          { title: "🌐 Nguồn bên ngoài", color: "#0891b2", bg: "#e8f4f8", items: [
+            { icon: "📊", name: "Google Sheets", desc: "Dữ liệu lead từ QC", connects: ["Đồng bộ tự động"] },
+            { icon: "📱", name: "Telegram Bot", desc: "Sale feedback qua bot", connects: ["Lịch sử liên hệ"] },
+            { icon: "📘", name: "Facebook API", desc: "Ads · Messenger · Page", connects: ["FB Ads Insights", "FB Messenger"] },
+            { icon: "🤖", name: "AI / Gemini", desc: "Tư vấn · Duyệt nội dung", connects: ["Duyệt nội dung MKT"] },
+          ]},
+          { title: "⚙️ Server (Node.js)", color: "#16a34a", bg: "#f0fdf4", items: [
+            { icon: "🔄", name: "Đồng bộ tự động", desc: "3 phút/lần · Sheet → DB → Post-sync" },
+            { icon: "📋", name: "Quản lý Lead", desc: "Chia · Xáo · Feedback · Ghi chú" },
+            { icon: "🤖", name: "Auto-Rotate", desc: "30 phút/lần · 3 ngày không FB → xáo" },
+            { icon: "📅", name: "Lịch chia tự động", desc: "Chia theo giờ · Tour xoay vòng" },
+            { icon: "🔌", name: "Socket.IO", desc: "Real-time cập nhật UI" },
+            { icon: "💾", name: "Backup", desc: "Tự động 8h + khôi phục" },
+            { icon: "📡", name: "Facebook CAPI", desc: "Gửi event khi đổi status" },
+          ]},
+          { title: "🗄️ Database (SQLite)", color: "#d97706", bg: "#fef3c7", items: [
+            { icon: "👥", name: "leads", desc: "Tên · SĐT · Status · Sale · Manager" },
+            { icon: "📝", name: "lead_history", desc: "Lịch sử: ai · làm gì · khi nào" },
+            { icon: "👤", name: "users", desc: "Tài khoản · Vai trò · Dự án" },
+            { icon: "🏗️", name: "projects", desc: "Dự án · Sheet ID · Config" },
+          ]},
+          { title: "🖥️ Frontend (React)", color: "#7c3aed", bg: "#ede9fe", items: [
+            { icon: "📊", name: "Dashboard", desc: "Tổng quan lead theo trạng thái" },
+            { icon: "📋", name: "Danh sách Lead", desc: "Tìm · Lọc · Phân trang" },
+            { icon: "🔀", name: "Chia / Xáo Lead", desc: "Bulk assign · Drag & drop" },
+            { icon: "📈", name: "Thống kê", desc: "Biểu đồ · Báo cáo · Excel" },
+            { icon: "💬", name: "Chat & MXH", desc: "Chat nội bộ · FB Messenger" },
+          ]},
         ]},
+        { type: "flowchart", title: "Vòng đời Lead", steps: [
+          { icon: "🆕", label: "Lead mới", desc: "Từ Google Sheet / QC", color: "#e88a2e" },
+          { icon: "🔀", label: "Chia lead", desc: "Thủ công / Lịch tự động", color: "#3b82f6" },
+          { icon: "👤", label: "Sale nhận lead", desc: "Telegram thông báo", color: "#8b5cf6" },
+          { icon: "📞", label: "Sale feedback", desc: "Cập nhật trạng thái", color: "#059669", branch: [
+            { label: "✅ Có feedback trong 3 ngày", color: "#059669", next: "Tiếp tục xử lý" },
+            { label: "❌ Không feedback 3 ngày", color: "#dc2626", next: "Auto-Rotate → Sale khác" },
+          ]},
+          { icon: "🏆", label: "Kết thúc", desc: "Booking / Chốt / Mất / Spam", color: "#14b8a6" },
+        ]},
+        { type: "text", value: "Hệ thống phân quyền 3 cấp:" },
         { type: "roles", items: [
-          { role: "Admin", color: "#dc2626", desc: "Toàn quyền: quản lý dự án, user, chia lead, backup, cấu hình Sheet/Telegram" },
-          { role: "Manager", color: "#d97706", desc: "Xem lead dự án được gán, quản lý sale, không thấy nút backup/khôi phục" },
-          { role: "Sale", color: "#059669", desc: "Chỉ xem lead được chia cho mình, cập nhật trạng thái/feedback" },
+          { role: "Admin", color: "#dc2626", desc: "Toàn quyền: quản lý dự án, user, chia lead, backup, cấu hình Sheet/Telegram, xem tất cả lead" },
+          { role: "Manager", color: "#d97706", desc: "Xem lead dự án được gán, chia lead dự án mình, quản lý sale, không thấy backup/khôi phục" },
+          { role: "Sale", color: "#059669", desc: "Chỉ xem lead được chia cho mình, cập nhật trạng thái/feedback, không thấy lead sale khác" },
+        ]},
+        { type: "table", title: "Tự động hóa", headers: ["Tính năng", "Tần suất", "Mô tả"], rows: [
+          ["🔄 Sync Google Sheet", "3 phút/lần", "Đọc lead mới từ Sheet → cập nhật DB → giữ nguyên dữ liệu CRM"],
+          ["🤖 Auto-Rotate", "30 phút/lần", "Lead 3 ngày không feedback → tự xáo qua sale khác"],
+          ["📅 Lịch chia tự động", "Theo giờ đặt", "Chia lead đều cho sale theo lịch + tour xoay vòng"],
+          ["💾 Backup tự động", "8 giờ/lần", "Sao lưu database + giữ 7 ngày gần nhất"],
+          ["📰 Tin tức BĐS", "1 lần/ngày", "Tự động fetch tin tức bất động sản"],
         ]},
       ]
     },
@@ -12917,6 +12953,78 @@ function GuidePage() {
             <div style={{ fontSize: 12.5, color: "#374151", lineHeight: 1.5 }}>{r.desc}</div>
           </div>
         ))}
+      </div>
+    );
+    if (item.type === "architecture") return (
+      <div key={idx} style={{ margin: "12px 0" }}>
+        {item.title && <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>{item.title}</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {item.groups.map((group, gi) => (
+            <div key={gi} style={{ background: group.bg, border: `2px solid ${group.color}33`, borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ padding: "10px 16px", background: group.color + "15", borderBottom: `1px solid ${group.color}22`, display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: group.color }}>{group.title}</span>
+              </div>
+              <div style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {group.items.map((it, ii) => (
+                  <div key={ii} style={{ flex: "1 1 160px", minWidth: 140, background: "#fff", borderRadius: 10, padding: "10px 12px", border: `1px solid ${group.color}20`, boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ fontSize: 16 }}>{it.icon}</span>
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: group.color }}>{it.name}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.4 }}>{it.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          {/* Connection arrows between groups */}
+          <div style={{ display: "flex", justifyContent: "center", gap: 16, flexWrap: "wrap", padding: "4px 0" }}>
+            {[
+              { from: "Google Sheet", to: "Server", icon: "🔄" },
+              { from: "Server", to: "Database", icon: "💾" },
+              { from: "Server", to: "Frontend", icon: "🔌" },
+              { from: "Telegram", to: "Server", icon: "📱" },
+            ].map((c, ci) => (
+              <span key={ci} style={{ fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", gap: 4, background: "#f8f9fa", padding: "3px 10px", borderRadius: 20, border: "1px solid #e5e7eb" }}>
+                {c.icon} {c.from} → {c.to}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+    if (item.type === "flowchart") return (
+      <div key={idx} style={{ margin: "12px 0" }}>
+        {item.title && <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>{item.title}</div>}
+        <div style={{ background: "#f8fafb", borderRadius: 12, padding: 16, border: "1px solid #e5e7eb" }}>
+          {item.steps.map((step, si) => (
+            <div key={si}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: step.branch ? 8 : 0 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: step.color + "18", border: `2px solid ${step.color}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{step.icon}</div>
+                  {si < item.steps.length - 1 && !step.branch && <div style={{ width: 2, height: 24, background: "#d1d5db", margin: "4px 0" }} />}
+                </div>
+                <div style={{ paddingTop: 4, flex: 1 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: step.color }}>{step.label}</div>
+                  <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 2 }}>{step.desc}</div>
+                </div>
+              </div>
+              {step.branch && (
+                <div style={{ marginLeft: 20, paddingLeft: 20, borderLeft: "2px solid #d1d5db", marginBottom: 4 }}>
+                  {step.branch.map((b, bi) => (
+                    <div key={bi} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, background: b.color + "08", borderRadius: 8, padding: "8px 12px", border: `1px solid ${b.color}20` }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: b.color }}>{b.label}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>→ {b.next}</span>
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 2, margin: "0 auto 0 0" }}>
+                    <div style={{ width: 2, height: 16, background: "#d1d5db" }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     );
     if (item.type === "statuses") return (
