@@ -4522,7 +4522,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>NEW</span>}
-                      {l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>ĐK lần {l.regIndex}</span>}
+                      {isAdmin && l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <span style={{
                         padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
@@ -4582,7 +4582,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                     style={{ background: isLocked ? "#fef2f2" : isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s", borderLeft: isLocked ? "3px solid #dc2626" : "none" }}>
                     <td style={tdStyle}>{globalIdx + 1} {isLocked && <Lock size={11} style={{ display: "inline", verticalAlign: "middle", color: "#dc2626" }} />}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{isAdmin && l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
                     <td style={tdStyle}>{l.phone || "-"}</td>
                     <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
                     <td style={tdStyle}>
@@ -4877,15 +4877,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b>
           )}
         </div>
-        {lead.regCount > 1 && (
+        {isAdmin && lead.regCount > 1 && (
           <div><span style={{ color: "#6b7280", fontSize: 11 }}>Số lần ĐK</span><br />
             <b style={{ fontSize: 13, color: "#d97706" }}>{lead.regCount} lần</b>
           </div>
         )}
       </div>
 
-      {/* Registration history - show when customer registered multiple times */}
-      {registrations.length > 1 && (
+      {/* Registration history - show when customer registered multiple times (admin/manager only) */}
+      {isAdmin && registrations.length > 1 && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, marginBottom: 12 }}>
           <div onClick={() => setShowRegHistory(!showRegHistory)}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
