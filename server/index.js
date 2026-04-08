@@ -1215,16 +1215,26 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
-  // Post-sync: re-sync lead statuses from CRM history (ignore sheet, respect Chia lead boundaries)
+  // Post-sync: re-sync lead statuses from history (use contact_date for correct ordering)
   try {
     const leadsInProject = await all(db, "SELECT id, status, name FROM leads WHERE project_id = ?", [projectId]);
     const allHistory = await all(db, `
-      SELECT lead_id, action, status, seq, source, sale_name
+      SELECT lead_id, action, status, seq, source, sale_name, contact_date
       FROM lead_history
       WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)
       ORDER BY lead_id, seq DESC`, [projectId]);
 
-    // Group history by lead_id (already sorted by seq DESC)
+    // Parse Vietnamese/ISO date string to Date object
+    function parseContactDate(s) {
+      if (!s) return null;
+      const vn = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if (vn) return new Date(+vn[3], +vn[2]-1, +vn[1], +vn[4], +vn[5], +(vn[6]||0));
+      const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return new Date(s);
+      return null;
+    }
+
+    // Group history by lead_id
     const histByLead = new Map();
     for (const h of allHistory) {
       if (!histByLead.has(h.lead_id)) histByLead.set(h.lead_id, []);
@@ -1237,12 +1247,21 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       let correctHistStatus = null;
       let foundSource = "";
 
+      // Sort entries by contact_date DESC (most recent first), fallback to seq DESC
+      // This fixes cases where seq order got corrupted during previous sync cycles
+      entries.sort((a, b) => {
+        const da = parseContactDate(a.contact_date);
+        const db = parseContactDate(b.contact_date);
+        if (da && db && da.getTime() !== db.getTime()) return db.getTime() - da.getTime();
+        return b.seq - a.seq; // fallback to seq
+      });
+
       // Debug: log all entries for leads with "minh" in name
       const isDebug = (lead.name || "").toLowerCase().includes("minh th");
       if (isDebug) {
         console.log(`[post-sync DEBUG] Lead#${lead.id} "${lead.name}" currentStatus="${lead.status}" entries=${entries.length}`);
         for (const e of entries) {
-          console.log(`  seq=${e.seq} action="${e.action}" status="${e.status}" source="${e.source}" sale="${e.sale_name}"`);
+          console.log(`  seq=${e.seq} date="${e.contact_date}" action="${e.action}" status="${e.status}" source="${e.source}" sale="${e.sale_name}"`);
         }
       }
 
