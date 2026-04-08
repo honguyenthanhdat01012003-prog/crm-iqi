@@ -1260,8 +1260,11 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, saleLatestStatus, lead.id] });
         }
       } else {
-        // Current sale has no CRM feedback at all — check if lead has ever been through CRM workflow
-        const hasCrmAssignment = entries.some(h => h.source !== "sheet" && h.action === "Chia lead");
+        // Current sale has no CRM feedback — only reset if this sale was CRM-assigned (not sheet-only)
+        const hasCrmAssignment = entries.some(h =>
+          h.source !== "sheet" && h.action === "Chia lead" &&
+          (h.sale_name || "").toLowerCase().trim() === currentSale
+        );
         if (hasCrmAssignment && lead.status !== "new") {
           fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
         }
@@ -4214,10 +4217,16 @@ function filterLeadsForSale(data, displayName) {
         }
       }
     }
-    // If lead is currently assigned to this sale but they have no feedback → force "new"
+    // Only force "new" if lead was assigned to this sale via CRM (has a non-sheet "Chia lead" entry)
+    // Leads only assigned via Google Sheets keep their existing status
     if (!foundOwnStatus && matchSaleName(l.saleName, displayName)) {
-      l.status = "new";
-      l.rawStatus = "";
+      const hasCrmAssignment = l.saleHistory && l.saleHistory.some(h =>
+        h.action === "Chia lead" && h.source !== "sheet" && matchSaleName(h.saleName, displayName)
+      );
+      if (hasCrmAssignment) {
+        l.status = "new";
+        l.rawStatus = "";
+      }
     }
   }
   return data;
