@@ -12626,46 +12626,8 @@ function GuidePage() {
       title: "Tổng quan hệ thống",
       content: [
         { type: "text", value: "CRM IQI là hệ thống quản lý khách hàng tiềm năng (lead) tích hợp Google Sheet, Telegram Bot và Facebook Messenger." },
-        { type: "architecture", title: "Sơ đồ kiến trúc hệ thống", groups: [
-          { title: "🌐 Nguồn bên ngoài", color: "#0891b2", bg: "#e8f4f8", items: [
-            { icon: "📊", name: "Google Sheets", desc: "Dữ liệu lead từ QC", connects: ["Đồng bộ tự động"] },
-            { icon: "📱", name: "Telegram Bot", desc: "Sale feedback qua bot", connects: ["Lịch sử liên hệ"] },
-            { icon: "📘", name: "Facebook API", desc: "Ads · Messenger · Page", connects: ["FB Ads Insights", "FB Messenger"] },
-            { icon: "🤖", name: "AI / Gemini", desc: "Tư vấn · Duyệt nội dung", connects: ["Duyệt nội dung MKT"] },
-          ]},
-          { title: "⚙️ Server (Node.js)", color: "#16a34a", bg: "#f0fdf4", items: [
-            { icon: "🔄", name: "Đồng bộ tự động", desc: "3 phút/lần · Sheet → DB → Post-sync" },
-            { icon: "📋", name: "Quản lý Lead", desc: "Chia · Xáo · Feedback · Ghi chú" },
-            { icon: "🤖", name: "Auto-Rotate", desc: "30 phút/lần · 3 ngày không FB → xáo" },
-            { icon: "📅", name: "Lịch chia tự động", desc: "Chia theo giờ · Tour xoay vòng" },
-            { icon: "🔌", name: "Socket.IO", desc: "Real-time cập nhật UI" },
-            { icon: "💾", name: "Backup", desc: "Tự động 8h + khôi phục" },
-            { icon: "📡", name: "Facebook CAPI", desc: "Gửi event khi đổi status" },
-          ]},
-          { title: "🗄️ Database (SQLite)", color: "#d97706", bg: "#fef3c7", items: [
-            { icon: "👥", name: "leads", desc: "Tên · SĐT · Status · Sale · Manager" },
-            { icon: "📝", name: "lead_history", desc: "Lịch sử: ai · làm gì · khi nào" },
-            { icon: "👤", name: "users", desc: "Tài khoản · Vai trò · Dự án" },
-            { icon: "🏗️", name: "projects", desc: "Dự án · Sheet ID · Config" },
-          ]},
-          { title: "🖥️ Frontend (React)", color: "#7c3aed", bg: "#ede9fe", items: [
-            { icon: "📊", name: "Dashboard", desc: "Tổng quan lead theo trạng thái" },
-            { icon: "📋", name: "Danh sách Lead", desc: "Tìm · Lọc · Phân trang" },
-            { icon: "🔀", name: "Chia / Xáo Lead", desc: "Bulk assign · Drag & drop" },
-            { icon: "📈", name: "Thống kê", desc: "Biểu đồ · Báo cáo · Excel" },
-            { icon: "💬", name: "Chat & MXH", desc: "Chat nội bộ · FB Messenger" },
-          ]},
-        ]},
-        { type: "flowchart", title: "Vòng đời Lead", steps: [
-          { icon: "🆕", label: "Lead mới", desc: "Từ Google Sheet / QC", color: "#e88a2e" },
-          { icon: "🔀", label: "Chia lead", desc: "Thủ công / Lịch tự động", color: "#3b82f6" },
-          { icon: "👤", label: "Sale nhận lead", desc: "Telegram thông báo", color: "#8b5cf6" },
-          { icon: "📞", label: "Sale feedback", desc: "Cập nhật trạng thái", color: "#059669", branch: [
-            { label: "✅ Có feedback trong 3 ngày", color: "#059669", next: "Tiếp tục xử lý" },
-            { label: "❌ Không feedback 3 ngày", color: "#dc2626", next: "Auto-Rotate → Sale khác" },
-          ]},
-          { icon: "🏆", label: "Kết thúc", desc: "Booking / Chốt / Mất / Spam", color: "#14b8a6" },
-        ]},
+        { type: "svg_system_diagram" },
+        { type: "svg_lead_lifecycle" },
         { type: "text", value: "Hệ thống phân quyền 3 cấp:" },
         { type: "roles", items: [
           { role: "Admin", color: "#dc2626", desc: "Toàn quyền: quản lý dự án, user, chia lead, backup, cấu hình Sheet/Telegram, xem tất cả lead" },
@@ -12955,75 +12917,221 @@ function GuidePage() {
         ))}
       </div>
     );
-    if (item.type === "architecture") return (
+    if (item.type === "architecture") return null;
+    if (item.type === "flowchart") return null;
+    if (item.type === "svg_system_diagram") return (
       <div key={idx} style={{ margin: "12px 0" }}>
-        {item.title && <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>{item.title}</div>}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {item.groups.map((group, gi) => (
-            <div key={gi} style={{ background: group.bg, border: `2px solid ${group.color}33`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ padding: "10px 16px", background: group.color + "15", borderBottom: `1px solid ${group.color}22`, display: "flex", alignItems: "center", gap: 8 }}>
-                <span style={{ fontSize: 14, fontWeight: 800, color: group.color }}>{group.title}</span>
-              </div>
-              <div style={{ padding: 12, display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {group.items.map((it, ii) => (
-                  <div key={ii} style={{ flex: "1 1 160px", minWidth: 140, background: "#fff", borderRadius: 10, padding: "10px 12px", border: `1px solid ${group.color}20`, boxShadow: "0 1px 3px rgba(0,0,0,.04)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                      <span style={{ fontSize: 16 }}>{it.icon}</span>
-                      <span style={{ fontSize: 12.5, fontWeight: 700, color: group.color }}>{it.name}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: "#6b7280", lineHeight: 1.4 }}>{it.desc}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-          {/* Connection arrows between groups */}
-          <div style={{ display: "flex", justifyContent: "center", gap: 16, flexWrap: "wrap", padding: "4px 0" }}>
-            {[
-              { from: "Google Sheet", to: "Server", icon: "🔄" },
-              { from: "Server", to: "Database", icon: "💾" },
-              { from: "Server", to: "Frontend", icon: "🔌" },
-              { from: "Telegram", to: "Server", icon: "📱" },
-            ].map((c, ci) => (
-              <span key={ci} style={{ fontSize: 10, color: "#9ca3af", display: "flex", alignItems: "center", gap: 4, background: "#f8f9fa", padding: "3px 10px", borderRadius: 20, border: "1px solid #e5e7eb" }}>
-                {c.icon} {c.from} → {c.to}
-              </span>
-            ))}
-          </div>
+        <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>Sơ đồ kiến trúc hệ thống</div>
+        <div style={{ background: "#f8fafb", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "auto", padding: 8 }}>
+          <svg viewBox="0 0 860 620" style={{ width: "100%", minWidth: 600, height: "auto", fontFamily: "system-ui, sans-serif" }}>
+            <defs>
+              <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#9ca3af"/></marker>
+              <marker id="ah-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#16a34a"/></marker>
+              <marker id="ah-red" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#dc2626"/></marker>
+              <filter id="shadow"><feDropShadow dx="0" dy="1" stdDeviation="2" floodOpacity="0.08"/></filter>
+            </defs>
+            {/* Row 1: External Sources */}
+            <rect x="10" y="8" width="840" height="80" rx="12" fill="#e8f4f8" stroke="#0891b2" strokeWidth="1.5" opacity="0.5"/>
+            <text x="30" y="30" fontSize="11" fontWeight="800" fill="#0891b2">🌐 NGUỒN BÊN NGOÀI</text>
+            <rect x="30" y="40" width="160" height="38" rx="8" fill="#fff" stroke="#0891b2" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="110" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="#0891b2">📊 Google Sheets</text>
+            <text x="110" y="70" textAnchor="middle" fontSize="8" fill="#6b7280">Dữ liệu lead từ QC</text>
+            <rect x="220" y="40" width="160" height="38" rx="8" fill="#fff" stroke="#0891b2" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="300" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="#0891b2">📱 Telegram Bot</text>
+            <text x="300" y="70" textAnchor="middle" fontSize="8" fill="#6b7280">Sale feedback qua bot</text>
+            <rect x="410" y="40" width="160" height="38" rx="8" fill="#fff" stroke="#0891b2" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="490" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="#0891b2">📘 Facebook API</text>
+            <text x="490" y="70" textAnchor="middle" fontSize="8" fill="#6b7280">Ads · Messenger · Page</text>
+            <rect x="600" y="40" width="160" height="38" rx="8" fill="#fff" stroke="#0891b2" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="680" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="#0891b2">🤖 AI / Gemini</text>
+            <text x="680" y="70" textAnchor="middle" fontSize="8" fill="#6b7280">Tư vấn · Duyệt nội dung</text>
+
+            {/* Arrows: External → Server */}
+            <line x1="110" y1="78" x2="110" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <text x="118" y="108" fontSize="7" fill="#0891b2">3 phút/lần</text>
+            <line x1="300" y1="78" x2="300" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <text x="308" y="108" fontSize="7" fill="#0891b2">Webhook</text>
+            <line x1="490" y1="78" x2="490" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <line x1="680" y1="78" x2="680" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+
+            {/* Row 2: Server */}
+            <rect x="10" y="130" width="840" height="150" rx="12" fill="#f0fdf4" stroke="#16a34a" strokeWidth="1.5" opacity="0.5"/>
+            <text x="30" y="152" fontSize="11" fontWeight="800" fill="#16a34a">⚙️ SERVER (Node.js + Express)</text>
+            <rect x="30" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="105" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">🔄 Đồng bộ Sheet</text>
+            <text x="105" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">3 phút → Post-sync</text>
+            <rect x="200" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="275" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">📋 Quản lý Lead</text>
+            <text x="275" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">Chia · Xáo · Feedback</text>
+            <rect x="370" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="445" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">🤖 Auto-Rotate</text>
+            <text x="445" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">3 ngày → Xáo sale</text>
+            <rect x="540" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="615" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">📅 Lịch chia</text>
+            <text x="615" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">Tự động · Tour</text>
+            <rect x="710" y="162" width="120" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="770" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">📡 CAPI</text>
+            <text x="770" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">FB Event</text>
+            <rect x="30" y="222" width="150" height="42" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="105" y="242" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">🔌 Socket.IO</text>
+            <text x="105" y="256" textAnchor="middle" fontSize="8" fill="#6b7280">Real-time UI</text>
+            <rect x="200" y="222" width="150" height="42" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="275" y="242" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">💾 Backup</text>
+            <text x="275" y="256" textAnchor="middle" fontSize="8" fill="#6b7280">8h/lần · Khôi phục</text>
+            <rect x="370" y="222" width="150" height="42" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="445" y="242" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">🔐 Auth / JWT</text>
+            <text x="445" y="256" textAnchor="middle" fontSize="8" fill="#6b7280">Admin · Manager · Sale</text>
+
+            {/* Internal server connections */}
+            <path d="M180,187 L200,187" stroke="#16a34a" strokeWidth="1" opacity="0.4" markerEnd="url(#ah-green)"/>
+            <path d="M350,187 L370,187" stroke="#16a34a" strokeWidth="1" opacity="0.4" markerEnd="url(#ah-green)"/>
+            <path d="M520,187 L540,187" stroke="#16a34a" strokeWidth="1" opacity="0.4" markerEnd="url(#ah-green)"/>
+
+            {/* Arrows: Server → Database */}
+            <line x1="200" y1="264" x2="200" y2="310" stroke="#16a34a" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <line x1="400" y1="264" x2="400" y2="310" stroke="#16a34a" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <text x="280" y="298" fontSize="8" fill="#16a34a" textAnchor="middle">Đọc / Ghi dữ liệu</text>
+
+            {/* Row 3: Database */}
+            <rect x="10" y="310" width="840" height="80" rx="12" fill="#fef3c7" stroke="#d97706" strokeWidth="1.5" opacity="0.5"/>
+            <text x="30" y="332" fontSize="11" fontWeight="800" fill="#d97706">🗄️ DATABASE (SQLite)</text>
+            <rect x="30" y="342" width="150" height="38" rx="8" fill="#fff" stroke="#d97706" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="105" y="358" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">👥 leads</text>
+            <text x="105" y="372" textAnchor="middle" fontSize="8" fill="#6b7280">Tên · SĐT · Status · Sale</text>
+            <rect x="210" y="342" width="170" height="38" rx="8" fill="#fff" stroke="#d97706" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="295" y="358" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">📝 lead_history</text>
+            <text x="295" y="372" textAnchor="middle" fontSize="8" fill="#6b7280">Ai · Làm gì · Khi nào · Seq</text>
+            <rect x="410" y="342" width="130" height="38" rx="8" fill="#fff" stroke="#d97706" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="475" y="358" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">👤 users</text>
+            <text x="475" y="372" textAnchor="middle" fontSize="8" fill="#6b7280">Tài khoản · Vai trò</text>
+            <rect x="570" y="342" width="130" height="38" rx="8" fill="#fff" stroke="#d97706" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="635" y="358" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">🏗️ projects</text>
+            <text x="635" y="372" textAnchor="middle" fontSize="8" fill="#6b7280">Dự án · Sheet ID</text>
+            <rect x="730" y="342" width="100" height="38" rx="8" fill="#fff" stroke="#d97706" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="780" y="358" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">⚙️ settings</text>
+            <text x="780" y="372" textAnchor="middle" fontSize="8" fill="#6b7280">Config · CAPI</text>
+            {/* DB internal connections */}
+            <path d="M180,361 L210,361" stroke="#d97706" strokeWidth="1" opacity="0.4" markerEnd="url(#ah)"/>
+            <path d="M380,361 L410,361" stroke="#d97706" strokeWidth="1" opacity="0.4" markerEnd="url(#ah)"/>
+
+            {/* Arrows: Server → Frontend (Socket.IO) */}
+            <line x1="105" y1="264" x2="105" y2="310" stroke="#16a34a" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <path d="M105,390 L105,440" stroke="#7c3aed" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <text x="113" y="420" fontSize="7" fill="#7c3aed">Socket.IO</text>
+            <path d="M400,390 L400,440" stroke="#7c3aed" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
+            <text x="408" y="420" fontSize="7" fill="#7c3aed">API REST</text>
+
+            {/* Row 4: Frontend */}
+            <rect x="10" y="440" width="840" height="80" rx="12" fill="#ede9fe" stroke="#7c3aed" strokeWidth="1.5" opacity="0.5"/>
+            <text x="30" y="462" fontSize="11" fontWeight="800" fill="#7c3aed">🖥️ FRONTEND (React + Vite)</text>
+            <rect x="30" y="472" width="140" height="38" rx="8" fill="#fff" stroke="#7c3aed" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="100" y="488" textAnchor="middle" fontSize="10" fontWeight="700" fill="#7c3aed">📊 Dashboard</text>
+            <text x="100" y="502" textAnchor="middle" fontSize="8" fill="#6b7280">Tổng quan · Biểu đồ</text>
+            <rect x="190" y="472" width="140" height="38" rx="8" fill="#fff" stroke="#7c3aed" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="260" y="488" textAnchor="middle" fontSize="10" fontWeight="700" fill="#7c3aed">📋 DS Lead</text>
+            <text x="260" y="502" textAnchor="middle" fontSize="8" fill="#6b7280">Tìm · Lọc · Chi tiết</text>
+            <rect x="350" y="472" width="140" height="38" rx="8" fill="#fff" stroke="#7c3aed" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="420" y="488" textAnchor="middle" fontSize="10" fontWeight="700" fill="#7c3aed">🔀 Chia Lead</text>
+            <text x="420" y="502" textAnchor="middle" fontSize="8" fill="#6b7280">Xáo · Lịch tự động</text>
+            <rect x="510" y="472" width="140" height="38" rx="8" fill="#fff" stroke="#7c3aed" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="580" y="488" textAnchor="middle" fontSize="10" fontWeight="700" fill="#7c3aed">📈 Thống kê</text>
+            <text x="580" y="502" textAnchor="middle" fontSize="8" fill="#6b7280">Báo cáo · Excel</text>
+            <rect x="670" y="472" width="160" height="38" rx="8" fill="#fff" stroke="#7c3aed" strokeWidth="1" filter="url(#shadow)"/>
+            <text x="750" y="488" textAnchor="middle" fontSize="10" fontWeight="700" fill="#7c3aed">💬 Chat · MXH</text>
+            <text x="750" y="502" textAnchor="middle" fontSize="8" fill="#6b7280">Nội bộ · Messenger</text>
+
+            {/* Role badges at bottom */}
+            <rect x="30" y="545" width="250" height="55" rx="10" fill="#dc262610" stroke="#dc2626" strokeWidth="1"/>
+            <text x="155" y="565" textAnchor="middle" fontSize="10" fontWeight="700" fill="#dc2626">👑 Admin</text>
+            <text x="155" y="580" textAnchor="middle" fontSize="8" fill="#6b7280">Toàn quyền · Tất cả tính năng</text>
+            <text x="155" y="592" textAnchor="middle" fontSize="8" fill="#6b7280">Backup · Cấu hình · Chia lead</text>
+            <rect x="305" y="545" width="250" height="55" rx="10" fill="#d9770610" stroke="#d97706" strokeWidth="1"/>
+            <text x="430" y="565" textAnchor="middle" fontSize="10" fontWeight="700" fill="#d97706">👔 Manager</text>
+            <text x="430" y="580" textAnchor="middle" fontSize="8" fill="#6b7280">Xem dự án được gán</text>
+            <text x="430" y="592" textAnchor="middle" fontSize="8" fill="#6b7280">Chia lead · Quản lý sale</text>
+            <rect x="580" y="545" width="250" height="55" rx="10" fill="#05966910" stroke="#059669" strokeWidth="1"/>
+            <text x="705" y="565" textAnchor="middle" fontSize="10" fontWeight="700" fill="#059669">👤 Sale</text>
+            <text x="705" y="580" textAnchor="middle" fontSize="8" fill="#6b7280">Chỉ xem lead của mình</text>
+            <text x="705" y="592" textAnchor="middle" fontSize="8" fill="#6b7280">Cập nhật feedback</text>
+
+            {/* Lines from frontend to roles */}
+            <path d="M260,510 L155,545" stroke="#9ca3af" strokeWidth="0.8" strokeDasharray="3,3"/>
+            <path d="M420,510 L430,545" stroke="#9ca3af" strokeWidth="0.8" strokeDasharray="3,3"/>
+            <path d="M580,510 L705,545" stroke="#9ca3af" strokeWidth="0.8" strokeDasharray="3,3"/>
+          </svg>
         </div>
       </div>
     );
-    if (item.type === "flowchart") return (
+    if (item.type === "svg_lead_lifecycle") return (
       <div key={idx} style={{ margin: "12px 0" }}>
-        {item.title && <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>{item.title}</div>}
-        <div style={{ background: "#f8fafb", borderRadius: 12, padding: 16, border: "1px solid #e5e7eb" }}>
-          {item.steps.map((step, si) => (
-            <div key={si}>
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: step.branch ? 8 : 0 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                  <div style={{ width: 40, height: 40, borderRadius: "50%", background: step.color + "18", border: `2px solid ${step.color}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>{step.icon}</div>
-                  {si < item.steps.length - 1 && !step.branch && <div style={{ width: 2, height: 24, background: "#d1d5db", margin: "4px 0" }} />}
-                </div>
-                <div style={{ paddingTop: 4, flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: step.color }}>{step.label}</div>
-                  <div style={{ fontSize: 11.5, color: "#6b7280", marginTop: 2 }}>{step.desc}</div>
-                </div>
-              </div>
-              {step.branch && (
-                <div style={{ marginLeft: 20, paddingLeft: 20, borderLeft: "2px solid #d1d5db", marginBottom: 4 }}>
-                  {step.branch.map((b, bi) => (
-                    <div key={bi} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, background: b.color + "08", borderRadius: 8, padding: "8px 12px", border: `1px solid ${b.color}20` }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: b.color }}>{b.label}</span>
-                      <span style={{ fontSize: 11, color: "#9ca3af" }}>→ {b.next}</span>
-                    </div>
-                  ))}
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 2, margin: "0 auto 0 0" }}>
-                    <div style={{ width: 2, height: 16, background: "#d1d5db" }} />
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
+        <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>Vòng đời Lead</div>
+        <div style={{ background: "#f8fafb", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "auto", padding: 8 }}>
+          <svg viewBox="0 0 860 280" style={{ width: "100%", minWidth: 600, height: "auto", fontFamily: "system-ui, sans-serif" }}>
+            <defs>
+              <marker id="alh" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e88a2e"/></marker>
+              <marker id="alh-g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#059669"/></marker>
+              <marker id="alh-r" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#dc2626"/></marker>
+            </defs>
+
+            {/* Step 1: Lead mới */}
+            <rect x="20" y="30" width="120" height="60" rx="12" fill="#e88a2e18" stroke="#e88a2e" strokeWidth="2"/>
+            <text x="80" y="55" textAnchor="middle" fontSize="13" fontWeight="700" fill="#e88a2e">🆕 Lead mới</text>
+            <text x="80" y="72" textAnchor="middle" fontSize="8" fill="#6b7280">Từ Google Sheet</text>
+            {/* Arrow 1→2 */}
+            <line x1="140" y1="60" x2="175" y2="60" stroke="#e88a2e" strokeWidth="2" markerEnd="url(#alh)"/>
+
+            {/* Step 2: Chia lead */}
+            <rect x="185" y="30" width="120" height="60" rx="12" fill="#3b82f618" stroke="#3b82f6" strokeWidth="2"/>
+            <text x="245" y="55" textAnchor="middle" fontSize="13" fontWeight="700" fill="#3b82f6">🔀 Chia lead</text>
+            <text x="245" y="72" textAnchor="middle" fontSize="8" fill="#6b7280">Thủ công / Tự động</text>
+            {/* Arrow 2→3 */}
+            <line x1="305" y1="60" x2="340" y2="60" stroke="#e88a2e" strokeWidth="2" markerEnd="url(#alh)"/>
+
+            {/* Step 3: Sale nhận */}
+            <rect x="350" y="30" width="130" height="60" rx="12" fill="#8b5cf618" stroke="#8b5cf6" strokeWidth="2"/>
+            <text x="415" y="55" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8b5cf6">👤 Sale nhận</text>
+            <text x="415" y="72" textAnchor="middle" fontSize="8" fill="#6b7280">Telegram thông báo</text>
+            {/* Arrow 3→4 */}
+            <line x1="480" y1="60" x2="515" y2="60" stroke="#e88a2e" strokeWidth="2" markerEnd="url(#alh)"/>
+
+            {/* Step 4: Feedback? */}
+            <polygon points="580,20 650,60 580,100 510,60" fill="#f0fdf4" stroke="#059669" strokeWidth="2"/>
+            <text x="580" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="#059669">📞 Feedback</text>
+            <text x="580" y="70" textAnchor="middle" fontSize="8" fill="#059669">trong 3 ngày?</text>
+
+            {/* YES branch → Kết thúc */}
+            <line x1="650" y1="60" x2="700" y2="60" stroke="#059669" strokeWidth="2" markerEnd="url(#alh-g)"/>
+            <text x="670" y="52" fontSize="9" fontWeight="700" fill="#059669">Có ✅</text>
+            <rect x="710" y="30" width="130" height="60" rx="12" fill="#14b8a618" stroke="#14b8a6" strokeWidth="2"/>
+            <text x="775" y="50" textAnchor="middle" fontSize="12" fontWeight="700" fill="#14b8a6">🏆 Xử lý tiếp</text>
+            <text x="775" y="66" textAnchor="middle" fontSize="8" fill="#6b7280">Hẹn xem · Booking</text>
+            <text x="775" y="78" textAnchor="middle" fontSize="8" fill="#6b7280">Chốt · Không QT</text>
+
+            {/* NO branch → Auto-Rotate */}
+            <line x1="580" y1="100" x2="580" y2="140" stroke="#dc2626" strokeWidth="2" markerEnd="url(#alh-r)"/>
+            <text x="595" y="125" fontSize="9" fontWeight="700" fill="#dc2626">Không ❌</text>
+
+            {/* Auto-rotate box */}
+            <rect x="490" y="150" width="180" height="50" rx="12" fill="#dc262615" stroke="#dc2626" strokeWidth="2"/>
+            <text x="580" y="172" textAnchor="middle" fontSize="12" fontWeight="700" fill="#dc2626">🔄 Auto-Rotate</text>
+            <text x="580" y="188" textAnchor="middle" fontSize="8" fill="#6b7280">Xáo qua sale khác</text>
+
+            {/* Arrow back to "Sale nhận" */}
+            <path d="M490,175 L415,175 L415,95" stroke="#dc2626" strokeWidth="1.5" strokeDasharray="5,3" fill="none" markerEnd="url(#alh-r)"/>
+            <text x="445" y="168" fontSize="8" fill="#dc2626">Quay lại</text>
+
+            {/* Legend */}
+            <rect x="20" y="230" width="820" height="35" rx="8" fill="#f0f4f1" stroke="#e5e7eb" strokeWidth="1"/>
+            <circle cx="50" cy="248" r="5" fill="#e88a2e"/><text x="60" y="252" fontSize="9" fill="#374151">Luồng chính</text>
+            <circle cx="170" cy="248" r="5" fill="#059669"/><text x="180" y="252" fontSize="9" fill="#374151">Có feedback</text>
+            <circle cx="290" cy="248" r="5" fill="#dc2626"/><text x="300" y="252" fontSize="9" fill="#374151">Không feedback → Xáo</text>
+            <line x1="440" y1="248" x2="470" y2="248" stroke="#9ca3af" strokeWidth="1.5" strokeDasharray="4,3"/>
+            <text x="478" y="252" fontSize="9" fill="#374151">Quay lại vòng lặp</text>
+            <rect x="600" y="238" width="60" height="20" rx="6" fill="#fff" stroke="#9ca3af" strokeWidth="1"/>
+            <text x="630" y="252" textAnchor="middle" fontSize="8" fill="#374151">Thành phần</text>
+            <polygon points="710,238 730,248 710,258 690,248" fill="#fff" stroke="#9ca3af" strokeWidth="1"/>
+            <text x="740" y="252" fontSize="8" fill="#374151">Quyết định</text>
+          </svg>
         </div>
       </div>
     );
