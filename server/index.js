@@ -1217,9 +1217,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   // Post-sync: re-sync lead statuses from CRM history (ignore sheet, respect Chia lead boundaries)
   try {
-    const leadsInProject = await all(db, "SELECT id, status, sale_name FROM leads WHERE project_id = ?", [projectId]);
+    const leadsInProject = await all(db, "SELECT id, status FROM leads WHERE project_id = ?", [projectId]);
     const allHistory = await all(db, `
-      SELECT lead_id, sale_name, action, status, seq, source
+      SELECT lead_id, action, status, seq, source
       FROM lead_history
       WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)
       ORDER BY lead_id, seq DESC`, [projectId]);
@@ -1231,42 +1231,25 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       histByLead.get(h.lead_id).push(h);
     }
 
-    // Get current sale assignment for each lead
-    const leadSaleMap = new Map();
-    for (const l of leadsInProject) leadSaleMap.set(l.id, l.sale_name || "");
-
     const fixStmts = [];
     for (const lead of leadsInProject) {
       const entries = histByLead.get(lead.id) || [];
-      const currentSale = (leadSaleMap.get(lead.id) || "").toLowerCase().trim();
-      const hasRealSale = currentSale && currentSale !== "chưa chia";
+      let correctHistStatus = null;
 
-      if (!hasRealSale) continue; // Skip unassigned leads — keep sheet status
-
-      // Find the current sale's latest feedback in CRM history (skip sheet & Chia lead entries)
-      let saleLatestStatus = null;
-      for (const h of entries) { // entries are seq DESC (newest first)
-        if (h.source === "sheet") continue;
-        if (h.action === "Chia lead") continue; // Skip assignment entries, don't break
-        if (h.status && h.status.trim() && (h.sale_name || "").toLowerCase().trim() === currentSale) {
-          saleLatestStatus = h.status;
+      // Walk from newest to oldest CRM entry, stop at "Chia lead" boundary
+      for (const h of entries) {
+        if (h.source === "sheet") continue; // Ignore sheet entries
+        if (h.action === "Chia lead") break; // Don't cross assignment boundary
+        if (h.status && h.status.trim()) {
+          correctHistStatus = h.status;
           break;
         }
       }
 
-      if (saleLatestStatus) {
-        const correctStatus = normalizeStatus(saleLatestStatus);
+      if (correctHistStatus) {
+        const correctStatus = normalizeStatus(correctHistStatus);
         if (correctStatus !== lead.status) {
-          fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, saleLatestStatus, lead.id] });
-        }
-      } else {
-        // Current sale has no CRM feedback — only reset if this sale was CRM-assigned (not sheet-only)
-        const hasCrmAssignment = entries.some(h =>
-          h.source !== "sheet" && h.action === "Chia lead" &&
-          (h.sale_name || "").toLowerCase().trim() === currentSale
-        );
-        if (hasCrmAssignment && lead.status !== "new") {
-          fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
+          fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
         }
       }
     }
@@ -3680,19 +3663,21 @@ async function processSchedules(db, triggerUser) {
       roundCounter++;
       saleCounts[assignedIdx]++;
 
-      // Check if the NEW sale has ever given feedback for this lead
+      // Only set manager if lead has no manager yet
       const schLead = await get(db, "SELECT manager_name, status FROM leads WHERE id = ?", [lid]);
-      const saleOwnFeedback = await get(db,
-        "SELECT status FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != '' ORDER BY seq DESC LIMIT 1",
-        [lid, saleName]
-      );
-      if (saleOwnFeedback && saleOwnFeedback.status) {
-        // Sale đã từng feedback lead này → restore status của chính sale đó
-        const restoredStatus = normalizeStatus(saleOwnFeedback.status);
-        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = ? WHERE id = ?", args: [saleName, restoredStatus, lid] });
+      if (schLead?.manager_name) {
+        // Preserve existing status if sale already gave feedback, only reset to 'new' for unprocessed leads
+        if (schLead.status && schLead.status !== "new") {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+        } else {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        }
       } else {
-        // Sale chưa từng feedback → reset về "Chưa feedback"
-        stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        if (schLead?.status && schLead.status !== "new") {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
+        } else {
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+        }
       }
       // Only create 'Chia lead' history if this sale doesn't already have one for this lead
       const existingChia = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1", [lid, saleName]);
