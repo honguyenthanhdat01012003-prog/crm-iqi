@@ -1153,6 +1153,31 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       }
     }
 
+    // Determine correct status from CRM history by DATE (most reliable, seq can be wrong)
+    const crmHist = phoneHistMap.get(np);
+    if (crmHist && crmHist.length) {
+      let latestDate = null;
+      let latestStatus = null;
+      let latestRaw = null;
+      for (const h of crmHist) {
+        if (h.action === "Chia lead") continue;
+        if (!h.status || !h.status.trim()) continue;
+        const d = parseLeadDate(h.contact_date);
+        if (d && (!latestDate || d.getTime() > latestDate.getTime())) {
+          latestDate = d;
+          latestStatus = normalizeStatus(h.status);
+          latestRaw = h.status;
+        }
+      }
+      if (latestStatus && latestStatus !== "new") {
+        if (status !== latestStatus) {
+          console.log(`[replaceProjectData] DATE-FIX: "${l.name}" status "${status}" → "${latestStatus}" (raw="${latestRaw}", date=${latestDate?.toISOString()})`);
+        }
+        status = latestStatus;
+        rawStatus = latestRaw;
+      }
+    }
+
     stmts.push({
       sql: `INSERT INTO leads(
         project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
@@ -1168,7 +1193,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     });
 
     // Insert sheet history FIRST (lower seq) so CRM entries always have higher priority
-    const crmHist = phoneHistMap.get(np);
+    // crmHist already defined above for DATE-FIX
     let seqCounter = 0;
     if (l.saleHistory && l.saleHistory.length) {
       const crmHistEntries = crmHist || [];
