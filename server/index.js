@@ -1235,12 +1235,14 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     for (const lead of leadsInProject) {
       const entries = histByLead.get(lead.id) || [];
       let correctHistStatus = null;
+      let foundSource = "";
 
       // Walk from newest to oldest entry, skip "Chia lead" to find latest feedback
       for (const h of entries) {
         if (h.action === "Chia lead") continue; // Skip assignment entries, keep searching
         if (h.status && h.status.trim()) {
           correctHistStatus = h.status;
+          foundSource = h.source || "unknown";
           break;
         }
       }
@@ -1249,12 +1251,15 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         const correctStatus = normalizeStatus(correctHistStatus);
         if (correctStatus !== lead.status) {
           fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
+          console.log(`[post-sync] FIX lead#${lead.id}: "${lead.status}" → "${correctStatus}" (raw="${correctHistStatus}", source=${foundSource})`);
         }
       }
     }
     if (fixStmts.length) {
       await db.batch(fixStmts, "write");
-      console.log(`[replaceProjectData] Re-synced ${fixStmts.length}/${leadsInProject.length} lead statuses from CRM history`);
+      console.log(`[replaceProjectData] Re-synced ${fixStmts.length}/${leadsInProject.length} lead statuses from history`);
+    } else {
+      console.log(`[replaceProjectData] Post-sync: all ${leadsInProject.length} lead statuses already correct`);
     }
   } catch (e) { console.error("[replaceProjectData] Post-sync status fix error:", e.message); }
 
