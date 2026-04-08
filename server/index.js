@@ -1217,9 +1217,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   // Post-sync: re-sync lead statuses from CRM history (ignore sheet, respect Chia lead boundaries)
   try {
-    const leadsInProject = await all(db, "SELECT id, status FROM leads WHERE project_id = ?", [projectId]);
+    const leadsInProject = await all(db, "SELECT id, status, name FROM leads WHERE project_id = ?", [projectId]);
     const allHistory = await all(db, `
-      SELECT lead_id, action, status, seq, source
+      SELECT lead_id, action, status, seq, source, sale_name
       FROM lead_history
       WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)
       ORDER BY lead_id, seq DESC`, [projectId]);
@@ -1237,6 +1237,15 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       let correctHistStatus = null;
       let foundSource = "";
 
+      // Debug: log all entries for leads with "minh" in name
+      const isDebug = (lead.name || "").toLowerCase().includes("minh th");
+      if (isDebug) {
+        console.log(`[post-sync DEBUG] Lead#${lead.id} "${lead.name}" currentStatus="${lead.status}" entries=${entries.length}`);
+        for (const e of entries) {
+          console.log(`  seq=${e.seq} action="${e.action}" status="${e.status}" source="${e.source}" sale="${e.sale_name}"`);
+        }
+      }
+
       // Walk from newest to oldest entry, skip "Chia lead" to find latest feedback
       for (const h of entries) {
         if (h.action === "Chia lead") continue; // Skip assignment entries, keep searching
@@ -1245,6 +1254,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           foundSource = h.source || "unknown";
           break;
         }
+      }
+
+      if (isDebug) {
+        console.log(`  → found="${correctHistStatus}" norm="${correctHistStatus ? normalizeStatus(correctHistStatus) : 'N/A'}" leadStatus="${lead.status}" match=${correctHistStatus ? normalizeStatus(correctHistStatus) === lead.status : 'no-hist'}`);
       }
 
       if (correctHistStatus) {
