@@ -1252,9 +1252,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         }
       }
 
+      // Check if this lead has ANY CRM (non-sheet) history entries
+      const hasCrmEntries = entries.some(h => h.source !== "sheet");
+
       // If the latest status came from a different sale (not the current assigned sale),
       // check if the current sale has their own feedback after being assigned
-      if (correctHistStatus && currentSale) {
+      const hasRealSale = currentSale && currentSale !== "Chưa chia";
+      if (correctHistStatus && hasRealSale) {
         let currentSaleHasFeedback = false;
         for (const h of entries) {
           if (h.source === "sheet") continue;
@@ -1274,8 +1278,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         if (correctStatus !== lead.status) {
           fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
         }
-      } else if (lead.status !== "new") {
-        // No feedback from current sale → ensure status is "new"
+      } else if (hasCrmEntries && hasRealSale && lead.status !== "new") {
+        // Lead has CRM history, sale assigned, but no feedback from this sale → reset to "new"
         fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
       }
     }
