@@ -1238,49 +1238,33 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const fixStmts = [];
     for (const lead of leadsInProject) {
       const entries = histByLead.get(lead.id) || [];
-      const currentSale = leadSaleMap.get(lead.id) || "";
-      let correctHistStatus = null;
+      const currentSale = (leadSaleMap.get(lead.id) || "").toLowerCase().trim();
+      const hasRealSale = currentSale && currentSale !== "chưa chia";
 
-      // Walk from newest to oldest CRM entry, stop at "Chia lead" boundary
-      // Only pick status from the CURRENT sale's feedback entries
-      for (const h of entries) {
-        if (h.source === "sheet") continue; // Ignore sheet entries
-        if (h.action === "Chia lead") break; // Don't cross assignment boundary
-        if (h.status && h.status.trim()) {
-          correctHistStatus = h.status;
+      if (!hasRealSale) continue; // Skip unassigned leads — keep sheet status
+
+      // Find the current sale's latest feedback in CRM history (skip sheet & Chia lead entries)
+      let saleLatestStatus = null;
+      for (const h of entries) { // entries are seq DESC (newest first)
+        if (h.source === "sheet") continue;
+        if (h.action === "Chia lead") continue; // Skip assignment entries, don't break
+        if (h.status && h.status.trim() && (h.sale_name || "").toLowerCase().trim() === currentSale) {
+          saleLatestStatus = h.status;
           break;
         }
       }
 
-      // Check if this lead has ANY CRM (non-sheet) history entries
-      const hasCrmEntries = entries.some(h => h.source !== "sheet");
-
-      // If the latest status came from a different sale (not the current assigned sale),
-      // check if the current sale has their own feedback after being assigned
-      const hasRealSale = currentSale && currentSale !== "Chưa chia";
-      if (correctHistStatus && hasRealSale) {
-        let currentSaleHasFeedback = false;
-        for (const h of entries) {
-          if (h.source === "sheet") continue;
-          if (h.action === "Chia lead") break;
-          if (h.status && h.status.trim() && (h.sale_name || "").toLowerCase().trim() === currentSale.toLowerCase().trim()) {
-            currentSaleHasFeedback = true;
-            correctHistStatus = h.status; // Use current sale's own status
-            break;
-          }
-        }
-        // Current sale has no feedback → reset to "new"
-        if (!currentSaleHasFeedback) correctHistStatus = null;
-      }
-
-      if (correctHistStatus) {
-        const correctStatus = normalizeStatus(correctHistStatus);
+      if (saleLatestStatus) {
+        const correctStatus = normalizeStatus(saleLatestStatus);
         if (correctStatus !== lead.status) {
-          fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
+          fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, saleLatestStatus, lead.id] });
         }
-      } else if (hasCrmEntries && hasRealSale && lead.status !== "new") {
-        // Lead has CRM history, sale assigned, but no feedback from this sale → reset to "new"
-        fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
+      } else {
+        // Current sale has no CRM feedback at all — check if lead has ever been through CRM workflow
+        const hasCrmAssignment = entries.some(h => h.source !== "sheet" && h.action === "Chia lead");
+        if (hasCrmAssignment && lead.status !== "new") {
+          fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
+        }
       }
     }
     if (fixStmts.length) {
@@ -4217,16 +4201,12 @@ function filterLeadsForSale(data, displayName) {
   for (const l of data.leads) {
     let foundOwnStatus = false;
     if (l.saleHistory && l.saleHistory.length) {
-      // Walk from newest to oldest, only look at entries AFTER the last "Chia lead" to this sale
-      let passedChiaLead = false;
+      // Walk from newest to oldest, skip "Chia lead" entries (don't break at them)
+      // This handles re-assignment: sale may have feedback BEFORE a later "Chia lead" to same sale
       for (let i = l.saleHistory.length - 1; i >= 0; i--) {
         const h = l.saleHistory[i];
-        // Found "Chia lead" entry for this sale → stop looking further back
-        if (h.action === "Chia lead" && matchSaleName(h.saleName, displayName)) {
-          passedChiaLead = true;
-          break;
-        }
-        if (h.status && h.action !== "Chia lead" && matchSaleName(h.saleName, displayName)) {
+        if (h.action === "Chia lead") continue; // Skip assignment entries
+        if (h.status && matchSaleName(h.saleName, displayName)) {
           l.status = normalizeStatus(h.status);
           l.rawStatus = h.status;
           foundOwnStatus = true;
