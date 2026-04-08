@@ -1236,10 +1236,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       const entries = histByLead.get(lead.id) || [];
       let correctHistStatus = null;
 
-      // Walk from newest to oldest CRM entry, stop at "Chia lead" boundary
+      // Walk from newest to oldest CRM entry, skip "Chia lead" to find latest feedback
       for (const h of entries) {
         if (h.source === "sheet") continue; // Ignore sheet entries
-        if (h.action === "Chia lead") break; // Don't cross assignment boundary
+        if (h.action === "Chia lead") continue; // Skip assignment entries, keep searching
         if (h.status && h.status.trim()) {
           correctHistStatus = h.status;
           break;
