@@ -4739,7 +4739,7 @@ app.post("/api/telegram-webhook/setup", requireAuth, requireAdmin, async (req, r
     // Use the request's host to build webhook URL (auto-detect domain)
     const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
     const host = req.headers['x-forwarded-host'] || req.headers.host;
-    const baseUrl = host ? `https://${host.replace(/:\d+$/, '')}` : 'https://crm-iqid.vn';
+    const baseUrl = host ? `https://${host.replace(/:\d+$/, '')}` : 'https://crm-iqi.id.vn';
 
     const results = [];
     for (const bot of activeBots) {
@@ -8573,7 +8573,7 @@ if (!process.env.VERCEL) {
       try {
         const activeBots = await all(db, "SELECT id, name, token FROM telegram_bots WHERE is_active = 1");
         if (!activeBots || activeBots.length === 0) { console.log("[telegram-webhook/auto] No active bots, skipping"); return; }
-        const baseUrl = process.env.BASE_URL || "https://crm-iqid.vn";
+        const baseUrl = process.env.BASE_URL || "https://crm-iqi.id.vn";
         for (const bot of activeBots) {
           const webhookUrl = `${baseUrl}/api/telegram-webhook/${bot.id}`;
           const r = await fetch(`https://api.telegram.org/bot${bot.token}/setWebhook`, {
