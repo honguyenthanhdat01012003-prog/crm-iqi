@@ -12614,12 +12614,551 @@ function CapiSettingsPage() {
     </div>
   );
 }
+/* ===== System Flow Diagram (Interactive) ===== */
+function SystemFlowDiagram() {
+  const [tab, setTab] = useState("overview");
+  const tabs = [
+    { key: "overview", icon: "🗺️", label: "Tổng quan vận hành" },
+    { key: "sync", icon: "🔄", label: "Đồng bộ Sheet" },
+    { key: "lead", icon: "👤", label: "Vòng đời Lead" },
+    { key: "actions", icon: "🖱️", label: "Nút & Hành động" },
+    { key: "telegram", icon: "📱", label: "Telegram Bot" },
+    { key: "integrations", icon: "🔌", label: "Facebook & AI" },
+  ];
+  const B = ({icon,t,d,c="#374151",w})=>(<div style={{display:"inline-flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minWidth:w||120,maxWidth:w||180,padding:"10px 12px",borderRadius:10,background:"#fff",border:`2px solid ${c}25`,boxShadow:"0 1px 4px #0001",textAlign:"center",flexShrink:0}}>{icon&&<div style={{fontSize:18,lineHeight:1}}>{icon}</div>}<div style={{fontSize:11,fontWeight:700,color:c,marginTop:icon?3:0,lineHeight:1.2}}>{t}</div>{d&&<div style={{fontSize:9,color:"#6b7280",marginTop:2,lineHeight:1.35}}>{d}</div>}</div>);
+  const A = ({l,down,c="#9ca3af"})=>(<div style={{display:"flex",flexDirection:down?"column":"row",alignItems:"center",justifyContent:"center",padding:down?"3px 0":"0 2px",flexShrink:0}}>{l&&<div style={{fontSize:8,fontWeight:600,color:c,whiteSpace:"nowrap"}}>{l}</div>}<div style={{fontSize:14,color:c,lineHeight:1}}>{down?"⬇":"➜"}</div></div>);
+  const R = ({children,gap=6,wrap,style})=>(<div style={{display:"flex",alignItems:"center",justifyContent:"center",gap,flexWrap:wrap?"wrap":"nowrap",...style}}>{children}</div>);
+  const C = ({children,gap=6,style})=>(<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap,...style}}>{children}</div>);
+  const S = ({title,color,children,style})=>(<div style={{border:`2px solid ${color}30`,borderRadius:12,padding:"20px 14px 14px",background:`${color}06`,marginBottom:10,position:"relative",...style}}><div style={{position:"absolute",top:-10,left:14,background:"#f8fafb",padding:"0 8px",fontSize:11,fontWeight:800,color,letterSpacing:0.5}}>{title}</div>{children}</div>);
+  const Tag = ({text,color})=>(<span style={{display:"inline-block",padding:"3px 10px",borderRadius:6,fontSize:10,fontWeight:600,background:`${color}15`,color,border:`1px solid ${color}30`}}>{text}</span>);
+
+  const renderOverview = () => (
+    <C gap={8}>
+      <S title="🌐 NGUỒN DỮ LIỆU VÀO" color="#0891b2">
+        <R gap={10} wrap>
+          <B icon="📊" t="Google Sheets" d="Lead từ quảng cáo FB · Sheet bài đăng · Sheet chi phí" c="#0891b2" w={170}/>
+          <B icon="📱" t="Telegram Bot" d="Webhook callback · Inline keyboard 16 nút · Feedback sale" c="#0891b2" w={170}/>
+          <B icon="📘" t="Facebook API" d="Ads insights · Messenger inbox · Pages · CAPI · Ads Library" c="#0891b2" w={170}/>
+          <B icon="🤖" t="AI Services" d="OpenAI GPT-4o (content) · Perplexity sonar-pro (market) · Gemini" c="#0891b2" w={170}/>
+          <B icon="📰" t="Nguồn tin BĐS" d="Batdongsan · Chợ Tốt · Tin tức thị trường" c="#0891b2" w={170}/>
+        </R>
+      </S>
+      <R gap={30}><A down l="3 phút/lần" c="#0891b2"/><A down l="Webhook" c="#0891b2"/><A down l="REST API" c="#0891b2"/><A down l="REST API" c="#0891b2"/></R>
+      <S title="⚙️ SERVER — Node.js + Express 5.1 (Port 4000)" color="#16a34a">
+        <C gap={10}>
+          <R gap={8} wrap>
+            <B icon="🔄" t="Sync Engine" d="syncAllProjects() → 4-tier match → replace → post-sync fix" c="#16a34a" w={200}/>
+            <B icon="📋" t="Lead Management" d="Chia lead · Xáo lead · Thu hồi · Cập nhật feedback · Hot lead" c="#16a34a" w={200}/>
+            <B icon="🤖" t="Auto-Rotate" d="30 phút/lần · 3 ngày không FB → xáo sale · Round-robin" c="#16a34a" w={200}/>
+            <B icon="📅" t="Lịch chia tự động" d="Tour xoay vòng · leads/ngày/sale · Khung giờ · Auto-schedule" c="#16a34a" w={200}/>
+          </R>
+          <R gap={8} wrap>
+            <B icon="🔐" t="Auth / JWT" d="Login · 3 roles · Rate limit · Password policy (8+ chars)" c="#16a34a" w={160}/>
+            <B icon="🔌" t="Socket.IO" d="Real-time push · data-changed · announcement-changed" c="#16a34a" w={160}/>
+            <B icon="💾" t="Backup" d="Auto 8h · Startup · Manual · Selective restore · 7 ngày" c="#16a34a" w={160}/>
+            <B icon="📡" t="CAPI" d="Status change → FB event · Pixel ID · Dedup" c="#16a34a" w={160}/>
+            <B icon="📝" t="Content" d="Bài đăng · Lịch đăng · Multi-page publish" c="#16a34a" w={160}/>
+          </R>
+        </C>
+      </S>
+      <R gap={30}><A down l="Đọc/Ghi" c="#16a34a"/><A down l="SQL" c="#d97706"/><A down l="" c="#16a34a"/></R>
+      <S title="🗄️ DATABASE — SQLite (20+ tables · ~500MB)" color="#d97706">
+        <R gap={6} wrap>
+          <Tag text="leads" color="#d97706"/><Tag text="lead_history" color="#d97706"/><Tag text="users" color="#d97706"/>
+          <Tag text="projects" color="#d97706"/><Tag text="campaigns" color="#d97706"/><Tag text="lead_schedules" color="#d97706"/>
+          <Tag text="settings" color="#d97706"/><Tag text="telegram_bots" color="#d97706"/><Tag text="telegram_pending" color="#d97706"/>
+          <Tag text="chat_messages" color="#d97706"/><Tag text="announcements" color="#d97706"/><Tag text="fb_pages" color="#d97706"/>
+          <Tag text="fb_ad_accounts" color="#d97706"/><Tag text="daily_news" color="#d97706"/><Tag text="capi_log" color="#d97706"/>
+          <Tag text="market_intel_cache" color="#d97706"/><Tag text="lead_status_log" color="#d97706"/><Tag text="sheet_configs" color="#d97706"/>
+        </R>
+      </S>
+      <R gap={20}><A down l="Socket.IO" c="#7c3aed"/><A down l="REST API" c="#7c3aed"/></R>
+      <S title="🖥️ FRONTEND — React 19 + Vite 7 (12 Pages · 38 Components)" color="#7c3aed">
+        <C gap={8}>
+          <R gap={6} wrap>
+            <B icon="📊" t="Dashboard" d="Donut chart · 4 cards · Sale ranking · CPL" c="#7c3aed" w={130}/>
+            <B icon="📋" t="Khách hàng" d="21 status tabs · Filter · Chi tiết · Chia lead · Xáo" c="#7c3aed" w={150}/>
+            <B icon="🏗️" t="Dự án" d="Sheet URL · Sync · Cost data" c="#7c3aed" w={130}/>
+            <B icon="📈" t="Chiến dịch" d="Market Intel · Content Review · FB Ads · AI Advisor" c="#7c3aed" w={160}/>
+            <B icon="👥" t="Sales" d="Kanban · Pipeline · Leaderboard" c="#7c3aed" w={130}/>
+            <B icon="👤" t="Tài khoản" d="CRUD · Bot TG · Bulk create" c="#7c3aed" w={130}/>
+          </R>
+          <R gap={6} wrap>
+            <B icon="🔑" t="Hồ sơ" d="Avatar crop · Password" c="#7c3aed" w={120}/>
+            <B icon="💬" t="Messenger" d="FB inbox · Reply" c="#7c3aed" w={120}/>
+            <B icon="📝" t="Bài đăng" d="Sheet posts · Publish" c="#7c3aed" w={120}/>
+            <B icon="📅" t="Lịch đăng" d="Calendar view" c="#7c3aed" w={120}/>
+            <B icon="📰" t="Tin tức BĐS" d="Heat · Verdict" c="#7c3aed" w={120}/>
+            <B icon="📊" t="CAPI" d="Pixel · Event log" c="#7c3aed" w={120}/>
+            <B icon="📖" t="Hướng dẫn" d="11 sections" c="#7c3aed" w={120}/>
+          </R>
+          <R gap={10} wrap style={{marginTop:4}}>
+            <div style={{padding:"8px 16px",borderRadius:8,background:"#dc262610",border:"1px solid #dc262630",textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#dc2626"}}>👑 Admin</div>
+              <div style={{fontSize:9,color:"#6b7280"}}>12 tabs · Toàn quyền · Backup · Chia lead</div>
+            </div>
+            <div style={{padding:"8px 16px",borderRadius:8,background:"#d9770610",border:"1px solid #d9770630",textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#d97706"}}>👔 Manager</div>
+              <div style={{fontSize:9,color:"#6b7280"}}>Dự án được gán · Chia lead · Quản lý sale</div>
+            </div>
+            <div style={{padding:"8px 16px",borderRadius:8,background:"#05966910",border:"1px solid #05966930",textAlign:"center"}}>
+              <div style={{fontSize:11,fontWeight:700,color:"#059669"}}>👤 Sale</div>
+              <div style={{fontSize:9,color:"#6b7280"}}>Lead của mình · Feedback · Không thấy sale khác</div>
+            </div>
+          </R>
+        </C>
+      </S>
+      <S title="⏰ BACKGROUND JOBS — Tự động chạy" color="#64748b">
+        <R gap={6} wrap>
+          <Tag text="🔄 Sync Sheet: 3 phút" color="#16a34a"/>
+          <Tag text="🔁 Auto-Rotate: 30 phút" color="#dc2626"/>
+          <Tag text="💾 Backup DB: 8 giờ" color="#d97706"/>
+          <Tag text="📰 Daily News: 10 phút check" color="#0891b2"/>
+          <Tag text="📅 Schedule: mỗi phút check" color="#7c3aed"/>
+          <Tag text="🔌 Webhook: khi khởi động" color="#64748b"/>
+        </R>
+      </S>
+    </C>
+  );
+
+  const renderSync = () => (
+    <C gap={4}>
+      <B icon="⏰" t="TRIGGER" d="Mỗi 3 phút tự động HOẶC Admin bấm nút Đồng bộ" c="#e88a2e" w={300}/>
+      <A down l="" c="#e88a2e"/>
+      <S title="PHASE 1 — Đọc dữ liệu từ Google Sheet" color="#0891b2">
+        <C gap={4}>
+          <R gap={6}>
+            <B icon="📊" t="1. Gọi Google Sheet API v4" d="spreadsheets.values.get · Đọc toàn bộ rows của sheet" c="#0891b2" w={250}/>
+            <A l="" c="#0891b2"/>
+            <B icon="🔍" t="2. Parse dữ liệu" d="Detect cột: Tên, SĐT, Trạng thái... · Detect Sale blocks (Nhận Lead → Feedback) · extractSaleHistory()" c="#0891b2" w={280}/>
+          </R>
+        </C>
+      </S>
+      <A down l="" c="#16a34a"/>
+      <S title="PHASE 2 — Backup & Matching" color="#16a34a">
+        <C gap={6}>
+          <B icon="💾" t="3. Backup CRM history" d="SELECT * FROM lead_history WHERE source != 'sheet' → Lưu vào RAM theo phone · Bảo vệ dữ liệu CRM không bị mất" c="#16a34a" w={400}/>
+          <A down l="" c="#16a34a"/>
+          <div style={{fontSize:11,fontWeight:700,color:"#16a34a",marginBottom:4}}>4. Tìm lead cũ matching — 4 Tiers (thử từ chính xác → mơ hồ)</div>
+          <R gap={6} wrap>
+            <B icon="🥇" t="Tier 1: ads_id" d="Facebook Ads ID · Chính xác nhất · 1-1 mapping" c="#059669" w={160}/>
+            <A l="không match" c="#9ca3af"/>
+            <B icon="🥈" t="Tier 2: phone + name" d="Chuẩn hóa +84 · Khớp cả SĐT lẫn tên" c="#0d9488" w={160}/>
+            <A l="không match" c="#9ca3af"/>
+            <B icon="🥉" t="Tier 3: phone" d="Chỉ cần SĐT khớp · Bỏ qua tên" c="#d97706" w={160}/>
+            <A l="không match" c="#9ca3af"/>
+            <B icon="4️⃣" t="Tier 4: name" d="Chỉ tên · Cùng dự án · Fallback cuối" c="#dc2626" w={160}/>
+          </R>
+          <A down l="Khi match → Khôi phục: sale_id, sale_name, manager_name, notes, is_hot, CRM history" c="#16a34a"/>
+        </C>
+      </S>
+      <A down l="" c="#d97706"/>
+      <S title="PHASE 3 — Xóa & Tạo lại dữ liệu" color="#d97706">
+        <C gap={4}>
+          <R gap={6}>
+            <B icon="🗑️" t="5. DELETE toàn bộ" d="DELETE FROM leads WHERE project_id = ? · DELETE FROM lead_history WHERE lead_id IN (...)" c="#dc2626" w={260}/>
+            <A l="" c="#d97706"/>
+            <B icon="📥" t="6. INSERT leads mới" d="Dữ liệu sheet + khôi phục status/sale/manager/notes từ match · DATE-FIX: so ngày để set status chính xác" c="#d97706" w={280}/>
+          </R>
+          <A down l="" c="#d97706"/>
+          <B icon="📋" t="7. INSERT lead_history" d="Sheet history TRƯỚC (seq thấp, ưu tiên thấp) → CRM history SAU (seq cao, ưu tiên cao) · Không trùng lặp" c="#d97706" w={420}/>
+        </C>
+      </S>
+      <A down l="" c="#7c3aed"/>
+      <S title="PHASE 4 — Post-sync Status Fix (Sửa status theo history CRM)" color="#7c3aed">
+        <C gap={4}>
+          <B icon="📊" t="8. Load toàn bộ history dự án vừa sync" d="Sort theo ngày GIẢM DẦN (mới nhất → cũ nhất) · parseContactDate() hỗ trợ dd/mm/yyyy, hh:mm:ss dd/mm/yyyy, ISO" c="#7c3aed" w={420}/>
+          <A down l="Duyệt từng lead" c="#7c3aed"/>
+          <R gap={6} wrap>
+            <C gap={3}>
+              <B icon="❓" t="source = sheet?" d="Bỏ qua — sheet data không đáng tin (chỉ lấy từ CRM history)" c="#6b7280" w={170}/>
+              <div style={{fontSize:9,color:"#6b7280",fontStyle:"italic"}}>→ continue (bỏ qua)</div>
+            </C>
+            <C gap={3}>
+              <B icon="❓" t="action = 'Chia lead' (CRM)?" d="DỪNG duyệt — đây là ranh giới giữa 2 lần chia, không lấy status sale cũ" c="#dc2626" w={190}/>
+              <div style={{fontSize:9,color:"#dc2626",fontStyle:"italic"}}>→ break (dừng)</div>
+            </C>
+            <C gap={3}>
+              <B icon="✅" t="Có status?" d="UPDATE leads SET status = normalizeStatus(h.status) · Đây là feedback MỚI NHẤT từ CRM" c="#059669" w={180}/>
+              <div style={{fontSize:9,color:"#059669",fontStyle:"italic"}}>→ UPDATE DB ✅</div>
+            </C>
+          </R>
+        </C>
+      </S>
+      <A down l="" c="#e88a2e"/>
+      <S title="PHASE 5 — Thông báo & Cập nhật UI" color="#e88a2e">
+        <R gap={6} wrap>
+          <B icon="🆕" t="9. Detect lead mới" d="Lead không match bất kỳ Tier 1-3 (chỉ Tier 4 name-only không tính)" c="#e88a2e" w={200}/>
+          <A l="" c="#e88a2e"/>
+          <B icon="📱" t="10. Telegram notify" d="Gửi tin nhắn cho sale + 16 nút feedback inline" c="#0891b2" w={200}/>
+          <A l="" c="#e88a2e"/>
+          <B icon="🔌" t="11. Socket.IO emit" d="'data-changed' → Tất cả client tự refresh" c="#16a34a" w={200}/>
+          <A l="" c="#e88a2e"/>
+          <B icon="🖥️" t="12. UI refresh" d="Frontend nhận data mới → re-render bảng lead" c="#7c3aed" w={200}/>
+        </R>
+      </S>
+    </C>
+  );
+
+  const renderLead = () => {
+    const st = (label,color) => (<span style={{display:"inline-block",padding:"3px 10px",borderRadius:6,fontSize:10,fontWeight:600,background:`${color}15`,color,border:`1px solid ${color}30`,margin:2}}>{label}</span>);
+    return (
+    <C gap={8}>
+      <S title="📊 21 TRẠNG THÁI LEAD" color="#1a3c20">
+        <C gap={6}>
+          <div style={{fontSize:11,fontWeight:700,color:"#059669"}}>🟢 Tích cực (tiến triển)</div>
+          <R gap={4} wrap>{[["Mới","#e88a2e"],["Đã gọi","#3b82f6"],["Quan tâm","#8b5cf6"],["QT hời hợt","#a78bfa"],["QT DA khác","#6366f1"],["Hẹn xem","#0ea5e9"],["Đã xem nhà","#14b8a6"],["Đang TL","#f59e0b"],["Giữ chỗ","#10b981"],["Đặt cọc","#059669"],["Đã cọc","#047857"],["Chốt","#065f46"]].map(([l,c],i) => <span key={i}>{st(l,c)}</span>)}</R>
+          <div style={{fontSize:11,fontWeight:700,color:"#dc2626",marginTop:4}}>🔴 Tiêu cực / Kết thúc</div>
+          <R gap={4} wrap>{[["Không QT","#6b7280"],["Phá/rác","#ef4444"],["Sai số","#9ca3af"],["Chặn","#991b1b"],["TC yếu","#f59e0b"],["Mất","#374151"],["Đã huỷ cọc","#ea580c"]].map(([l,c],i) => <span key={i}>{st(l,c)}</span>)}</R>
+          <div style={{fontSize:11,fontWeight:700,color:"#d97706",marginTop:4}}>🟡 Chờ xử lý</div>
+          <R gap={4} wrap>{[["Chưa LLĐ","#94a3b8"],["Gọi lại sau","#f97316"],["Có sale khác","#7c3aed"]].map(([l,c],i) => <span key={i}>{st(l,c)}</span>)}</R>
+        </C>
+      </S>
+
+      <S title="🔥 NHIỆT ĐỘ LEAD" color="#dc2626">
+        <R gap={8} wrap>
+          <B icon="🔥" t="Cực nóng" d="Tạo ≤ 24 giờ · Cần gọi NGAY" c="#dc2626" w={140}/>
+          <B icon="🟠" t="Nóng" d="Tạo ≤ 72 giờ · Ưu tiên cao" c="#ea580c" w={140}/>
+          <B icon="🟡" t="Ấm" d="Tạo ≤ 7 ngày · Còn tiềm năng" c="#d97706" w={140}/>
+          <B icon="🔵" t="Lạnh" d="Tạo > 7 ngày · Khả năng thấp" c="#6b7280" w={140}/>
+        </R>
+      </S>
+
+      <S title="🔄 VÒNG ĐỜI LEAD — Từ quảng cáo đến chốt deal" color="#16a34a">
+        <C gap={4}>
+          <B icon="🆕" t="Lead xuất hiện" d="Khách điền form quảng cáo Facebook → dữ liệu vào Google Sheet → Sync vào CRM" c="#e88a2e" w={350}/>
+          <A down l="" c="#e88a2e"/>
+          <R gap={6}>
+            <B icon="🔀" t="Chia lead" d="Admin chia thủ công · Lịch tự động · Xáo lead hàng loạt" c="#3b82f6" w={200}/>
+            <A l="" c="#3b82f6"/>
+            <B icon="👤" t="Sale nhận lead" d="CRM gán sale_id · Telegram gửi thông báo kèm 16 nút feedback" c="#8b5cf6" w={220}/>
+          </R>
+          <A down l="" c="#059669"/>
+          <div style={{border:"2px dashed #059669",borderRadius:12,padding:12,background:"#f0fdf405"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#059669",marginBottom:8,textAlign:"center"}}>📞 Sale liên hệ khách hàng</div>
+            <R gap={6} wrap>
+              <C gap={3}>
+                <B icon="✅" t="Feedback tích cực" d="Quan tâm → Hẹn xem → Đã xem → Thương lượng → Giữ chỗ → Cọc → Chốt" c="#059669" w={200}/>
+                <div style={{fontSize:9,color:"#059669",fontStyle:"italic"}}>Tiếp tục xử lý → Chốt deal 🏆</div>
+              </C>
+              <C gap={3}>
+                <B icon="⏰" t="Chưa phản hồi" d="Sale không cập nhật feedback trong 3 ngày liên tiếp" c="#d97706" w={200}/>
+                <A down l="3 ngày" c="#dc2626"/>
+                <B icon="🔁" t="Auto-Rotate" d="Thu hồi lead → Xáo qua sale khác → Telegram: xóa msg cũ, gửi msg mới" c="#dc2626" w={200}/>
+                <div style={{fontSize:9,color:"#dc2626",fontStyle:"italic"}}>↩ Quay lại "Sale nhận lead"</div>
+              </C>
+              <C gap={3}>
+                <B icon="❌" t="Feedback tiêu cực" d="KBM · Spam · Sai số · Không QT · Chặn → Lead bị khóa (locked)" c="#6b7280" w={200}/>
+                <div style={{fontSize:9,color:"#6b7280",fontStyle:"italic"}}>Không bị auto-rotate nữa</div>
+              </C>
+            </R>
+          </div>
+          <A down l="" c="#059669"/>
+          <R gap={6}>
+            <B icon="📊" t="Facebook CAPI" d="Status thay đổi → Gửi event: Lead/InitiateCheckout/Schedule/Purchase" c="#0891b2" w={250}/>
+            <B icon="🔌" t="Socket.IO" d="Emit 'data-changed' → Tất cả user thấy update real-time" c="#16a34a" w={250}/>
+          </R>
+        </C>
+      </S>
+
+      <S title="🔒 LOCKED STATUS — Không bị Auto-Rotate" color="#64748b">
+        <R gap={4} wrap>
+          {[["Giữ chỗ","#10b981"],["Đặt cọc","#059669"],["Đã cọc","#047857"],["Chốt","#065f46"],["Không QT","#6b7280"],["Phá/rác","#ef4444"],["Sai số","#9ca3af"],["Mất","#374151"],["Đã huỷ cọc","#ea580c"]].map(([l,c],i)=><span key={i}>{st(l,c)}</span>)}
+        </R>
+        <div style={{fontSize:9,color:"#64748b",marginTop:6}}>💡 Lead có status này sẽ không bao giờ bị auto-rotate xáo. Chỉ Admin mới có thể thay đổi.</div>
+      </S>
+    </C>
+    );
+  };
+
+  const renderActions = () => (
+    <C gap={8}>
+      <div style={{fontSize:13,fontWeight:700,color:"#1a3c20",marginBottom:4}}>Mỗi nút bấm trên CRM sẽ kích hoạt một chuỗi hành động. Chi tiết từng nút:</div>
+
+      <S title='📋 Trang "Khách hàng" — Thanh nút Admin' color="#dc2626">
+        <C gap={8}>
+          {[
+            {btn:"🔀 Chia Lead",desc:"Mở panel 8 bước",steps:["Chọn dự án · Lọc status · Lọc nhu cầu · Lọc ngày","Chọn số lead (cụ thể / tất cả)","Chọn danh sách Sale tham gia","Mode: Chia ngay (shuffle) hoặc Tạo lịch tự động","→ API: POST /api/shuffle-leads hoặc POST /api/schedules","→ DB: UPDATE leads.sale_id · INSERT lead_history (Chia lead)","→ Telegram: sendMessage() cho mỗi sale kèm 16 nút","→ Socket.IO: emit('data-changed') → UI refresh"]},
+            {btn:"🔄 Xáo Lead",desc:"Admin xáo lead hàng loạt",steps:["Chọn dự án + filter","Round-robin phân bổ đều cho sales","→ API: POST /api/shuffle-leads","→ DB: UPDATE sale_id/sale_name + INSERT history","→ Telegram: xóa msg cũ + gửi msg mới"]},
+            {btn:"🚫 Thu hồi Lead",desc:"Xóa entry 'Chia lead' trong history",steps:["Click lead → Mở lịch sử → Bấm 🗑️ ở entry 'Chia lead'","→ API: POST /api/recall-lead","→ DB: DELETE lead_history entry · UPDATE leads.sale_id = NULL","→ Telegram: deleteMessage() xóa msg từ chat sale","Lead về trạng thái chưa chia"]},
+            {btn:"💾 Backup",desc:"Tải file backup về máy",steps:["Bấm nút Backup → GET /api/backup","→ Server copy crm.db → gửi file .db","Tải về máy tính"]},
+            {btn:"🔄 Khôi phục chọn lọc",desc:"Chọn backup + dự án → khôi phục sale/status",steps:["Bấm 'Khôi phục' → Chọn dự án → Chọn file backup","→ API: POST /api/restore-sales","→ DB: Chỉ UPDATE sale_id · sale_name · manager_name · status từ backup","Không xóa data hiện tại → additive (cộng dồn)"]},
+            {btn:"🔥 Auto-Rotate ON/OFF",desc:"Bật/tắt auto-rotate toàn hệ thống",steps:["Toggle → POST /api/auto-rotate/toggle","→ DB: settings.auto_rotate = true/false","Khi ON: mỗi 30 phút check lead 3 ngày không feedback → xáo"]},
+            {btn:"📊 Lead Quality Report",desc:"Báo cáo chất lượng lead",steps:["→ GET /api/lead-quality-report","→ Server: Phân tích leads theo dự án, status dist, CPL","→ Xuất Excel hoặc hiển thị trên UI"]},
+          ].map((item,i) => (
+            <div key={i} style={{background:"#fff",borderRadius:10,border:"1px solid #e5e7eb",padding:"10px 14px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#1a3c20"}}>{item.btn}</div>
+              <div style={{fontSize:10,color:"#6b7280",marginBottom:6}}>{item.desc}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                {item.steps.map((s,si) => (
+                  <div key={si} style={{fontSize:10,color:s.startsWith("→")?"#16a34a":"#374151",paddingLeft:s.startsWith("→")?12:0,lineHeight:1.4}}>
+                    {!s.startsWith("→") && <span style={{color:"#e88a2e",fontWeight:700,marginRight:4}}>{si+1}.</span>}
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </C>
+      </S>
+
+      <S title="👤 Sale — Hành động" color="#059669">
+        <C gap={8}>
+          {[
+            {btn:"📝 Cập nhật trạng thái",steps:["Click lead → Chọn status mới từ dropdown → Nhập ghi chú → Lưu","→ POST /api/update-status","→ DB: UPDATE leads.status · INSERT lead_history (Cập nhật)","→ Nếu status thay đổi → POST Facebook CAPI event","→ Socket.IO: emit('data-changed') → Tất cả user thấy"]},
+            {btn:"📱 Bấm nút Telegram",steps:["Sale nhận tin nhắn từ Bot CRM kèm 16 nút inline","Bấm nút (VD: ✅ Quan tâm) → Telegram gửi callback","→ Webhook: POST /api/telegram-webhook/2","→ Server: Tìm lead bằng lead_id · Fallback bằng phone","→ DB: UPDATE status · INSERT history (source=telegram)","→ Bot: editMessageReplyMarkup (xóa nút) · answerCallbackQuery (xác nhận)","→ CAPI + Socket.IO refresh"]},
+          ].map((item,i) => (
+            <div key={i} style={{background:"#fff",borderRadius:10,border:"1px solid #e5e7eb",padding:"10px 14px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#059669"}}>{item.btn}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:3,marginTop:4}}>
+                {item.steps.map((s,si) => (
+                  <div key={si} style={{fontSize:10,color:s.startsWith("→")?"#16a34a":"#374151",paddingLeft:s.startsWith("→")?12:0,lineHeight:1.4}}>
+                    {!s.startsWith("→") && <span style={{color:"#059669",fontWeight:700,marginRight:4}}>{si+1}.</span>}
+                    {s}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </C>
+      </S>
+
+      <S title="🔄 Đồng bộ — Tự động & Thủ công" color="#0891b2">
+        <C gap={4}>
+          {[
+            {btn:"🔄 Bấm nút Đồng bộ (Admin)",steps:["POST /api/sync → Trigger syncAllProjects()","→ Đọc Sheet → 4-tier match → Replace → Post-sync fix","→ Detect lead mới → Telegram notify → Socket.IO refresh"]},
+            {btn:"⏰ Auto-Sync (3 phút/lần)",steps:["setInterval → syncAllProjects()","Cùng flow như bấm nút nhưng tự động","Log: [auto-sync] synced X projects"]}
+          ].map((item,i) => (
+            <div key={i} style={{background:"#fff",borderRadius:10,border:"1px solid #e5e7eb",padding:"10px 14px",marginBottom:4}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#0891b2"}}>{item.btn}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:2,marginTop:4}}>
+                {item.steps.map((s,si) => (
+                  <div key={si} style={{fontSize:10,color:s.startsWith("→")?"#16a34a":"#374151",paddingLeft:s.startsWith("→")?12:0,lineHeight:1.4}}>{s}</div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </C>
+      </S>
+    </C>
+  );
+
+  const renderTelegram = () => (
+    <C gap={8}>
+      <S title="📤 SERVER → TELEGRAM (Gửi thông báo lead mới)" color="#0891b2">
+        <C gap={4}>
+          <R gap={6} wrap>
+            <B icon="🆕" t="1. Lead được chia" d="Admin chia lead cho Sale · Lịch tự động · Sync lead mới" c="#e88a2e" w={170}/>
+            <A l="" c="#0891b2"/>
+            <B icon="🔍" t="2. Tìm chat_id" d="users.telegram_id → telegram_chat_users.chat_id · Sale phải /start trước" c="#0891b2" w={200}/>
+            <A l="" c="#0891b2"/>
+            <B icon="📝" t="3. Tạo message" d="📋 Lead mới · Tên · SĐT · Dự án · Chiến dịch · Nhu cầu · Nhiệt độ 🔥" c="#0891b2" w={200}/>
+          </R>
+          <A down l="" c="#0891b2"/>
+          <R gap={6}>
+            <B icon="⌨️" t="4. Inline Keyboard" d="16 nút trạng thái: Quan tâm · Hẹn xem · KBM · Spam · Không nghe máy · Gọi lại sau · ..." c="#7c3aed" w={300}/>
+            <A l="" c="#0891b2"/>
+            <B icon="📨" t="5. sendMessage()" d="Bot CRM API → Telegram chat · Trả về message_id" c="#0891b2" w={180}/>
+          </R>
+          <A down l="" c="#0891b2"/>
+          <B icon="💾" t="6. Lưu telegram_pending" d="telegram_id · lead_id · message_id · phone (fallback) · Chờ sale phản hồi" c="#d97706" w={350}/>
+        </C>
+      </S>
+
+      <S title="📥 TELEGRAM → SERVER (Sale bấm nút phản hồi)" color="#16a34a">
+        <C gap={4}>
+          <B icon="👆" t="Sale bấm nút trên Telegram" d="VD: Bấm '✅ Quan tâm' → Telegram gửi callback_query" c="#8b5cf6" w={300}/>
+          <A down l="Callback query" c="#16a34a"/>
+          <B icon="🔌" t="Webhook: POST /api/telegram-webhook/2" d="Express handler nhận callback → parse data (callback_data, from.id, message.message_id)" c="#16a34a" w={380}/>
+          <A down l="" c="#16a34a"/>
+          <div style={{border:"2px dashed #d97706",borderRadius:10,padding:10,background:"#fffbeb05"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"#d97706",textAlign:"center",marginBottom:6}}>🔍 Tìm lead — 2 cách (fallback)</div>
+            <R gap={6} wrap>
+              <C gap={3}>
+                <B icon="1️⃣" t="Tìm bằng lead_id" d="telegram_pending.lead_id → leads.id · Nhanh nhất" c="#059669" w={170}/>
+                <div style={{fontSize:9,color:"#059669"}}>✅ Found → tiếp tục</div>
+              </C>
+              <C gap={3}>
+                <div style={{fontSize:10,color:"#d97706",fontWeight:600}}>Nếu không tìm thấy ↓</div>
+                <div style={{fontSize:9,color:"#6b7280"}}>(lead_id cũ sau sync)</div>
+              </C>
+              <C gap={3}>
+                <B icon="2️⃣" t="Fallback: tìm bằng phone" d="telegram_pending.phone → leads.phone · Backup khi ID thay đổi" c="#d97706" w={180}/>
+                <div style={{fontSize:9,color:"#d97706"}}>✅ Found → tiếp tục</div>
+              </C>
+              <C gap={3}>
+                <B icon="❌" t="Không tìm thấy" d="answerCallbackQuery: 'Lead không tồn tại'" c="#dc2626" w={150}/>
+              </C>
+            </R>
+          </div>
+          <A down l="Lead found ✅" c="#16a34a"/>
+          <R gap={6} wrap>
+            <B icon="📝" t="UPDATE leads" d="SET status = callback_data (VD: interested)" c="#16a34a" w={160}/>
+            <A l="" c="#16a34a"/>
+            <B icon="📋" t="INSERT history" d="action='Cập nhật' · source='telegram' · status · feedback" c="#16a34a" w={170}/>
+            <A l="" c="#16a34a"/>
+            <B icon="✏️" t="editMessage" d="Xóa inline keyboard cũ (nút biến mất)" c="#0891b2" w={150}/>
+            <A l="" c="#16a34a"/>
+            <B icon="✅" t="answerCallback" d="'✅ Đã cập nhật: Quan tâm'" c="#059669" w={150}/>
+          </R>
+          <A down l="" c="#16a34a"/>
+          <R gap={8}>
+            <B icon="📊" t="Facebook CAPI" d="Gửi event (nếu status mapping có)" c="#0891b2" w={160}/>
+            <B icon="🗑️" t="DELETE pending" d="Xóa khỏi telegram_pending" c="#d97706" w={160}/>
+            <B icon="🔌" t="Socket.IO" d="emit('data-changed') → UI refresh" c="#16a34a" w={160}/>
+          </R>
+        </C>
+      </S>
+
+      <S title="🔙 THU HỒI LEAD → Telegram" color="#dc2626">
+        <R gap={6}>
+          <B icon="🚫" t="Admin thu hồi" d="Xóa entry 'Chia lead' từ history" c="#dc2626" w={160}/>
+          <A l="" c="#dc2626"/>
+          <B icon="🔍" t="Tìm message_id" d="telegram_pending WHERE lead_id = ?" c="#d97706" w={160}/>
+          <A l="" c="#dc2626"/>
+          <B icon="🗑️" t="deleteMessage()" d="Xóa tin nhắn khỏi chat Telegram sale" c="#dc2626" w={170}/>
+          <A l="" c="#dc2626"/>
+          <B icon="📨" t="Thông báo thu hồi" d="Gửi msg mới: 'Lead đã bị thu hồi'" c="#6b7280" w={160}/>
+        </R>
+      </S>
+    </C>
+  );
+
+  const renderIntegrations = () => (
+    <C gap={8}>
+      <S title="📊 FACEBOOK ADS — Quảng cáo" color="#1877f2">
+        <C gap={4}>
+          <R gap={6} wrap>
+            <B icon="🔗" t="1. Kết nối" d="Thêm FB Ad Account: account_id + access_token · Multi-account" c="#1877f2" w={180}/>
+            <A l="" c="#1877f2"/>
+            <B icon="📈" t="2. Fetch insights" d="Graph API v21: campaigns, adsets, ads · Date presets (12 loại)" c="#1877f2" w={200}/>
+            <A l="" c="#1877f2"/>
+            <B icon="📊" t="3. Hiển thị" d="9 metrics: Spend · Impressions · Clicks · CTR · CPC · CPM · Leads · CPL · Conv" c="#1877f2" w={220}/>
+          </R>
+          <A down l="" c="#1877f2"/>
+          <R gap={6}>
+            <B icon="🏗️" t="4. Project grouping" d="Nhóm campaigns theo dự án CRM · So sánh hiệu suất" c="#1877f2" w={200}/>
+            <A l="" c="#1877f2"/>
+            <B icon="🤖" t="5. AI Advisor" d="Click campaign → Fetch real ads + couplets → Perplexity: Score /100 · Gợi ý cải thiện" c="#7c3aed" w={250}/>
+          </R>
+        </C>
+      </S>
+
+      <S title="📡 FACEBOOK CAPI — Conversions API" color="#059669">
+        <C gap={4}>
+          <R gap={6} wrap>
+            <B icon="⚙️" t="Cấu hình" d="Pixel ID + Access Token + Test Event Code" c="#059669" w={170}/>
+            <A l="" c="#059669"/>
+            <B icon="🔀" t="Event mapping" d="interested→Lead · appointment→InitiateCheckout · visited→Schedule · booking→AddToCart · closed→Purchase" c="#059669" w={280}/>
+            <A l="" c="#059669"/>
+            <B icon="📨" t="Gửi event" d="Server-side · user_data (phone hash, email hash) · Dedup" c="#059669" w={180}/>
+          </R>
+          <div style={{fontSize:9,color:"#059669",marginTop:4}}>Trigger: khi leads.status thay đổi → auto gửi event tương ứng → capi_log ghi kết quả</div>
+        </C>
+      </S>
+
+      <S title="💬 MESSENGER INBOX" color="#0891b2">
+        <R gap={6} wrap>
+          <B icon="📋" t="1. Chọn Page" d="FB Pages dropdown" c="#0891b2" w={120}/>
+          <A l="" c="#0891b2"/>
+          <B icon="👥" t="2. Danh sách chat" d="Conversations API · Avatar · Snippet · Auto-refresh 15s" c="#0891b2" w={200}/>
+          <A l="" c="#0891b2"/>
+          <B icon="💬" t="3. Xem tin nhắn" d="Messages API · Bubble UI · Image support · Auto-poll 5s" c="#0891b2" w={200}/>
+          <A l="" c="#0891b2"/>
+          <B icon="📨" t="4. Trả lời" d="Send API · Enter-to-send · Auto-resize" c="#0891b2" w={160}/>
+        </R>
+      </S>
+
+      <S title="🤖 AI — Content Review (4 bước)" color="#7c3aed">
+        <C gap={4}>
+          <R gap={6} wrap>
+            <B icon="📝" t="Bước 1: Input" d="Tên dự án · Vị trí · Giá · USP · Đối tượng KH" c="#7c3aed" w={180}/>
+            <A l="" c="#7c3aed"/>
+            <B icon="🔍" t="Bước 2: Phân tích" d="OpenAI GPT-4o: What/Where/How/Why · 6 tiêu chí /10 · Danh sách lỗi" c="#7c3aed" w={220}/>
+            <A l="" c="#7c3aed"/>
+            <B icon="✨" t="Bước 3: Tạo content" d="3 phiên bản AI: 🔥 Bản GẮT (FOMO) · 📖 Bản Kể chuyện · 💰 Bản Trực diện" c="#7c3aed" w={240}/>
+            <A l="" c="#7c3aed"/>
+            <B icon="📊" t="Bước 4: So sánh" d="Original vs AI · Copy 1-click" c="#7c3aed" w={140}/>
+          </R>
+        </C>
+      </S>
+
+      <S title="🔍 MARKET INTELLIGENCE" color="#1e40af">
+        <R gap={6} wrap>
+          <B icon="🔎" t="Input: Dự án" d="Tên + vị trí" c="#1e40af" w={120}/>
+          <A l="" c="#1e40af"/>
+          <B icon="💰" t="CPL Estimate" d="Perplexity phân tích CPL theo loại SP (căn hộ/đất/villa)" c="#1e40af" w={180}/>
+          <B icon="⚔️" t="Competition" d="Ads Library scan · Đối thủ QC cùng khu" c="#1e40af" w={160}/>
+          <B icon="🏠" t="Property Prices" d="Giá BĐS thực tế · Nhiều nguồn" c="#1e40af" w={150}/>
+          <B icon="📊" t="Score /100" d="Opportunity Score · AI verified" c="#1e40af" w={140}/>
+        </R>
+      </S>
+
+      <S title="📰 TIN TỨC BĐS HÀNG NGÀY" color="#7c2d12">
+        <R gap={6} wrap>
+          <B icon="⏰" t="Auto-fetch" d="10 phút check · 1 lần/ngày theo giờ config" c="#7c2d12" w={160}/>
+          <A l="" c="#7c2d12"/>
+          <B icon="🤖" t="Perplexity" d="Tổng hợp tin BĐS VN · sonar-pro model" c="#7c2d12" w={160}/>
+          <A l="" c="#7c2d12"/>
+          <B icon="📊" t="Output" d="Market Heat 0-100 · Verdict: THƠM/ĐỘC/TRUNG TÍNH · Dự báo 2-3 ngày · Action items" c="#7c2d12" w={240}/>
+        </R>
+      </S>
+
+      <S title="📝 QUẢN LÝ BÀI ĐĂNG" color="#b45309">
+        <R gap={6} wrap>
+          <B icon="📊" t="Google Sheet" d="Sheet bài đăng qua Apps Script" c="#b45309" w={150}/>
+          <A l="" c="#b45309"/>
+          <B icon="📋" t="Danh sách" d="STOP → READY → POSTED · Filter · Search" c="#b45309" w={160}/>
+          <A l="" c="#b45309"/>
+          <B icon="📘" t="Publish FB" d="Đăng bài lên nhiều Page cùng lúc" c="#b45309" w={160}/>
+          <A l="" c="#b45309"/>
+          <B icon="📅" t="Calendar" d="Lịch đăng bài theo tháng · Color-coded" c="#b45309" w={150}/>
+        </R>
+      </S>
+    </C>
+  );
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
+        {tabs.map(t=>(
+          <button key={t.key} onClick={()=>setTab(t.key)} style={{
+            padding:"7px 14px",borderRadius:8,border:"1.5px solid",
+            borderColor:tab===t.key?"#e88a2e":"#e5e7eb",
+            background:tab===t.key?"#e88a2e12":"#fff",
+            color:tab===t.key?"#e88a2e":"#6b7280",
+            cursor:"pointer",fontSize:11,fontWeight:600,transition:"all .15s",
+            display:"flex",alignItems:"center",gap:4,
+          }}>{t.icon} {t.label}</button>
+        ))}
+      </div>
+      <div style={{background:"#f8fafb",borderRadius:12,border:"1px solid #e5e7eb",padding:16,overflowX:"auto"}}>
+        {tab==="overview"&&renderOverview()}
+        {tab==="sync"&&renderSync()}
+        {tab==="lead"&&renderLead()}
+        {tab==="actions"&&renderActions()}
+        {tab==="telegram"&&renderTelegram()}
+        {tab==="integrations"&&renderIntegrations()}
+      </div>
+    </div>
+  );
+}
+
 /* ===== Guide Page ===== */
 function GuidePage() {
   const [openSection, setOpenSection] = useState(null);
   const toggle = (key) => setOpenSection(prev => prev === key ? null : key);
 
   const sections = [
+    {
+      key: "system_flow",
+      icon: "🗺️",
+      title: "Flow vận hành hệ thống (Chi tiết)",
+      content: [
+        { type: "text", value: "Sơ đồ tương tác chi tiết toàn bộ quá trình hoạt động của hệ thống CRM IQI. Bấm vào từng tab để xem flow cụ thể." },
+        { type: "system_flow_interactive" },
+      ]
+    },
     {
       key: "overview",
       icon: "🏠",
@@ -12919,6 +13458,7 @@ function GuidePage() {
     );
     if (item.type === "architecture") return null;
     if (item.type === "flowchart") return null;
+    if (item.type === "system_flow_interactive") return <SystemFlowDiagram key={idx} />;
     if (item.type === "svg_system_diagram") return (
       <div key={idx} style={{ margin: "12px 0" }}>
         <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3c20", marginBottom: 12 }}>Sơ đồ kiến trúc hệ thống</div>
