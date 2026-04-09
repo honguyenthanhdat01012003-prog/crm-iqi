@@ -670,6 +670,13 @@ function parseLeadDate(createdAt) {
       Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
     if (!isNaN(dt.getTime())) return dt;
   }
+  // hh:mm:ss dd/mm/yyyy (Vietnamese locale output)
+  const m2 = createdAt.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m2) {
+    const dt = new Date(Number(m2[6]), Number(m2[5]) - 1, Number(m2[4]),
+      Number(m2[1]), Number(m2[2]), Number(m2[3] || 0));
+    if (!isNaN(dt.getTime())) return dt;
+  }
   const iso = new Date(createdAt);
   if (!isNaN(iso.getTime())) return iso;
   return null;
@@ -1253,8 +1260,12 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     // Parse Vietnamese/ISO date string to Date object
     function parseContactDate(s) {
       if (!s) return null;
+      // Format: dd/mm/yyyy hh:mm[:ss]
       const vn = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/);
       if (vn) return new Date(+vn[3], +vn[2]-1, +vn[1], +vn[4], +vn[5], +(vn[6]||0));
+      // Format: hh:mm:ss dd/mm/yyyy (Vietnamese locale output)
+      const vn2 = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (vn2) return new Date(+vn2[6], +vn2[5]-1, +vn2[4], +vn2[1], +vn2[2], +(vn2[3]||0));
       const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
       if (iso) return new Date(s);
       return null;
