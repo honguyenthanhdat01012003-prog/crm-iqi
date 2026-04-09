@@ -258,6 +258,7 @@ async function initDb() {
     "ALTER TABLE daily_news ADD COLUMN big_picture TEXT DEFAULT ''",
     "ALTER TABLE daily_news ADD COLUMN editorial_comment TEXT DEFAULT ''",
     "ALTER TABLE daily_news ADD COLUMN action_items TEXT DEFAULT '[]'",
+    "ALTER TABLE telegram_pending ADD COLUMN phone TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -3354,7 +3355,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
           });
           const teleJson = await teleRes.json();
           const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
-          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, lid, sentMsgId]);
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, lid, sentMsgId, lead.phone || ""]);
         }
       }
     } catch (teleErr) {
@@ -3819,7 +3820,7 @@ async function processSchedules(db, triggerUser) {
             });
             const teleJson = await teleRes.json();
             const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
-            await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, leadId, sentMsgId]);
+            await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, leadId, sentMsgId, lead.phone || ""]);
           } catch (teleErr) {
             console.error("[Telegram schedule] Send failed:", teleErr.message);
           }
@@ -4541,8 +4542,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           const teleJson = await teleRes.json();
           const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
 
-          // Save pending state for this user (include message_id for recall)
-          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, '', ?)", [saleUser.telegram_id, actualLeadId, sentMsgId]);
+          // Save pending state for this user (include message_id and phone for recall/fallback)
+          await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, actualLeadId, sentMsgId, lead ? lead.phone || "" : ""]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
@@ -4876,9 +4877,9 @@ async function handleTelegramWebhook(req, res) {
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
         // Update pending with chosen status
-        // Preserve message_id from original notification
-        const existingPending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ?", [chatId]);
-        await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, ?, ?)", [chatId, leadId, statusKey, existingPending?.message_id || null]);
+        // Preserve message_id and phone from original notification
+        const existingPending = await get(db, "SELECT message_id, phone FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+        await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, ?, ?, ?)", [chatId, leadId, statusKey, existingPending?.message_id || null, existingPending?.phone || ""]);
 
         await answerCb(callback_query.id, `✅ Đã chọn: ${statusLabel}`);
         await sendTg(chatId, [
@@ -4901,7 +4902,7 @@ async function handleTelegramWebhook(req, res) {
       // Ignore bot commands
       if (feedbackText.startsWith("/")) return res.json({ ok: true });
 
-      const pending = await get(db, "SELECT lead_id, status FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+      const pending = await get(db, "SELECT lead_id, status, phone FROM telegram_pending WHERE telegram_id = ?", [chatId]);
       console.log(`[telegram-webhook] Message from ${chatId}: "${feedbackText.slice(0, 50)}", pending=${JSON.stringify(pending)}`);
 
       if (!pending) {
@@ -4915,12 +4916,19 @@ async function handleTelegramWebhook(req, res) {
       }
 
       try {
-        const leadId = pending.lead_id;
+        let leadId = pending.lead_id;
         const statusKey = pending.status;
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
 
-        // Get lead info (including assigned sale)
-        const lead = await get(db, "SELECT name, phone, sale_name FROM leads WHERE id = ?", [leadId]);
+        // Get lead info — fallback by phone if lead_id is stale (sync may have re-created lead with new ID)
+        let lead = await get(db, "SELECT id, name, phone, sale_name FROM leads WHERE id = ?", [leadId]);
+        if (!lead && pending.phone) {
+          lead = await get(db, "SELECT id, name, phone, sale_name FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [pending.phone]);
+          if (lead) {
+            console.log(`[telegram-webhook] Lead#${leadId} not found, fallback by phone "${pending.phone}" → Lead#${lead.id}`);
+            leadId = lead.id;
+          }
+        }
 
         // Attribute feedback to the lead's assigned sale, not the Telegram sender
         let saleName = lead?.sale_name || "";
