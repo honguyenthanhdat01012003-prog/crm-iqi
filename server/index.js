@@ -1290,9 +1290,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         }
       }
 
-      // Walk from newest to oldest entry, skip "Chia lead" to find latest feedback
+      // Walk from newest to oldest entry, STOP at "Chia lead" boundary
       for (const h of entries) {
-        if (h.action === "Chia lead") continue; // Skip assignment entries, keep searching
+        if (h.action === "Chia lead") break; // Stop at assignment boundary — don't use old sale's status
         if (h.status && h.status.trim()) {
           correctHistStatus = h.status;
           foundSource = h.source || "unknown";
@@ -3573,7 +3573,7 @@ async function processAutoRotate(db) {
     // Pick next sale (round-robin based on lead ID)
     const nextSale = projectSales[lead.id % projectSales.length].display_name;
 
-    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [nextSale, lead.id] });
+    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     stmts.push({
@@ -3731,13 +3731,13 @@ async function processSchedules(db, triggerUser) {
         if (schLead.status && schLead.status !== "new") {
           stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
         } else {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
         }
       } else {
         if (schLead?.status && schLead.status !== "new") {
           stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
         } else {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
         }
       }
       // Only create 'Chia lead' history if this sale doesn't already have one for this lead
@@ -4876,7 +4876,9 @@ async function handleTelegramWebhook(req, res) {
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
         // Update pending with chosen status
-        await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status) VALUES(?, ?, ?)", [chatId, leadId, statusKey]);
+        // Preserve message_id from original notification
+        const existingPending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+        await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id) VALUES(?, ?, ?, ?)", [chatId, leadId, statusKey, existingPending?.message_id || null]);
 
         await answerCb(callback_query.id, `✅ Đã chọn: ${statusLabel}`);
         await sendTg(chatId, [
@@ -4938,8 +4940,9 @@ async function handleTelegramWebhook(req, res) {
           [leadId, saleName, "Cập nhật (Telegram)", now, statusLabel, feedbackText, nextSeq, "telegram"]
         );
 
-        // Update lead status
-        await run(db, "UPDATE leads SET status = ? WHERE id = ?", [statusKey, leadId]);
+        // Update lead status + raw_status
+        const statusLabel2 = TELE_STATUS_LABELS[statusKey] || statusKey;
+        await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [statusKey, statusLabel2, leadId]);
 
         // Clear pending
         await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
