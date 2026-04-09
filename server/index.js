@@ -1355,6 +1355,17 @@ async function readData(db) {
     }
     historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source });
   }
+  // Sort each lead's history by date (oldest first) so last entry = newest
+  for (const lid in historyMap) {
+    historyMap[lid].sort((a, b) => {
+      const da = parseLeadDate(a.date);
+      const db2 = parseLeadDate(b.date);
+      if (da && db2) return da - db2;
+      if (da) return 1;
+      if (db2) return -1;
+      return 0;
+    });
+  }
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectMap = {};
