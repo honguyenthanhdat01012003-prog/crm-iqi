@@ -513,6 +513,19 @@ function CRMApp({ user, updateUser, onLogout }) {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
 
+  // Pending leads notification for sale users
+  const [pendingLeadsData, setPendingLeadsData] = useState(null);
+  const [showPendingPopup, setShowPendingPopup] = useState(false);
+  useEffect(() => {
+    if (user.role !== "sale") return;
+    apiFetch(`${API}/pending-leads`).then(r => r.json()).then(data => {
+      if (data && (data.totalPending > 0 || data.pendingLeads)) {
+        setPendingLeadsData(data);
+        if (data.totalPending > 0) setShowPendingPopup(true);
+      }
+    }).catch(() => {});
+  }, []);
+
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
     if (data.noChange) {
@@ -1449,6 +1462,47 @@ function CRMApp({ user, updateUser, onLogout }) {
       <ChatSidebar currentUser={user} />
       <ToastContainer />
       <ConfirmModal_ />
+
+      {/* Pending leads popup for sale users */}
+      {showPendingPopup && pendingLeadsData && pendingLeadsData.totalPending > 0 && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.5)", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: Math.min(480, window.innerWidth - 32), maxHeight: "80vh", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,.3)", animation: "fadeIn .2s ease" }}>
+            <div style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", padding: "16px 20px", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>⏰ Nhắc nhở cập nhật khách hàng</div>
+                <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>Bạn có {pendingLeadsData.totalPending} khách chưa cập nhật trên 2 ngày</div>
+              </div>
+              <button onClick={() => setShowPendingPopup(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+            </div>
+            <div style={{ maxHeight: "55vh", overflowY: "auto", padding: "12px 16px" }}>
+              {pendingLeadsData.pendingLeads.map((l, i) => (
+                <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 8, marginBottom: 4, border: "1px solid #f3f4f6" }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{l.name}</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+                      <span>📞 {l.phone || "-"}</span>
+                      <span>📋 {l.projectName}</span>
+                      {l.lastFeedback && <span style={{ fontStyle: "italic" }}>"{l.lastFeedback}"</span>}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 8 }}>
+                    <span style={{ padding: "3px 8px", borderRadius: 8, fontSize: 11, fontWeight: 700, background: l.daysSinceUpdate >= 5 ? "#fee2e2" : l.daysSinceUpdate >= 3 ? "#fef3c7" : "#dbeafe", color: l.daysSinceUpdate >= 5 ? "#dc2626" : l.daysSinceUpdate >= 3 ? "#d97706" : "#2563eb" }}>
+                      {l.daysSinceUpdate} ngày
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {pendingLeadsData.totalPending > pendingLeadsData.pendingLeads.length && (
+                <div style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: 8 }}>... và {pendingLeadsData.totalPending - pendingLeadsData.pendingLeads.length} khách khác</div>
+              )}
+            </div>
+            <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8 }}>
+              <button onClick={() => { setShowPendingPopup(false); setPage("leads"); }} style={{ flex: 1, padding: "10px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📋 Cập nhật ngay</button>
+              <button onClick={() => setShowPendingPopup(false)} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Để sau</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -9609,14 +9663,14 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
   // Bot handlers
   const openNewBot = () => {
     setEditingBot(null);
-    setBotDraft({ name: "", token: "", projectIds: [] });
+    setBotDraft({ name: "", token: "", projectIds: [], groupChatId: "" });
     setBotError("");
     setShowBotForm(true);
   };
 
   const openEditBot = (b) => {
     setEditingBot(b);
-    setBotDraft({ name: b.name, token: b.token, projectIds: b.projectIds || [] });
+    setBotDraft({ name: b.name, token: b.token, projectIds: b.projectIds || [], groupChatId: b.groupChatId || "" });
     setBotError("");
     setShowBotForm(true);
   };
@@ -10224,6 +10278,12 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           </div>
           <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
             <Info size={11} style={{ display: "inline", verticalAlign: "middle" }} /> Chọn các dự án bot sẽ gửi thông báo. Không chọn = dùng làm fallback cho tất cả.
+          </div>
+          <label style={labelStyle}>💬 Group Chat ID (báo cáo hàng ngày)</label>
+          <input style={inputStyle} value={botDraft.groupChatId}
+            onChange={(e) => setBotDraft({ ...botDraft, groupChatId: e.target.value })} placeholder="VD: -1001234567890 (ID nhóm Telegram)" />
+          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>
+            <Info size={11} style={{ display: "inline", verticalAlign: "middle" }} /> Nhập Chat ID của nhóm Telegram để nhận báo cáo tổng hợp hàng ngày. Lấy ID bằng cách thêm bot @userinfobot vào nhóm.
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button onClick={handleSaveBot} disabled={savingBot} style={{ ...btnPrimary, flex: 1, opacity: savingBot ? 0.6 : 1 }}>{savingBot ? "Đang lưu..." : "Lưu"}</button>

@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 14; // Bump this when adding new DDL/migrations
+const DB_VERSION = 15; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -259,6 +259,7 @@ async function initDb() {
     "ALTER TABLE daily_news ADD COLUMN editorial_comment TEXT DEFAULT ''",
     "ALTER TABLE daily_news ADD COLUMN action_items TEXT DEFAULT '[]'",
     "ALTER TABLE telegram_pending ADD COLUMN phone TEXT DEFAULT ''",
+    "ALTER TABLE telegram_bots ADD COLUMN group_chat_id TEXT DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -1813,6 +1814,64 @@ app.get("/api/me", requireAuth, async (req, res) => {
   res.json({ user: { ...req.user, projectIds } });
 });
 
+/* ---------- Pending leads for sale users (not updated in 2+ days) ---------- */
+app.get("/api/pending-leads", requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== "sale") return res.json({ pendingLeads: [], totalPending: 0 });
+    const displayName = req.user.displayName;
+    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Get all leads assigned to this sale (not locked statuses)
+    const leads = await all(db,
+      `SELECT l.id, l.name, l.phone, l.status, l.project_id FROM leads l
+       WHERE (l.sale_name = ? OR l.sale_name = ?)
+         AND l.status NOT IN ('booked','booking_other','closed','not_interested','spam','wrong_number','blocked','lost','cancelled_deposit')
+       ORDER BY l.id`,
+      [displayName, displayName.toLowerCase()]
+    );
+
+    const pending = [];
+    for (const lead of leads) {
+      // Find last non-"Chia lead" history entry from this sale
+      const lastUpdate = await get(db,
+        `SELECT contact_date, status, feedback, action FROM lead_history
+         WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead'
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, displayName]
+      );
+
+      let daysSinceUpdate = null;
+      if (!lastUpdate) {
+        // Never updated — check "Chia lead" date as fallback
+        const chiaEntry = await get(db,
+          `SELECT contact_date FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1`,
+          [lead.id, displayName]
+        );
+        if (chiaEntry) {
+          const d = parseLeadDate(chiaEntry.contact_date);
+          if (d) daysSinceUpdate = Math.floor((now - d.getTime()) / (24*60*60*1000));
+        }
+        if (daysSinceUpdate === null || daysSinceUpdate < 2) continue;
+        const proj = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+        pending.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, projectName: proj?.name || "-", daysSinceUpdate, lastFeedback: null });
+      } else {
+        const d = parseLeadDate(lastUpdate.contact_date);
+        if (!d) continue;
+        daysSinceUpdate = Math.floor((now - d.getTime()) / (24*60*60*1000));
+        if (daysSinceUpdate < 2) continue;
+        const proj = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+        pending.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, projectName: proj?.name || "-", daysSinceUpdate, lastFeedback: lastUpdate.feedback || lastUpdate.status || null, lastDate: lastUpdate.contact_date });
+      }
+    }
+
+    res.json({ pendingLeads: pending.slice(0, 50), totalPending: pending.length });
+  } catch (err) {
+    console.error("[pending-leads] Error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ---------- User management (admin only) ---------- */
 const mapUser = (u, projectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", avatarUrl: u.avatar_url || "", email: u.email || "", phone: u.phone || "", mustChangePassword: !!u.must_change_password, lastActive: u.last_active || "", createdAt: u.created_at, projectIds: projectIds || [] });
 const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, avatar_url, email, phone, must_change_password, last_active, created_at FROM users ORDER BY CASE role WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, id");
@@ -2142,7 +2201,7 @@ const mapBot = b => {
       projectIds = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
     } catch { projectIds = [Number(b.project_id)].filter(Boolean); }
   }
-  return { id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, projectIds, createdAt: b.created_at };
+  return { id: b.id, name: b.name, token: b.token, isActive: !!b.is_active, projectIds, groupChatId: b.group_chat_id || "", createdAt: b.created_at };
 };
 
 // Helper: get bot token for a lead's project (fallback to any active bot)
@@ -2183,10 +2242,11 @@ app.post("/api/telegram-bots", requireAuth, requireAdminOnly, async (req, res) =
 app.put("/api/telegram-bots/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { name, token, isActive, projectIds } = req.body;
+    const { name, token, isActive, projectIds, groupChatId } = req.body;
     if (name !== undefined) await run(db, "UPDATE telegram_bots SET name = ? WHERE id = ?", [String(name).trim(), id]);
     if (token !== undefined) await run(db, "UPDATE telegram_bots SET token = ? WHERE id = ?", [String(token).trim(), id]);
     if (isActive !== undefined) await run(db, "UPDATE telegram_bots SET is_active = ? WHERE id = ?", [isActive ? 1 : 0, id]);
+    if (groupChatId !== undefined) await run(db, "UPDATE telegram_bots SET group_chat_id = ? WHERE id = ?", [String(groupChatId).trim(), id]);
     if (projectIds !== undefined) {
       const pids = Array.isArray(projectIds) && projectIds.length > 0 ? JSON.stringify(projectIds) : null;
       await run(db, "UPDATE telegram_bots SET project_id = ? WHERE id = ?", [pids, id]);
@@ -8683,6 +8743,208 @@ if (!process.env.VERCEL) {
     }
   }, 10 * 60 * 1000); // Check every 10 minutes
   console.log("[daily-news] Auto-fetch enabled, checks every 10 min");
+
+  // Daily sale reminder + group report (check every 10 min, run once per day at configured time)
+  let lastDailyReminderDate = "";
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const setting = await get(db, "SELECT value FROM settings WHERE key = 'daily_reminder_time'");
+      const targetTime = setting?.value || "09:00";
+      const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+      const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+      if (todayStr !== lastDailyReminderDate && currentTime >= targetTime) {
+        lastDailyReminderDate = todayStr;
+        console.log("[daily-reminder] Running daily sale reminder & group report...");
+        await processDailySaleReminder(db, now);
+      }
+    } catch (e) {
+      console.error("[daily-reminder] Error:", e.message);
+    }
+  }, 10 * 60 * 1000);
+  console.log("[daily-reminder] Enabled, checks every 10 min");
+}
+
+/* ===== Daily Sale Reminder + Group Report ===== */
+async function processDailySaleReminder(db, now) {
+  const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+  const nowMs = now.getTime();
+  const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+
+  // Get all sales
+  const sales = await all(db, "SELECT id, display_name, telegram_id FROM users WHERE role = 'sale'");
+  // Get all projects
+  const projects = await all(db, "SELECT id, name FROM projects WHERE is_legacy = 0 OR is_legacy IS NULL");
+  const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
+
+  // Get all active bots
+  const bots = await all(db, "SELECT id, name, token, project_id, group_chat_id FROM telegram_bots WHERE is_active = 1");
+
+  // Collect report data per project
+  const projectReports = {}; // projectId -> { projectName, sales: { saleName: { total, pending, updated } } }
+
+  for (const sale of sales) {
+    const displayName = sale.display_name;
+
+    // Get all active leads for this sale
+    const leads = await all(db,
+      `SELECT l.id, l.name, l.phone, l.status, l.project_id FROM leads l
+       WHERE (l.sale_name = ? OR l.sale_name = ?)
+         AND l.status NOT IN ('booked','booking_other','closed','not_interested','spam','wrong_number','blocked','lost','cancelled_deposit')
+       ORDER BY l.id`,
+      [displayName, displayName.toLowerCase()]
+    );
+
+    let pendingLeads = [];
+    for (const lead of leads) {
+      // Track per project report
+      const pid = lead.project_id;
+      if (!projectReports[pid]) projectReports[pid] = { projectName: projectMap[pid] || "-", sales: {} };
+      if (!projectReports[pid].sales[displayName]) projectReports[pid].sales[displayName] = { total: 0, pending: 0, updated: 0 };
+      projectReports[pid].sales[displayName].total++;
+
+      const lastUpdate = await get(db,
+        `SELECT contact_date, status, feedback FROM lead_history
+         WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead'
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, displayName]
+      );
+
+      let daysSince = null;
+      if (!lastUpdate) {
+        const chiaEntry = await get(db,
+          `SELECT contact_date FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1`,
+          [lead.id, displayName]
+        );
+        if (chiaEntry) {
+          const d = parseLeadDate(chiaEntry.contact_date);
+          if (d) daysSince = Math.floor((nowMs - d.getTime()) / (24*60*60*1000));
+        }
+      } else {
+        const d = parseLeadDate(lastUpdate.contact_date);
+        if (d) daysSince = Math.floor((nowMs - d.getTime()) / (24*60*60*1000));
+      }
+
+      if (daysSince !== null && daysSince >= 2) {
+        pendingLeads.push({ name: lead.name, phone: lead.phone, days: daysSince, project: projectMap[lead.project_id] || "-" });
+        projectReports[pid].sales[displayName].pending++;
+      } else {
+        projectReports[pid].sales[displayName].updated++;
+      }
+    }
+
+    // Send individual Telegram reminder to this sale
+    if (!sale.telegram_id) continue;
+
+    // Find a bot that covers this sale's projects
+    let botToken = null;
+    for (const bot of bots) {
+      if (bot.token) { botToken = bot.token; break; }
+    }
+    if (!botToken) continue;
+
+    let msg;
+    if (pendingLeads.length > 0) {
+      const leadLines = pendingLeads.slice(0, 15).map((l, i) =>
+        `${i+1}. 👤 *${l.name}* (${l.project}) — ${l.days} ngày chưa cập nhật`
+      ).join("\n");
+      msg = [
+        `⏰ *NHẮC NHỞ CẬP NHẬT KHÁCH HÀNG*`,
+        `Xin chào *${displayName}*! 👋`,
+        ``,
+        `📋 Bạn có *${pendingLeads.length} khách hàng* chưa cập nhật trạng thái trên *2 ngày*:`,
+        ``,
+        leadLines,
+        pendingLeads.length > 15 ? `\n... và ${pendingLeads.length - 15} khách khác` : "",
+        ``,
+        `⚡ Vui lòng vào CRM cập nhật tình trạng khách ngay nhé!`,
+        `🔗 https://crm-iqi.id.vn`,
+      ].filter(Boolean).join("\n");
+    } else {
+      msg = [
+        `✅ *BÁO CÁO HÀNG NGÀY*`,
+        `Xin chào *${displayName}*! 👋`,
+        ``,
+        `🎉 Hôm nay bạn không có khách hàng nào cần cập nhật tình trạng.`,
+        `Tất cả khách đã được cập nhật đầy đủ! 👍`,
+      ].join("\n");
+    }
+
+    try {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: sale.telegram_id, text: msg, parse_mode: "Markdown" }),
+      });
+      console.log(`[daily-reminder] Sent to ${displayName} (${pendingLeads.length} pending)`);
+    } catch (e) {
+      console.error(`[daily-reminder] Failed to send to ${displayName}:`, e.message);
+    }
+  }
+
+  // Send group report to each bot's group_chat_id
+  for (const bot of bots) {
+    if (!bot.token || !bot.group_chat_id) continue;
+
+    // Find which projects this bot covers
+    let botProjectIds = [];
+    if (bot.project_id) {
+      try {
+        const parsed = JSON.parse(bot.project_id);
+        botProjectIds = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
+      } catch { botProjectIds = [Number(bot.project_id)].filter(Boolean); }
+    }
+
+    // Build report for this bot's projects
+    const relevantProjects = botProjectIds.length > 0
+      ? botProjectIds.filter(pid => projectReports[pid])
+      : Object.keys(projectReports).map(Number);
+
+    if (relevantProjects.length === 0) continue;
+
+    let totalLeads = 0, totalPending = 0, totalUpdated = 0;
+    const saleLines = [];
+
+    for (const pid of relevantProjects) {
+      const pr = projectReports[pid];
+      if (!pr) continue;
+      saleLines.push(`\n📋 *${pr.projectName}*:`);
+      for (const [saleName, stats] of Object.entries(pr.sales)) {
+        totalLeads += stats.total;
+        totalPending += stats.pending;
+        totalUpdated += stats.updated;
+        const statusIcon = stats.pending > 0 ? "⚠️" : "✅";
+        saleLines.push(`  ${statusIcon} ${saleName}: ${stats.total} lead (✅ ${stats.updated} đã CN | ⏳ ${stats.pending} chưa CN)`);
+      }
+    }
+
+    const groupMsg = [
+      `📊 *BÁO CÁO TỔNG HỢP HÀNG NGÀY*`,
+      `🗓 ${nowStr}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `📈 Tổng lead đang xử lý: *${totalLeads}*`,
+      `✅ Đã cập nhật: *${totalUpdated}*`,
+      `⏳ Chưa cập nhật (>2 ngày): *${totalPending}*`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+      `👥 *CHI TIẾT THEO SALE:*`,
+      ...saleLines,
+      ``,
+      totalPending > 0
+        ? `⚡ Có *${totalPending}* khách cần được cập nhật tình trạng!`
+        : `🎉 Tất cả sale đã cập nhật đầy đủ!`,
+    ].join("\n");
+
+    try {
+      await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: bot.group_chat_id, text: groupMsg, parse_mode: "Markdown" }),
+      });
+      console.log(`[daily-reminder] Group report sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
+    } catch (e) {
+      console.error(`[daily-reminder] Group report failed for ${bot.name}:`, e.message);
+    }
+  }
 }
 
 export default app;
