@@ -1008,7 +1008,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
-    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked FROM leads WHERE project_id = ?",
     [projectId]
   );
   
@@ -1137,6 +1137,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let saleName = l.saleName || "";
     let isHot = l.isHot ? 1 : 0;
     let managerName = "";
+    let dealValue = 0;
+    let isLockedVal = 0;
 
     if (prev) {
       // ALWAYS preserve CRM status if user has changed it from "new"
@@ -1153,6 +1155,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.notes) notes = prev.notes;
       if (prev.is_hot) isHot = prev.is_hot;
       managerName = prev.manager_name || "";
+      if (prev.deal_value) dealValue = prev.deal_value;
+      if (prev.is_locked) isLockedVal = prev.is_locked;
       // Debug: log manager restoration for leads with specific managers
       if (prev.manager_name && prev.manager_name !== "Trần Văn Quyết") {
         console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${lAdsId && adsIdMap.has(lAdsId) ? 'adsId' : pnKey && phoneNameMap.has(pnKey) ? 'phoneName' : np && phoneMap.has(np) ? 'phone' : 'name'})`);
@@ -1193,13 +1197,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       sql: `INSERT INTO leads(
         project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
         product, raw_status, status,
-        created_at, inbox_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, inbox_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
         l.adsetName || "-", l.adName || "-", l.formName || "-",
         l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName, managerName,
-        l.source, l.budget, l.syncAt, notes,
+        l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
       ],
     });
 
@@ -4531,6 +4535,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       return res.status(403).json({ error: `Chỉ admin/manager mới được đổi quản lý (role hiện tại: ${req.user.role})` });
     }
     if (status !== undefined) { sets.push("status = ?"); params.push(status); }
+    if (status === "closed") { sets.push("is_locked = ?"); params.push(1); }
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
 
     if (sets.length) {
