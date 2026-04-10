@@ -4999,39 +4999,35 @@ async function handleTelegramWebhook(req, res) {
     if (message?.from) saveChatUser(message.from);
 
     const sendTg = async (chatId, text, extra = {}) => {
-      try {
+      const doSend = async (txt, useMd) => {
+        const payload = { chat_id: chatId, text: txt, ...extra };
+        if (useMd) payload.parse_mode = "Markdown";
         const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown", ...extra }),
+          body: JSON.stringify(payload),
         });
-        const data = await r.json();
-        if (!data.ok) {
-          console.warn(`[telegram-webhook] sendTg failed (Markdown): ${data.description}`);
-          // Always retry without Markdown on any failure
-          const plainText = text.replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
-          const r2 = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: chatId, text: plainText, ...extra }),
-          });
-          const d2 = await r2.json();
-          if (!d2.ok) console.warn(`[telegram-webhook] sendTg retry also failed: ${d2.description}`);
-          return r2;
-        }
         return r;
-      } catch (e) {
-        console.error(`[telegram-webhook] sendTg error: ${e.message}`);
-        // Last resort: try plain text without any formatting
+      };
+      const stripMd = (s) => s.replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
+      for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          const plainText = text.replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
-          return await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: chatId, text: plainText }),
-          });
-        } catch (_) {}
+          const r = await doSend(text, true);
+          const data = await r.json();
+          if (data.ok) return r;
+          console.warn(`[telegram-webhook] sendTg failed (Markdown): ${data.description}`);
+          const r2 = await doSend(stripMd(text), false);
+          const d2 = await r2.json();
+          if (d2.ok) return r2;
+          console.warn(`[telegram-webhook] sendTg retry plain also failed: ${d2.description}`);
+          return r2;
+        } catch (e) {
+          console.error(`[telegram-webhook] sendTg attempt ${attempt + 1}/3 error: ${e.message}`);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        }
       }
+      // Last resort after all retries
+      try { return await doSend(stripMd(text), false); } catch (_) {}
     };
 
     const answerCb = (cbId, text) =>
@@ -8838,7 +8834,7 @@ if (!process.env.VERCEL) {
     if (!db) return;
     try {
       const setting = await get(db, "SELECT value FROM settings WHERE key = 'daily_reminder_time'");
-      const targetTime = setting?.value || "09:00";
+      const targetTime = setting?.value || "08:30";
       const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
       const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
       const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;

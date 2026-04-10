@@ -1,0 +1,1 @@
+sqlite3 /www/wwwroot/crm-iqi/server/data/crm.db "INSERT OR REPLACE INTO settings(key, value) VALUES('daily_reminder_time','08:30');"
