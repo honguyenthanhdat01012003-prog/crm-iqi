@@ -845,12 +845,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     filteredLeads.forEach((l) => {
       const sale = l.saleName || "Chưa chia";
       if (!map[sale]) {
-        map[sale] = { name: sale, total: 0 };
+        map[sale] = { name: sale, total: 0, totalDealValue: 0, closedDealCount: 0 };
         statusKeys.forEach(k => map[sale][k] = 0);
       }
       map[sale].total++;
       const st = l.status || "new";
       if (map[sale][st] !== undefined) map[sale][st]++;
+      if (st === "closed" && l.dealValue) {
+        map[sale].totalDealValue += Number(l.dealValue) || 0;
+        map[sale].closedDealCount++;
+      }
     });
     return Object.values(map).sort((a, b) => b.total - a.total);
   }, [filteredLeads]);
@@ -1283,7 +1287,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           />
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} isAdminOnly={isAdminOnly} />}
-        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} apiFetch={apiFetch} applyApiData={applyApiData} />}
+        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
@@ -4737,6 +4741,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [adPreview, setAdPreview] = useState(null);
   const [loadingAdPreview, setLoadingAdPreview] = useState(false);
   const [showAdPreview, setShowAdPreview] = useState(false);
+  const [editDealValue, setEditDealValue] = useState(String(lead.dealValue || ""));
+  const [savingDealValue, setSavingDealValue] = useState(false);
   // Messenger chat state
   const [messengerConvs, setMessengerConvs] = useState([]);
   const [messengerLoading, setMessengerLoading] = useState(false);
@@ -5017,6 +5023,42 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         </div>
       )}
+
+      {/* Admin: Deal Value for closed leads */}
+      {isAdmin && lead.status === "closed" && (() => {
+        const doSaveDv = async () => {
+          const val = Number(editDealValue.replace(/[^0-9]/g, ""));
+          if (!val || val <= 0 || savingDealValue) return;
+          setSavingDealValue(true);
+          try {
+            const r = await apiFetch(`${API}/leads/${lead.id}/deal-value`, { method: "PUT", body: JSON.stringify({ dealValue: val }) });
+            if (r.ok) { const d = await r.json(); applyApiData(d); }
+          } catch {}
+          setSavingDealValue(false);
+        };
+        return (
+          <div style={{ background: lead.dealValue ? "#f0fdf4" : "#fffbeb", border: `1px solid ${lead.dealValue ? "#bbf7d0" : "#fde68a"}`, borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <b style={{ fontSize: 12, color: lead.dealValue ? "#166534" : "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+                <DollarSign size={14} /> Giá trị deal:
+              </b>
+              {lead.dealValue > 0
+                ? <span style={{ fontWeight: 700, color: "#059669", fontSize: 14 }}>{formatVND(lead.dealValue)}</span>
+                : <span style={{ color: "#d97706", fontWeight: 600 }}>Chưa nhập</span>}
+              {lead.dealValue > 0 && <Lock size={12} color="#059669" />}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input type="text" placeholder="Nhập giá trị (VNĐ)" value={editDealValue} onChange={e => setEditDealValue(e.target.value.replace(/[^0-9]/g, ""))}
+                style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: isMobile ? "1 1 100%" : "1", minHeight: isMobile ? 44 : "auto", background: "#fff" }} />
+              <button onClick={doSaveDv} disabled={savingDealValue || !editDealValue}
+                style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editDealValue ? "#d1d5db" : "linear-gradient(135deg, #f59e0b, #e88a2e)", minHeight: isMobile ? 44 : "auto" }}>
+                {savingDealValue ? "Đang lưu..." : <><DollarSign size={14} /> {lead.dealValue ? "Cập nhật" : "Lưu"}</>}
+              </button>
+            </div>
+            {editDealValue && Number(editDealValue) > 0 && <div style={{ marginTop: 4, fontSize: 12, color: "#059669" }}>= {formatVND(Number(editDealValue))}</div>}
+          </div>
+        );
+      })()}
 
       {/* Admin: Chia lead cho Sale */}
       {isAdmin && (
@@ -8743,12 +8785,17 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
   );
 }
 
-function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
+function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }) {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState("kanban");
   const [analytics, setAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [dragId, setDragId] = useState(null);
+  const [lbProject, setLbProject] = useState("all");
+  const [lbPeriod, setLbPeriod] = useState("all");
+  const [dealModal, setDealModal] = useState(null); // { leadId, leadName, saleName }
+  const [dealValueInput, setDealValueInput] = useState("");
+  const [savingDeal, setSavingDeal] = useState(false);
 
   const PIPELINE_STAGES = [
     { key: "new", label: "Mới", statuses: ["new"], color: "#f59e0b" },
@@ -8966,69 +9013,296 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
   };
 
   /* -- LEADERBOARD TAB -- */
+  // Filter leads for leaderboard by project and time period
+  const lbFilteredRanking = useMemo(() => {
+    let filtered = leads || [];
+    if (lbProject !== "all") filtered = filtered.filter(l => l.projectId === Number(lbProject));
+    if (lbPeriod !== "all") {
+      const now = new Date();
+      let cutoff;
+      if (lbPeriod === "week") cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+      else if (lbPeriod === "month") cutoff = new Date(now.getFullYear(), now.getMonth(), 1);
+      else if (lbPeriod === "quarter") cutoff = new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+      else if (lbPeriod === "year") cutoff = new Date(now.getFullYear(), 0, 1);
+      if (cutoff) filtered = filtered.filter(l => {
+        const d = l.createdAt ? new Date(l.createdAt) : null;
+        return d && d >= cutoff;
+      });
+    }
+    const map = {};
+    const statusKeys = Object.keys(STATUS_LABELS);
+    filtered.forEach((l) => {
+      const sale = l.saleName || "Chưa chia";
+      if (!map[sale]) {
+        map[sale] = { name: sale, total: 0, totalDealValue: 0, closedDealCount: 0 };
+        statusKeys.forEach(k => map[sale][k] = 0);
+      }
+      map[sale].total++;
+      const st = l.status || "new";
+      if (map[sale][st] !== undefined) map[sale][st]++;
+      if (st === "closed" && l.dealValue) {
+        map[sale].totalDealValue += Number(l.dealValue) || 0;
+        map[sale].closedDealCount++;
+      }
+    });
+    return Object.values(map).sort((a, b) => (b.totalDealValue || 0) - (a.totalDealValue || 0) || (b.closed || 0) - (a.closed || 0) || b.total - a.total);
+  }, [leads, lbProject, lbPeriod]);
+
+  // Closed leads without deal value (for admin to fill)
+  const closedWithoutDeal = useMemo(() => {
+    if (!isAdmin) return [];
+    return (leads || []).filter(l => l.status === "closed" && (!l.dealValue || l.dealValue === 0));
+  }, [leads, isAdmin]);
+
+  const saveDealValue = async () => {
+    if (!dealModal || !dealValueInput || savingDeal) return;
+    const val = Number(dealValueInput.replace(/[^0-9.]/g, ""));
+    if (!val || val <= 0) return;
+    setSavingDeal(true);
+    try {
+      const res = await apiFetch(`/api/leads/${dealModal.leadId}/deal-value`, { method: "PUT", body: JSON.stringify({ dealValue: val }) });
+      if (res.ok) { const d = await res.json(); applyApiData(d); }
+    } catch {}
+    setSavingDeal(false);
+    setDealModal(null);
+    setDealValueInput("");
+  };
+
+  const heatColor = (val, max) => {
+    if (!max || !val) return "transparent";
+    const pct = Math.min(val / max, 1);
+    if (pct >= 0.8) return "#dcfce7";
+    if (pct >= 0.5) return "#fef9c3";
+    if (pct >= 0.2) return "#ffedd5";
+    return "#fee2e2";
+  };
+
   const renderLeaderboard = () => {
-    const sorted = [...ranking].sort((a, b) => (b.closed || 0) - (a.closed || 0) || b.total - a.total);
+    const sorted = lbFilteredRanking;
+    const maxDeal = Math.max(...sorted.map(s => s.totalDealValue || 0), 1);
+    const maxClosed = Math.max(...sorted.map(s => s.closed || 0), 1);
+
+    const filterBar = (
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Filter size={14} color="#6b7280" />
+          <select value={lbProject} onChange={e => setLbProject(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, background: "#fff" }}>
+            <option value="all">Tất cả dự án</option>
+            {(projects || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Calendar size={14} color="#6b7280" />
+          <select value={lbPeriod} onChange={e => setLbPeriod(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, background: "#fff" }}>
+            <option value="all">Tất cả thời gian</option>
+            <option value="week">7 ngày qua</option>
+            <option value="month">Tháng này</option>
+            <option value="quarter">Quý này</option>
+            <option value="year">Năm nay</option>
+          </select>
+        </div>
+        {isAdmin && closedWithoutDeal.length > 0 && (
+          <span style={{ fontSize: 12, color: "#d97706", background: "#fef3c7", padding: "4px 10px", borderRadius: 8, fontWeight: 600 }}>
+            <AlertTriangle size={12} style={{ display: "inline", verticalAlign: "middle" }} /> {closedWithoutDeal.length} deal chưa nhập giá trị
+          </span>
+        )}
+      </div>
+    );
+
     return isMobile ? (
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {sorted.map((s, i) => (
-          <div key={s.name} style={{
-            background: i < 3 ? `linear-gradient(135deg, ${i === 0 ? "#fef3c7" : i === 1 ? "#f3f4f6" : "#fef0e1"}, #fff)` : "#fff",
-            borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb",
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-              <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? <Trophy size={16} style={{ color: "#FFD700", display: "inline", verticalAlign: "middle" }} /> : i === 1 ? <Trophy size={16} style={{ color: "#C0C0C0", display: "inline", verticalAlign: "middle" }} /> : i === 2 ? <Trophy size={16} style={{ color: "#CD7F32", display: "inline", verticalAlign: "middle" }} /> : `#${i+1}`} {s.name}</span>
-              <span style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>{s.closed || 0} chốt</span>
+      <div>
+        {filterBar}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {sorted.map((s, i) => {
+            const rate = s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0;
+            const effRate = (s.appointment || 0) ? ((s.closed || 0) / s.appointment * 100).toFixed(1) : "—";
+            const avgVal = s.closedDealCount ? (s.totalDealValue / s.closedDealCount) : 0;
+            return (
+            <div key={s.name} style={{
+              background: i < 3 ? `linear-gradient(135deg, ${i === 0 ? "#fef3c7" : i === 1 ? "#f3f4f6" : "#fef0e1"}, #fff)` : "#fff",
+              borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>{i === 0 ? <Trophy size={16} style={{ color: "#FFD700", display: "inline", verticalAlign: "middle" }} /> : i === 1 ? <Trophy size={16} style={{ color: "#C0C0C0", display: "inline", verticalAlign: "middle" }} /> : i === 2 ? <Trophy size={16} style={{ color: "#CD7F32", display: "inline", verticalAlign: "middle" }} /> : `#${i+1}`} {s.name}</span>
+                <span style={{ fontWeight: 700, fontSize: 18, color: "#059669" }}>{s.closed || 0} chốt</span>
+              </div>
+              {s.totalDealValue > 0 && <div style={{ fontWeight: 700, color: "#e88a2e", fontSize: 14, marginBottom: 4 }}><DollarSign size={13} style={{ display: "inline", verticalAlign: "middle" }} /> {formatVND(s.totalDealValue)}</div>}
+              <div style={{ display: "flex", gap: 10, fontSize: 12, color: "#6b7280", alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {s.total} lead</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Star size={12} /> {s.interested || 0} QT</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Eye size={12} /> {s.appointment || 0} hẹn</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 2 }}><BarChart3 size={12} /> {rate}%</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Crosshair size={12} /> {effRate}{effRate !== "—" ? "%" : ""}</span>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280", alignItems: "center" }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {s.total} lead</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Star size={12} /> {s.interested || 0}</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><CheckCircle size={12} /> {s.booked || 0}</span>
-              <span style={{ display: "flex", alignItems: "center", gap: 2 }}><BarChart3 size={12} /> {s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0}%</span>
-            </div>
+          );})}
+        </div>
+        {/* Closed leads without deal value */}
+        {isAdmin && closedWithoutDeal.length > 0 && (
+          <div style={{ marginTop: 16, background: "#fffbeb", borderRadius: 10, padding: 14, border: "1px solid #fde68a" }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8, color: "#92400e" }}><AlertTriangle size={14} style={{ display: "inline", verticalAlign: "middle" }} /> Deal chưa nhập giá trị</div>
+            {closedWithoutDeal.map(l => (
+              <div key={l.id} onClick={() => { setDealModal({ leadId: l.id, leadName: l.name, saleName: l.saleName }); setDealValueInput(""); }}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #fde68a", cursor: "pointer" }}>
+                <span style={{ fontSize: 13 }}>{l.name} — <span style={{ color: "#6b7280" }}>{l.saleName || "?"}</span></span>
+                <span style={{ color: "#e88a2e", fontWeight: 600, fontSize: 12 }}>Nhập giá trị →</span>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     ) : (
-      <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>#</th>
-              <th style={thStyle}>Sale</th>
-              <th style={thStyle}>Tổng Lead</th>
-              <th style={thStyle}>Quan tâm</th>
-              <th style={thStyle}>Hẹn xem</th>
-              <th style={thStyle}>Giữ chỗ</th>
-              <th style={thStyle}>Chốt</th>
-              <th style={thStyle}>Tỷ lệ chốt</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((s, i) => {
-              const rate = s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0;
-              return (
-                <tr key={s.name} style={{
-                  background: i === 0 ? "#fef9c3" : i === 1 ? "#f5f5f5" : i === 2 ? "#fef3e2" : i % 2 ? "#f9fafb" : "#fff",
-                }}>
-                  <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
-                  <td style={{ ...tdStyle, fontWeight: 700 }}>{s.name}</td>
-                  <td style={tdStyle}>{s.total}</td>
-                  <td style={tdStyle}>{s.interested || 0}</td>
-                  <td style={tdStyle}>{s.appointment || 0}</td>
-                  <td style={tdStyle}>{s.booked || 0}</td>
-                  <td style={{ ...tdStyle, fontWeight: 700, color: "#059669" }}>{s.closed || 0}</td>
-                  <td style={tdStyle}>
-                    <span style={{
-                      fontWeight: 700, padding: "2px 8px", borderRadius: 8,
-                      background: rate >= 20 ? "#dcfce7" : rate >= 10 ? "#fef3c7" : "#fee2e2",
-                      color: rate >= 20 ? "#059669" : rate >= 10 ? "#d97706" : "#dc2626",
-                    }}>{rate}%</span>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div>
+        {filterBar}
+        <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thStyle}>#</th>
+                <th style={thStyle}>Sale</th>
+                <th style={thStyle}>Tổng Lead</th>
+                <th style={thStyle}>Quan tâm</th>
+                <th style={thStyle}>Hẹn xem</th>
+                <th style={thStyle}>Giữ chỗ</th>
+                <th style={thStyle}>Chốt</th>
+                <th style={{ ...thStyle, whiteSpace: "nowrap" }}>Tổng Doanh Số</th>
+                <th style={{ ...thStyle, whiteSpace: "nowrap" }}>Chốt/Hẹn xem</th>
+                <th style={thStyle}>Tỷ lệ chốt</th>
+                <th style={{ ...thStyle, whiteSpace: "nowrap" }}>GT Lead TB</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((s, i) => {
+                const rate = s.total ? ((s.closed || 0) / s.total * 100).toFixed(1) : 0;
+                const effRate = (s.appointment || 0) ? ((s.closed || 0) / s.appointment * 100).toFixed(1) : "—";
+                const avgVal = s.closedDealCount ? (s.totalDealValue / s.closedDealCount) : 0;
+                const dealPct = maxDeal > 0 ? (s.totalDealValue || 0) / maxDeal : 0;
+                return (
+                  <tr key={s.name} style={{
+                    background: i === 0 ? "#fef9c3" : i === 1 ? "#f5f5f5" : i === 2 ? "#fef3e2" : i % 2 ? "#f9fafb" : "#fff",
+                  }}>
+                    <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700 }}>{s.name}</td>
+                    <td style={tdStyle}>{s.total}</td>
+                    <td style={{ ...tdStyle, background: heatColor(s.interested || 0, Math.max(...sorted.map(x => x.interested || 0), 1)) }}>{s.interested || 0}</td>
+                    <td style={{ ...tdStyle, background: heatColor(s.appointment || 0, Math.max(...sorted.map(x => x.appointment || 0), 1)) }}>{s.appointment || 0}</td>
+                    <td style={{ ...tdStyle, background: heatColor(s.booked || 0, Math.max(...sorted.map(x => x.booked || 0), 1)) }}>{s.booked || 0}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700, color: "#059669", background: heatColor(s.closed || 0, maxClosed) }}>{s.closed || 0}</td>
+                    <td style={{ ...tdStyle, minWidth: 140 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <span style={{ fontWeight: 700, color: "#e88a2e", fontSize: 13 }}>{s.totalDealValue ? formatVND(s.totalDealValue) : "—"}</span>
+                        {s.totalDealValue > 0 && <div style={{ background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden" }}>
+                          <div style={{ width: `${(dealPct * 100).toFixed(0)}%`, height: "100%", borderRadius: 4, background: "linear-gradient(90deg, #f59e0b, #e88a2e)" }} />
+                        </div>}
+                      </div>
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{
+                        fontWeight: 700, padding: "2px 8px", borderRadius: 8,
+                        background: effRate !== "—" ? (Number(effRate) >= 50 ? "#dcfce7" : Number(effRate) >= 25 ? "#fef3c7" : "#fee2e2") : "#f3f4f6",
+                        color: effRate !== "—" ? (Number(effRate) >= 50 ? "#059669" : Number(effRate) >= 25 ? "#d97706" : "#dc2626") : "#9ca3af",
+                      }}>{effRate}{effRate !== "—" ? "%" : ""}</span>
+                    </td>
+                    <td style={tdStyle}>
+                      <span style={{
+                        fontWeight: 700, padding: "2px 8px", borderRadius: 8,
+                        background: rate >= 20 ? "#dcfce7" : rate >= 10 ? "#fef3c7" : "#fee2e2",
+                        color: rate >= 20 ? "#059669" : rate >= 10 ? "#d97706" : "#dc2626",
+                      }}>{rate}%</span>
+                    </td>
+                    <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>{avgVal ? formatVND(avgVal) : "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {/* Closed leads without deal value */}
+        {isAdmin && closedWithoutDeal.length > 0 && (
+          <div style={{ marginTop: 16, background: "#fffbeb", borderRadius: 12, padding: 16, border: "1px solid #fde68a" }}>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10, color: "#92400e", display: "flex", alignItems: "center", gap: 6 }}><AlertTriangle size={16} /> Deal chưa nhập giá trị ({closedWithoutDeal.length})</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {closedWithoutDeal.map(l => (
+                <div key={l.id} onClick={() => { setDealModal({ leadId: l.id, leadName: l.name, saleName: l.saleName }); setDealValueInput(""); }}
+                  style={{
+                    background: "#fff", borderRadius: 10, padding: "10px 14px", cursor: "pointer",
+                    border: "1px solid #fde68a", boxShadow: "0 1px 2px rgba(0,0,0,.04)",
+                    display: "flex", alignItems: "center", gap: 10, fontSize: 13, transition: "box-shadow .2s",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.boxShadow = "0 3px 8px rgba(0,0,0,.1)"}
+                  onMouseLeave={e => e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,.04)"}
+                >
+                  <div><span style={{ fontWeight: 600 }}>{l.name}</span> <span style={{ color: "#6b7280" }}>— {l.saleName || "?"}</span></div>
+                  <span style={{ color: "#e88a2e", fontWeight: 600, fontSize: 12, whiteSpace: "nowrap" }}><DollarSign size={12} style={{ display: "inline", verticalAlign: "middle" }} /> Nhập</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /* -- Deal Value Modal -- */
+  const renderDealModal = () => {
+    if (!dealModal) return null;
+    return (
+      <div onClick={() => setDealModal(null)} style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 99990,
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <div onClick={e => e.stopPropagation()} style={{
+          background: "#fff", borderRadius: 16, padding: 24, minWidth: 360, maxWidth: 420,
+          boxShadow: "0 20px 60px rgba(0,0,0,.2)",
+        }}>
+          <h3 style={{ margin: "0 0 6px", fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <DollarSign size={20} color="#e88a2e" /> Nhập giá trị deal
+          </h3>
+          <p style={{ margin: "0 0 16px", color: "#6b7280", fontSize: 13 }}>
+            Khách: <b>{dealModal.leadName}</b> — Sale: <b>{dealModal.saleName || "?"}</b>
+          </p>
+          <div style={{ position: "relative", marginBottom: 16 }}>
+            <input
+              type="text"
+              autoFocus
+              placeholder="Ví dụ: 2500000000"
+              value={dealValueInput}
+              onChange={e => {
+                const raw = e.target.value.replace(/[^0-9]/g, "");
+                setDealValueInput(raw);
+              }}
+              onKeyDown={e => { if (e.key === "Enter") saveDealValue(); }}
+              style={{
+                width: "100%", padding: "12px 14px", fontSize: 16, fontWeight: 600,
+                border: "2px solid #e5e7eb", borderRadius: 10, outline: "none",
+                boxSizing: "border-box",
+              }}
+              onFocus={e => e.target.style.borderColor = "#e88a2e"}
+              onBlur={e => e.target.style.borderColor = "#e5e7eb"}
+            />
+            {dealValueInput && (
+              <div style={{ marginTop: 6, fontSize: 13, color: "#059669", fontWeight: 600 }}>
+                = {formatVND(Number(dealValueInput))}
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <button onClick={() => setDealModal(null)}
+              style={{ padding: "10px 20px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 14 }}>
+              Hủy
+            </button>
+            <button onClick={saveDealValue} disabled={savingDeal || !dealValueInput}
+              style={{
+                padding: "10px 24px", borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14,
+                background: dealValueInput ? "linear-gradient(135deg, #f59e0b, #e88a2e)" : "#d1d5db", color: "#fff",
+                opacity: savingDeal ? 0.6 : 1,
+              }}>
+              {savingDeal ? "Đang lưu..." : "Lưu giá trị"}
+            </button>
+          </div>
+        </div>
       </div>
     );
   };
@@ -9043,6 +9317,7 @@ function SalesPage({ ranking, leads, apiFetch, applyApiData }) {
       {tab === "kanban" && renderKanban()}
       {tab === "analytics" && renderAnalytics()}
       {tab === "leaderboard" && renderLeaderboard()}
+      {renderDealModal()}
     </div>
   );
 }

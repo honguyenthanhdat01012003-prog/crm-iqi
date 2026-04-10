@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 15; // Bump this when adding new DDL/migrations
+const DB_VERSION = 16; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -260,6 +260,7 @@ async function initDb() {
     "ALTER TABLE daily_news ADD COLUMN action_items TEXT DEFAULT '[]'",
     "ALTER TABLE telegram_pending ADD COLUMN phone TEXT DEFAULT ''",
     "ALTER TABLE telegram_bots ADD COLUMN group_chat_id TEXT DEFAULT ''",
+    "ALTER TABLE leads ADD COLUMN deal_value REAL DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -1424,6 +1425,7 @@ async function readData(db) {
       budget: l.budget,
       syncAt: l.sync_at,
       notes: l.notes,
+      dealValue: l.deal_value || 0,
       regCount: allRegs.length,
       regIndex: regIndex >= 0 ? regIndex + 1 : 1,
       registrations: allRegs,
@@ -4813,6 +4815,40 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+/* ===== Deal Value (admin sets value for closed leads) ===== */
+app.put("/api/leads/:id/deal-value", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const { dealValue } = req.body;
+    if (dealValue === undefined || dealValue === null || isNaN(Number(dealValue)) || Number(dealValue) < 0) {
+      return res.status(400).json({ error: "Giá trị deal không hợp lệ" });
+    }
+    const lead = await get(db, "SELECT id, status, name, sale_name FROM leads WHERE id = ?", [leadId]);
+    if (!lead) return res.status(404).json({ error: "Lead không tồn tại" });
+    if (lead.status !== "closed") return res.status(400).json({ error: "Chỉ có thể nhập giá trị cho lead đã Chốt" });
+
+    await run(db, "UPDATE leads SET deal_value = ? WHERE id = ?", [Number(dealValue), leadId]);
+
+    // Log in history
+    const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+    const nextSeq = (maxSeq?.m ?? -1) + 1;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const fmtValue = Number(dealValue).toLocaleString("vi-VN") + " ₫";
+    await run(db,
+      "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      [leadId, req.user.displayName, "Nhập giá trị deal", now, "Chốt", `Giá trị: ${fmtValue}`, nextSeq, "admin"]
+    );
+
+    lastSyncHash = "";
+    emitDataChanged("deal-value-update");
+    const data = await readData(db);
+    await filterDataForRole(data, req.user);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Update deal value failed" });
   }
 });
 
