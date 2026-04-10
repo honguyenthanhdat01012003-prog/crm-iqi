@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 16; // Bump this when adding new DDL/migrations
+const DB_VERSION = 17; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -261,6 +261,7 @@ async function initDb() {
     "ALTER TABLE telegram_pending ADD COLUMN phone TEXT DEFAULT ''",
     "ALTER TABLE telegram_bots ADD COLUMN group_chat_id TEXT DEFAULT ''",
     "ALTER TABLE leads ADD COLUMN deal_value REAL DEFAULT 0",
+    "ALTER TABLE leads ADD COLUMN is_locked INTEGER DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -1417,6 +1418,7 @@ async function readData(db) {
       createdAt: l.created_at,
       inboxUrl: l.inbox_url,
       isHot: Boolean(l.is_hot),
+      isLocked: Boolean(l.is_locked),
       saleId: l.sale_id,
       saleName: l.sale_name || "",
       managerName: l.manager_name || "",
@@ -3581,6 +3583,7 @@ async function processAutoRotate(db) {
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
+       AND l.is_locked = 0
      ORDER BY l.id ASC`
   );
   // Filter to only enabled projects
@@ -4490,6 +4493,15 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         return res.status(403).json({ error: "You can only update your own leads" });
       }
     }
+
+    // Block status changes on locked leads for non-admin
+    if (req.body.status !== undefined) {
+      const lockCheck = await get(db, "SELECT is_locked FROM leads WHERE id = ?", [actualLeadId]);
+      if (lockCheck && lockCheck.is_locked && req.user.role !== "admin") {
+        return res.status(403).json({ error: "Lead đã bị khóa, không thể thay đổi trạng thái. Liên hệ Admin để mở khóa." });
+      }
+    }
+
     const { status, notes, saleId, saleName, isHot, managerName } = req.body;
     const sets = [];
     const params = [];
@@ -4683,6 +4695,11 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       if (!hist) return res.status(403).json({ error: "You can only update your own leads" });
     }
 
+    // Block locked leads for non-admin
+    if (lead.is_locked && req.user.role !== "admin") {
+      return res.status(403).json({ error: "Lead đã bị khóa. Liên hệ Admin để mở khóa." });
+    }
+
     const { status, feedback } = req.body;
     const saleName = req.user.displayName;
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -4830,7 +4847,7 @@ app.put("/api/leads/:id/deal-value", requireAuth, requireAdmin, async (req, res)
     if (!lead) return res.status(404).json({ error: "Lead không tồn tại" });
     if (lead.status !== "closed") return res.status(400).json({ error: "Chỉ có thể nhập giá trị cho lead đã Chốt" });
 
-    await run(db, "UPDATE leads SET deal_value = ? WHERE id = ?", [Number(dealValue), leadId]);
+    await run(db, "UPDATE leads SET deal_value = ?, is_locked = 1 WHERE id = ?", [Number(dealValue), leadId]);
 
     // Log in history
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -4839,7 +4856,7 @@ app.put("/api/leads/:id/deal-value", requireAuth, requireAdmin, async (req, res)
     const fmtValue = Number(dealValue).toLocaleString("vi-VN") + " ₫";
     await run(db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, req.user.displayName, "Nhập giá trị deal", now, "Chốt", `Giá trị: ${fmtValue}`, nextSeq, "admin"]
+      [leadId, req.user.displayName, "Nhập giá trị deal", now, "Chốt", `Giá trị: ${fmtValue} — Lead đã khóa`, nextSeq, "admin"]
     );
 
     lastSyncHash = "";
@@ -4849,6 +4866,36 @@ app.put("/api/leads/:id/deal-value", requireAuth, requireAdmin, async (req, res)
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message || "Update deal value failed" });
+  }
+});
+
+/* ===== Admin Lock/Unlock Lead ===== */
+app.put("/api/leads/:id/lock", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const { locked } = req.body; // true = lock, false = unlock
+    const lead = await get(db, "SELECT id, name, sale_name, is_locked FROM leads WHERE id = ?", [leadId]);
+    if (!lead) return res.status(404).json({ error: "Lead không tồn tại" });
+
+    const newLocked = locked ? 1 : 0;
+    await run(db, "UPDATE leads SET is_locked = ? WHERE id = ?", [newLocked, leadId]);
+
+    // Log in history
+    const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+    const nextSeq = (maxSeq?.m ?? -1) + 1;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    await run(db,
+      "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      [leadId, req.user.displayName, locked ? "Khóa lead" : "Mở khóa lead", now, "", locked ? "Admin khóa lead" : "Admin mở khóa lead", nextSeq, "admin"]
+    );
+
+    lastSyncHash = "";
+    emitDataChanged("lock-lead");
+    const data = await readData(db);
+    await filterDataForRole(data, req.user);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Lock/unlock failed" });
   }
 });
 

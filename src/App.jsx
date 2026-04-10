@@ -4590,6 +4590,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
                       {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
+                      {l.isLocked && <Lock size={12} color="#dc2626" title="Lead đã khóa" />}
                     </div>
                     <div style={{ display: "flex", gap: isMobile ? 8 : 16, fontSize: 12, color: "#6b7280", flexWrap: "wrap", alignItems: "center" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone || "-"}</span>
@@ -5108,6 +5109,42 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         </div>
       )}
 
+      {/* Admin: Khóa/Mở khóa Lead */}
+      {isAdmin && (
+        <div style={{ background: lead.isLocked ? "#fef2f2" : "#f8fafc", border: `1px solid ${lead.isLocked ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {lead.isLocked ? <Lock size={16} color="#dc2626" /> : <Lock size={16} color="#9ca3af" />}
+              <span style={{ fontWeight: 700, color: lead.isLocked ? "#dc2626" : "#6b7280" }}>
+                {lead.isLocked ? "Lead đã khóa" : "Lead chưa khóa"}
+              </span>
+              {lead.isLocked && <span style={{ fontSize: 11, color: "#9ca3af" }}>Sale không thể thay đổi trạng thái</span>}
+            </div>
+            <button onClick={async () => {
+              try {
+                const r = await apiFetch(`${API}/leads/${lead.id}/lock`, { method: "PUT", body: JSON.stringify({ locked: !lead.isLocked }) });
+                if (r.ok) { const d = await r.json(); applyApiData(d); }
+              } catch {}
+            }}
+              style={{
+                ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 14px", fontSize: isMobile ? 14 : 12,
+                background: lead.isLocked ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #ef4444, #dc2626)",
+                minHeight: isMobile ? 44 : "auto",
+              }}>
+              {lead.isLocked ? <><Lock size={14} /> Mở khóa</> : <><Lock size={14} /> Khóa lead</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Lock notice for sale */}
+      {!isAdmin && lead.isLocked && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <Lock size={16} color="#dc2626" />
+          <span style={{ color: "#dc2626", fontWeight: 600 }}>Lead đã bị khóa — không thể thay đổi trạng thái. Liên hệ Admin nếu cần mở khóa.</span>
+        </div>
+      )}
+
       {/* === Contact form (both sale and admin) === */}
       {(() => {
         const formVisible = !isAdmin || showForm;
@@ -5129,7 +5166,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </button>
               )}
             </h4>
-            {(!isAdmin || formVisible) && (!isAdmin || showForm) && (
+            {(!isAdmin || formVisible) && (!isAdmin || showForm) && !(isSale && lead.isLocked) && (
               <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 16 : 12, marginBottom: 12 }}>
                 <div style={{ display: "flex", gap: isMobile ? 12 : 8, flexDirection: "column" }}>
                   <div style={{ width: "100%" }}>
