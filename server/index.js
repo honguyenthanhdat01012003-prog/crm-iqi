@@ -504,7 +504,7 @@ function findVal(obj, candidates) {
 }
 
 const VALID_STATUS_KEYS = new Set([
-  "new", "called", "interested", "low_interest", "other_project", "appointment",
+  "new", "called", "interested", "low_interest", "other_project", "consulting", "appointment",
   "booked", "booking_other", "closed", "not_interested", "spam", "sale",
   "weak_finance", "unreachable", "callback", "wrong_phone", "wrong_number",
   "hung_up", "blocked", "has_sale", "lost",
@@ -512,7 +512,7 @@ const VALID_STATUS_KEYS = new Set([
 
 const STATUS_LABELS_VI = {
   new: "Chưa feedback", called: "Đã gọi", interested: "Quan tâm", low_interest: "QT hời hợt",
-  other_project: "QT DA khác", appointment: "Hẹn xem", booked: "Booking/Cọc", booking_other: "Booking sản khác",
+  other_project: "QT DA khác", consulting: "Đang tư vấn", appointment: "Hẹn xem", booked: "Booking/Cọc", booking_other: "Booking sản khác",
   closed: "Chốt", not_interested: "Không QT", spam: "Phá/rác", sale: "Sale",
   weak_finance: "TC yếu", unreachable: "Chưa LLĐ",
   callback: "Gọi lại sau", wrong_phone: "Thuê bao", wrong_number: "Sai số",
@@ -3430,10 +3430,10 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
           ].join("\n");
           const statusList = [
             ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
-            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
-            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
-            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
-            ["has_sale", "Có sale khác"],
+            ["consulting", "Đang tư vấn"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -3895,10 +3895,10 @@ async function processSchedules(db, triggerUser) {
           ].join("\n");
           const statusList = [
             ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
-            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
-            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
-            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
-            ["has_sale", "Có sale khác"],
+            ["consulting", "Đang tư vấn"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
@@ -4622,10 +4622,10 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           // Build inline keyboard with status buttons (3 per row)
           const statusList = [
             ["interested", "Quan tâm"], ["low_interest", "QT hời hợt"], ["other_project", "QT DA khác"],
-            ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"], ["closed", "Chốt"],
-            ["not_interested", "Không QT"], ["spam", "Phá/rác"], ["weak_finance", "TC yếu"],
-            ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"], ["wrong_number", "Sai số"],
-            ["has_sale", "Có sale khác"],
+            ["consulting", "Đang tư vấn"], ["appointment", "Hẹn xem"], ["booked", "Giữ chỗ"],
+            ["closed", "Chốt"], ["not_interested", "Không QT"], ["spam", "Phá/rác"],
+            ["weak_finance", "TC yếu"], ["unreachable", "Chưa LLĐ"], ["callback", "Gọi lại sau"],
+            ["wrong_number", "Sai số"], ["has_sale", "Có sale khác"],
           ];
           const keyboard = [];
           for (let i = 0; i < statusList.length; i += 3) {
