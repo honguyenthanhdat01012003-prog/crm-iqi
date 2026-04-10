@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 17; // Bump this when adding new DDL/migrations
+const DB_VERSION = 18; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -262,6 +262,14 @@ async function initDb() {
     "ALTER TABLE telegram_bots ADD COLUMN group_chat_id TEXT DEFAULT ''",
     "ALTER TABLE leads ADD COLUMN deal_value REAL DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN is_locked INTEGER DEFAULT 0",
+    `CREATE TABLE IF NOT EXISTS telegram_lead_msgs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      telegram_id TEXT NOT NULL,
+      lead_id INTEGER NOT NULL,
+      message_id INTEGER NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_tlm_tg_lead ON telegram_lead_msgs(telegram_id, lead_id)`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -3446,6 +3454,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
           const teleJson = await teleRes.json();
           const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
           await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, lid, sentMsgId, lead.phone || ""]);
+          if (sentMsgId) await run(db, "INSERT INTO telegram_lead_msgs(telegram_id, lead_id, message_id) VALUES(?, ?, ?)", [saleUser.telegram_id, lid, sentMsgId]);
         }
       }
     } catch (teleErr) {
@@ -3912,6 +3921,7 @@ async function processSchedules(db, triggerUser) {
             const teleJson = await teleRes.json();
             const sentMsgId = teleJson.ok ? teleJson.result.message_id : null;
             await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, leadId, sentMsgId, lead.phone || ""]);
+            if (sentMsgId) await run(db, "INSERT INTO telegram_lead_msgs(telegram_id, lead_id, message_id) VALUES(?, ?, ?)", [saleUser.telegram_id, leadId, sentMsgId]);
           } catch (teleErr) {
             console.error("[Telegram schedule] Send failed:", teleErr.message);
           }
@@ -4072,8 +4082,42 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
         stmts.push({ sql: "DELETE FROM lead_history WHERE id = ?", args: [hist.id] });
       }
       // Check if this lead still has the sale from this schedule
-      const lead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      const lead = await get(db, "SELECT sale_name, project_id FROM leads WHERE id = ?", [lid]);
       if (lead && lead.sale_name === entry.saleName) {
+        // Delete Telegram notification messages for this lead
+        try {
+          const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [entry.saleName]);
+          if (saleUser && saleUser.telegram_id) {
+            const activeBot = await getBotForProject(lead.project_id);
+            if (activeBot && activeBot.token) {
+              const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, lid]);
+              for (const tm of trackedMsgs) {
+                try {
+                  await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
+                  });
+                } catch (_) {}
+              }
+              await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, lid]);
+
+              // Send recall notice
+              const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+              const leadRow = await get(db, "SELECT name FROM leads WHERE id = ?", [lid]);
+              await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  chat_id: saleUser.telegram_id,
+                  text: `🚫 *LEAD ĐÃ BỊ THU HỒI*\nDự án: *${projectRow ? projectRow.name : "-"}*\n----------------------------------------------\n👤 Khách: *${leadRow ? leadRow.name : "N/A"}*\n\n❌ _Lead này đã được Admin thu hồi._\n_Bạn không cần liên hệ khách hàng này nữa._`,
+                  parse_mode: "Markdown",
+                }),
+              });
+            }
+          }
+        } catch (teleErr) {
+          console.error("[Telegram] Schedule revoke message failed:", teleErr.message);
+        }
+
         // Revert to previous sale or clear
         const prev = await get(db, "SELECT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND feedback NOT LIKE ? ORDER BY seq DESC LIMIT 1",
           [lid, `%#${sch.id}%`]);
@@ -4652,6 +4696,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
           // Save pending state for this user (include message_id and phone for recall/fallback)
           await run(db, "INSERT OR REPLACE INTO telegram_pending(telegram_id, lead_id, status, message_id, phone) VALUES(?, ?, '', ?, ?)", [saleUser.telegram_id, actualLeadId, sentMsgId, lead ? lead.phone || "" : ""]);
+          if (sentMsgId) await run(db, "INSERT INTO telegram_lead_msgs(telegram_id, lead_id, message_id) VALUES(?, ?, ?)", [saleUser.telegram_id, actualLeadId, sentMsgId]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
@@ -4768,14 +4813,27 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         const activeBot = lead ? await getBotForProject(lead.project_id) : await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
-          // Delete the original notification message (with inline keyboard)
+          // Delete ALL tracked notification messages for this lead from this sale
+          const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+          for (const tm of trackedMsgs) {
+            try {
+              await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
+              });
+            } catch (_) {}
+          }
+          await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+
+          // Also try deleting from legacy pending
           const pending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
           if (pending && pending.message_id) {
-            await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: pending.message_id }),
-            });
+            try {
+              await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: pending.message_id }),
+              });
+            } catch (_) {}
           }
 
           // Send recall notification
