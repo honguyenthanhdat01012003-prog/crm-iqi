@@ -4541,6 +4541,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
                     </div>
+                    {isSale && l.lastSaleUpdate && (
+                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                        <Clock size={11} style={{ flexShrink: 0 }} />
+                        <span style={{ fontWeight: 600 }}>{l.lastSaleUpdate.date || "-"}</span>
+                        {l.lastSaleUpdate.status && <span style={{ padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[l.lastSaleUpdate.status] || "#6b7280") + "18", color: STATUS_COLORS[l.lastSaleUpdate.status] || "#6b7280" }}>{STATUS_LABELS[l.lastSaleUpdate.status] || l.lastSaleUpdate.status}</span>}
+                        {l.lastSaleUpdate.feedback && <span style={{ color: "#475569", fontStyle: "italic", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{l.lastSaleUpdate.feedback}"</span>}
+                      </div>
+                    )}
+                    {isSale && !l.lastSaleUpdate && (
+                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#fef3c7", borderRadius: 6, border: "1px solid #fcd34d", fontSize: 11, color: "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+                        <AlertCircle size={11} style={{ flexShrink: 0 }} />
+                        <span>Chưa cập nhật feedback</span>
+                      </div>
+                    )}
                   </div>
                   <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>

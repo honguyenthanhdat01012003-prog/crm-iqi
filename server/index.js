@@ -4272,20 +4272,27 @@ function filterLeadsForSale(data, displayName) {
   // If this sale has never given feedback on a lead assigned to them → show "Chưa feedback" (new)
   for (const l of data.leads) {
     let foundOwnStatus = false;
+    let lastSaleUpdate = null;
     if (l.saleHistory && l.saleHistory.length) {
       // Walk from newest to oldest, skip "Chia lead" entries (don't break at them)
       // This handles re-assignment: sale may have feedback BEFORE a later "Chia lead" to same sale
       for (let i = l.saleHistory.length - 1; i >= 0; i--) {
         const h = l.saleHistory[i];
         if (h.action === "Chia lead") continue; // Skip assignment entries
-        if (h.status && matchSaleName(h.saleName, displayName)) {
-          l.status = normalizeStatus(h.status);
-          l.rawStatus = h.status;
-          foundOwnStatus = true;
-          break;
+        if (matchSaleName(h.saleName, displayName)) {
+          if (!lastSaleUpdate) {
+            lastSaleUpdate = { date: h.date, status: h.status ? normalizeStatus(h.status) : null, feedback: h.feedback, action: h.action, source: h.source };
+          }
+          if (h.status && !foundOwnStatus) {
+            l.status = normalizeStatus(h.status);
+            l.rawStatus = h.status;
+            foundOwnStatus = true;
+          }
+          if (foundOwnStatus && lastSaleUpdate) break;
         }
       }
     }
+    l.lastSaleUpdate = lastSaleUpdate;
     // Only force "new" if lead was assigned to this sale via CRM (has a non-sheet "Chia lead" entry)
     // Leads only assigned via Google Sheets keep their existing status
     if (!foundOwnStatus && matchSaleName(l.saleName, displayName)) {
