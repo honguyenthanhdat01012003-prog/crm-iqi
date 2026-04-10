@@ -4571,7 +4571,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
-            const isLocked = l.status === "booked" || l.status === "booking_other";
+            const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
             return (
               <div key={l.id} id={`lead-${l.id}`} style={{ background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
                 <div onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
@@ -4650,7 +4650,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).flatMap((l, i) => {
                 const isOpen = expandedId === l.id;
                 const globalIdx = (currentPage - 1) * pageSize + i;
-                const isLocked = l.status === "booked" || l.status === "booking_other";
+                const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
                 const rows = [
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                     style={{ background: isLocked ? "#fef2f2" : isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s", borderLeft: isLocked ? "3px solid #dc2626" : "none" }}>
