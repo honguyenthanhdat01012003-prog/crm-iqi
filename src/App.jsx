@@ -12,7 +12,7 @@ import {
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper,
-  Briefcase, AlertTriangle
+  Briefcase, AlertTriangle, ArrowUp, ArrowDown
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 
@@ -445,6 +445,44 @@ function ForceChangePasswordPage({ user, onChanged, onLogout }) {
           Đăng xuất
         </button>
       </form>
+    </div>
+  );
+}
+
+// Announcement marquee: cycle one announcement at a time
+function AnnouncementMarquee({ announcements }) {
+  const [idx, setIdx] = useState(0);
+  const [key, setKey] = useState(0);
+  useEffect(() => {
+    if (announcements.length <= 1) return;
+    const duration = Math.max(8000, (announcements[idx]?.content?.length || 20) * 180);
+    const timer = setTimeout(() => {
+      setIdx(i => (i + 1) % announcements.length);
+      setKey(k => k + 1);
+    }, duration);
+    return () => clearTimeout(timer);
+  }, [idx, key, announcements]);
+  useEffect(() => { setIdx(0); setKey(k => k + 1); }, [announcements.length]);
+  const current = announcements[idx] || announcements[0];
+  if (!current) return null;
+  const speed = Math.max(12, (current.content?.length || 20) * 0.18);
+  return (
+    <div style={{
+      background: "linear-gradient(90deg, #fef3c7, #fffbeb, #fef3c7)", borderBottom: "1px solid #fde68a",
+      padding: "8px 0", overflow: "hidden", position: "relative",
+    }}>
+      <div key={key} style={{
+        display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap",
+        animation: `marqueeScroll ${speed}s linear 1`,
+      }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8, paddingLeft: "100%" }}>
+          <Megaphone size={14} color="#d97706" style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>
+            {current.content}
+            {announcements.length > 1 && <span style={{ marginLeft: 12, fontSize: 11, color: "#b45309", opacity: 0.6 }}>({idx + 1}/{announcements.length})</span>}
+          </span>
+        </span>
+      </div>
     </div>
   );
 }
@@ -1223,25 +1261,8 @@ function CRMApp({ user, updateUser, onLogout }) {
           )}
         </div>
 
-        {/* Scrolling announcement marquee */}
-        {announcements.length > 0 && (
-          <div style={{
-            background: "linear-gradient(90deg, #fef3c7, #fffbeb, #fef3c7)", borderBottom: "1px solid #fde68a",
-            padding: "8px 0", overflow: "hidden", position: "relative",
-          }}>
-            <div style={{
-              display: "flex", alignItems: "center", gap: 12, whiteSpace: "nowrap",
-              animation: `marqueeScroll ${Math.max(15, announcements.map(a => a.content).join("   •   ").length * 0.18)}s linear infinite`,
-            }}>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 8, paddingLeft: "100%" }}>
-                <Megaphone size={14} color="#d97706" style={{ flexShrink: 0 }} />
-                <span style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>
-                  {announcements.map(a => a.content).join("   •   ")}
-                </span>
-              </span>
-            </div>
-          </div>
-        )}
+        {/* Scrolling announcement marquee - one at a time */}
+        {announcements.length > 0 && <AnnouncementMarquee announcements={announcements} />}
 
         <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20 }}>
         {page === "dashboard" && (
@@ -1330,7 +1351,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               </div>
 
               {/* List active announcements */}
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>Đang hiển thị ({announcements.length})</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 8 }}>Đang hiển thị ({announcements.length}) — Thứ tự chạy từ trên xuống</div>
               {announcements.length === 0 ? (
                 <div style={{ textAlign: "center", padding: 24, color: "#9ca3af", fontSize: 13 }}>
                   <Megaphone size={32} style={{ opacity: 0.3, marginBottom: 8 }} /><br />
@@ -1338,8 +1359,21 @@ function CRMApp({ user, updateUser, onLogout }) {
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {announcements.map(a => (
-                    <div key={a.id} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                  {announcements.map((a, ai) => (
+                    <div key={a.id} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 11, color: "#b45309", fontWeight: 700, minWidth: 20, textAlign: "center" }}>{ai + 1}</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <button disabled={ai === 0} onClick={() => {
+                          const ids = announcements.map(x => x.id);
+                          [ids[ai - 1], ids[ai]] = [ids[ai], ids[ai - 1]];
+                          apiFetch(`${API}/announcements/reorder`, { method: "POST", body: JSON.stringify({ ids }) }).then(r => { if (r.ok) fetchAnnouncements(); });
+                        }} title="Lên" style={{ background: "none", border: "none", cursor: ai === 0 ? "default" : "pointer", padding: 1, opacity: ai === 0 ? 0.3 : 1 }}><ArrowUp size={12} color="#6b7280" /></button>
+                        <button disabled={ai === announcements.length - 1} onClick={() => {
+                          const ids = announcements.map(x => x.id);
+                          [ids[ai], ids[ai + 1]] = [ids[ai + 1], ids[ai]];
+                          apiFetch(`${API}/announcements/reorder`, { method: "POST", body: JSON.stringify({ ids }) }).then(r => { if (r.ok) fetchAnnouncements(); });
+                        }} title="Xuống" style={{ background: "none", border: "none", cursor: ai === announcements.length - 1 ? "default" : "pointer", padding: 1, opacity: ai === announcements.length - 1 ? 0.3 : 1 }}><ArrowDown size={12} color="#6b7280" /></button>
+                      </div>
                       <Megaphone size={14} color="#d97706" style={{ flexShrink: 0 }} />
                       <span style={{ flex: 1, fontSize: 13, color: "#92400e" }}>{a.content}</span>
                       <button onClick={() => { apiFetch(`${API}/announcements/${a.id}`, { method: "PUT", body: JSON.stringify({ is_active: false }) }).then(r => { if (r.ok) { fetchAnnouncements(); showToast("Đã tắt thông báo", "success"); } }); }} title="Tắt" style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><Pause size={14} color="#f59e0b" /></button>
@@ -2362,6 +2396,15 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const filtered = tab ? processedLeads.filter(tab.filter) : [...processedLeads];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
   }, [processedLeads, activeTab, LEAD_TABS]);
+
+  // Always-valid page: clamp currentPage to data range so rendering never shows empty
+  const totalPages = Math.max(1, Math.ceil(tabFiltered.length / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+
+  // Auto-clamp currentPage state when filtered data shrinks (e.g. search, filter change)
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [tabFiltered.length, pageSize, currentPage, totalPages]);
 
   // Navigate to highlighted lead from notification click
   useEffect(() => {
@@ -4285,14 +4328,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
           placeholder="Tìm tên, SĐT, chiến dịch, sale, nhu cầu..."
           value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
+          onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); setActiveTab("all"); }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, flexWrap: "wrap", width: isMobile ? "100%" : "auto" }}>
           <span style={{ color: "#6b7280" }}>Từ:</span>
-          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+          <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setCurrentPage(1); }}
             style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, flex: isMobile ? 1 : "none" }} />
           <span style={{ color: "#6b7280", marginLeft: 4 }}>Đến:</span>
-          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+          <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setCurrentPage(1); }}
             style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, flex: isMobile ? 1 : "none" }} />
           {(dateFrom || dateTo) && (
             <button onClick={() => { setDateFrom(""); setDateTo(""); }}
@@ -4499,7 +4542,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       </div>
 
       <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <span>Hiển thị {Math.min(pageSize, tabFiltered.length)} / {tabFiltered.length} khách hàng</span>
+        <span>Hiển thị {Math.min(safePage * pageSize, tabFiltered.length) - (safePage - 1) * pageSize} / {tabFiltered.length} khách hàng</span>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {/* Auto-rotate toggle per project */}
           {isAdmin && selectedProject && (() => {
@@ -4570,7 +4613,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {/* Lead cards - card layout for all on mobile, table for admin desktop */}
       {(!isAdmin || isMobile) ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((l) => {
+          {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
@@ -4649,9 +4692,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </tr>
             </thead>
             <tbody>
-              {tabFiltered.slice((currentPage - 1) * pageSize, currentPage * pageSize).flatMap((l, i) => {
+              {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).flatMap((l, i) => {
                 const isOpen = expandedId === l.id;
-                const globalIdx = (currentPage - 1) * pageSize + i;
+                const globalIdx = (safePage - 1) * pageSize + i;
                 const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
                 const rows = [
                   <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
@@ -4700,8 +4743,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       )}
 
       {/* Pagination */}
-      {tabFiltered.length > pageSize && (() => {
-        const totalPages = Math.ceil(tabFiltered.length / pageSize);
+      {totalPages > 1 && (() => {
         const btnStyle = (disabled) => ({
           padding: isMobile ? "10px 14px" : "6px 10px", borderRadius: 8,
           border: "1px solid #d1d5db", background: disabled ? "#f3f4f6" : "#fff",
@@ -4711,11 +4753,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         });
         return (
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: isMobile ? 6 : 8, marginTop: 16, flexWrap: "wrap" }}>
-          <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} style={btnStyle(currentPage === 1)}>«</button>
-          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={btnStyle(currentPage === 1)}>‹</button>
-          <span style={{ fontSize: 13, color: "#374151", padding: "0 4px" }}>{currentPage} / {totalPages}</span>
-          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage >= totalPages} style={btnStyle(currentPage >= totalPages)}>›</button>
-          <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage >= totalPages} style={btnStyle(currentPage >= totalPages)}>»</button>
+          <button onClick={() => setCurrentPage(1)} disabled={safePage === 1} style={btnStyle(safePage === 1)}>«</button>
+          <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={safePage === 1} style={btnStyle(safePage === 1)}>‹</button>
+          <span style={{ fontSize: 13, color: "#374151", padding: "0 4px" }}>{safePage} / {totalPages}</span>
+          <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages} style={btnStyle(safePage >= totalPages)}>›</button>
+          <button onClick={() => setCurrentPage(totalPages)} disabled={safePage >= totalPages} style={btnStyle(safePage >= totalPages)}>»</button>
         </div>
         );
       })()}

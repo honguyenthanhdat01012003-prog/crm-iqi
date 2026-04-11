@@ -1977,9 +1977,20 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
       await run(db, "UPDATE users SET phone = ? WHERE id = ?", [String(phone || "").trim(), id]);
     }
     if (req.body.projectIds !== undefined && Array.isArray(req.body.projectIds)) {
+      // Get old project IDs before update to detect removed projects
+      const oldProjects = await all(db, "SELECT project_id FROM user_projects WHERE user_id = ?", [id]);
+      const oldPids = oldProjects.map(r => r.project_id);
+      const newPids = req.body.projectIds.map(Number);
+
       await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
       for (const pid of req.body.projectIds) {
         await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?, ?)", [id, Number(pid)]);
+      }
+
+      // Find removed projects and sync active schedules
+      const removedPids = oldPids.filter(p => !newPids.includes(p));
+      if (removedPids.length) {
+        await syncSchedulesAfterProjectChange(db, id, removedPids);
       }
     }
     const users = await selectUsers();
@@ -3706,6 +3717,38 @@ function getNowHHMM() {
   return new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+// Sync active schedules after a sale is removed from project(s)
+async function syncSchedulesAfterProjectChange(db, userId, removedProjectIds) {
+  if (!removedProjectIds || !removedProjectIds.length) return;
+  const user = await get(db, "SELECT display_name FROM users WHERE id = ?", [userId]);
+  if (!user) return;
+  const saleName = user.display_name;
+
+  for (const projId of removedProjectIds) {
+    const schedules = await all(db, "SELECT * FROM lead_schedules WHERE is_active = 1 AND project_id = ?", [projId]);
+    for (const sch of schedules) {
+      let saleList;
+      try { saleList = JSON.parse(sch.sale_names || "[]"); } catch { continue; }
+      const idx = saleList.indexOf(saleName);
+      if (idx === -1) continue; // sale not in this schedule
+
+      saleList.splice(idx, 1);
+      if (!saleList.length) {
+        // No sales left → deactivate schedule
+        await run(db, "UPDATE lead_schedules SET is_active = 0, sale_names = '[]' WHERE id = ?", [sch.id]);
+        console.log(`[syncSchedules] Deactivated schedule #${sch.id} (no sales left after removing ${saleName})`);
+      } else {
+        // Adjust assigned_index if needed (was pointing beyond removed sale)
+        // current_tour also wraps based on new saleList length
+        let newTour = (sch.current_tour || 0) % saleList.length;
+        await run(db, "UPDATE lead_schedules SET sale_names = ?, current_tour = ? WHERE id = ?",
+          [JSON.stringify(saleList), newTour, sch.id]);
+        console.log(`[syncSchedules] Removed ${saleName} from schedule #${sch.id}, remaining: ${saleList.join(", ")}`);
+      }
+    }
+  }
+}
+
 // Process all active schedules - assign leads that are due today at the scheduled time
 async function processSchedules(db, triggerUser) {
   const today = getTodayStr();
@@ -3735,8 +3778,30 @@ async function processSchedules(db, triggerUser) {
     if (sch.last_processed_date === today && slotToProcess < lastSlot) continue;
     if (sch.last_processed_date === today && slotToProcess === lastSlot - 1) continue;
 
-    const saleList = JSON.parse(sch.sale_names || "[]");
+    let saleList = JSON.parse(sch.sale_names || "[]");
     const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
+
+    // Guard: filter out sales no longer in the project
+    if (saleList.length && sch.project_id) {
+      const activeSales = await all(db,
+        `SELECT u.display_name FROM users u INNER JOIN user_projects up ON up.user_id = u.id
+         WHERE up.project_id = ? AND u.role = 'sale'`, [sch.project_id]);
+      const activeNames = new Set(activeSales.map(r => r.display_name));
+      const filtered = saleList.filter(s => activeNames.has(s));
+      if (filtered.length < saleList.length) {
+        const removed = saleList.filter(s => !activeNames.has(s));
+        console.log(`[processSchedules] Schedule #${sch.id}: removed stale sales: ${removed.join(", ")}`);
+        saleList = filtered;
+        if (!saleList.length) {
+          await run(db, "UPDATE lead_schedules SET is_active = 0, sale_names = '[]' WHERE id = ?", [sch.id]);
+          continue;
+        }
+        const newTour = (sch.current_tour || 0) % saleList.length;
+        await run(db, "UPDATE lead_schedules SET sale_names = ?, current_tour = ? WHERE id = ?",
+          [JSON.stringify(saleList), newTour, sch.id]);
+      }
+    }
+
     if (!saleList.length || !leadIdList.length) continue;
 
     const currentTour = sch.current_tour || 0;
@@ -6085,13 +6150,16 @@ const ensureAnnouncementsTable = async () => {
   await run(db, `CREATE TABLE IF NOT EXISTS announcements (
     id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
     is_active INTEGER DEFAULT 1, created_by TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')))`);
+  // Add sort_order if missing (existing installs)
+  try { await run(db, "ALTER TABLE announcements ADD COLUMN sort_order INTEGER DEFAULT 0"); } catch {}
 };
 
 app.get("/api/announcements", requireAuth, async (_req, res) => {
   try {
     await ensureAnnouncementsTable();
-    const rows = await all(db, "SELECT * FROM announcements WHERE is_active = 1 ORDER BY created_at DESC");
+    const rows = await all(db, "SELECT * FROM announcements WHERE is_active = 1 ORDER BY sort_order ASC, created_at DESC");
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -6099,7 +6167,7 @@ app.get("/api/announcements", requireAuth, async (_req, res) => {
 app.get("/api/announcements/all", requireAuth, requireAdmin, async (_req, res) => {
   try {
     await ensureAnnouncementsTable();
-    const rows = await all(db, "SELECT * FROM announcements ORDER BY created_at DESC");
+    const rows = await all(db, "SELECT * FROM announcements ORDER BY sort_order ASC, created_at DESC");
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -6109,7 +6177,9 @@ app.post("/api/announcements", requireAuth, requireAdminOnly, async (req, res) =
     await ensureAnnouncementsTable();
     const { content } = req.body;
     if (!content || !content.trim()) return res.status(400).json({ error: "Chưa nhập nội dung thông báo" });
-    await run(db, "INSERT INTO announcements (content, created_by) VALUES (?, ?)", [content.trim(), req.user.display_name || req.user.username]);
+    const maxOrder = await get(db, "SELECT MAX(sort_order) as m FROM announcements WHERE is_active = 1");
+    const nextOrder = (maxOrder?.m ?? -1) + 1;
+    await run(db, "INSERT INTO announcements (content, created_by, sort_order) VALUES (?, ?, ?)", [content.trim(), req.user.display_name || req.user.username, nextOrder]);
     if (io) io.emit("announcement-changed");
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -6128,6 +6198,19 @@ app.put("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, res
 app.delete("/api/announcements/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     await run(db, "DELETE FROM announcements WHERE id = ?", [req.params.id]);
+    if (io) io.emit("announcement-changed");
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Reorder announcements
+app.post("/api/announcements/reorder", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const { ids } = req.body; // array of announcement IDs in desired order
+    if (!Array.isArray(ids)) return res.status(400).json({ error: "Invalid ids array" });
+    for (let i = 0; i < ids.length; i++) {
+      await run(db, "UPDATE announcements SET sort_order = ? WHERE id = ?", [i, ids[i]]);
+    }
     if (io) io.emit("announcement-changed");
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
