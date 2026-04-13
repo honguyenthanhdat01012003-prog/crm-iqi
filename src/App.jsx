@@ -9568,12 +9568,11 @@ function PersonalLeadsPage({ user }) {
   const [editNote, setEditNote] = useState({});
 
   const plHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("token")}` });
-  const handlePLAuth = (r) => { if (r.status === 401) { showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại", "error"); localStorage.removeItem("token"); setTimeout(() => location.reload(), 1500); return true; } return false; };
   const fetchLeads = async () => {
     try {
       const r = await fetch("/api/personal-leads", { headers: plHeaders() });
-      if (handlePLAuth(r)) return;
       if (r.ok) setLeads(await r.json());
+      else if (r.status === 401) showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại", "error");
     } catch {} finally { setLoading(false); }
   };
   useEffect(() => { fetchLeads(); }, []);
@@ -9598,7 +9597,6 @@ function PersonalLeadsPage({ user }) {
       const url = editingLead ? `/api/personal-leads/${editingLead.id}` : "/api/personal-leads";
       const method = editingLead ? "PUT" : "POST";
       const r = await fetch(url, { method, headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify(draft) });
-      if (handlePLAuth(r)) return;
       if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchLeads(); showToast(editingLead ? "Đã cập nhật khách hàng" : "Đã thêm khách hàng mới", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi lưu khách hàng", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); } finally { setSaving(false); }
@@ -9608,7 +9606,6 @@ function PersonalLeadsPage({ user }) {
     if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
-      if (handlePLAuth(r)) return;
       if (r.ok) { fetchLeads(); showToast("Đã xóa khách hàng", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi xóa", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
@@ -9617,7 +9614,6 @@ function PersonalLeadsPage({ user }) {
   const handleUpdateField = async (id, field, value) => {
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
-      if (handlePLAuth(r)) return;
       if (r.ok) { fetchLeads(); showToast("Đã cập nhật", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi cập nhật", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
