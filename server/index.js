@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 19; // Bump this when adding new DDL/migrations
+const DB_VERSION = 20; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -284,6 +284,18 @@ async function initDb() {
       is_deleted INTEGER DEFAULT 0
     )`,
     `CREATE INDEX IF NOT EXISTS idx_pl_user ON personal_leads(user_id, is_deleted)`,
+    // v20: personal_lead_history table
+    `CREATE TABLE IF NOT EXISTS personal_lead_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      lead_id INTEGER NOT NULL,
+      sale_name TEXT NOT NULL DEFAULT '',
+      status TEXT DEFAULT '',
+      feedback TEXT DEFAULT '',
+      seq INTEGER DEFAULT 0,
+      contact_date TEXT DEFAULT '',
+      FOREIGN KEY (lead_id) REFERENCES personal_leads(id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_plh_lead ON personal_lead_history(lead_id)`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -6305,6 +6317,64 @@ app.delete("/api/personal-leads/:id", requireAuth, async (req, res) => {
       await run(db, "UPDATE personal_leads SET is_deleted = 1 WHERE id = ?", [id]);
     }
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET history for a personal lead
+app.get("/api/personal-leads/:id/history", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const lead = await get(db, "SELECT * FROM personal_leads WHERE id = ?", [id]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy" });
+    if (req.user.role === "sale" && lead.user_id !== req.user.userId) {
+      return res.status(403).json({ error: "Không có quyền" });
+    }
+    const rows = await all(db, "SELECT * FROM personal_lead_history WHERE lead_id = ? ORDER BY seq ASC", [id]);
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST: Add a call/contact entry for personal lead
+app.post("/api/personal-leads/:id/history", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const lead = await get(db, "SELECT * FROM personal_leads WHERE id = ?", [id]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy" });
+    if (req.user.role === "sale" && lead.user_id !== req.user.userId) {
+      return res.status(403).json({ error: "Không có quyền" });
+    }
+    const { status, feedback } = req.body;
+    if (!status && !feedback) return res.status(400).json({ error: "Chưa nhập trạng thái hoặc ghi chú" });
+    const saleName = req.user.displayName;
+    const maxSeq = await get(db, "SELECT MAX(seq) as m FROM personal_lead_history WHERE lead_id = ?", [id]);
+    const nextSeq = (maxSeq?.m ?? -1) + 1;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    await run(db, "INSERT INTO personal_lead_history(lead_id, sale_name, status, feedback, seq, contact_date) VALUES(?, ?, ?, ?, ?, ?)",
+      [id, saleName, status || "", feedback || "", nextSeq, now]);
+    // Also update lead status if provided
+    if (status) {
+      await run(db, "UPDATE personal_leads SET status = ?, updated_at = ? WHERE id = ?", [status, now, id]);
+    }
+    // Return updated history
+    const rows = await all(db, "SELECT * FROM personal_lead_history WHERE lead_id = ? ORDER BY seq ASC", [id]);
+    res.json({ success: true, history: rows, newStatus: status || lead.status });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE: Remove a history entry for personal lead
+app.delete("/api/personal-leads/:id/history/:histId", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const histId = Number(req.params.histId);
+    const lead = await get(db, "SELECT * FROM personal_leads WHERE id = ?", [id]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy" });
+    const isAdmin = req.user.role === "admin" || req.user.role === "manager";
+    if (req.user.role === "sale" && lead.user_id !== req.user.userId) {
+      return res.status(403).json({ error: "Không có quyền" });
+    }
+    await run(db, "DELETE FROM personal_lead_history WHERE id = ? AND lead_id = ?", [histId, id]);
+    const rows = await all(db, "SELECT * FROM personal_lead_history WHERE lead_id = ? ORDER BY seq ASC", [id]);
+    res.json({ success: true, history: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

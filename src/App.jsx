@@ -2303,6 +2303,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [plEditStatus, setPlEditStatus] = useState({});
   const [plEditNote, setPlEditNote] = useState({});
   const [plSaleFilter, setPlSaleFilter] = useState("all");
+  const [plHistory, setPlHistory] = useState({}); // { [leadId]: [...history rows] }
+  const [plHistStatus, setPlHistStatus] = useState("");
+  const [plHistFeedback, setPlHistFeedback] = useState("");
+  const [plSavingHist, setPlSavingHist] = useState(false);
 
   const plHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("crm_token")}` });
   const fetchPlLeads = async () => {
@@ -2355,6 +2359,40 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
       if (r.ok) { fetchPlLeads(); showToast("Đã cập nhật", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi", "error"); }
+    } catch { showToast("Lỗi kết nối", "error"); }
+  };
+
+  const fetchPlHistory = async (leadId) => {
+    try {
+      const r = await fetch(`/api/personal-leads/${leadId}/history`, { headers: plHeaders() });
+      if (r.ok) { const rows = await r.json(); setPlHistory(prev => ({ ...prev, [leadId]: rows })); }
+    } catch {}
+  };
+
+  const plHandleAddHistory = async (leadId) => {
+    if (!plHistStatus && !plHistFeedback) return;
+    setPlSavingHist(true);
+    try {
+      const r = await fetch(`/api/personal-leads/${leadId}/history`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...plHeaders() },
+        body: JSON.stringify({ status: plHistStatus, feedback: plHistFeedback }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        setPlHistory(prev => ({ ...prev, [leadId]: data.history }));
+        if (data.newStatus) { setPlLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: data.newStatus } : l)); }
+        setPlHistStatus(""); setPlHistFeedback("");
+        showToast("Đã lưu liên hệ", "success");
+      } else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi", "error"); }
+    } catch { showToast("Lỗi kết nối", "error"); } finally { setPlSavingHist(false); }
+  };
+
+  const plHandleDeleteHistory = async (leadId, histId) => {
+    if (!confirm("Xóa lịch sử liên hệ này?")) return;
+    try {
+      const r = await fetch(`/api/personal-leads/${leadId}/history/${histId}`, { method: "DELETE", headers: plHeaders() });
+      if (r.ok) { const data = await r.json(); setPlHistory(prev => ({ ...prev, [leadId]: data.history })); showToast("Đã xóa", "success"); }
+      else showToast("Xóa thất bại", "error");
     } catch { showToast("Lỗi kết nối", "error"); }
   };
 
@@ -2851,7 +2889,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             const isDeleted = l.is_deleted === 1;
             return (
               <div key={l.id} style={{ background: isDeleted ? "#fef2f2" : "#fff", borderRadius: 10, border: isOpen ? "2px solid #8b5cf6" : isDeleted ? "1px solid #fca5a5" : "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", overflow: "hidden", opacity: isDeleted ? 0.7 : 1 }}>
-                <div onClick={() => setPlExpandedId(isOpen ? null : l.id)} style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                <div onClick={() => { if (!isOpen) { fetchPlHistory(l.id); setPlHistStatus(""); setPlHistFeedback(""); } setPlExpandedId(isOpen ? null : l.id); }} style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 700, fontSize: 14 }}>{i + 1}. {l.name}</span>
@@ -2865,36 +2903,88 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone}</span>
                       {l.product && <span>Nhu cầu: {l.product}</span>}
                       <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.created_at}</span>
+                      {(plHistory[l.id]?.length || 0) > 0 && <span>📞 {plHistory[l.id].length} lần gọi</span>}
                     </div>
                   </div>
                   <span style={{ color: "#9ca3af" }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
 
-                {isOpen && (
+                {isOpen && (() => {
+                  const hist = plHistory[l.id] || [];
+                  return (
                   <div style={{ borderTop: "1px solid #e5e7eb", padding: 16, background: "#f9fafb" }}>
+                    {/* Info */}
                     {l.note && <div style={{ fontSize: 13, color: "#374151", marginBottom: 12, padding: "8px 12px", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb" }}><b>Ghi chú:</b> {l.note}</div>}
 
-                    {/* Status update */}
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Trạng thái:</span>
-                      <select value={plEditStatus[l.id] ?? l.status} onChange={e => setPlEditStatus(prev => ({ ...prev, [l.id]: e.target.value }))}
-                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}>
-                        {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                      </select>
-                      {(plEditStatus[l.id] && plEditStatus[l.id] !== l.status) && (
-                        <button onClick={() => { plHandleUpdateField(l.id, "status", plEditStatus[l.id]); setPlEditStatus(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
-                          style={{ background: "#8b5cf6", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cập nhật</button>
-                      )}
-                    </div>
+                    {/* Contact form - same as normal leads */}
+                    {!isDeleted && (
+                      <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#166534", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                          <ClipboardList size={14} /> Cập nhật thông tin khách hàng
+                        </div>
+                        <div style={{ display: "flex", gap: 8, flexDirection: "column" }}>
+                          <div>
+                            <label style={{ fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 4, display: "block" }}>Trạng thái khách</label>
+                            <select value={plHistStatus} onChange={e => setPlHistStatus(e.target.value)}
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}>
+                              <option value="">-- Chọn trạng thái --</option>
+                              {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label style={{ fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 4, display: "block" }}>Ghi chú</label>
+                            <textarea value={plHistFeedback} onChange={e => setPlHistFeedback(e.target.value)}
+                              placeholder="Nội dung trao đổi với khách..."
+                              rows={2}
+                              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, resize: "vertical" }} />
+                          </div>
+                          <button onClick={() => plHandleAddHistory(l.id)} disabled={plSavingHist || (!plHistStatus && !plHistFeedback)}
+                            style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: plSavingHist || (!plHistStatus && !plHistFeedback) ? 0.5 : 1 }}>
+                            {plSavingHist ? "Đang lưu..." : <><Save size={14} /> Lưu liên hệ</>}
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
-                    {/* Note update */}
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Ghi chú:</span>
-                      <input value={plEditNote[l.id] ?? l.note ?? ""} onChange={e => setPlEditNote(prev => ({ ...prev, [l.id]: e.target.value }))}
-                        style={{ flex: 1, padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minWidth: 150 }} placeholder="Thêm ghi chú..." />
-                      {(plEditNote[l.id] !== undefined && plEditNote[l.id] !== (l.note ?? "")) && (
-                        <button onClick={() => { plHandleUpdateField(l.id, "note", plEditNote[l.id]); setPlEditNote(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
-                          style={{ background: "#8b5cf6", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Lưu</button>
+                    {/* Call history timeline */}
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#1f2937", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+                        📞 Lịch sử liên hệ ({hist.length} lần gọi)
+                      </div>
+                      {hist.length === 0 ? (
+                        <div style={{ color: "#9ca3af", fontSize: 12, fontStyle: "italic", padding: 8 }}>Chưa có lịch sử liên hệ</div>
+                      ) : (
+                        <div>
+                          {hist.map((h, hi) => {
+                            const stLabel = PL_STATUS[h.status] || h.status || "Chưa feedback";
+                            const stColor = PL_STATUS_COLORS[h.status] || "#6b7280";
+                            const isLast = hi === hist.length - 1;
+                            return (
+                              <div key={h.id} style={{ position: "relative", paddingLeft: 24, marginBottom: isLast ? 0 : 6 }}>
+                                <div style={{ position: "absolute", left: 8, top: 0, bottom: isLast ? "50%" : 0, width: 2, background: "#e5e7eb" }} />
+                                <div style={{ position: "absolute", left: 8, top: 14, width: 12, height: 2, background: "#e5e7eb" }} />
+                                <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
+                                <div style={{ background: hi % 2 ? "#f9fafb" : "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: "8px 10px" }}>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                    <span style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                      Gọi lần {hi + 1}
+                                      <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
+                                    </span>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                      <span style={{ fontSize: 10, color: "#9ca3af" }}>{h.contact_date || "-"}</span>
+                                      <button onClick={(e) => { e.stopPropagation(); plHandleDeleteHistory(l.id, h.id); }}
+                                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                                        title="Xóa"><Trash2 size={12} /></button>
+                                    </div>
+                                  </div>
+                                  <div style={{ fontSize: 11, color: "#374151", marginTop: 4 }}>
+                                    {h.feedback ? h.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
 
@@ -2903,7 +2993,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       {(!isDeleted || isAdmin) && (
                         <button onClick={() => { setPlShowForm(true); setPlEditing(l); setPlDraft({ name: l.name, phone: l.phone, product: l.product || "", status: l.status || "new", note: l.note || "" }); }}
                           style={{ background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                          <Pencil size={12} /> Sửa
+                          <Pencil size={12} /> Sửa thông tin
                         </button>
                       )}
                       <button onClick={() => plHandleDelete(l.id)}
@@ -2912,7 +3002,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       </button>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
             );
           })}
