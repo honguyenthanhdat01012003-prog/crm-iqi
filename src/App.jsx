@@ -9558,7 +9558,7 @@ function PersonalLeadsPage({ user }) {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingLead, setEditingLead] = useState(null);
-  const [draft, setDraft] = useState({ name: "", phone: "", product: "", note: "" });
+  const [draft, setDraft] = useState({ name: "", phone: "", product: "", status: "new", note: "" });
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -9595,8 +9595,9 @@ function PersonalLeadsPage({ user }) {
       const url = editingLead ? `/api/personal-leads/${editingLead.id}` : "/api/personal-leads";
       const method = editingLead ? "PUT" : "POST";
       const r = await fetch(url, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` }, body: JSON.stringify(draft) });
-      if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", note: "" }); fetchLeads(); }
-    } catch {} finally { setSaving(false); }
+      if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchLeads(); }
+      else { const err = await r.json().catch(() => ({})); alert(err.error || "Lỗi khi lưu khách hàng"); }
+    } catch (e) { alert("Lỗi kết nối: " + e.message); } finally { setSaving(false); }
   };
 
   const handleDelete = async (id) => {
@@ -9626,7 +9627,7 @@ function PersonalLeadsPage({ user }) {
           <UserCog size={22} color="#e88a2e" /> Khách hàng cá nhân
           {isAdmin && <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 400 }}>— Tổng hợp từ các Sale</span>}
         </h2>
-        <button onClick={() => { setShowForm(true); setEditingLead(null); setDraft({ name: "", phone: "", product: "", note: "" }); }} style={btnPrimary}>
+        <button onClick={() => { setShowForm(true); setEditingLead(null); setDraft({ name: "", phone: "", product: "", status: "new", note: "" }); }} style={btnPrimary}>
           <Plus size={16} style={{ verticalAlign: "middle", marginRight: 4 }} /> Thêm khách
         </button>
       </div>
@@ -9713,7 +9714,7 @@ function PersonalLeadsPage({ user }) {
 
                     <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
                       {(!isDeleted || isAdmin) && (
-                        <button onClick={() => { setShowForm(true); setEditingLead(l); setDraft({ name: l.name, phone: l.phone, product: l.product || "", note: l.note || "" }); }}
+                        <button onClick={() => { setShowForm(true); setEditingLead(l); setDraft({ name: l.name, phone: l.phone, product: l.product || "", status: l.status || "new", note: l.note || "" }); }}
                           style={{ background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                           <Pencil size={12} /> Sửa
                         </button>
@@ -9745,6 +9746,11 @@ function PersonalLeadsPage({ user }) {
             <input value={draft.phone} onChange={e => setDraft(d => ({ ...d, phone: e.target.value }))} placeholder="VD: 0901234567" style={inputStyle} />
             <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Nhu cầu</label>
             <input value={draft.product} onChange={e => setDraft(d => ({ ...d, product: e.target.value }))} placeholder="VD: 2PN, căn góc, tầng cao..." style={inputStyle} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Trạng thái</label>
+            <select value={draft.status} onChange={e => setDraft(d => ({ ...d, status: e.target.value }))}
+              style={{ ...inputStyle, cursor: "pointer" }}>
+              {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
             <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Ghi chú</label>
             <textarea value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} placeholder="Ghi chú thêm..." rows={3}
               style={{ ...inputStyle, resize: "vertical" }} />

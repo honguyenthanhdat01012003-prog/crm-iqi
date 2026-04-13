@@ -6253,12 +6253,12 @@ app.get("/api/personal-leads", requireAuth, async (req, res) => {
 // POST: Any authenticated user can add personal leads
 app.post("/api/personal-leads", requireAuth, async (req, res) => {
   try {
-    const { name, phone, product, note } = req.body;
+    const { name, phone, product, status, note } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: "Chưa nhập tên khách" });
     if (!phone || !phone.trim()) return res.status(400).json({ error: "Chưa nhập số điện thoại" });
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-    await run(db, `INSERT INTO personal_leads (user_id, name, phone, product, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [req.user.userId, name.trim(), phone.trim(), (product || "").trim(), (note || "").trim(), now, now]);
+    await run(db, `INSERT INTO personal_leads (user_id, name, phone, product, status, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.userId, name.trim(), phone.trim(), (product || "").trim(), status || "new", (note || "").trim(), now, now]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
