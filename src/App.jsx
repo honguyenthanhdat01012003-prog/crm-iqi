@@ -1314,7 +1314,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
-        {page === "personal_leads" && <PersonalLeadsPage user={user} />}
+        {page === "personal_leads" && <PersonalLeadsPage user={user} onLogout={onLogout} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "fb_pages_mgmt" && isAdminOnly && <FbPagesPage />}
@@ -9550,7 +9550,7 @@ const PL_STATUS_COLORS = {
   unreachable: "#9ca3af", wrong_number: "#dc2626",
 };
 
-function PersonalLeadsPage({ user }) {
+function PersonalLeadsPage({ user, onLogout }) {
   const isMobile = useIsMobile();
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
@@ -9568,11 +9568,12 @@ function PersonalLeadsPage({ user }) {
   const [editNote, setEditNote] = useState({});
 
   const plHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("token")}` });
+  const handle401 = (r) => { if (r.status === 401) { showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại", "error"); if (onLogout) setTimeout(onLogout, 1500); return true; } return false; };
   const fetchLeads = async () => {
     try {
       const r = await fetch("/api/personal-leads", { headers: plHeaders() });
+      if (handle401(r)) return;
       if (r.ok) setLeads(await r.json());
-      else if (r.status === 401) showToast("Phiên đăng nhập hết hạn, vui lòng đăng nhập lại", "error");
     } catch {} finally { setLoading(false); }
   };
   useEffect(() => { fetchLeads(); }, []);
@@ -9597,6 +9598,7 @@ function PersonalLeadsPage({ user }) {
       const url = editingLead ? `/api/personal-leads/${editingLead.id}` : "/api/personal-leads";
       const method = editingLead ? "PUT" : "POST";
       const r = await fetch(url, { method, headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify(draft) });
+      if (handle401(r)) return;
       if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchLeads(); showToast(editingLead ? "Đã cập nhật khách hàng" : "Đã thêm khách hàng mới", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi lưu khách hàng", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); } finally { setSaving(false); }
@@ -9606,6 +9608,7 @@ function PersonalLeadsPage({ user }) {
     if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
+      if (handle401(r)) return;
       if (r.ok) { fetchLeads(); showToast("Đã xóa khách hàng", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi xóa", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
@@ -9614,6 +9617,7 @@ function PersonalLeadsPage({ user }) {
   const handleUpdateField = async (id, field, value) => {
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
+      if (handle401(r)) return;
       if (r.ok) { fetchLeads(); showToast("Đã cập nhật", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi cập nhật", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
