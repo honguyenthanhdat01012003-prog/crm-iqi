@@ -492,9 +492,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const isAdminOnly = user.role === "admin";
   const isManager = user.role === "manager";
   const isMobile = useIsMobile();
-  const adminPages = ["dashboard", "leads", "personal_leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
-  const managerPages = ["dashboard", "leads", "personal_leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "profile"];
-  const salePages = ["leads", "personal_leads", "profile"];
+  const adminPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
+  const managerPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "profile"];
+  const salePages = ["leads", "profile"];
   const [page, setPage] = useState(() => {
     try {
       const saved = localStorage.getItem("crm_page");
@@ -916,7 +916,6 @@ function CRMApp({ user, updateUser, onLogout }) {
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
     { key: "leads", label: "Khách hàng", icon: Users, adminOnly: false },
-    { key: "personal_leads", label: "KH cá nhân", icon: UserCog, adminOnly: false },
     { key: "projects", label: "Dự án", icon: Building2, adminOnly: true },
     { key: "campaigns", label: "Chiến dịch", icon: Megaphone, adminOnly: true },
     { key: "sales", label: "Sale", icon: Trophy, adminOnly: true },
@@ -1314,7 +1313,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
-        {page === "personal_leads" && <PersonalLeadsPage user={user} />}
+
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "fb_pages_mgmt" && isAdminOnly && <FbPagesPage />}
@@ -2291,6 +2290,74 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
 
+  // === Personal Leads state ===
+  const [plLeads, setPlLeads] = useState([]);
+  const [plLoading, setPlLoading] = useState(false);
+  const [plShowForm, setPlShowForm] = useState(false);
+  const [plEditing, setPlEditing] = useState(null);
+  const [plDraft, setPlDraft] = useState({ name: "", phone: "", product: "", status: "new", note: "" });
+  const [plSaving, setPlSaving] = useState(false);
+  const [plSearch, setPlSearch] = useState("");
+  const [plStatusFilter, setPlStatusFilter] = useState("all");
+  const [plExpandedId, setPlExpandedId] = useState(null);
+  const [plEditStatus, setPlEditStatus] = useState({});
+  const [plEditNote, setPlEditNote] = useState({});
+  const [plSaleFilter, setPlSaleFilter] = useState("all");
+
+  const plHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("crm_token")}` });
+  const fetchPlLeads = async () => {
+    setPlLoading(true);
+    try {
+      const r = await fetch("/api/personal-leads", { headers: plHeaders() });
+      if (r.ok) setPlLeads(await r.json());
+    } catch {} finally { setPlLoading(false); }
+  };
+  useEffect(() => { if (selectedProject === "personal") fetchPlLeads(); }, [selectedProject]);
+  // Also fetch PL count for the card on mount
+  useEffect(() => { fetch("/api/personal-leads", { headers: plHeaders() }).then(r => r.ok ? r.json() : []).then(d => setPlLeads(d)).catch(() => {}); }, []);
+
+  const plFiltered = useMemo(() => {
+    let list = plLeads;
+    if (plSearch.trim()) {
+      const q = plSearch.toLowerCase();
+      list = list.filter(l => (l.name||"").toLowerCase().includes(q) || (l.phone||"").includes(q) || (l.product||"").toLowerCase().includes(q) || (l.sale_name||"").toLowerCase().includes(q));
+    }
+    if (plStatusFilter !== "all") list = list.filter(l => l.status === plStatusFilter);
+    if (isAdmin && plSaleFilter !== "all") list = list.filter(l => l.sale_name === plSaleFilter);
+    return list;
+  }, [plLeads, plSearch, plStatusFilter, plSaleFilter, isAdmin]);
+
+  const plSaleNames = useMemo(() => [...new Set(plLeads.map(l => l.sale_name).filter(Boolean))].sort(), [plLeads]);
+
+  const plHandleSave = async () => {
+    if (!plDraft.name.trim() || !plDraft.phone.trim()) return;
+    setPlSaving(true);
+    try {
+      const url = plEditing ? `/api/personal-leads/${plEditing.id}` : "/api/personal-leads";
+      const method = plEditing ? "PUT" : "POST";
+      const r = await fetch(url, { method, headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify(plDraft) });
+      if (r.ok) { setPlShowForm(false); setPlEditing(null); setPlDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchPlLeads(); showToast(plEditing ? "Đã cập nhật" : "Đã thêm khách hàng mới", "success"); }
+      else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi lưu", "error"); }
+    } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); } finally { setPlSaving(false); }
+  };
+
+  const plHandleDelete = async (id) => {
+    if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
+    try {
+      const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
+      if (r.ok) { fetchPlLeads(); showToast("Đã xóa", "success"); }
+      else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi xóa", "error"); }
+    } catch (e) { showToast("Lỗi kết nối", "error"); }
+  };
+
+  const plHandleUpdateField = async (id, field, value) => {
+    try {
+      const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
+      if (r.ok) { fetchPlLeads(); showToast("Đã cập nhật", "success"); }
+      else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi", "error"); }
+    } catch { showToast("Lỗi kết nối", "error"); }
+  };
+
   useEffect(() => {
     if (isAdmin) {
       apiFetch(`${API}/users`).then(r => r.json()).then(data => setAllUsers(Array.isArray(data) ? data : [])).catch(() => {});
@@ -2714,6 +2781,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 </div>
               );
             })}
+            {/* KH cá nhân card */}
+            <div onClick={() => setSelectedProject("personal")}
+              style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", borderRadius: 12, padding: 20, cursor: "pointer", color: "#fff", boxShadow: "0 2px 8px rgba(109,40,217,.25)", transition: "transform .15s, box-shadow .15s" }}
+              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 16px rgba(109,40,217,.35)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 2px 8px rgba(109,40,217,.25)"; }}>
+              <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+                <UserCog size={16} /> KH cá nhân
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 800 }}>{plLeads.length}</div>
+              <div style={{ fontSize: 12, opacity: 0.9 }}>khách của tôi</div>
+            </div>
           </div>
           {availableProjects.length === 0 && (
             <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
@@ -2722,10 +2800,164 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             </div>
           )}
         </div>
+      ) : selectedProject === "personal" ? (
+      <>
+      {/* === Personal Leads View === */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setSelectedProject(null)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4, display: "flex", alignItems: "center" }}>
+            <ArrowLeft size={20} color="#6b7280" />
+          </button>
+          <h2 style={{ margin: 0, fontSize: isMobile ? 16 : 20, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+            <UserCog size={20} color="#8b5cf6" /> KH cá nhân
+          </h2>
+        </div>
+        <button onClick={() => { setPlShowForm(true); setPlEditing(null); setPlDraft({ name: "", phone: "", product: "", status: "new", note: "" }); }}
+          style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontWeight: 700, cursor: "pointer", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          <Plus size={16} /> Thêm khách
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <input placeholder="Tìm tên, SĐT, nhu cầu..." value={plSearch} onChange={e => setPlSearch(e.target.value)}
+          style={{ flex: 1, padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", minWidth: 200 }} />
+        <select value={plStatusFilter} onChange={e => setPlStatusFilter(e.target.value)}
+          style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 13 }}>
+          <option value="all">Tất cả trạng thái</option>
+          {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        {isAdmin && plSaleNames.length > 0 && (
+          <select value={plSaleFilter} onChange={e => setPlSaleFilter(e.target.value)}
+            style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 13 }}>
+            <option value="all">Tất cả sale</option>
+            {plSaleNames.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>Hiển thị {plFiltered.length} / {plLeads.length} khách</div>
+
+      {plLoading ? <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Đang tải...</div> :
+       plFiltered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+          <UserCog size={48} style={{ opacity: 0.3, marginBottom: 8 }} /><br />
+          {plLeads.length === 0 ? "Chưa có khách hàng cá nhân. Bấm \"Thêm khách\" để bắt đầu." : "Không tìm thấy khách hàng phù hợp."}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {plFiltered.map((l, i) => {
+            const isOpen = plExpandedId === l.id;
+            const isDeleted = l.is_deleted === 1;
+            return (
+              <div key={l.id} style={{ background: isDeleted ? "#fef2f2" : "#fff", borderRadius: 10, border: isOpen ? "2px solid #8b5cf6" : isDeleted ? "1px solid #fca5a5" : "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", overflow: "hidden", opacity: isDeleted ? 0.7 : 1 }}>
+                <div onClick={() => setPlExpandedId(isOpen ? null : l.id)} style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{i + 1}. {l.name}</span>
+                      <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: (PL_STATUS_COLORS[l.status] || "#6b7280") + "18", color: PL_STATUS_COLORS[l.status] || "#6b7280" }}>
+                        {PL_STATUS[l.status] || l.status}
+                      </span>
+                      {isDeleted && <span style={{ padding: "2px 6px", borderRadius: 8, fontSize: 10, background: "#fee2e2", color: "#dc2626", fontWeight: 600 }}>Đã xóa</span>}
+                      {isAdmin && l.sale_name && <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 8 }}>Sale: {l.sale_name}</span>}
+                    </div>
+                    <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280", flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {l.phone}</span>
+                      {l.product && <span>Nhu cầu: {l.product}</span>}
+                      <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {l.created_at}</span>
+                    </div>
+                  </div>
+                  <span style={{ color: "#9ca3af" }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+                </div>
+
+                {isOpen && (
+                  <div style={{ borderTop: "1px solid #e5e7eb", padding: 16, background: "#f9fafb" }}>
+                    {l.note && <div style={{ fontSize: 13, color: "#374151", marginBottom: 12, padding: "8px 12px", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb" }}><b>Ghi chú:</b> {l.note}</div>}
+
+                    {/* Status update */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Trạng thái:</span>
+                      <select value={plEditStatus[l.id] ?? l.status} onChange={e => setPlEditStatus(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}>
+                        {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                      {(plEditStatus[l.id] && plEditStatus[l.id] !== l.status) && (
+                        <button onClick={() => { plHandleUpdateField(l.id, "status", plEditStatus[l.id]); setPlEditStatus(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                          style={{ background: "#8b5cf6", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Cập nhật</button>
+                      )}
+                    </div>
+
+                    {/* Note update */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Ghi chú:</span>
+                      <input value={plEditNote[l.id] ?? l.note ?? ""} onChange={e => setPlEditNote(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        style={{ flex: 1, padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minWidth: 150 }} placeholder="Thêm ghi chú..." />
+                      {(plEditNote[l.id] !== undefined && plEditNote[l.id] !== (l.note ?? "")) && (
+                        <button onClick={() => { plHandleUpdateField(l.id, "note", plEditNote[l.id]); setPlEditNote(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                          style={{ background: "#8b5cf6", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Lưu</button>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      {(!isDeleted || isAdmin) && (
+                        <button onClick={() => { setPlShowForm(true); setPlEditing(l); setPlDraft({ name: l.name, phone: l.phone, product: l.product || "", status: l.status || "new", note: l.note || "" }); }}
+                          style={{ background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                          <Pencil size={12} /> Sửa
+                        </button>
+                      )}
+                      <button onClick={() => plHandleDelete(l.id)}
+                        style={{ background: "#fff", border: "1px solid #fca5a5", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: "pointer", color: "#dc2626", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Trash2 size={12} /> {isAdmin ? "Xóa vĩnh viễn" : "Xóa"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add/Edit Modal */}
+      {plShowForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", backdropFilter: "blur(4px)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={() => { setPlShowForm(false); setPlEditing(null); }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 460, maxWidth: "100%", padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <UserCog size={18} color="#8b5cf6" /> {plEditing ? "Sửa khách hàng" : "Thêm khách hàng mới"}
+            </h3>
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Tên khách *</label>
+            <input value={plDraft.name} onChange={e => setPlDraft(d => ({ ...d, name: e.target.value }))} placeholder="VD: Nguyễn Văn A"
+              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12 }} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Số điện thoại *</label>
+            <input value={plDraft.phone} onChange={e => setPlDraft(d => ({ ...d, phone: e.target.value }))} placeholder="VD: 0901234567"
+              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12 }} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Nhu cầu</label>
+            <input value={plDraft.product} onChange={e => setPlDraft(d => ({ ...d, product: e.target.value }))} placeholder="VD: 2PN, căn góc, tầng cao..."
+              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12 }} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Trạng thái</label>
+            <select value={plDraft.status} onChange={e => setPlDraft(d => ({ ...d, status: e.target.value }))}
+              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12, cursor: "pointer" }}>
+              {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Ghi chú</label>
+            <textarea value={plDraft.note} onChange={e => setPlDraft(d => ({ ...d, note: e.target.value }))} placeholder="Ghi chú thêm..." rows={3}
+              style={{ width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12, resize: "vertical" }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={plHandleSave} disabled={plSaving || !plDraft.name.trim() || !plDraft.phone.trim()}
+                style={{ flex: 1, background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontWeight: 700, cursor: "pointer", fontSize: 14, opacity: plSaving || !plDraft.name.trim() || !plDraft.phone.trim() ? 0.5 : 1 }}>
+                {plSaving ? "Đang lưu..." : plEditing ? "Cập nhật" : "Thêm khách"}
+              </button>
+              <button onClick={() => { setPlShowForm(false); setPlEditing(null); }}
+                style={{ flex: 1, background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 10, padding: "10px 20px", fontSize: 14, cursor: "pointer" }}>Hủy</button>
+            </div>
+          </div>
+        </div>
+      )}
+      </>
       ) : (
       <>
-
-      {/* Admin chia lead */}
       {isAdmin && (
         <div style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
