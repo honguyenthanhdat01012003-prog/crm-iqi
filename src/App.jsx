@@ -492,9 +492,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const isAdminOnly = user.role === "admin";
   const isManager = user.role === "manager";
   const isMobile = useIsMobile();
-  const adminPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
-  const managerPages = ["dashboard", "leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "profile"];
-  const salePages = ["leads", "profile"];
+  const adminPages = ["dashboard", "leads", "personal_leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "sheet_config", "profile"];
+  const managerPages = ["dashboard", "leads", "personal_leads", "projects", "campaigns", "sales", "users", "posts", "calendar", "profile"];
+  const salePages = ["leads", "personal_leads", "profile"];
   const [page, setPage] = useState(() => {
     try {
       const saved = localStorage.getItem("crm_page");
@@ -916,6 +916,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
     { key: "leads", label: "Khách hàng", icon: Users, adminOnly: false },
+    { key: "personal_leads", label: "KH cá nhân", icon: UserCog, adminOnly: false },
     { key: "projects", label: "Dự án", icon: Building2, adminOnly: true },
     { key: "campaigns", label: "Chiến dịch", icon: Megaphone, adminOnly: true },
     { key: "sales", label: "Sale", icon: Trophy, adminOnly: true },
@@ -1313,6 +1314,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
+        {page === "personal_leads" && <PersonalLeadsPage user={user} />}
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
         {page === "fb_pages_mgmt" && isAdminOnly && <FbPagesPage />}
@@ -9533,6 +9535,231 @@ function AvatarCropModal({ imageSrc, onConfirm, onClose }) {
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ===== Personal Leads Page =====
+const PL_STATUS = {
+  new: "Mới", interested: "Quan tâm", appointment: "Hẹn xem", booked: "Booking/Cọc",
+  closed: "Chốt", not_interested: "Không quan tâm", callback: "Liên lạc lại sau",
+  unreachable: "Chưa liên lạc được", wrong_number: "Sai số",
+};
+const PL_STATUS_COLORS = {
+  new: "#6b7280", interested: "#f59e0b", appointment: "#8b5cf6", booked: "#3b82f6",
+  closed: "#10b981", not_interested: "#ef4444", callback: "#06b6d4",
+  unreachable: "#9ca3af", wrong_number: "#dc2626",
+};
+
+function PersonalLeadsPage({ user }) {
+  const isMobile = useIsMobile();
+  const isAdmin = user.role === "admin" || user.role === "manager";
+  const isSale = user.role === "sale";
+  const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingLead, setEditingLead] = useState(null);
+  const [draft, setDraft] = useState({ name: "", phone: "", product: "", note: "" });
+  const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [saleFilterPL, setSaleFilterPL] = useState("all");
+  const [expandedId, setExpandedId] = useState(null);
+  const [editStatus, setEditStatus] = useState({});
+  const [editNote, setEditNote] = useState({});
+
+  const fetchLeads = async () => {
+    try {
+      const r = await fetch("/api/personal-leads", { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
+      if (r.ok) setLeads(await r.json());
+    } catch {} finally { setLoading(false); }
+  };
+  useEffect(() => { fetchLeads(); }, []);
+
+  const filtered = useMemo(() => {
+    let list = leads;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter(l => (l.name||"").toLowerCase().includes(q) || (l.phone||"").includes(q) || (l.product||"").toLowerCase().includes(q) || (l.sale_name||"").toLowerCase().includes(q));
+    }
+    if (statusFilter !== "all") list = list.filter(l => l.status === statusFilter);
+    if (isAdmin && saleFilterPL !== "all") list = list.filter(l => l.sale_name === saleFilterPL);
+    return list;
+  }, [leads, search, statusFilter, saleFilterPL, isAdmin]);
+
+  const saleNames = useMemo(() => [...new Set(leads.map(l => l.sale_name).filter(Boolean))].sort(), [leads]);
+
+  const handleSave = async () => {
+    if (!draft.name.trim() || !draft.phone.trim()) return;
+    setSaving(true);
+    try {
+      const url = editingLead ? `/api/personal-leads/${editingLead.id}` : "/api/personal-leads";
+      const method = editingLead ? "PUT" : "POST";
+      const r = await fetch(url, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` }, body: JSON.stringify(draft) });
+      if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", note: "" }); fetchLeads(); }
+    } catch {} finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
+    try {
+      await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
+      fetchLeads();
+    } catch {}
+  };
+
+  const handleUpdateField = async (id, field, value) => {
+    try {
+      await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("token")}` }, body: JSON.stringify({ [field]: value }) });
+      fetchLeads();
+    } catch {}
+  };
+
+  const inputStyle = { width: "100%", padding: "10px 14px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 14, outline: "none", marginBottom: 12 };
+  const btnPrimary = { background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", border: "none", borderRadius: 10, padding: "10px 20px", fontWeight: 700, cursor: "pointer", fontSize: 14 };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Đang tải...</div>;
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 22, display: "flex", alignItems: "center", gap: 8 }}>
+          <UserCog size={22} color="#e88a2e" /> Khách hàng cá nhân
+          {isAdmin && <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 400 }}>— Tổng hợp từ các Sale</span>}
+        </h2>
+        <button onClick={() => { setShowForm(true); setEditingLead(null); setDraft({ name: "", phone: "", product: "", note: "" }); }} style={btnPrimary}>
+          <Plus size={16} style={{ verticalAlign: "middle", marginRight: 4 }} /> Thêm khách
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <input placeholder="Tìm tên, SĐT, nhu cầu..." value={search} onChange={e => setSearch(e.target.value)}
+          style={{ ...inputStyle, flex: 1, marginBottom: 0, minWidth: 200 }} />
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+          style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 13 }}>
+          <option value="all">Tất cả trạng thái</option>
+          {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        {isAdmin && saleNames.length > 0 && (
+          <select value={saleFilterPL} onChange={e => setSaleFilterPL(e.target.value)}
+            style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 13 }}>
+            <option value="all">Tất cả sale</option>
+            {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
+      </div>
+
+      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>Hiển thị {filtered.length} / {leads.length} khách</div>
+
+      {/* Lead list */}
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+          <UserCog size={48} style={{ opacity: 0.3, marginBottom: 8 }} /><br />
+          {leads.length === 0 ? "Chưa có khách hàng cá nhân. Bấm \"Thêm khách\" để bắt đầu." : "Không tìm thấy khách hàng phù hợp."}
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {filtered.map((l, i) => {
+            const isOpen = expandedId === l.id;
+            const isDeleted = l.is_deleted === 1;
+            return (
+              <div key={l.id} style={{ background: isDeleted ? "#fef2f2" : "#fff", borderRadius: 12, border: isOpen ? "2px solid #e88a2e" : isDeleted ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", opacity: isDeleted ? 0.7 : 1 }}>
+                <div onClick={() => setExpandedId(isOpen ? null : l.id)} style={{ padding: "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{i + 1}. {l.name}</span>
+                      <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: (PL_STATUS_COLORS[l.status] || "#6b7280") + "18", color: PL_STATUS_COLORS[l.status] || "#6b7280" }}>
+                        {PL_STATUS[l.status] || l.status}
+                      </span>
+                      {isDeleted && <span style={{ padding: "2px 6px", borderRadius: 8, fontSize: 10, background: "#fee2e2", color: "#dc2626", fontWeight: 600 }}>Đã xóa</span>}
+                      {isAdmin && <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", padding: "2px 8px", borderRadius: 8 }}>Sale: {l.sale_name}</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      <span><Phone size={11} style={{ verticalAlign: "middle" }} /> {l.phone}</span>
+                      {l.product && <span>Nhu cầu: {l.product}</span>}
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{l.created_at}</span>
+                    </div>
+                  </div>
+                  <span>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
+                </div>
+
+                {isOpen && (
+                  <div style={{ borderTop: "1px solid #e5e7eb", padding: 16, background: "#f9fafb" }}>
+                    {l.note && <div style={{ fontSize: 13, color: "#374151", marginBottom: 12, padding: "8px 12px", background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb" }}><b>Ghi chú:</b> {l.note}</div>}
+
+                    {/* Inline status update */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>Trạng thái:</span>
+                      <select value={editStatus[l.id] ?? l.status} onChange={e => setEditStatus(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        style={{ padding: "4px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12 }}>
+                        {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      </select>
+                      {(editStatus[l.id] && editStatus[l.id] !== l.status) && (
+                        <button onClick={() => { handleUpdateField(l.id, "status", editStatus[l.id]); setEditStatus(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                          style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>Lưu</button>
+                      )}
+                    </div>
+
+                    {/* Inline note update */}
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>Ghi chú:</span>
+                      <input value={editNote[l.id] ?? l.note ?? ""} onChange={e => setEditNote(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        style={{ flex: 1, padding: "4px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12, minWidth: 150 }} placeholder="Thêm ghi chú..." />
+                      {(editNote[l.id] !== undefined && editNote[l.id] !== (l.note ?? "")) && (
+                        <button onClick={() => { handleUpdateField(l.id, "note", editNote[l.id]); setEditNote(prev => { const n = {...prev}; delete n[l.id]; return n; }); }}
+                          style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>Lưu</button>
+                      )}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                      {(!isDeleted || isAdmin) && (
+                        <button onClick={() => { setShowForm(true); setEditingLead(l); setDraft({ name: l.name, phone: l.phone, product: l.product || "", note: l.note || "" }); }}
+                          style={{ background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                          <Pencil size={12} /> Sửa
+                        </button>
+                      )}
+                      <button onClick={() => handleDelete(l.id)}
+                        style={{ background: "#fff", border: "1px solid #fca5a5", borderRadius: 8, padding: "6px 14px", fontSize: 12, cursor: "pointer", color: "#dc2626", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Trash2 size={12} /> {isAdmin ? "Xóa vĩnh viễn" : "Xóa"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Add/Edit Modal */}
+      {showForm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", backdropFilter: "blur(4px)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+          onClick={() => { setShowForm(false); setEditingLead(null); }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, width: 460, maxWidth: "100%", padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.2)" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
+              <UserCog size={18} color="#e88a2e" /> {editingLead ? "Sửa khách hàng" : "Thêm khách hàng mới"}
+            </h3>
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Tên khách *</label>
+            <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="VD: Nguyễn Văn A" style={inputStyle} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Số điện thoại *</label>
+            <input value={draft.phone} onChange={e => setDraft(d => ({ ...d, phone: e.target.value }))} placeholder="VD: 0901234567" style={inputStyle} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Nhu cầu</label>
+            <input value={draft.product} onChange={e => setDraft(d => ({ ...d, product: e.target.value }))} placeholder="VD: 2PN, căn góc, tầng cao..." style={inputStyle} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>Ghi chú</label>
+            <textarea value={draft.note} onChange={e => setDraft(d => ({ ...d, note: e.target.value }))} placeholder="Ghi chú thêm..." rows={3}
+              style={{ ...inputStyle, resize: "vertical" }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={handleSave} disabled={saving || !draft.name.trim() || !draft.phone.trim()}
+                style={{ ...btnPrimary, flex: 1, opacity: saving || !draft.name.trim() || !draft.phone.trim() ? 0.5 : 1 }}>
+                {saving ? "Đang lưu..." : editingLead ? "Cập nhật" : "Thêm khách"}
+              </button>
+              <button onClick={() => { setShowForm(false); setEditingLead(null); }}
+                style={{ flex: 1, background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 10, padding: "10px 20px", fontSize: 14, cursor: "pointer" }}>Hủy</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

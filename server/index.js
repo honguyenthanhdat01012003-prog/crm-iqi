@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 18; // Bump this when adding new DDL/migrations
+const DB_VERSION = 19; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -270,6 +270,20 @@ async function initDb() {
       created_at TEXT DEFAULT (datetime('now'))
     )`,
     `CREATE INDEX IF NOT EXISTS idx_tlm_tg_lead ON telegram_lead_msgs(telegram_id, lead_id)`,
+    // v19: personal_leads table
+    `CREATE TABLE IF NOT EXISTS personal_leads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      phone TEXT NOT NULL DEFAULT '',
+      product TEXT DEFAULT '',
+      status TEXT DEFAULT 'new',
+      note TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      is_deleted INTEGER DEFAULT 0
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_pl_user ON personal_leads(user_id, is_deleted)`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -6212,6 +6226,84 @@ app.post("/api/announcements/reorder", requireAuth, requireAdminOnly, async (req
       await run(db, "UPDATE announcements SET sort_order = ? WHERE id = ?", [i, ids[i]]);
     }
     if (io) io.emit("announcement-changed");
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ===== Personal Leads (Sale's individual customers) ===== */
+// GET: Sale sees own leads; Admin/Manager sees all
+app.get("/api/personal-leads", requireAuth, async (req, res) => {
+  try {
+    const isSale = req.user.role === "sale";
+    let rows;
+    if (isSale) {
+      rows = await all(db, `SELECT pl.*, u.display_name as sale_name FROM personal_leads pl
+        JOIN users u ON u.id = pl.user_id
+        WHERE pl.user_id = ? AND pl.is_deleted = 0 ORDER BY pl.created_at DESC`, [req.user.userId]);
+    } else {
+      // Admin/Manager: show all (including soft-deleted)
+      rows = await all(db, `SELECT pl.*, u.display_name as sale_name FROM personal_leads pl
+        JOIN users u ON u.id = pl.user_id
+        ORDER BY pl.is_deleted ASC, pl.created_at DESC`);
+    }
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST: Any authenticated user can add personal leads
+app.post("/api/personal-leads", requireAuth, async (req, res) => {
+  try {
+    const { name, phone, product, note } = req.body;
+    if (!name || !name.trim()) return res.status(400).json({ error: "Chưa nhập tên khách" });
+    if (!phone || !phone.trim()) return res.status(400).json({ error: "Chưa nhập số điện thoại" });
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    await run(db, `INSERT INTO personal_leads (user_id, name, phone, product, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.user.userId, name.trim(), phone.trim(), (product || "").trim(), (note || "").trim(), now, now]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT: Sale can update own leads; Admin can update any
+app.put("/api/personal-leads/:id", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const lead = await get(db, "SELECT * FROM personal_leads WHERE id = ?", [id]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy" });
+    if (req.user.role === "sale" && lead.user_id !== req.user.userId) {
+      return res.status(403).json({ error: "Không có quyền chỉnh sửa" });
+    }
+    const { name, phone, product, status, note } = req.body;
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const sets = ["updated_at = ?"];
+    const params = [now];
+    if (name !== undefined) { sets.push("name = ?"); params.push(name.trim()); }
+    if (phone !== undefined) { sets.push("phone = ?"); params.push(phone.trim()); }
+    if (product !== undefined) { sets.push("product = ?"); params.push(product.trim()); }
+    if (status !== undefined) { sets.push("status = ?"); params.push(status); }
+    if (note !== undefined) { sets.push("note = ?"); params.push(note.trim()); }
+    params.push(id);
+    await run(db, `UPDATE personal_leads SET ${sets.join(", ")} WHERE id = ?`, params);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE: Sale soft-deletes own leads; Admin hard-deletes
+app.delete("/api/personal-leads/:id", requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const lead = await get(db, "SELECT * FROM personal_leads WHERE id = ?", [id]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy" });
+    const isAdmin = req.user.role === "admin" || req.user.role === "manager";
+    if (req.user.role === "sale" && lead.user_id !== req.user.userId) {
+      return res.status(403).json({ error: "Không có quyền xóa" });
+    }
+    if (isAdmin) {
+      // Admin/Manager: hard delete
+      await run(db, "DELETE FROM personal_leads WHERE id = ?", [id]);
+    } else {
+      // Sale: soft delete (admin still sees it)
+      await run(db, "UPDATE personal_leads SET is_deleted = 1 WHERE id = ?", [id]);
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
