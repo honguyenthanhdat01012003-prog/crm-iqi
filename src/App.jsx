@@ -517,6 +517,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [projects, setProjects] = useState([]);
   const [schedules, setSchedules] = useState([]);
   const [autoRotateProjects, setAutoRotateProjects] = useState({});
+  const [sprintRotateProjects, setSprintRotateProjects] = useState({});
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
@@ -606,6 +607,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (Array.isArray(data.projects)) setProjects(data.projects);
     if (Array.isArray(data.schedules)) setSchedules(data.schedules);
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
+    if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
   }, [seenLeadKeys]);
 
@@ -1295,6 +1297,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setSaleFilter={setSaleFilter}
             autoRotateProjects={autoRotateProjects}
             setAutoRotateProjects={setAutoRotateProjects}
+            sprintRotateProjects={sprintRotateProjects}
+            setSprintRotateProjects={setSprintRotateProjects}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -2191,7 +2195,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateProjects, setAutoRotateProjects }) {
+function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateProjects, setAutoRotateProjects, sprintRotateProjects, setSprintRotateProjects }) {
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
@@ -4917,7 +4921,42 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </div>
             );
           })()}
-          {isAdmin && selectedProject && autoRotateProjects[selectedProject] && (
+          {/* Sprint rotate toggle per project */}
+          {isAdmin && selectedProject && (() => {
+            const isSprintOn = sprintRotateProjects[selectedProject] || false;
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: isSprintOn ? "#ea580c" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>⚡ Nước rút:</span>
+                <div
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const r = await apiFetch(`${API}/sprint-rotate/toggle`, { method: "POST", body: JSON.stringify({ projectId: Number(selectedProject) }) });
+                      const data = await r.json();
+                      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+                      setSprintRotateProjects(prev => ({ ...prev, [selectedProject]: data.enabled }));
+                      showToast(data.enabled ? "Đã BẬT xáo nước rút (12h, tính từ lúc chia lead)" : "Đã TẮT xáo nước rút cho dự án này", data.enabled ? "success" : "info");
+                    } catch (err) { showToast("Lỗi: " + err.message, "error"); }
+                  }}
+                  style={{
+                    width: 40, height: 22, borderRadius: 11, cursor: "pointer",
+                    background: isSprintOn ? "#ea580c" : "#d1d5db",
+                    position: "relative", transition: "background 0.25s",
+                    boxShadow: isSprintOn ? "0 0 6px rgba(234,88,12,0.3)" : "none",
+                    flexShrink: 0,
+                  }}
+                >
+                  <div style={{
+                    width: 18, height: 18, borderRadius: 9, background: "#fff",
+                    position: "absolute", top: 2, left: isSprintOn ? 20 : 2,
+                    transition: "left 0.25s",
+                    boxShadow: "0 1px 3px rgba(0,0,0,.2)",
+                  }} />
+                </div>
+              </div>
+            );
+          })()}
+          {isAdmin && selectedProject && (autoRotateProjects[selectedProject] || sprintRotateProjects[selectedProject]) && (
             <button onClick={async () => {
               setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null);
               try {

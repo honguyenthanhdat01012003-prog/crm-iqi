@@ -2694,7 +2694,14 @@ app.get("/api/data", requireAuth, async (req, res) => {
       const pid = r.key.replace('auto_rotate_project_', '');
       autoRotateProjects[pid] = r.value === "1";
     }
-    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects });
+    // Include per-project sprint-rotate status
+    const sprintRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'sprint_rotate_project_%'");
+    const sprintRotateProjects = {};
+    for (const r of sprintRows) {
+      const pid = r.key.replace('sprint_rotate_project_', '');
+      sprintRotateProjects[pid] = r.value === "1";
+    }
+    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -3579,6 +3586,22 @@ app.get("/api/auto-rotate", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// Toggle sprint-rotate (nước rút) on/off for a specific project
+app.post("/api/sprint-rotate/toggle", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId } = req.body;
+    if (!projectId) return res.status(400).json({ error: "Cần chọn dự án" });
+    const key = `sprint_rotate_project_${projectId}`;
+    const current = await get(db, "SELECT value FROM settings WHERE key = ?", [key]);
+    const newVal = current?.value === "1" ? "0" : "1";
+    await upsertSetting(db, key, newVal);
+    console.log(`[sprint-rotate] Project ${projectId} toggled to ${newVal === "1" ? "ON" : "OFF"} by ${req.user.displayName}`);
+    res.json({ enabled: newVal === "1", projectId: Number(projectId) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Toggle auto-rotate on/off for a specific project
 app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -3626,11 +3649,15 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
   }
 });
 
-// Process auto-rotate: unified flow — hot sales (24h) first, then normal sales (2 days)
+// Process auto-rotate: unified flow — hot sales (24h) first, then normal sales (2 days), sprint mode (12h)
 async function processAutoRotate(db) {
   const enabledRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%' AND value = '1'");
   if (!enabledRows.length) return 0;
   const enabledProjectIds = new Set(enabledRows.map(r => Number(r.key.replace('auto_rotate_project_', ''))));
+
+  // Sprint mode per project
+  const sprintRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'sprint_rotate_project_%' AND value = '1'");
+  const sprintProjectIds = new Set(sprintRows.map(r => Number(r.key.replace('sprint_rotate_project_', ''))));
 
   const now = new Date();
   const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -3672,18 +3699,20 @@ async function processAutoRotate(db) {
   };
 
   for (const lead of filtered) {
+    const isSprint = sprintProjectIds.has(lead.project_id);
     const projectHotSales = hotSalesByProject[lead.project_id];
     const hasHotConfig = projectHotSales && projectHotSales.size > 0;
     const currentSaleIsHot = hasHotConfig && projectHotSales.has(lead.sale_name);
 
-    // --- Determine threshold ---
-    // If current sale is hot-lead sale → 24h (48h if hẹn gặp/xem)
-    // If current sale is normal → 2 days
-    // If project has no hot config → 2 days
+    // --- Determine threshold & check date source ---
     let thresholdMs;
-    if (hasHotConfig && currentSaleIsHot) {
-      const hẹnStatuses = ["hen_gap", "hen_xem", "hẹn gặp", "hẹn xem"];
-      if (hẹnStatuses.some(s => (lead.status || "").toLowerCase() === s)) {
+
+    if (isSprint) {
+      // Sprint mode: 12h for ALL sales, count from "Chia lead" date
+      thresholdMs = 12 * 60 * 60 * 1000;
+    } else if (hasHotConfig && currentSaleIsHot) {
+      const henStatuses = ["hen_gap", "hen_xem", "hẹn gặp", "hẹn xem"];
+      if (henStatuses.some(s => (lead.status || "").toLowerCase() === s)) {
         thresholdMs = 48 * 60 * 60 * 1000; // 48h
       } else {
         thresholdMs = 24 * 60 * 60 * 1000; // 24h
@@ -3692,54 +3721,65 @@ async function processAutoRotate(db) {
       thresholdMs = 2 * 24 * 60 * 60 * 1000; // 2 days
     }
 
-    // --- Check if threshold passed ---
-    const latestUpdate = await get(db,
-      `SELECT contact_date, action FROM lead_history
-       WHERE lead_id = ? AND sale_name = ?
-       ORDER BY seq DESC LIMIT 1`,
-      [lead.id, lead.sale_name]
-    );
-    if (!latestUpdate) continue;
+    // --- Get the relevant date to check ---
+    let checkDate = null;
 
-    let checkDate = parseDate(latestUpdate.contact_date);
-    if (!checkDate || isNaN(checkDate.getTime())) continue;
+    if (isSprint) {
+      // Sprint: count from the last "Chia lead" action for this sale
+      const chiaEntry = await get(db,
+        `SELECT contact_date FROM lead_history
+         WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead'
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, lead.sale_name]
+      );
+      if (chiaEntry) checkDate = parseDate(chiaEntry.contact_date);
+      if (!checkDate || isNaN(checkDate.getTime())) continue;
+    } else {
+      // Normal: count from last update/status change
+      const latestUpdate = await get(db,
+        `SELECT contact_date, action FROM lead_history
+         WHERE lead_id = ? AND sale_name = ?
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, lead.sale_name]
+      );
+      if (!latestUpdate) continue;
 
-    // Use latest status change date if exists (not just "Chia lead")
-    const latestStatusChange = await get(db,
-      `SELECT contact_date FROM lead_history
-       WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
-       ORDER BY seq DESC LIMIT 1`,
-      [lead.id, lead.sale_name]
-    );
-    if (latestStatusChange) {
-      const d = parseDate(latestStatusChange.contact_date);
-      if (d && !isNaN(d.getTime())) checkDate = d;
+      checkDate = parseDate(latestUpdate.contact_date);
+      if (!checkDate || isNaN(checkDate.getTime())) continue;
+
+      // Use latest status change date if exists (not just "Chia lead")
+      const latestStatusChange = await get(db,
+        `SELECT contact_date FROM lead_history
+         WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, lead.sale_name]
+      );
+      if (latestStatusChange) {
+        const d = parseDate(latestStatusChange.contact_date);
+        if (d && !isNaN(d.getTime())) checkDate = d;
+      }
     }
 
     if (now.getTime() - checkDate.getTime() < thresholdMs) continue;
 
     // --- Find next sale (unified flow) ---
-    // Step 1: If project has hot config, try hot sales first
-    // Step 2: If all hot sales exhausted → normal sales
-    // Step 3: If no hot config → all project sales (round-robin)
     let nextSale = null;
 
     if (hasHotConfig) {
-      // Get history to know which sales already had this lead
       const pastSales = await all(db,
         `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
         [lead.id]
       );
       const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
-      pastSaleNames.add(lead.sale_name); // include current
+      pastSaleNames.add(lead.sale_name);
 
-      // Try hot sales that haven't received this lead yet
+      // Try hot sales first
       const allHotNames = [...projectHotSales];
       const unreceivedHot = allHotNames.filter(s => !pastSaleNames.has(s));
       if (unreceivedHot.length > 0) {
         nextSale = unreceivedHot[lead.id % unreceivedHot.length];
       } else {
-        // All hot sales exhausted → move to normal sales
+        // Hot exhausted → normal sales
         const nonHotSales = await all(db,
           `SELECT DISTINCT u.display_name FROM users u
            INNER JOIN user_projects up ON up.user_id = u.id
@@ -3751,18 +3791,15 @@ async function processAutoRotate(db) {
         if (unreceivedNormal.length > 0) {
           nextSale = unreceivedNormal[lead.id % unreceivedNormal.length];
         } else if (nonHotNames.length > 0) {
-          // All normal sales also received → round-robin among normal sales
           const available = nonHotNames.filter(s => s !== lead.sale_name);
           if (available.length > 0) nextSale = available[lead.id % available.length];
         }
-        // If still no next sale and we're on a hot sale, cycle back to hot
         if (!nextSale) {
           const otherHot = allHotNames.filter(s => s !== lead.sale_name);
           if (otherHot.length > 0) nextSale = otherHot[lead.id % otherHot.length];
         }
       }
     } else {
-      // No hot config → rotate among all project sales (round-robin, 2 days)
       const projectSales = await all(db,
         `SELECT DISTINCT u.display_name FROM users u
          INNER JOIN user_projects up ON up.user_id = u.id
@@ -3781,10 +3818,13 @@ async function processAutoRotate(db) {
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
-    const reason = `Tự động xáo (sale ${lead.sale_name} không cập nhật >${thresholdLabel})`;
+    const source = isSprint ? "sprint-rotate" : "auto-rotate";
+    const reason = isSprint
+      ? `Nước rút: sale ${lead.sale_name} không chốt trong 12h`
+      : `Tự động xáo (sale ${lead.sale_name} không cập nhật >${thresholdLabel})`;
     stmts.push({
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, nextSale, "Chia lead", nowStr, "", reason, nextSeq, "auto-rotate"],
+      args: [lead.id, nextSale, "Chia lead", nowStr, "", reason, nextSeq, source],
     });
     rotated++;
   }
