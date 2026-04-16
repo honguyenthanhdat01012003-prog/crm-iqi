@@ -2562,9 +2562,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       .filter(u => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid))
       .map(u => u.displayName);
     if (projectSales.length > 0) return [...new Set(projectSales)].sort();
-    // Fallback: if no user_projects data, show all sales (backward compat)
-    const merged = new Set([...allSaleUsers, ...saleNames]);
-    return [...merged].sort();
+    // Fallback: get sale names from leads of this specific project only
+    const projectLeadSales = new Set();
+    (Array.isArray(leads) ? leads : []).forEach(l => {
+      if (l.projectId === pid && l.saleName && l.saleName.toLowerCase() !== "chưa chia") projectLeadSales.add(l.saleName);
+    });
+    return [...projectLeadSales].sort();
   };
 
   // Auto-default shuffleStartDate to earliest lead date when project changes
@@ -3832,7 +3835,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       const q = shuffleSaleSearch.toLowerCase();
                       const pid = Number(shuffleProject);
                       const projectSales = allUsers.filter(u => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid)).map(u => u.displayName);
-                      const allSales = projectSales.length > 0 ? [...new Set(projectSales)].sort() : [...new Set([...allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName), ...saleNames])].sort();
+                      let allSales;
+                      if (projectSales.length > 0) { allSales = [...new Set(projectSales)].sort(); }
+                      else { const pls = new Set(); leads.forEach(l => { if (l.projectId === pid && l.saleName && l.saleName.toLowerCase() !== "chưa chia") pls.add(l.saleName); }); allSales = [...pls].sort(); }
                       const filtered = allSales.filter(s => (!q || s.toLowerCase().includes(q)) && !shuffleSelectedSales.includes(s));
                       if (shuffleSaleFocused) return (
                         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,.1)" }}>
