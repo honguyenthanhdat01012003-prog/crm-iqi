@@ -3626,9 +3626,8 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
   }
 });
 
-// Process auto-rotate: find leads where sale hasn't updated status in 3+ days, reassign
+// Process auto-rotate: unified flow — hot sales (24h) first, then normal sales (2 days)
 async function processAutoRotate(db) {
-  // Get all projects with auto-rotate enabled
   const enabledRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%' AND value = '1'");
   if (!enabledRows.length) return 0;
   const enabledProjectIds = new Set(enabledRows.map(r => Number(r.key.replace('auto_rotate_project_', ''))));
@@ -3648,16 +3647,15 @@ async function processAutoRotate(db) {
     hotSalesByProject[r.project_id].add(r.display_name);
   }
 
-  // Get all leads that have a sale assigned and are NOT in locked statuses, only from enabled projects
+  // Get candidate leads (assigned, not locked/booked)
   const candidates = await all(db,
-    `SELECT l.id, l.sale_name, l.status, l.project_id, l.is_hot
+    `SELECT l.id, l.sale_name, l.status, l.project_id
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
        AND l.is_locked = 0
      ORDER BY l.id ASC`
   );
-  // Filter to only enabled projects
   const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id));
 
   let rotated = 0;
@@ -3675,104 +3673,96 @@ async function processAutoRotate(db) {
 
   for (const lead of filtered) {
     const projectHotSales = hotSalesByProject[lead.project_id];
-    const hasHotSalesConfig = projectHotSales && projectHotSales.size > 0;
-    const currentSaleIsHot = hasHotSalesConfig && projectHotSales.has(lead.sale_name);
-    const isHotLead = lead.is_hot === 1;
+    const hasHotConfig = projectHotSales && projectHotSales.size > 0;
+    const currentSaleIsHot = hasHotConfig && projectHotSales.has(lead.sale_name);
 
-    // Determine rotation threshold based on hot lead logic
+    // --- Determine threshold ---
+    // If current sale is hot-lead sale → 24h (48h if hẹn gặp/xem)
+    // If current sale is normal → 2 days
+    // If project has no hot config → 2 days
     let thresholdMs;
-    if (hasHotSalesConfig && isHotLead && currentSaleIsHot) {
-      // Hot lead assigned to hot-lead sale: check status for threshold
-      const hẹnStatuses = ["hen_gap", "hen_xem", "Hẹn gặp", "Hẹn xem", "hẹn gặp", "hẹn xem"];
-      if (hẹnStatuses.some(s => lead.status?.toLowerCase() === s.toLowerCase() || lead.status === s)) {
-        thresholdMs = 48 * 60 * 60 * 1000; // 48h for hẹn gặp/xem
+    if (hasHotConfig && currentSaleIsHot) {
+      const hẹnStatuses = ["hen_gap", "hen_xem", "hẹn gặp", "hẹn xem"];
+      if (hẹnStatuses.some(s => (lead.status || "").toLowerCase() === s)) {
+        thresholdMs = 48 * 60 * 60 * 1000; // 48h
       } else {
-        thresholdMs = 24 * 60 * 60 * 1000; // 24h for other statuses
+        thresholdMs = 24 * 60 * 60 * 1000; // 24h
       }
     } else {
-      thresholdMs = 3 * 24 * 60 * 60 * 1000; // 3 days default for normal flow
+      thresholdMs = 2 * 24 * 60 * 60 * 1000; // 2 days
     }
 
-    // Check latest history entry for this lead
+    // --- Check if threshold passed ---
     const latestUpdate = await get(db,
       `SELECT contact_date, action FROM lead_history
        WHERE lead_id = ? AND sale_name = ?
        ORDER BY seq DESC LIMIT 1`,
       [lead.id, lead.sale_name]
     );
-
     if (!latestUpdate) continue;
 
-    let lastDate = parseDate(latestUpdate.contact_date);
-    if (!lastDate || isNaN(lastDate.getTime())) continue;
+    let checkDate = parseDate(latestUpdate.contact_date);
+    if (!checkDate || isNaN(checkDate.getTime())) continue;
 
-    // Check for actual status change (not just "Chia lead")
+    // Use latest status change date if exists (not just "Chia lead")
     const latestStatusChange = await get(db,
       `SELECT contact_date FROM lead_history
        WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
        ORDER BY seq DESC LIMIT 1`,
       [lead.id, lead.sale_name]
     );
-
-    let checkDate = lastDate;
     if (latestStatusChange) {
       const d = parseDate(latestStatusChange.contact_date);
       if (d && !isNaN(d.getTime())) checkDate = d;
     }
 
-    if (isNaN(checkDate.getTime())) continue;
-
-    // If not yet past threshold, skip
     if (now.getTime() - checkDate.getTime() < thresholdMs) continue;
 
-    // Find next sale to rotate to
+    // --- Find next sale (unified flow) ---
+    // Step 1: If project has hot config, try hot sales first
+    // Step 2: If all hot sales exhausted → normal sales
+    // Step 3: If no hot config → all project sales (round-robin)
     let nextSale = null;
 
-    if (hasHotSalesConfig && isHotLead) {
-      // Hot lead: rotate only among hot-lead sales for this project
-      const hotSalesInProject = await all(db,
-        `SELECT DISTINCT u.display_name FROM users u
-         INNER JOIN user_projects up ON up.user_id = u.id
-         WHERE up.project_id = ? AND up.hot_lead = 1 AND u.role = 'sale' AND u.display_name != ?`,
-        [lead.project_id, lead.sale_name]
+    if (hasHotConfig) {
+      // Get history to know which sales already had this lead
+      const pastSales = await all(db,
+        `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
+        [lead.id]
       );
+      const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
+      pastSaleNames.add(lead.sale_name); // include current
 
-      if (hotSalesInProject.length > 0) {
-        // Check if all hot sales have already received this lead (via history)
-        const allHotSaleNames = [...projectHotSales];
-        const pastSales = await all(db,
-          `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
-          [lead.id]
+      // Try hot sales that haven't received this lead yet
+      const allHotNames = [...projectHotSales];
+      const unreceivedHot = allHotNames.filter(s => !pastSaleNames.has(s));
+      if (unreceivedHot.length > 0) {
+        nextSale = unreceivedHot[lead.id % unreceivedHot.length];
+      } else {
+        // All hot sales exhausted → move to normal sales
+        const nonHotSales = await all(db,
+          `SELECT DISTINCT u.display_name FROM users u
+           INNER JOIN user_projects up ON up.user_id = u.id
+           WHERE up.project_id = ? AND (up.hot_lead = 0 OR up.hot_lead IS NULL) AND u.role = 'sale'`,
+          [lead.project_id]
         );
-        const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
-
-        // Hot sales that haven't received this lead yet (excluding current sale)
-        const unreceivedHot = allHotSaleNames.filter(s => s !== lead.sale_name && !pastSaleNames.has(s));
-        if (unreceivedHot.length > 0) {
-          nextSale = unreceivedHot[lead.id % unreceivedHot.length];
-        } else {
-          // All hot sales have received this lead → move to non-hot sales
-          const nonHotSales = await all(db,
-            `SELECT DISTINCT u.display_name FROM users u
-             INNER JOIN user_projects up ON up.user_id = u.id
-             WHERE up.project_id = ? AND (up.hot_lead = 0 OR up.hot_lead IS NULL) AND u.role = 'sale' AND u.display_name != ?`,
-            [lead.project_id, lead.sale_name]
-          );
-          if (nonHotSales.length > 0) {
-            const unreceivedNonHot = nonHotSales.map(r => r.display_name).filter(s => !pastSaleNames.has(s));
-            if (unreceivedNonHot.length > 0) {
-              nextSale = unreceivedNonHot[lead.id % unreceivedNonHot.length];
-            } else {
-              nextSale = nonHotSales[lead.id % nonHotSales.length].display_name;
-            }
-          } else {
-            // No non-hot sales, cycle back among hot sales
-            nextSale = hotSalesInProject[lead.id % hotSalesInProject.length].display_name;
-          }
+        const nonHotNames = nonHotSales.map(r => r.display_name);
+        const unreceivedNormal = nonHotNames.filter(s => !pastSaleNames.has(s));
+        if (unreceivedNormal.length > 0) {
+          nextSale = unreceivedNormal[lead.id % unreceivedNormal.length];
+        } else if (nonHotNames.length > 0) {
+          // All normal sales also received → round-robin among normal sales
+          const available = nonHotNames.filter(s => s !== lead.sale_name);
+          if (available.length > 0) nextSale = available[lead.id % available.length];
+        }
+        // If still no next sale and we're on a hot sale, cycle back to hot
+        if (!nextSale) {
+          const otherHot = allHotNames.filter(s => s !== lead.sale_name);
+          if (otherHot.length > 0) nextSale = otherHot[lead.id % otherHot.length];
         }
       }
     } else {
-      // Normal flow (no hot lead config or not a hot lead): rotate among all project sales
+      // No hot config → rotate among all project sales (round-robin, 2 days)
       const projectSales = await all(db,
         `SELECT DISTINCT u.display_name FROM users u
          INNER JOIN user_projects up ON up.user_id = u.id
@@ -3786,12 +3776,12 @@ async function processAutoRotate(db) {
 
     if (!nextSale) continue;
 
+    // --- Apply rotation ---
     stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
-    const reason = (hasHotSalesConfig && isHotLead && currentSaleIsHot)
-      ? `Lead nóng: sale ${lead.sale_name} không cập nhật >${thresholdMs / 3600000}h`
-      : `Tự động xáo lead (sale ${lead.sale_name} không cập nhật >3 ngày)`;
+    const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
+    const reason = `Tự động xáo (sale ${lead.sale_name} không cập nhật >${thresholdLabel})`;
     stmts.push({
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       args: [lead.id, nextSale, "Chia lead", nowStr, "", reason, nextSeq, "auto-rotate"],

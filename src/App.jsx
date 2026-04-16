@@ -4887,7 +4887,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             const isOn = autoRotateProjects[selectedProject] || false;
             return (
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 12, color: isOn ? "#16a34a" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>Xáo lead 3 ngày:</span>
+                <span style={{ fontSize: 12, color: isOn ? "#16a34a" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>Tự động xáo lead:</span>
                 <div
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -4896,7 +4896,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       const data = await r.json();
                       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
                       setAutoRotateProjects(prev => ({ ...prev, [selectedProject]: data.enabled }));
-                      showToast(data.enabled ? "Đã BẬT tự động xáo lead 3 ngày cho dự án này" : "Đã TẮT tự động xáo lead 3 ngày cho dự án này", data.enabled ? "success" : "info");
+                      showToast(data.enabled ? "Đã BẬT tự động xáo lead (🔥24h / thường 2 ngày)" : "Đã TẮT tự động xáo lead cho dự án này", data.enabled ? "success" : "info");
                     } catch (err) { showToast("Lỗi: " + err.message, "error"); }
                   }}
                   style={{
