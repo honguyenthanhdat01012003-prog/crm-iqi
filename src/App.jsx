@@ -2556,6 +2556,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   }, [allUsers]);
 
   const getProjectSaleNames = (projectId) => {
+    const pid = Number(projectId);
+    // Only show sales that are assigned to this project via user_projects
+    const projectSales = (Array.isArray(allUsers) ? allUsers : [])
+      .filter(u => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid))
+      .map(u => u.displayName);
+    if (projectSales.length > 0) return [...new Set(projectSales)].sort();
+    // Fallback: if no user_projects data, show all sales (backward compat)
     const merged = new Set([...allSaleUsers, ...saleNames]);
     return [...merged].sort();
   };
@@ -3823,8 +3830,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%", fontSize: 13 }} />
                     {(() => {
                       const q = shuffleSaleSearch.toLowerCase();
-                      const userSales = allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
-                      const allSales = [...new Set([...userSales, ...saleNames])].sort();
+                      const pid = Number(shuffleProject);
+                      const projectSales = allUsers.filter(u => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid)).map(u => u.displayName);
+                      const allSales = projectSales.length > 0 ? [...new Set(projectSales)].sort() : [...new Set([...allUsers.filter(u => u.role === "sale" && u.displayName).map(u => u.displayName), ...saleNames])].sort();
                       const filtered = allSales.filter(s => (!q || s.toLowerCase().includes(q)) && !shuffleSelectedSales.includes(s));
                       if (shuffleSaleFocused) return (
                         <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, maxHeight: 200, overflowY: "auto", zIndex: 50, boxShadow: "0 4px 12px rgba(0,0,0,.1)" }}>
