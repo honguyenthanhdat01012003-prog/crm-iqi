@@ -10447,7 +10447,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
 
   const openNew = () => {
     setEditingUser(null);
-    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [], avatarUrl: "", email: "", phone: "" });
+    setDraft({ username: "", password: "", displayName: "", role: "sale", telegramId: "", projectIds: [], hotLeadProjectIds: [], avatarUrl: "", email: "", phone: "" });
     setError("");
     setProjectSearch("");
     setShowDraftPwd(false);
@@ -10456,7 +10456,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
 
   const openEdit = (u) => {
     setEditingUser(u);
-    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "", projectIds: u.projectIds || [], avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "" });
+    setDraft({ username: u.username, password: "", displayName: u.displayName, role: u.role, telegramId: u.telegramId || "", projectIds: u.projectIds || [], hotLeadProjectIds: u.hotLeadProjectIds || [], avatarUrl: u.avatarUrl || "", email: u.email || "", phone: u.phone || "" });
     setError("");
     setProjectSearch("");
     setShowDraftPwd(false);
@@ -10469,7 +10469,7 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
     setSavingUser(true);
     try {
       if (editingUser) {
-        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds, avatarUrl: draft.avatarUrl, email: draft.email, phone: draft.phone };
+        const body = { displayName: draft.displayName, role: draft.role, telegramId: draft.telegramId, projectIds: draft.projectIds, hotLeadProjectIds: draft.hotLeadProjectIds, avatarUrl: draft.avatarUrl, email: draft.email, phone: draft.phone };
         if (draft.password) body.password = draft.password;
         const r = await apiFetch(`${API}/users/${editingUser.id}`, { method: "PUT", body: JSON.stringify(body) });
         if (!r.ok) { const d = await r.json(); setError(String(d.error || "Lỗi cập nhật")); return; }
@@ -11077,26 +11077,50 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
               }}>
                 {projects
                   .filter(p => !projectSearch || p.name.toLowerCase().includes(projectSearch.toLowerCase()))
-                  .map(p => (
-                    <label key={p.id} style={{
+                  .map(p => {
+                    const isChecked = draft.projectIds.includes(p.id);
+                    const isHot = draft.hotLeadProjectIds?.includes(p.id);
+                    return (
+                    <div key={p.id} style={{
                       display: "flex", alignItems: "center", gap: 8, padding: "4px 6px",
-                      borderRadius: 6, cursor: "pointer", fontSize: 13,
-                      background: draft.projectIds.includes(p.id) ? "#f0faf1" : "transparent",
+                      borderRadius: 6, fontSize: 13,
+                      background: isChecked ? "#f0faf1" : "transparent",
                     }}>
-                      <input
-                        type="checkbox"
-                        checked={draft.projectIds.includes(p.id)}
-                        onChange={(e) => {
-                          const ids = e.target.checked
-                            ? [...draft.projectIds, p.id]
-                            : draft.projectIds.filter(id => id !== p.id);
-                          setDraft({ ...draft, projectIds: ids });
-                        }}
-                        style={{ accentColor: "#e88a2e" }}
-                      />
-                      <span>{p.name}</span>
-                    </label>
-                  ))
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", flex: 1 }}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const ids = e.target.checked
+                              ? [...draft.projectIds, p.id]
+                              : draft.projectIds.filter(id => id !== p.id);
+                            const hotIds = e.target.checked ? draft.hotLeadProjectIds : (draft.hotLeadProjectIds || []).filter(id => id !== p.id);
+                            setDraft({ ...draft, projectIds: ids, hotLeadProjectIds: hotIds });
+                          }}
+                          style={{ accentColor: "#e88a2e" }}
+                        />
+                        <span>{p.name}</span>
+                      </label>
+                      {isChecked && draft.role === "sale" && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 3, cursor: "pointer", fontSize: 11, color: isHot ? "#dc2626" : "#9ca3af", whiteSpace: "nowrap" }}
+                          title="Tham gia nhận lead nóng cho dự án này">
+                          <input
+                            type="checkbox"
+                            checked={!!isHot}
+                            onChange={(e) => {
+                              const hotIds = e.target.checked
+                                ? [...(draft.hotLeadProjectIds || []), p.id]
+                                : (draft.hotLeadProjectIds || []).filter(id => id !== p.id);
+                              setDraft({ ...draft, hotLeadProjectIds: hotIds });
+                            }}
+                            style={{ accentColor: "#dc2626", width: 13, height: 13 }}
+                          />
+                          🔥 Lead nóng
+                        </label>
+                      )}
+                    </div>
+                    );
+                  })
                 }
                 {projects.filter(p => !projectSearch || p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
                   <div style={{ color: "#9ca3af", fontSize: 12, textAlign: "center", padding: 8 }}>Không tìm thấy dự án</div>

@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 20; // Bump this when adding new DDL/migrations
+const DB_VERSION = 21; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -296,6 +296,8 @@ async function initDb() {
       FOREIGN KEY (lead_id) REFERENCES personal_leads(id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_plh_lead ON personal_lead_history(lead_id)`,
+    // v21: hot_lead flag on user_projects
+    "ALTER TABLE user_projects ADD COLUMN hot_lead INTEGER DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -1915,24 +1917,29 @@ app.get("/api/pending-leads", requireAuth, async (req, res) => {
 });
 
 /* ---------- User management (admin only) ---------- */
-const mapUser = (u, projectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", avatarUrl: u.avatar_url || "", email: u.email || "", phone: u.phone || "", mustChangePassword: !!u.must_change_password, lastActive: u.last_active || "", createdAt: u.created_at, projectIds: projectIds || [] });
+const mapUser = (u, projectIds, hotLeadProjectIds) => ({ id: u.id, username: u.username, role: u.role, displayName: u.display_name, telegramId: u.telegram_id || "", avatarUrl: u.avatar_url || "", email: u.email || "", phone: u.phone || "", mustChangePassword: !!u.must_change_password, lastActive: u.last_active || "", createdAt: u.created_at, projectIds: projectIds || [], hotLeadProjectIds: hotLeadProjectIds || [] });
 const selectUsers = () => all(db, "SELECT id, username, role, display_name, telegram_id, avatar_url, email, phone, must_change_password, last_active, created_at FROM users ORDER BY CASE role WHEN 'admin' THEN 1 WHEN 'manager' THEN 2 ELSE 3 END, id");
 const getUserProjectIds = async (userId) => {
   const rows = await all(db, "SELECT project_id FROM user_projects WHERE user_id = ? ORDER BY project_id", [userId]);
   return rows.map(r => r.project_id);
 };
 const getAllUserProjects = async () => {
-  const rows = await all(db, "SELECT user_id, project_id FROM user_projects ORDER BY user_id, project_id");
+  const rows = await all(db, "SELECT user_id, project_id, hot_lead FROM user_projects ORDER BY user_id, project_id");
   const map = {};
+  const hotMap = {};
   for (const r of rows) {
     if (!map[r.user_id]) map[r.user_id] = [];
     map[r.user_id].push(r.project_id);
+    if (r.hot_lead) {
+      if (!hotMap[r.user_id]) hotMap[r.user_id] = [];
+      hotMap[r.user_id].push(r.project_id);
+    }
   }
-  return map;
+  return { map, hotMap };
 };
 const mapUsersWithProjects = async (users) => {
-  const upMap = await getAllUserProjects();
-  return users.map(u => mapUser(u, upMap[u.id] || []));
+  const { map: upMap, hotMap } = await getAllUserProjects();
+  return users.map(u => mapUser(u, upMap[u.id] || [], hotMap[u.id] || []));
 };
 
 app.get("/api/users", requireAuth, requireAdmin, async (_req, res) => {
@@ -1960,8 +1967,9 @@ app.post("/api/users", requireAuth, requireAdmin, async (req, res) => {
       [String(username).trim(), hash, salt, validRole, String(displayName || username).trim(), String(telegramId || "").trim()]
     );
     if (req.body.projectIds && Array.isArray(req.body.projectIds)) {
+      const hotPids = new Set((req.body.hotLeadProjectIds || []).map(Number));
       for (const pid of req.body.projectIds) {
-        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?, ?)", [result.lastID, Number(pid)]);
+        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id, hot_lead) VALUES(?, ?, ?)", [result.lastID, Number(pid), hotPids.has(Number(pid)) ? 1 : 0]);
       }
     }
     const users = await selectUsers();
@@ -2009,8 +2017,9 @@ app.put("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
       const newPids = req.body.projectIds.map(Number);
 
       await run(db, "DELETE FROM user_projects WHERE user_id = ?", [id]);
+      const hotPids = new Set((req.body.hotLeadProjectIds || []).map(Number));
       for (const pid of req.body.projectIds) {
-        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id) VALUES(?, ?)", [id, Number(pid)]);
+        await run(db, "INSERT OR IGNORE INTO user_projects(user_id, project_id, hot_lead) VALUES(?, ?, ?)", [id, Number(pid), hotPids.has(Number(pid)) ? 1 : 0]);
       }
 
       // Find removed projects and sync active schedules
@@ -3627,9 +3636,21 @@ async function processAutoRotate(db) {
   const now = new Date();
   const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
 
+  // Pre-fetch hot lead sales per project: { projectId: Set<saleName> }
+  const hotLeadRows = await all(db,
+    `SELECT u.display_name, up.project_id FROM user_projects up
+     INNER JOIN users u ON u.id = up.user_id
+     WHERE up.hot_lead = 1 AND u.role = 'sale'`
+  );
+  const hotSalesByProject = {};
+  for (const r of hotLeadRows) {
+    if (!hotSalesByProject[r.project_id]) hotSalesByProject[r.project_id] = new Set();
+    hotSalesByProject[r.project_id].add(r.display_name);
+  }
+
   // Get all leads that have a sale assigned and are NOT in locked statuses, only from enabled projects
   const candidates = await all(db,
-    `SELECT l.id, l.sale_name, l.status, l.project_id
+    `SELECT l.id, l.sale_name, l.status, l.project_id, l.is_hot
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
@@ -3642,8 +3663,37 @@ async function processAutoRotate(db) {
   let rotated = 0;
   const stmts = [];
 
+  // Helper: parse date from VN or ISO format
+  const parseDate = (dateStr) => {
+    if (!dateStr) return null;
+    const isoMatch = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+    if (isoMatch) return new Date(dateStr);
+    const vnMatch = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (vnMatch) return new Date(`${vnMatch[3]}-${vnMatch[2].padStart(2, '0')}-${vnMatch[1].padStart(2, '0')}`);
+    return null;
+  };
+
   for (const lead of filtered) {
-    // Check latest history entry for this lead (any action from the assigned sale)
+    const projectHotSales = hotSalesByProject[lead.project_id];
+    const hasHotSalesConfig = projectHotSales && projectHotSales.size > 0;
+    const currentSaleIsHot = hasHotSalesConfig && projectHotSales.has(lead.sale_name);
+    const isHotLead = lead.is_hot === 1;
+
+    // Determine rotation threshold based on hot lead logic
+    let thresholdMs;
+    if (hasHotSalesConfig && isHotLead && currentSaleIsHot) {
+      // Hot lead assigned to hot-lead sale: check status for threshold
+      const hẹnStatuses = ["hen_gap", "hen_xem", "Hẹn gặp", "Hẹn xem", "hẹn gặp", "hẹn xem"];
+      if (hẹnStatuses.some(s => lead.status?.toLowerCase() === s.toLowerCase() || lead.status === s)) {
+        thresholdMs = 48 * 60 * 60 * 1000; // 48h for hẹn gặp/xem
+      } else {
+        thresholdMs = 24 * 60 * 60 * 1000; // 24h for other statuses
+      }
+    } else {
+      thresholdMs = 3 * 24 * 60 * 60 * 1000; // 3 days default for normal flow
+    }
+
+    // Check latest history entry for this lead
     const latestUpdate = await get(db,
       `SELECT contact_date, action FROM lead_history
        WHERE lead_id = ? AND sale_name = ?
@@ -3651,27 +3701,12 @@ async function processAutoRotate(db) {
       [lead.id, lead.sale_name]
     );
 
-    if (!latestUpdate) continue; // No history, skip (newly assigned)
+    if (!latestUpdate) continue;
 
-    // Parse the Vietnamese date format or ISO format
-    let lastDate = null;
-    const dateStr = latestUpdate.contact_date || "";
-    // Try ISO format first
-    const isoMatch = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
-    if (isoMatch) {
-      lastDate = new Date(dateStr);
-    } else {
-      // Vietnamese format: dd/mm/yyyy HH:mm:ss or similar
-      const vnMatch = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-      if (vnMatch) {
-        lastDate = new Date(`${vnMatch[3]}-${vnMatch[2].padStart(2, '0')}-${vnMatch[1].padStart(2, '0')}`);
-      }
-    }
-
+    let lastDate = parseDate(latestUpdate.contact_date);
     if (!lastDate || isNaN(lastDate.getTime())) continue;
 
-    // Check if the latest action was a status change (not just "Chia lead")
-    // If the latest action is "Chia lead" and it's >3 days old, AND no other status update exists → rotate
+    // Check for actual status change (not just "Chia lead")
     const latestStatusChange = await get(db,
       `SELECT contact_date FROM lead_history
        WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
@@ -3681,42 +3716,85 @@ async function processAutoRotate(db) {
 
     let checkDate = lastDate;
     if (latestStatusChange) {
-      const scDateStr = latestStatusChange.contact_date || "";
-      const scIso = scDateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
-      if (scIso) {
-        checkDate = new Date(scDateStr);
-      } else {
-        const scVn = scDateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-        if (scVn) {
-          checkDate = new Date(`${scVn[3]}-${scVn[2].padStart(2, '0')}-${scVn[1].padStart(2, '0')}`);
-        }
-      }
+      const d = parseDate(latestStatusChange.contact_date);
+      if (d && !isNaN(d.getTime())) checkDate = d;
     }
 
     if (isNaN(checkDate.getTime())) continue;
 
-    // If less than 3 days since last update, skip
-    if (now.getTime() - checkDate.getTime() < 3 * 24 * 60 * 60 * 1000) continue;
+    // If not yet past threshold, skip
+    if (now.getTime() - checkDate.getTime() < thresholdMs) continue;
 
-    // Find other sales in the same project to rotate to
-    const projectSales = await all(db,
-      `SELECT DISTINCT u.display_name FROM users u
-       INNER JOIN user_projects up ON up.user_id = u.id
-       WHERE up.project_id = ? AND u.role = 'sale' AND u.display_name != ?`,
-      [lead.project_id, lead.sale_name]
-    );
+    // Find next sale to rotate to
+    let nextSale = null;
 
-    if (!projectSales.length) continue; // No other sales available
+    if (hasHotSalesConfig && isHotLead) {
+      // Hot lead: rotate only among hot-lead sales for this project
+      const hotSalesInProject = await all(db,
+        `SELECT DISTINCT u.display_name FROM users u
+         INNER JOIN user_projects up ON up.user_id = u.id
+         WHERE up.project_id = ? AND up.hot_lead = 1 AND u.role = 'sale' AND u.display_name != ?`,
+        [lead.project_id, lead.sale_name]
+      );
 
-    // Pick next sale (round-robin based on lead ID)
-    const nextSale = projectSales[lead.id % projectSales.length].display_name;
+      if (hotSalesInProject.length > 0) {
+        // Check if all hot sales have already received this lead (via history)
+        const allHotSaleNames = [...projectHotSales];
+        const pastSales = await all(db,
+          `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
+          [lead.id]
+        );
+        const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
+
+        // Hot sales that haven't received this lead yet (excluding current sale)
+        const unreceivedHot = allHotSaleNames.filter(s => s !== lead.sale_name && !pastSaleNames.has(s));
+        if (unreceivedHot.length > 0) {
+          nextSale = unreceivedHot[lead.id % unreceivedHot.length];
+        } else {
+          // All hot sales have received this lead → move to non-hot sales
+          const nonHotSales = await all(db,
+            `SELECT DISTINCT u.display_name FROM users u
+             INNER JOIN user_projects up ON up.user_id = u.id
+             WHERE up.project_id = ? AND (up.hot_lead = 0 OR up.hot_lead IS NULL) AND u.role = 'sale' AND u.display_name != ?`,
+            [lead.project_id, lead.sale_name]
+          );
+          if (nonHotSales.length > 0) {
+            const unreceivedNonHot = nonHotSales.map(r => r.display_name).filter(s => !pastSaleNames.has(s));
+            if (unreceivedNonHot.length > 0) {
+              nextSale = unreceivedNonHot[lead.id % unreceivedNonHot.length];
+            } else {
+              nextSale = nonHotSales[lead.id % nonHotSales.length].display_name;
+            }
+          } else {
+            // No non-hot sales, cycle back among hot sales
+            nextSale = hotSalesInProject[lead.id % hotSalesInProject.length].display_name;
+          }
+        }
+      }
+    } else {
+      // Normal flow (no hot lead config or not a hot lead): rotate among all project sales
+      const projectSales = await all(db,
+        `SELECT DISTINCT u.display_name FROM users u
+         INNER JOIN user_projects up ON up.user_id = u.id
+         WHERE up.project_id = ? AND u.role = 'sale' AND u.display_name != ?`,
+        [lead.project_id, lead.sale_name]
+      );
+      if (projectSales.length > 0) {
+        nextSale = projectSales[lead.id % projectSales.length].display_name;
+      }
+    }
+
+    if (!nextSale) continue;
 
     stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
+    const reason = (hasHotSalesConfig && isHotLead && currentSaleIsHot)
+      ? `Lead nóng: sale ${lead.sale_name} không cập nhật >${thresholdMs / 3600000}h`
+      : `Tự động xáo lead (sale ${lead.sale_name} không cập nhật >3 ngày)`;
     stmts.push({
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, nextSale, "Chia lead", nowStr, "", `Tự động xáo lead (sale ${lead.sale_name} không cập nhật >3 ngày)`, nextSeq, "auto-rotate"],
+      args: [lead.id, nextSale, "Chia lead", nowStr, "", reason, nextSeq, "auto-rotate"],
     });
     rotated++;
   }
