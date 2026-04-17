@@ -3690,13 +3690,18 @@ async function processAutoRotate(db) {
   let rotated = 0;
   const stmts = [];
 
-  // Helper: parse date from VN or ISO format
+  // Helper: parse date from VN or ISO format (includes time)
   const parseDate = (dateStr) => {
     if (!dateStr) return null;
-    const isoMatch = dateStr.match(/(\d{4})-(\d{2})-(\d{2})/);
+    const isoMatch = dateStr.match(/(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
     if (isoMatch) return new Date(dateStr);
-    const vnMatch = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-    if (vnMatch) return new Date(`${vnMatch[3]}-${vnMatch[2].padStart(2, '0')}-${vnMatch[1].padStart(2, '0')}`);
+    // VN format: "HH:MM:SS DD/MM/YYYY" or "DD/MM/YYYY HH:MM:SS"
+    const vnTimeBefore = dateStr.match(/(\d{1,2}):(\d{2}):(\d{2})\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (vnTimeBefore) return new Date(Number(vnTimeBefore[6]), Number(vnTimeBefore[5]) - 1, Number(vnTimeBefore[4]), Number(vnTimeBefore[1]), Number(vnTimeBefore[2]), Number(vnTimeBefore[3]));
+    const vnTimeAfter = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (vnTimeAfter) return new Date(Number(vnTimeAfter[3]), Number(vnTimeAfter[2]) - 1, Number(vnTimeAfter[1]), Number(vnTimeAfter[4]), Number(vnTimeAfter[5]), Number(vnTimeAfter[6] || 0));
+    const vnDateOnly = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (vnDateOnly) return new Date(Number(vnDateOnly[3]), Number(vnDateOnly[2]) - 1, Number(vnDateOnly[1]));
     return null;
   };
 
