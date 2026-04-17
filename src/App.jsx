@@ -2285,6 +2285,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [rotateHistLoading, setRotateHistLoading] = useState(false);
   const [rotateHistMonth, setRotateHistMonth] = useState(() => { const d = new Date(); return { month: d.getMonth(), year: d.getFullYear() }; });
   const [rotateHistDay, setRotateHistDay] = useState(null);
+  const [rotateHistTab, setRotateHistTab] = useState("auto"); // "auto" | "sprint"
   // Lead quality report
   const [leadReportOpen, setLeadReportOpen] = useState(false);
   const [leadReportData, setLeadReportData] = useState(null);
@@ -3553,9 +3554,28 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease" }}>
               <div onClick={e => e.stopPropagation()}
                 style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 32px" : 28, width: isMobile ? "100%" : 700, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)", animation: isMobile ? "slideUp .25s ease" : "fadeIn .2s ease" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Clock size={20} /> Lịch sử xáo lead tự động</h3>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}><Clock size={20} /> Lịch sử xáo lead</h3>
                   <button onClick={() => setRotateHistOpen(false)} style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}><X size={18} /></button>
+                </div>
+                {/* Tab switcher */}
+                <div style={{ display: "flex", gap: 0, marginBottom: 16, borderRadius: 10, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  {[{ key: "auto", label: "\u23F0 Xáo tự động", color: "#16a34a" }, { key: "sprint", label: "\u26A1 Nước rút", color: "#ea580c" }].map(tab => (
+                    <button key={tab.key} onClick={async () => {
+                      if (rotateHistTab === tab.key) return;
+                      setRotateHistTab(tab.key); setRotateHistDay(null); setRotateHistLoading(true);
+                      try {
+                        const r = await apiFetch(`${API}/auto-rotate/history?source=${tab.key === "sprint" ? "sprint" : "auto"}`);
+                        const data = await r.json();
+                        setRotateHistData(data.history || []);
+                      } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }
+                      setRotateHistLoading(false);
+                    }} style={{
+                      flex: 1, padding: "8px 12px", border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700, transition: "all .2s",
+                      background: rotateHistTab === tab.key ? tab.color : "#f9fafb",
+                      color: rotateHistTab === tab.key ? "#fff" : "#6b7280",
+                    }}>{tab.label}</button>
+                  ))}
                 </div>
                 {rotateHistLoading ? (
                   <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>Đang tải...</div>
@@ -4958,9 +4978,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           })()}
           {isAdmin && selectedProject && (autoRotateProjects[selectedProject] || sprintRotateProjects[selectedProject]) && (
             <button onClick={async () => {
-              setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null);
+              setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null); setRotateHistTab("auto");
               try {
-                const r = await apiFetch(`${API}/auto-rotate/history`);
+                const r = await apiFetch(`${API}/auto-rotate/history?source=auto`);
                 const data = await r.json();
                 setRotateHistData(data.history || []);
               } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }

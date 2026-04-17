@@ -3622,17 +3622,18 @@ app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) 
 /* ===== Auto-rotate history (calendar) ===== */
 app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) => {
   try {
+    const source = req.query.source === "sprint" ? "sprint-rotate" : "auto-rotate";
     const rows = await all(db,
       `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, l.name as lead_name, l.phone as lead_phone, l.project_id
        FROM lead_history lh
        JOIN leads l ON lh.lead_id = l.id
-       WHERE lh.source = 'auto-rotate'
+       WHERE lh.source = ?
        ORDER BY lh.id DESC
-       LIMIT 500`
+       LIMIT 500`,
+      [source]
     );
-    // Parse old sale name from feedback: "Tự động xáo lead (sale X không cập nhật >3 ngày)"
     const history = rows.map(r => {
-      const oldSaleMatch = (r.feedback || "").match(/sale\s+(.+?)\s+không cập nhật/);
+      const oldSaleMatch = (r.feedback || "").match(/sale\s+(.+?)\s+không (?:cập nhật|chốt)/);
       return {
         id: r.id,
         leadId: r.lead_id,
