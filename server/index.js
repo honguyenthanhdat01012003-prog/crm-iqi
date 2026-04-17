@@ -1724,6 +1724,7 @@ async function syncAllProjects(db) {
 const app = express();
 
 // --- Security headers ---
+app.set("trust proxy", 1); // behind Nginx reverse proxy
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(ALLOWED_ORIGINS.length > 0 ? { origin: ALLOWED_ORIGINS, credentials: true } : undefined));
 app.use(express.json({ limit: "10mb" }));
