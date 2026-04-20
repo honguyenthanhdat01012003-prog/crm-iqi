@@ -1205,15 +1205,34 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
 
     // Determine correct status from CRM history by DATE (most reliable, seq can be wrong)
+    // Only consider entries AFTER the most recent "Chia lead" for current sale (respect assignment boundary)
     const crmHist = phoneHistMap.get(np);
     if (crmHist && crmHist.length) {
+      // Sort by date DESC to find the most recent "Chia lead" for current sale
+      const sortedHist = [...crmHist].sort((a, b) => {
+        const da = parseLeadDate(a.contact_date);
+        const db2 = parseLeadDate(b.contact_date);
+        if (da && db2) return db2.getTime() - da.getTime();
+        return b.seq - a.seq;
+      });
+      // Find the boundary: most recent "Chia lead" for current sale
+      let boundaryDate = null;
+      for (const h of sortedHist) {
+        if (h.action === "Chia lead" && h.sale_name === saleName) {
+          boundaryDate = parseLeadDate(h.contact_date);
+          break;
+        }
+      }
       let latestDate = null;
       let latestStatus = null;
       let latestRaw = null;
       for (const h of crmHist) {
         if (h.action === "Chia lead") continue;
         if (!h.status || !h.status.trim()) continue;
+        // Only consider entries by current sale, AFTER the Chia lead boundary
+        if (h.sale_name && h.sale_name !== saleName) continue;
         const d = parseLeadDate(h.contact_date);
+        if (boundaryDate && d && d.getTime() < boundaryDate.getTime()) continue;
         if (d && (!latestDate || d.getTime() > latestDate.getTime())) {
           latestDate = d;
           latestStatus = normalizeStatus(h.status);
@@ -1222,7 +1241,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       }
       if (latestStatus && latestStatus !== "new") {
         if (status !== latestStatus) {
-          console.log(`[replaceProjectData] DATE-FIX: "${l.name}" status "${status}" → "${latestStatus}" (raw="${latestRaw}", date=${latestDate?.toISOString()})`);
+          console.log(`[replaceProjectData] DATE-FIX: "${l.name}" status "${status}" → "${latestStatus}" (raw="${latestRaw}", date=${latestDate?.toISOString()}, sale=${saleName})`);
         }
         status = latestStatus;
         rawStatus = latestRaw;
@@ -1364,6 +1383,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         if (correctStatus !== lead.status) {
           fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
           console.log(`[post-sync] FIX lead#${lead.id}: "${lead.status}" → "${correctStatus}" (raw="${correctHistStatus}", source=${foundSource})`);
+        }
+      } else {
+        // No feedback found after Chia lead boundary — reset to 'new' if status was wrongly set by DATE-FIX
+        const hasChiaLead = entries.some(h => h.action === "Chia lead");
+        if (hasChiaLead && lead.status && lead.status !== "new") {
+          fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
+          console.log(`[post-sync] RESET lead#${lead.id}: "${lead.status}" → "new" (no feedback after Chia lead)`);
         }
       }
     }
