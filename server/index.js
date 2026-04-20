@@ -1111,7 +1111,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
   console.log(`[replaceProjectData] Existing leads manager distribution:`, JSON.stringify(mgrCounts));
 
-  // 2. Save CRM-added history per phone (non-sheet entries, max 20 per phone)
+  // 2. Save CRM-added history per phone (non-sheet entries)
+  // Keep ALL feedback entries + only latest "Chia lead" per sale to prevent bloat
   let allHistory = [];
   if (existing.length > 0) {
     allHistory = await all(db,
@@ -1125,8 +1126,29 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const np = normPhone(h.phone);
     if (!np) continue;
     if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
-    const arr = phoneHistMap.get(np);
-    if (arr.length < 20) arr.push(h); // Limit to 20 CRM entries per phone to prevent bloat
+    phoneHistMap.get(np).push(h);
+  }
+  // Deduplicate + trim: keep ALL feedback/update entries, only latest "Chia lead" per sale
+  for (const [np, arr] of phoneHistMap) {
+    const feedback = [];
+    const chiaPerSale = new Map();
+    const seenFeedback = new Set();
+    for (const h of arr) {
+      if (h.action === "Chia lead") {
+        const key = h.sale_name || "";
+        if (!chiaPerSale.has(key) || h.seq > chiaPerSale.get(key).seq) {
+          chiaPerSale.set(key, h);
+        }
+      } else {
+        // Deduplicate feedback entries (same sale+action+date+status)
+        const dk = `${h.sale_name}|${h.action}|${h.contact_date}|${h.status}`;
+        if (!seenFeedback.has(dk)) {
+          seenFeedback.add(dk);
+          feedback.push(h);
+        }
+      }
+    }
+    phoneHistMap.set(np, [...feedback, ...chiaPerSale.values()]);
   }
 
   const stmts = [];
@@ -1383,13 +1405,6 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         if (correctStatus !== lead.status) {
           fixStmts.push({ sql: "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", args: [correctStatus, correctHistStatus, lead.id] });
           console.log(`[post-sync] FIX lead#${lead.id}: "${lead.status}" → "${correctStatus}" (raw="${correctHistStatus}", source=${foundSource})`);
-        }
-      } else {
-        // No feedback found after Chia lead boundary — reset to 'new' if status was wrongly set by DATE-FIX
-        const hasChiaLead = entries.some(h => h.action === "Chia lead");
-        if (hasChiaLead && lead.status && lead.status !== "new") {
-          fixStmts.push({ sql: "UPDATE leads SET status = 'new', raw_status = '' WHERE id = ?", args: [lead.id] });
-          console.log(`[post-sync] RESET lead#${lead.id}: "${lead.status}" → "new" (no feedback after Chia lead)`);
         }
       }
     }
