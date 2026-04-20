@@ -3807,21 +3807,41 @@ async function processAutoRotate(db) {
         }
       }
     } else {
+      const pastSales = await all(db,
+        `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
+        [lead.id]
+      );
+      const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
+      pastSaleNames.add(lead.sale_name);
+
       const projectSales = await all(db,
         `SELECT DISTINCT u.display_name FROM users u
          INNER JOIN user_projects up ON up.user_id = u.id
-         WHERE up.project_id = ? AND u.role = 'sale' AND u.display_name != ?`,
-        [lead.project_id, lead.sale_name]
+         WHERE up.project_id = ? AND u.role = 'sale'`,
+        [lead.project_id]
       );
-      if (projectSales.length > 0) {
-        nextSale = projectSales[lead.id % projectSales.length].display_name;
+      const allNames = projectSales.map(r => r.display_name);
+      const unreceived = allNames.filter(s => !pastSaleNames.has(s));
+      if (unreceived.length > 0) {
+        nextSale = unreceived[lead.id % unreceived.length];
+      } else {
+        const available = allNames.filter(s => s !== lead.sale_name);
+        if (available.length > 0) nextSale = available[lead.id % available.length];
       }
     }
 
     if (!nextSale) continue;
 
-    // --- Apply rotation ---
-    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
+    // --- Apply rotation (restore previous feedback if sale had this lead before) ---
+    const prevFeedback = await get(db,
+      `SELECT status FROM lead_history WHERE lead_id = ? AND sale_name = ? AND status != '' ORDER BY seq DESC LIMIT 1`,
+      [lead.id, nextSale]
+    );
+    if (prevFeedback && prevFeedback.status) {
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = ?, raw_status = ? WHERE id = ?", args: [nextSale, normalizeStatus(prevFeedback.status), prevFeedback.status, lead.id] });
+    } else {
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
+    }
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
