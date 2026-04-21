@@ -3752,6 +3752,25 @@ async function processAutoRotate(db) {
     const hasHotConfig = projectHotSales && projectHotSales.size > 0;
     const currentSaleIsHot = hasHotConfig && projectHotSales.has(lead.sale_name);
 
+    // Skip rotating trash leads (pha/rac and related unreachable contacts)
+    const normalizedLeadStatus = normalizeStatus(lead.status || "");
+    if (["spam", "wrong_phone", "wrong_number", "blocked"].includes(normalizedLeadStatus)) continue;
+
+    // Skip rotating leads that have >3 distinct sales marking "khong quan tam"
+    const feedbackRows = await all(db,
+      `SELECT DISTINCT sale_name, status
+       FROM lead_history
+       WHERE lead_id = ? AND action != 'Chia lead' AND sale_name != '' AND status != ''`,
+      [lead.id]
+    );
+    const notInterestedSales = new Set(
+      feedbackRows
+        .filter(r => normalizeStatus(r.status || "") === "not_interested")
+        .map(r => (r.sale_name || "").trim().toLowerCase())
+        .filter(Boolean)
+    );
+    if (notInterestedSales.size > 3) continue;
+
     // --- Determine threshold & check date source ---
     let thresholdMs;
 
