@@ -793,14 +793,27 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   const dateColIdx = lsIdx >= 0 ? lsIdx + 1 : -1;
 
   const normalizedHeaders = headers.map((h) => ({ raw: h, norm: foldText(h) }));
-  const productKey =
-    normalizedHeaders.find(
-      (entry) =>
-        entry.norm.includes("loai hinh") ||
-        entry.norm.includes("quan_tam") ||
-        entry.norm.includes("quan tam") ||
-        entry.norm.includes("can ho")
-    )?.raw ?? "";
+
+  // Detect question columns: everything between 'platform' and first name/phone col
+  // This auto-handles any number of form questions without hardcoding column names
+  const _platformIdx = rawHeaders ? rawHeaders.findIndex(h => foldText(h) === "platform") : -1;
+  const _namePhoneNorms = new Set([
+    "full name", "full_name", "ten day du", "ho ten", "ten", "name",
+    "phone", "phone number", "phone_number", "so dien thoai", "sdt",
+    "dien thoai", "di dong", "so dt", "mobile",
+  ]);
+  let _firstNPIdx = rawHeaders ? rawHeaders.length : 0;
+  if (rawHeaders) {
+    for (let _ci = (_platformIdx >= 0 ? _platformIdx + 1 : 0); _ci < rawHeaders.length; _ci++) {
+      if (_namePhoneNorms.has(foldText(rawHeaders[_ci]))) { _firstNPIdx = _ci; break; }
+    }
+  }
+  const questionColIndices = [];
+  if (rawHeaders && _platformIdx >= 0) {
+    for (let _ci = _platformIdx + 1; _ci < _firstNPIdx; _ci++) {
+      questionColIndices.push(_ci);
+    }
+  }
 
   // Standard header-based mapping
   const standardResult = rows
@@ -815,7 +828,10 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
       const adsetName = findVal(r, ["adset_name", "adset name", "nhom quang cao", "ten nhom"]);
       const adName = findVal(r, ["ad_name", "ad name", "noi dung", "ten quang cao"]);
       const formName = findVal(r, ["form_name", "form name", "ten form"]);
-      const product = productKey ? r[productKey] ?? "" : findVal(r, ["product", "loai"]);
+      const _rawRow = rawRows?.[i] ?? [];
+      const product = questionColIndices.length > 0
+        ? questionColIndices.map(ci => (_rawRow[ci] || "").trim()).filter(Boolean).join(" | ")
+        : findVal(r, ["product", "loai"]);
       const fbStatus = findVal(r, ["lead_status"]);
       // Prefer column R (system date right after lead_status) over header-based lookup
       const colRDate = dateColIdx >= 0 && rawRows && rawRows[i] ? (rawRows[i][dateColIdx] || "").trim() : "";
