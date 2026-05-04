@@ -837,7 +837,8 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
     "budget", "chi phi", "sale", "feedback khach", "nhan lead",
   ];
   if (rawHeaders && _questionStopIdx > 0) {
-    for (let _ci = 0; _ci < _questionStopIdx; _ci++) {
+    const _qStart = _platformIdx >= 0 ? _platformIdx + 1 : 0;
+    for (let _ci = _qStart; _ci < _questionStopIdx; _ci++) {
       const hn = foldedRawHeaders[_ci] || "";
       if (!hn) continue;
       if (_systemHeaderTokens.some((t) => hn.includes(t))) continue;
