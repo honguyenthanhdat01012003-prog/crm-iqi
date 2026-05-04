@@ -788,9 +788,10 @@ function detectColumnIndices(rawRows) {
 function mapLeads(rows, headers, rawRows, rawHeaders) {
   const saleBlocks = rawHeaders ? extractSaleBlocks(rawHeaders) : [];
 
-  // Column R: system-recorded date — right after lead_status, often has empty header
   const lsIdx = rawHeaders ? rawHeaders.findIndex((h) => foldText(h).includes("lead status")) : -1;
-  const dateColIdx = lsIdx >= 0 ? lsIdx + 1 : -1;
+  // Find "Thời gian lead về" column — ONLY accepted source for lead timestamp
+  const tgLeadVeIdx = rawHeaders ? rawHeaders.findIndex((h) => foldText(h).includes("thoi gian lead ve")) : -1;
+  const dateColIdx = tgLeadVeIdx >= 0 ? tgLeadVeIdx : -1;
 
   const normalizedHeaders = headers.map((h) => ({ raw: h, norm: foldText(h) }));
 
@@ -813,40 +814,43 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   const nameHeaderIdx = findHeaderIndex(["full_name", "full name", "ho ten", "ten day du"]);
   const phoneHeaderIdx = findHeaderIndex(["phone_number", "phone number", "phone", "so dien thoai", "sdt"]);
 
-  // Detect question columns dynamically, excluding known system columns.
-  // Prefer the region before name/phone to avoid picking sale history columns.
-  const _platformIdx = rawHeaders ? rawHeaders.findIndex(h => foldText(h) === "platform") : -1;
-  const _namePhoneNorms = new Set([
-    "full name", "full_name", "ten day du", "ho ten", "ten", "name",
-    "phone", "phone number", "phone_number", "so dien thoai", "sdt",
-    "dien thoai", "di dong", "so dt", "mobile",
-  ]);
-  let _firstNPIdx = rawHeaders ? rawHeaders.length : 0;
-  if (rawHeaders) {
-    for (let _ci = (_platformIdx >= 0 ? _platformIdx + 1 : 0); _ci < rawHeaders.length; _ci++) {
-      if (_namePhoneNorms.has(foldText(rawHeaders[_ci]))) { _firstNPIdx = _ci; break; }
-    }
-  }
+  // Detect "nhu cầu khách" (question) columns.
+  // New structure: questions come AFTER lead_status column, BEFORE "Thời gian lead về".
+  // Old structure fallback: questions come AFTER platform, BEFORE full_name/phone_number.
   const questionColIndices = [];
-  const _questionStopIdx = (nameHeaderIdx >= 0 && phoneHeaderIdx >= 0)
-    ? Math.min(nameHeaderIdx, phoneHeaderIdx)
-    : _firstNPIdx;
-  const _systemHeaderTokens = [
-    "id", "lead id", "ads id", "campaign", "adset", "ad name", "form name",
-    "lead status", "thoi gian", "created", "inbox", "source", "platform",
-    "budget", "chi phi", "sale", "feedback khach", "nhan lead",
-  ];
-  if (rawHeaders && _questionStopIdx > 0) {
-    const _qStart = _platformIdx >= 0 ? _platformIdx + 1 : 0;
-    for (let _ci = _qStart; _ci < _questionStopIdx; _ci++) {
+
+  if (lsIdx >= 0 && rawHeaders) {
+    // New structure: scan from after lead_status to before "Thời gian lead về" (or end)
+    const _qEnd = tgLeadVeIdx >= 0 ? tgLeadVeIdx : rawHeaders.length;
+    const _nonQTokens = [
+      "thoi gian", "sale", "feedback", "nhan lead", "ghi chu", "note", "budget", "chi phi",
+      "id", "campaign", "adset", "platform", "created", "inbox", "source",
+    ];
+    for (let _ci = lsIdx + 1; _ci < _qEnd; _ci++) {
       const hn = foldedRawHeaders[_ci] || "";
       if (!hn) continue;
-      if (_systemHeaderTokens.some((t) => hn.includes(t))) continue;
+      if (_nonQTokens.some((t) => hn.includes(t))) continue;
       questionColIndices.push(_ci);
     }
-  } else if (rawHeaders && _platformIdx >= 0) {
-    // Fallback to old behavior when full_name/phone_number are not detectable.
-    for (let _ci = _platformIdx + 1; _ci < _firstNPIdx; _ci++) questionColIndices.push(_ci);
+  }
+
+  if (questionColIndices.length === 0 && rawHeaders) {
+    // Fallback: old structure where questions are BEFORE full_name/phone_number (after platform)
+    const _platformIdx = rawHeaders.findIndex((h) => foldText(h) === "platform");
+    const _qStop = (nameHeaderIdx >= 0 && phoneHeaderIdx >= 0)
+      ? Math.min(nameHeaderIdx, phoneHeaderIdx)
+      : rawHeaders.length;
+    const _qStart = _platformIdx >= 0 ? _platformIdx + 1 : 0;
+    const _sysTokens = [
+      "id", "lead id", "ads id", "campaign", "adset", "ad name", "form name",
+      "lead status", "thoi gian", "created", "inbox", "source", "platform",
+      "budget", "chi phi", "sale", "feedback khach", "nhan lead",
+    ];
+    for (let _ci = _qStart; _ci < _qStop; _ci++) {
+      const hn = foldedRawHeaders[_ci] || "";
+      if (!hn || _sysTokens.some((t) => hn.includes(t))) continue;
+      questionColIndices.push(_ci);
+    }
   }
 
   // Standard header-based mapping
