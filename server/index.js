@@ -794,8 +794,27 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
 
   const normalizedHeaders = headers.map((h) => ({ raw: h, norm: foldText(h) }));
 
-  // Detect question columns: everything between 'platform' and first name/phone col
-  // This auto-handles any number of form questions without hardcoding column names
+  const foldedRawHeaders = rawHeaders ? rawHeaders.map((h) => foldText(h)) : [];
+  const findHeaderIndex = (aliases) => {
+    if (!rawHeaders || !rawHeaders.length) return -1;
+    const aliasFolded = aliases.map((a) => foldText(a));
+    for (const a of aliasFolded) {
+      const exactIdx = foldedRawHeaders.findIndex((h) => h === a);
+      if (exactIdx >= 0) return exactIdx;
+    }
+    for (const a of aliasFolded) {
+      const softIdx = foldedRawHeaders.findIndex((h) => h && (h.startsWith(a) || a.startsWith(h)));
+      if (softIdx >= 0) return softIdx;
+    }
+    return -1;
+  };
+
+  // Anchor mapping by stable form fields, avoid positional drift when questions change.
+  const nameHeaderIdx = findHeaderIndex(["full_name", "full name", "ho ten", "ten day du"]);
+  const phoneHeaderIdx = findHeaderIndex(["phone_number", "phone number", "phone", "so dien thoai", "sdt"]);
+
+  // Detect question columns dynamically, excluding known system columns.
+  // Prefer the region before name/phone to avoid picking sale history columns.
   const _platformIdx = rawHeaders ? rawHeaders.findIndex(h => foldText(h) === "platform") : -1;
   const _namePhoneNorms = new Set([
     "full name", "full_name", "ten day du", "ho ten", "ten", "name",
@@ -809,26 +828,44 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
     }
   }
   const questionColIndices = [];
-  if (rawHeaders && _platformIdx >= 0) {
-    for (let _ci = _platformIdx + 1; _ci < _firstNPIdx; _ci++) {
+  const _questionStopIdx = (nameHeaderIdx >= 0 && phoneHeaderIdx >= 0)
+    ? Math.min(nameHeaderIdx, phoneHeaderIdx)
+    : _firstNPIdx;
+  const _systemHeaderTokens = [
+    "id", "lead id", "ads id", "campaign", "adset", "ad name", "form name",
+    "lead status", "thoi gian", "created", "inbox", "source", "platform",
+    "budget", "chi phi", "sale", "feedback khach", "nhan lead",
+  ];
+  if (rawHeaders && _questionStopIdx > 0) {
+    for (let _ci = 0; _ci < _questionStopIdx; _ci++) {
+      const hn = foldedRawHeaders[_ci] || "";
+      if (!hn) continue;
+      if (_systemHeaderTokens.some((t) => hn.includes(t))) continue;
       questionColIndices.push(_ci);
     }
+  } else if (rawHeaders && _platformIdx >= 0) {
+    // Fallback to old behavior when full_name/phone_number are not detectable.
+    for (let _ci = _platformIdx + 1; _ci < _firstNPIdx; _ci++) questionColIndices.push(_ci);
   }
 
   // Standard header-based mapping
   const standardResult = rows
     .map((r, i) => {
-      const name = findVal(r, ["full name", "full_name", "ho ten", "ten", "name", "ten day du"]);
+      const _rawRow = rawRows?.[i] ?? [];
+      const name = nameHeaderIdx >= 0
+        ? ((_rawRow[nameHeaderIdx] || "").trim())
+        : findVal(r, ["full name", "full_name", "ho ten", "ten day du"]);
       if (!name) return null;
 
       const adsId = findVal(r, ["id", "lead_id", "ads_id", "id_ads", "ma_lead", "id lead"]);
-      let phone = findVal(r, ["phone", "so dien thoai", "sdt", "dien thoai", "phone number", "mobile", "di dong", "so dt"]);
+      let phone = phoneHeaderIdx >= 0
+        ? ((_rawRow[phoneHeaderIdx] || "").trim())
+        : findVal(r, ["phone_number", "phone number", "phone", "so dien thoai", "sdt", "dien thoai", "mobile", "di dong", "so dt"]);
       if (phone.startsWith("p:")) phone = phone.slice(2);
       const campaign = findVal(r, ["campaign_name", "campaign name", "chien dich", "ten chien dich"]);
       const adsetName = findVal(r, ["adset_name", "adset name", "nhom quang cao", "ten nhom"]);
       const adName = findVal(r, ["ad_name", "ad name", "noi dung", "ten quang cao"]);
       const formName = findVal(r, ["form_name", "form name", "ten form"]);
-      const _rawRow = rawRows?.[i] ?? [];
       const product = questionColIndices.length > 0
         ? questionColIndices.map(ci => (_rawRow[ci] || "").trim()).filter(Boolean).join(" | ")
         : findVal(r, ["product", "loai"]);
