@@ -815,21 +815,19 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   const phoneHeaderIdx = findHeaderIndex(["phone_number", "phone number", "phone", "so dien thoai", "sdt"]);
 
   // Detect "nhu cầu khách" (question) columns.
-  // New structure: questions come AFTER lead_status column, BEFORE "Thời gian lead về".
-  // Old structure fallback: questions come AFTER platform, BEFORE full_name/phone_number.
+  // Anchor: questions are BETWEEN phone_number col and "Thời gian lead về" col.
+  // Skip inbox_url and lead_status which sit in between.
+  // Fallback: old structure where questions are BEFORE full_name/phone_number (after platform).
   const questionColIndices = [];
+  const _skipExactTokens = new Set(["lead status", "inbox url", "inbox", "inbox_url"]);
 
-  if (lsIdx >= 0 && rawHeaders) {
-    // New structure: scan from after lead_status to before "Thời gian lead về" (or end)
-    const _qEnd = tgLeadVeIdx >= 0 ? tgLeadVeIdx : rawHeaders.length;
-    const _nonQTokens = [
-      "thoi gian", "sale", "feedback", "nhan lead", "ghi chu", "note", "budget", "chi phi",
-      "id", "campaign", "adset", "platform", "created", "inbox", "source",
-    ];
-    for (let _ci = lsIdx + 1; _ci < _qEnd; _ci++) {
+  if (phoneHeaderIdx >= 0 && tgLeadVeIdx > phoneHeaderIdx && rawHeaders) {
+    for (let _ci = phoneHeaderIdx + 1; _ci < tgLeadVeIdx; _ci++) {
       const hn = foldedRawHeaders[_ci] || "";
       if (!hn) continue;
-      if (_nonQTokens.some((t) => hn.includes(t))) continue;
+      // Skip exact-matched system cols that sit between phone and questions
+      if (_skipExactTokens.has(hn)) continue;
+      if (hn === foldText("lead_status") || hn === "lead status") continue;
       questionColIndices.push(_ci);
     }
   }
@@ -841,14 +839,15 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
       ? Math.min(nameHeaderIdx, phoneHeaderIdx)
       : rawHeaders.length;
     const _qStart = _platformIdx >= 0 ? _platformIdx + 1 : 0;
-    const _sysTokens = [
-      "id", "lead id", "ads id", "campaign", "adset", "ad name", "form name",
-      "lead status", "thoi gian", "created", "inbox", "source", "platform",
-      "budget", "chi phi", "sale", "feedback khach", "nhan lead",
-    ];
+    // Use word-boundary safe tokens (no short substrings that can false-match)
+    const _sysExact = new Set([
+      "id", "lead id", "ads id", "campaign name", "adset name", "ad name", "form name",
+      "lead status", "thoi gian", "created time", "inbox url", "source", "platform",
+      "budget", "sale", "feedback khach", "nhan lead",
+    ]);
     for (let _ci = _qStart; _ci < _qStop; _ci++) {
       const hn = foldedRawHeaders[_ci] || "";
-      if (!hn || _sysTokens.some((t) => hn.includes(t))) continue;
+      if (!hn || _sysExact.has(hn)) continue;
       questionColIndices.push(_ci);
     }
   }
