@@ -79,7 +79,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 21; // Bump this when adding new DDL/migrations
+const DB_VERSION = 22; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -417,6 +417,12 @@ async function initDb() {
         }
       }
     } catch (_) {}
+  }
+
+  // --- v22: manual_assign flag on projects ---
+  if (dbVersion < 22) {
+    console.log("[DB] v22 migration: adding manual_assign column to projects...");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN manual_assign INTEGER DEFAULT 0"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -1081,9 +1087,12 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // Helper: normalize phone for matching (uses robust +84/0 normalization)
   const normPhone = normalizePhoneKey;
 
-  // Read project flags
-  const projectRow = await get(db, "SELECT manual_assign FROM projects WHERE id = ?", [projectId]);
-  const isManualAssign = !!(projectRow && projectRow.manual_assign);
+  // Read project flags (resilient: column may not exist on old DBs)
+  let isManualAssign = false;
+  try {
+    const projectRow = await get(db, "SELECT manual_assign FROM projects WHERE id = ?", [projectId]);
+    isManualAssign = !!(projectRow && projectRow.manual_assign);
+  } catch (_) {}
 
   // 0. BACKUP: Save sale assignments + history before destructive sync
   try {
