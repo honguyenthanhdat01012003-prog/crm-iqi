@@ -126,7 +126,8 @@ async function initDb() {
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lead_url TEXT DEFAULT '',
       cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '',
-      mgr_assign_idx INTEGER DEFAULT 0)`,
+      mgr_assign_idx INTEGER DEFAULT 0, manual_assign INTEGER DEFAULT 0)`,
+
     `CREATE TABLE IF NOT EXISTS lead_history (
       id INTEGER PRIMARY KEY, lead_id INTEGER NOT NULL, sale_name TEXT NOT NULL,
       action TEXT DEFAULT '', contact_date TEXT DEFAULT '', status TEXT DEFAULT '',
@@ -262,6 +263,7 @@ async function initDb() {
     "ALTER TABLE telegram_bots ADD COLUMN group_chat_id TEXT DEFAULT ''",
     "ALTER TABLE leads ADD COLUMN deal_value REAL DEFAULT 0",
     "ALTER TABLE leads ADD COLUMN is_locked INTEGER DEFAULT 0",
+    "ALTER TABLE projects ADD COLUMN manual_assign INTEGER DEFAULT 0",
     `CREATE TABLE IF NOT EXISTS telegram_lead_msgs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       telegram_id TEXT NOT NULL,
@@ -1079,6 +1081,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // Helper: normalize phone for matching (uses robust +84/0 normalization)
   const normPhone = normalizePhoneKey;
 
+  // Read project flags
+  const projectRow = await get(db, "SELECT manual_assign FROM projects WHERE id = ?", [projectId]);
+  const isManualAssign = !!(projectRow && projectRow.manual_assign);
+
   // 0. BACKUP: Save sale assignments + history before destructive sync
   try {
     const backupLeads = await all(db,
@@ -1257,6 +1263,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let managerName = "";
     let dealValue = 0;
     let isLockedVal = 0;
+
+    // Manual-assign project: new leads (no prev DB record) must NOT be auto-assigned from sheet
+    if (isManualAssign && !prev && saleName) {
+      console.log(`[replaceProjectData] MANUAL_ASSIGN: new lead "${l.name}" blocked from auto-assign (was "${saleName}")`);
+      saleName = "";
+      saleId = null;
+    }
 
     if (prev) {
       // ALWAYS preserve CRM status if user has changed it from "new"
@@ -3535,6 +3548,22 @@ app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => 
   }
 });
 
+/* POST /api/projects/:id/toggle-manual-assign - Toggle manual_assign flag for hot projects */
+app.post("/api/projects/:id/toggle-manual-assign", requireAuth, requireAdminOnly, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const proj = await get(db, "SELECT id, name, manual_assign FROM projects WHERE id = ?", [id]);
+    if (!proj) return res.status(404).json({ error: "Dự án không tồn tại" });
+    const newVal = proj.manual_assign ? 0 : 1;
+    await run(db, "UPDATE projects SET manual_assign = ? WHERE id = ?", [newVal, id]);
+    console.log(`[toggle-manual-assign] Project "${proj.name}" (id=${id}) manual_assign=${newVal} by ${req.user.displayName}`);
+    const data = await readData(db);
+    res.json({ manual_assign: newVal, projectName: proj.name, ...data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -3632,6 +3661,11 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     const { projectId, saleNames } = req.body;
     if (!saleNames || !saleNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     const pid = Number(projectId) || 1;
+    // Block shuffle for manual_assign projects
+    const projCheck = await get(db, "SELECT manual_assign, name FROM projects WHERE id = ?", [pid]);
+    if (projCheck && projCheck.manual_assign) {
+      return res.status(403).json({ error: `Dự án "${projCheck.name}" bật chế độ Chia tay thủ công — không cho phép xáo tự động. Vui lòng chia lead thủ công.` });
+    }
     // Get unassigned leads (sale_name is empty or 'Chưa chia')
     const leads = await all(db,
       "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL) ORDER BY id ASC",
@@ -3786,7 +3820,10 @@ async function processAutoRotate(db) {
        AND l.is_locked = 0
      ORDER BY l.id ASC`
   );
-  const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id));
+  // Exclude manual_assign projects from auto-rotate entirely
+  const manualAssignProjects = await all(db, "SELECT id FROM projects WHERE manual_assign = 1");
+  const manualAssignIds = new Set(manualAssignProjects.map(r => Number(r.id)));
+  const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id) && !manualAssignIds.has(l.project_id));
 
   let rotated = 0;
   const stmts = [];
@@ -4043,6 +4080,15 @@ async function processSchedules(db, triggerUser) {
     try { distTimes = JSON.parse(sch.distribute_time || '["08:00"]'); } catch { distTimes = [sch.distribute_time || '08:00']; }
     if (!Array.isArray(distTimes)) distTimes = [String(distTimes)];
     const numSlots = distTimes.length;
+
+    // Skip schedules for manual_assign projects
+    if (sch.project_id) {
+      const projFlag = await get(db, "SELECT manual_assign FROM projects WHERE id = ?", [sch.project_id]);
+      if (projFlag && projFlag.manual_assign) {
+        console.log(`[processSchedules] SKIP schedule #${sch.id}: project ${sch.project_id} has manual_assign=1`);
+        continue;
+      }
+    }
 
     // Determine which slot to process next
     let lastSlot = sch.last_processed_slot || 0;
