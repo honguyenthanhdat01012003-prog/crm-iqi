@@ -662,11 +662,12 @@ function pickSaleInfo(rawCols, saleBlocks) {
   }
 
   if (!currentSale) {
+    // Fallback: only use blocks that have a proper "Nhận Lead" column.
+    // Blocks without nhanLeadIdx rely on feedback col alone which can false-match.
     for (let i = saleBlocks.length - 1; i >= 0; i--) {
       const b = saleBlocks[i];
-      const v = b.nhanLeadIdx >= 0
-        ? (rawCols[b.nhanLeadIdx] || "").trim()
-        : (rawCols[b.feedbackIdx] || "").trim();
+      if (b.nhanLeadIdx < 0) continue;
+      const v = (rawCols[b.nhanLeadIdx] || "").trim();
       if (v) { currentSale = b.name; break; }
     }
   }
@@ -1179,7 +1180,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   }
   const phoneHistMap = new Map();
   for (const h of allHistory) {
-    if (h.source === "sheet") continue; // Sheet history comes from new sheet
+    // Direction B: keep sheet-source entries that have real sale feedback (non-empty status/feedback).
+    // Pure "Chia lead" sheet entries (no status, no feedback) are dropped — they'll be re-added from new sheet.
+    if (h.source === "sheet" && !h.status && !h.feedback) continue;
     const np = normPhone(h.phone);
     if (!np) continue;
     if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
