@@ -3661,11 +3661,6 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     const { projectId, saleNames } = req.body;
     if (!saleNames || !saleNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     const pid = Number(projectId) || 1;
-    // Block shuffle for manual_assign projects
-    const projCheck = await get(db, "SELECT manual_assign, name FROM projects WHERE id = ?", [pid]);
-    if (projCheck && projCheck.manual_assign) {
-      return res.status(403).json({ error: `Dự án "${projCheck.name}" bật chế độ Chia tay thủ công — không cho phép xáo tự động. Vui lòng chia lead thủ công.` });
-    }
     // Get unassigned leads (sale_name is empty or 'Chưa chia')
     const leads = await all(db,
       "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL) ORDER BY id ASC",
@@ -3820,10 +3815,7 @@ async function processAutoRotate(db) {
        AND l.is_locked = 0
      ORDER BY l.id ASC`
   );
-  // Exclude manual_assign projects from auto-rotate entirely
-  const manualAssignProjects = await all(db, "SELECT id FROM projects WHERE manual_assign = 1");
-  const manualAssignIds = new Set(manualAssignProjects.map(r => Number(r.id)));
-  const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id) && !manualAssignIds.has(l.project_id));
+  const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id));
 
   let rotated = 0;
   const stmts = [];
@@ -4080,15 +4072,6 @@ async function processSchedules(db, triggerUser) {
     try { distTimes = JSON.parse(sch.distribute_time || '["08:00"]'); } catch { distTimes = [sch.distribute_time || '08:00']; }
     if (!Array.isArray(distTimes)) distTimes = [String(distTimes)];
     const numSlots = distTimes.length;
-
-    // Skip schedules for manual_assign projects
-    if (sch.project_id) {
-      const projFlag = await get(db, "SELECT manual_assign FROM projects WHERE id = ?", [sch.project_id]);
-      if (projFlag && projFlag.manual_assign) {
-        console.log(`[processSchedules] SKIP schedule #${sch.id}: project ${sch.project_id} has manual_assign=1`);
-        continue;
-      }
-    }
 
     // Determine which slot to process next
     let lastSlot = sch.last_processed_slot || 0;
