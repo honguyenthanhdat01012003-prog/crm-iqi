@@ -9567,6 +9567,37 @@ async function processDailySaleReminder(db, now) {
     }
   }
 
+  // --- Manager report: today's leads grouped by project → manager ---
+  // sync_at stored as toLocaleString("vi-VN") e.g. "07/05/2026, 14:30:25" or "14:30:25 7/5/2026"
+  const managerReports = {}; // pid -> { projectName, managers: { mgrName: [{name, syncTime, saleName}] } }
+  try {
+    const sampleNow = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const todayDateMatch = sampleNow.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
+    const todayPrefix = todayDateMatch ? todayDateMatch[0] : "";
+    if (todayPrefix) {
+      const todayLeads = await all(db,
+        "SELECT name, sale_name, manager_name, sync_at, created_at, project_id FROM leads WHERE sync_at LIKE ?",
+        [`%${todayPrefix}%`]
+      );
+      for (const l of todayLeads) {
+        const pid = l.project_id;
+        if (!projectMap[pid]) continue;
+        const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
+        if (!managerReports[pid]) managerReports[pid] = { projectName: projectMap[pid], managers: {} };
+        if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
+        const timeMatch = (l.sync_at || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+        const syncTime = timeMatch ? timeMatch[1] : "";
+        managerReports[pid].managers[mgr].push({
+          name: l.name || "N/A",
+          syncTime,
+          saleName: (l.sale_name || "").trim() || null,
+        });
+      }
+    }
+  } catch (mgrErr) {
+    console.error("[daily-reminder] Manager report query error:", mgrErr.message);
+  }
+
   // Send group report to each bot's group_chat_id
   for (const bot of bots) {
     if (!bot.token || !bot.group_chat_id) continue;
@@ -9582,8 +9613,8 @@ async function processDailySaleReminder(db, now) {
 
     // Build report for this bot's projects
     const relevantProjects = botProjectIds.length > 0
-      ? botProjectIds.filter(pid => projectReports[pid])
-      : Object.keys(projectReports).map(Number);
+      ? botProjectIds.filter(pid => projectReports[pid] || managerReports[pid])
+      : [...new Set([...Object.keys(projectReports), ...Object.keys(managerReports)].map(Number))];
 
     if (relevantProjects.length === 0) continue;
 
@@ -9593,13 +9624,13 @@ async function processDailySaleReminder(db, now) {
     for (const pid of relevantProjects) {
       const pr = projectReports[pid];
       if (!pr) continue;
-      saleLines.push(`\n📋 *${pr.projectName}*:`);
+      saleLines.push(`\n📋 *${escMd(pr.projectName)}*:`);
       for (const [saleName, stats] of Object.entries(pr.sales)) {
         totalLeads += stats.total;
         totalPending += stats.pending;
         totalUpdated += stats.updated;
         const statusIcon = stats.pending > 0 ? "⚠️" : "✅";
-        saleLines.push(`  ${statusIcon} ${saleName}: ${stats.total} lead (✅ ${stats.updated} đã CN | ⏳ ${stats.pending} chưa CN)`);
+        saleLines.push(`  ${statusIcon} ${escMd(saleName)}: ${stats.total} lead (✅ ${stats.updated} đã CN | ⏳ ${stats.pending} chưa CN)`);
       }
     }
 
@@ -9627,6 +9658,47 @@ async function processDailySaleReminder(db, now) {
       console.log(`[daily-reminder] Group report sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
     } catch (e) {
       console.error(`[daily-reminder] Group report failed for ${bot.name}:`, e.message);
+    }
+
+    // --- Send manager detail report (today's leads per manager) as a separate message ---
+    const mgrMsgLines = [
+      `👨‍💼 *QUẢN LÍ - LEAD HÔM NAY*`,
+      `🗓 ${nowStr}`,
+      `━━━━━━━━━━━━━━━━━━━━`,
+    ];
+    let hasMgrData = false;
+    for (const pid of relevantProjects) {
+      const mr = managerReports[pid];
+      if (!mr || Object.keys(mr.managers).length === 0) continue;
+      const totalToday = Object.values(mr.managers).reduce((s, arr) => s + arr.length, 0);
+      hasMgrData = true;
+      mgrMsgLines.push(``, `🏢 *${escMd(mr.projectName)}* — ${totalToday} lead hôm nay:`);
+      for (const [mgrName, mgrLeads] of Object.entries(mr.managers)) {
+        mgrMsgLines.push(`  👨‍💼 *${escMd(mgrName)}*: ${mgrLeads.length} lead`);
+        const shown = mgrLeads.slice(0, 12);
+        for (let i = 0; i < shown.length; i++) {
+          const l = shown[i];
+          const saleTag = l.saleName ? `✅ ${escMd(l.saleName)}` : `⏳ Chưa chia`;
+          const timeTag = l.syncTime ? ` [${l.syncTime}]` : "";
+          mgrMsgLines.push(`    ${i + 1}. ${escMd(l.name)}${timeTag} — ${saleTag}`);
+        }
+        if (mgrLeads.length > 12) {
+          mgrMsgLines.push(`    _...và ${mgrLeads.length - 12} lead khác_`);
+        }
+      }
+    }
+    if (hasMgrData) {
+      mgrMsgLines.push(``, `━━━━━━━━━━━━━━━━━━━━`);
+      const mgrMsg = mgrMsgLines.join("\n");
+      try {
+        await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: bot.group_chat_id, text: mgrMsg, parse_mode: "Markdown" }),
+        });
+        console.log(`[daily-reminder] Manager report sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
+      } catch (e) {
+        console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, e.message);
+      }
     }
   }
 }
