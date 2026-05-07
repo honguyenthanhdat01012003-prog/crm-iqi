@@ -24,6 +24,9 @@ const JWT_SECRET = process.env.JWT_SECRET || "lux-iqi-crm-jwt-2026-xK9mZpQ4vR7wN
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [];
 const TELEGRAM_WEBHOOK_SECRET = crypto.createHash("sha256").update("tg-webhook-" + JWT_SECRET).digest("hex").slice(0, 64);
 
+// Escape Telegram Markdown V1 special chars in user-provided content (_*`[)
+const escMd = (s) => String(s || "").replace(/[_*`[\]\\]/g, "\\$&");
+
 // Global Socket.IO instance — set up when server starts
 let io = null;
 
@@ -1775,12 +1778,13 @@ async function syncProject(db, projectId) {
                 console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" has NO telegram_id, skip notify`);
                 continue;
               }
-              const leadLines = mgrNewLeads.map((l, i) =>
-                `${i + 1}. 👤 *${l.name || "N/A"}* - 📞 \`${l.phone || "-"}\`${l.product ? ` - ${l.product}` : ""}`
-              ).join("\n");
+              const leadLines = mgrNewLeads.map((l, i) => {
+                const prod = l.product && l.product !== "-" ? ` - ${escMd(l.product)}` : "";
+                return `${i + 1}. 👤 *${escMd(l.name || "N/A")}* - 📞 \`${l.phone || "-"}\`` + prod;
+              }).join("\n");
               const msg = [
                 `🚨 *CÓ ${mgrNewLeads.length} LEAD MỚI*`,
-                `📋 Dự án: *${projectName}*`,
+                `📋 Dự án: *${escMd(projectName)}*`,
                 `🕒 ${now}`,
                 `----------------------------------------------`,
                 leadLines,
@@ -3619,11 +3623,11 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
             `🔔 *BẠN CÓ LEAD MỚI*`,
-            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
             `----------------------------------------------`,
-            `👤 Khách: *${lead.name || "N/A"}*`,
+            `👤 Khách: *${escMd(lead.name || "N/A")}*`,
             `📞 SĐT: \`${lead.phone || "-"}\``,
-            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🔗 Nhu cầu: ${escMd(lead.product || "-")}`,
             `🕒 Nhận lúc: ${now}`,
             `--------------------------`,
             `📝 *FEEDBACK:*`,
@@ -4275,11 +4279,11 @@ async function processSchedules(db, triggerUser) {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
           const msg = [
             `🔔 *BẠN CÓ LEAD MỚI*`,
-            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
             `----------------------------------------------`,
-            `👤 Khách: *${lead.name || "N/A"}*`,
+            `👤 Khách: *${escMd(lead.name || "N/A")}*`,
             `📞 SĐT: \`${lead.phone || "-"}\``,
-            `🔗 Nhu cầu: ${lead.product || "-"}`,
+            `🔗 Nhu cầu: ${escMd(lead.product || "-")}`,
             `🕒 Nhận lúc: ${now}`,
             `📋 Lịch chia tự động #${sch.id} (Tour ${currentTour + 1}/${totalTours})`,
             `--------------------------`,
@@ -4492,7 +4496,7 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                   chat_id: saleUser.telegram_id,
-                  text: `🚫 *LEAD ĐÃ BỊ THU HỒI*\nDự án: *${projectRow ? projectRow.name : "-"}*\n----------------------------------------------\n👤 Khách: *${leadRow ? leadRow.name : "N/A"}*\n\n❌ _Lead này đã được Admin thu hồi._\n_Bạn không cần liên hệ khách hàng này nữa._`,
+                  text: `🚫 *LEAD ĐÃ BỊ THU HỒI*\nDự án: *${escMd(projectRow ? projectRow.name : "-")}*\n----------------------------------------------\n👤 Khách: *${escMd(leadRow ? leadRow.name : "N/A")}*\n\n❌ _Lead này đã được Admin thu hồi._\n_Bạn không cần liên hệ khách hàng này nữa._`,
                   parse_mode: "Markdown",
                 }),
               });
@@ -5033,11 +5037,11 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const msg = [
             `🔔 *BẠN CÓ LEAD MỚI*`,
-            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
             `----------------------------------------------`,
-            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+            `👤 Khách: *${escMd(lead ? lead.name : "N/A")}*`,
             `📞 SĐT: \`${lead ? lead.phone || "-" : "-"}\``,
-            `🔗 Nhu cầu: ${lead ? lead.product || "-" : "-"}`,
+            `🔗 Nhu cầu: ${escMd(lead ? lead.product || "-" : "-")}`,
             `🕒 Nhận lúc: ${now}`,
             `--------------------------`,
             `📝 *FEEDBACK:*`,
@@ -5224,9 +5228,9 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
           const recallMsg = [
             `🚫 *LEAD ĐÃ BỊ THU HỒI*`,
-            `Dự án: *${projectRow ? projectRow.name : "-"}*`,
+            `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
             `----------------------------------------------`,
-            `👤 Khách: *${lead ? lead.name : "N/A"}*`,
+            `👤 Khách: *${escMd(lead ? lead.name : "N/A")}*`,
             ``,
             `❌ _Lead này đã được Admin thu hồi._`,
             `_Bạn không cần liên hệ khách hàng này nữa._`,
