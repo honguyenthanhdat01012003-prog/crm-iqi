@@ -9567,32 +9567,42 @@ async function processDailySaleReminder(db, now) {
     }
   }
 
-  // --- Manager report: today's leads grouped by project → manager ---
-  // sync_at stored as toLocaleString("vi-VN") e.g. "07/05/2026, 14:30:25" or "14:30:25 7/5/2026"
-  const managerReports = {}; // pid -> { projectName, managers: { mgrName: [{name, syncTime, saleName}] } }
+  // --- Manager report: today's lead assignments grouped by project -> manager ---
+  const managerReports = {}; // pid -> { projectName, managers: { mgrName: [{name, assignTime, saleName}] } }
   try {
-    const sampleNow = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-    const todayDateMatch = sampleNow.match(/\d{1,2}\/\d{1,2}\/\d{4}/);
-    const todayPrefix = todayDateMatch ? todayDateMatch[0] : "";
-    if (todayPrefix) {
-      const todayLeads = await all(db,
-        "SELECT name, sale_name, manager_name, sync_at, created_at, project_id FROM leads WHERE sync_at LIKE ?",
-        [`%${todayPrefix}%`]
-      );
-      for (const l of todayLeads) {
-        const pid = l.project_id;
-        if (!projectMap[pid]) continue;
-        const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
-        if (!managerReports[pid]) managerReports[pid] = { projectName: projectMap[pid], managers: {} };
-        if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
-        const timeMatch = (l.sync_at || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-        const syncTime = timeMatch ? timeMatch[1] : "";
-        managerReports[pid].managers[mgr].push({
-          name: l.name || "N/A",
-          syncTime,
-          saleName: (l.sale_name || "").trim() || null,
-        });
-      }
+    const d = now.getDate();
+    const m = now.getMonth() + 1;
+    const y = now.getFullYear();
+    const dateNeedles = [...new Set([
+      `${d}/${m}/${y}`,
+      `${String(d).padStart(2, "0")}/${m}/${y}`,
+      `${d}/${String(m).padStart(2, "0")}/${y}`,
+      `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`,
+    ])];
+    const whereLike = dateNeedles.map(() => "lh.contact_date LIKE ?").join(" OR ");
+    const todayAssignments = await all(db,
+      `SELECT l.name, l.manager_name, l.project_id,
+              lh.sale_name, lh.contact_date
+       FROM lead_history lh
+       JOIN leads l ON l.id = lh.lead_id
+       WHERE lh.action = 'Chia lead'
+         AND (${whereLike})
+       ORDER BY l.project_id, l.manager_name, lh.seq ASC`,
+      dateNeedles.map(s => `%${s}%`)
+    );
+    for (const l of todayAssignments) {
+      const pid = l.project_id;
+      if (!projectMap[pid]) continue;
+      const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
+      if (!managerReports[pid]) managerReports[pid] = { projectName: projectMap[pid], managers: {} };
+      if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
+      const timeMatch = (l.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+      const assignTime = timeMatch ? timeMatch[1] : "";
+      managerReports[pid].managers[mgr].push({
+        name: l.name || "N/A",
+        assignTime,
+        saleName: (l.sale_name || "").trim() || null,
+      });
     }
   } catch (mgrErr) {
     console.error("[daily-reminder] Manager report query error:", mgrErr.message);
@@ -9679,7 +9689,7 @@ async function processDailySaleReminder(db, now) {
         for (let i = 0; i < shown.length; i++) {
           const l = shown[i];
           const saleTag = l.saleName ? `✅ ${escMd(l.saleName)}` : `⏳ Chưa chia`;
-          const timeTag = l.syncTime ? ` [${l.syncTime}]` : "";
+          const timeTag = l.assignTime ? ` [${l.assignTime}]` : "";
           mgrMsgLines.push(`    ${i + 1}. ${escMd(l.name)}${timeTag} — ${saleTag}`);
         }
         if (mgrLeads.length > 12) {
