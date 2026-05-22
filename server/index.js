@@ -3772,27 +3772,49 @@ app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) 
 app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) => {
   try {
     const source = req.query.source === "sprint" ? "sprint-rotate" : "auto-rotate";
+    const sourceAliases = source === "sprint-rotate"
+      ? ["sprint-rotate", "sprint", "nuoc-rut", "nước-rút"]
+      : ["auto-rotate", "auto_rotate", "auto", "rotate"];
+    const feedbackNeedles = source === "sprint-rotate"
+      ? ["%Nước rút:%", "%Nuoc rut:%", "%không chốt trong 12h%", "%khong chot trong 12h%"]
+      : ["%Tự động xáo%", "%Tu dong xao%", "%không cập nhật%", "%khong cap nhat%"];
+    const sourcePlaceholders = sourceAliases.map(() => "?").join(",");
+    const feedbackWhere = feedbackNeedles.map(() => "lh.feedback LIKE ?").join(" OR ");
     const rows = await all(db,
-      `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, l.name as lead_name, l.phone as lead_phone, l.project_id
+      `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, lh.source,
+              l.name as lead_name, l.phone as lead_phone, l.project_id
        FROM lead_history lh
        JOIN leads l ON lh.lead_id = l.id
-       WHERE lh.source = ?
+       WHERE lh.action = 'Chia lead'
+         AND (
+           LOWER(COALESCE(lh.source, '')) IN (${sourcePlaceholders})
+           OR (${feedbackWhere})
+         )
        ORDER BY lh.id DESC
        LIMIT 500`,
-      [source]
+      [...sourceAliases, ...feedbackNeedles]
     );
+    const seen = new Set();
     const history = rows.map(r => {
-      const oldSaleMatch = (r.feedback || "").match(/sale\s+(.+?)\s+không (?:cập nhật|chốt)/);
+      const feedback = r.feedback || "";
+      const oldSaleMatch =
+        feedback.match(/sale\s+(.+?)\s+không\s+(?:cập nhật|chốt)/i) ||
+        feedback.match(/sale\s+(.+?)\s+khong\s+(?:cap nhat|chot)/i);
       return {
         id: r.id,
         leadId: r.lead_id,
         leadName: r.lead_name || "",
         leadPhone: r.lead_phone || "",
         projectId: r.project_id,
-        fromSale: oldSaleMatch ? oldSaleMatch[1] : "",
+        fromSale: oldSaleMatch ? oldSaleMatch[1].trim() : "",
         toSale: r.sale_name || "",
         date: r.contact_date || "",
       };
+    }).filter(h => {
+      const key = `${h.leadId}|${h.toSale}|${h.date}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
     res.json({ history });
   } catch (err) {
