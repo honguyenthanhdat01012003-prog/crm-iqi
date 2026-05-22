@@ -9584,7 +9584,7 @@ async function processDailySaleReminder(db, now) {
   }
 
   // --- Manager report: yesterday's received leads grouped by project -> manager ---
-  const managerReports = {}; // pid -> { projectName, totalReceived, managerAssigned, saleCount, managers: { mgrName: [{name, receivedTime, assignTime, saleName}] } }
+  const managerReports = {}; // pid -> { projectName, totalReceived, managerAssigned, oldAssigned, saleCount, managers, oldManagers }
   const reportDate = new Date(now);
   reportDate.setDate(reportDate.getDate() - 1);
   const reportDateLabel = `${String(reportDate.getDate()).padStart(2, "0")}/${String(reportDate.getMonth() + 1).padStart(2, "0")}/${reportDate.getFullYear()}`;
@@ -9598,14 +9598,15 @@ async function processDailySaleReminder(db, now) {
       `${d}/${String(m).padStart(2, "0")}/${y}`,
       `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`,
     ])];
+    const createdWhereLike = dateNeedles.map(() => "l.created_at LIKE ?").join(" OR ");
     const syncWhereLike = dateNeedles.map(() => "l.sync_at LIKE ?").join(" OR ");
     const receivedLeads = await all(db,
-      `SELECT l.id, l.name, l.manager_name, l.project_id, l.sync_at
+      `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at
        FROM leads l
        WHERE l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
-         AND (${syncWhereLike})
+         AND ((${createdWhereLike}) OR (${syncWhereLike}))
        ORDER BY l.project_id, l.manager_name, l.id ASC`,
-      dateNeedles.map(s => `%${s}%`)
+      [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
     );
     const leadIds = receivedLeads.map(l => l.id);
     const assignmentMap = new Map();
@@ -9631,17 +9632,52 @@ async function processDailySaleReminder(db, now) {
       const pid = l.project_id;
       if (!reportProjectMap[pid]) continue;
       const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
-      if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, saleNames: new Set(), managers: {} };
+      if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
       managerReports[pid].totalReceived++;
       if ((l.manager_name || "").trim()) managerReports[pid].managerAssigned++;
       if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
       const assignment = assignmentMap.get(l.id);
-      const receiveTimeMatch = (l.sync_at || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+      const receiveText = l.created_at || l.sync_at || "";
+      const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
       const assignTimeMatch = (assignment?.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
       const saleName = (assignment?.sale_name || "").trim() || null;
       if (saleName) managerReports[pid].saleNames.add(saleName);
       managerReports[pid].managers[mgr].push({
         name: l.name || "N/A",
+        receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
+        assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
+        saleName,
+      });
+    }
+
+    const assignWhereLike = dateNeedles.map(() => "lh.contact_date LIKE ?").join(" OR ");
+    const oldAssignments = await all(db,
+      `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at,
+              lh.sale_name, lh.contact_date
+       FROM lead_history lh
+       JOIN leads l ON l.id = lh.lead_id
+       WHERE lh.action = 'Chia lead'
+         AND l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
+         AND (${assignWhereLike})
+         AND NOT ((${createdWhereLike}) OR (${syncWhereLike}))
+       ORDER BY l.project_id, l.manager_name, lh.seq ASC`,
+      [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
+    );
+    for (const l of oldAssignments) {
+      const pid = l.project_id;
+      if (!reportProjectMap[pid]) continue;
+      const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
+      if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
+      managerReports[pid].oldAssigned++;
+      if (!managerReports[pid].oldManagers[mgr]) managerReports[pid].oldManagers[mgr] = [];
+      const receiveText = l.created_at || l.sync_at || "";
+      const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+      const assignTimeMatch = (l.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+      const saleName = (l.sale_name || "").trim() || null;
+      if (saleName) managerReports[pid].saleNames.add(saleName);
+      managerReports[pid].oldManagers[mgr].push({
+        name: l.name || "N/A",
+        receivedAt: receiveText,
         receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
         assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
         saleName,
@@ -9722,6 +9758,7 @@ async function processDailySaleReminder(db, now) {
       if (!mr) continue;
       totalReceived += mr.totalReceived || 0;
       totalManagerAssigned += mr.managerAssigned || 0;
+      totalManagerAssigned += mr.oldAssigned || 0;
       for (const s of (mr.saleNames || [])) allSaleNames.add(s);
     }
 
@@ -9735,7 +9772,10 @@ async function processDailySaleReminder(db, now) {
       ...relevantProjects.flatMap(pid => {
         const mr = managerReports[pid];
         if (!mr) return [];
-        return Object.entries(mr.managers).map(([mgrName, mgrLeads]) => `  + ${escMd(mgrName)}: ${mgrLeads.length} lead`);
+        const counts = new Map();
+        for (const [mgrName, mgrLeads] of Object.entries(mr.managers)) counts.set(mgrName, (counts.get(mgrName) || 0) + mgrLeads.length);
+        for (const [mgrName, mgrLeads] of Object.entries(mr.oldManagers || {})) counts.set(mgrName, (counts.get(mgrName) || 0) + mgrLeads.length);
+        return [...counts.entries()].map(([mgrName, count]) => `  + ${escMd(mgrName)}: ${count} lead`);
       }),
       `👥 Số lượng sale đã nhận lead trong ngày đó: *${allSaleNames.size}*`,
       `━━━━━━━━━━━━━━━━━━━━`,
@@ -9748,8 +9788,11 @@ async function processDailySaleReminder(db, now) {
     }
     for (const pid of relevantProjects) {
       const mr = managerReports[pid];
-      if (!mr || Object.keys(mr.managers).length === 0) continue;
-      detailLines.push(``, `🏢 *${escMd(mr.projectName)}*`);
+      detailLines.push(``, `🏢 *${escMd(mr?.projectName || reportProjectMap[pid] || projectMap[pid] || "-")}*`);
+      if (!mr || (Object.keys(mr.managers).length === 0 && Object.keys(mr.oldManagers || {}).length === 0)) {
+        detailLines.push(`Không có lead nhận/chia trong ngày ${reportDateLabel}.`);
+        continue;
+      }
       for (const [mgrName, mgrLeads] of Object.entries(mr.managers)) {
         detailLines.push(`-> Quản lí *${escMd(mgrName)}*: ${mgrLeads.length} lead`);
         for (let i = 0; i < mgrLeads.length; i++) {
@@ -9757,6 +9800,18 @@ async function processDailySaleReminder(db, now) {
           const timePair = `${l.receivedTime || "-"} - ${l.assignTime || "chưa chia"}`;
           const saleTag = l.saleName ? `chia cho sale ${escMd(l.saleName)}` : `chưa chia cho sale`;
           detailLines.push(`${i + 1}. ${escMd(l.name)} (${timePair}) ${saleTag}`);
+        }
+      }
+      if (Object.keys(mr.oldManagers || {}).length > 0) {
+        detailLines.push(``, `Lead cũ được chia trong ngày ${reportDateLabel}:`);
+        for (const [mgrName, mgrLeads] of Object.entries(mr.oldManagers)) {
+          detailLines.push(`-> Quản lí *${escMd(mgrName)}*: ${mgrLeads.length} lead cũ`);
+          for (let i = 0; i < mgrLeads.length; i++) {
+            const l = mgrLeads[i];
+            const timePair = `${l.receivedAt || "-"} - ${l.assignTime || "chưa rõ"}`;
+            const saleTag = l.saleName ? `chia cho sale ${escMd(l.saleName)}` : `chưa chia cho sale`;
+            detailLines.push(`${i + 1}. ${escMd(l.name)} (${timePair}) ${saleTag}`);
+          }
         }
       }
     }
