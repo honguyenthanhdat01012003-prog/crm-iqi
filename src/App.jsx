@@ -532,7 +532,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   // Project modal state
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
-  const [draftProject, setDraftProject] = useState({ name: "", leadUrl: "", costUrl: "" });
+  const [draftProject, setDraftProject] = useState({ name: "", leadUrl: "", costUrl: "", dailyReportEnabled: false });
 
   // Legacy import modal state
   const [showLegacyModal, setShowLegacyModal] = useState(false);
@@ -719,13 +719,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   // --- Project CRUD ---
   const openNewProject = () => {
     setEditingProject(null);
-    setDraftProject({ name: "", leadUrl: "", costUrl: "", fbCode: "", fbPerson: "" });
+    setDraftProject({ name: "", leadUrl: "", costUrl: "", fbCode: "", fbPerson: "", dailyReportEnabled: false });
     setShowProjectModal(true);
   };
 
   const openEditProject = (p) => {
     setEditingProject(p);
-    setDraftProject({ name: p.name, leadUrl: p.leadUrl || "", costUrl: p.costUrl || "", fbCode: p.fbCode || "", fbPerson: p.fbPerson || "" });
+    setDraftProject({ name: p.name, leadUrl: p.leadUrl || "", costUrl: p.costUrl || "", fbCode: p.fbCode || "", fbPerson: p.fbPerson || "", dailyReportEnabled: !!p.dailyReportEnabled });
     setShowProjectModal(true);
   };
 
@@ -1439,6 +1439,18 @@ function CRMApp({ user, updateUser, onLogout }) {
           <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8, lineHeight: 1.5 }}>
             💡 Mã dự án dùng để phân loại chiến dịch FB Ads. VD: nếu mã là "CT4", chiến dịch có chứa "CT4" trong tên sẽ tự động gán vào dự án này.
           </div>
+          <label style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginTop: 10 }}>
+            <span>
+              Báo cáo Telegram hằng ngày
+              <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginTop: 2 }}>Bật để đưa dự án này vào báo cáo sale và quản lí gửi về nhóm.</div>
+            </span>
+            <input
+              type="checkbox"
+              checked={!!draftProject.dailyReportEnabled}
+              onChange={(e) => setDraftProject({ ...draftProject, dailyReportEnabled: e.target.checked })}
+              style={{ width: 18, height: 18, flexShrink: 0 }}
+            />
+          </label>
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
             <button
               onClick={saveProject}
@@ -6237,6 +6249,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
               <h4 style={{ margin: "0 0 12px", display: "flex", alignItems: "center", gap: 8 }}>
                 {p.name}
                 {p.isLegacy && <span style={{ fontSize: 10, fontWeight: 700, background: "#dbeafe", color: "#1e40af", padding: "2px 8px", borderRadius: 10 }}>DATA CŨ</span>}
+                {p.dailyReportEnabled && <span style={{ fontSize: 10, fontWeight: 700, background: "#dcfce7", color: "#166534", padding: "2px 8px", borderRadius: 10 }}>BÁO CÁO TELE</span>}
               </h4>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Chi phí: <b>{formatVND(c.totalSpent)}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Lead: <b>{c.totalLeads || 0}</b> | Booking: <b>{c.totalBooking || 0}</b></div>
