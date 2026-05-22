@@ -9430,7 +9430,7 @@ if (!process.env.VERCEL) {
 
   // Daily sale reminder + group report (check every 10 min, run once per day at configured time)
   let lastDailyReminderDate = "";
-  setInterval(async () => {
+  const runDailyReminderIfDue = async () => {
     if (!db) return;
     try {
       const setting = await get(db, "SELECT value FROM settings WHERE key = 'daily_reminder_time'");
@@ -9447,7 +9447,9 @@ if (!process.env.VERCEL) {
     } catch (e) {
       console.error("[daily-reminder] Error:", e.message);
     }
-  }, 10 * 60 * 1000);
+  };
+  setTimeout(runDailyReminderIfDue, 3000);
+  setInterval(runDailyReminderIfDue, 10 * 60 * 1000);
   console.log("[daily-reminder] Enabled, checks every 10 min");
 }
 
