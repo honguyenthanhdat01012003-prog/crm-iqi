@@ -9697,18 +9697,28 @@ async function processDailySaleReminder(db, now) {
         }
       }
     }
-    if (hasMgrData) {
-      mgrMsgLines.push(``, `━━━━━━━━━━━━━━━━━━━━`);
-      const mgrMsg = mgrMsgLines.join("\n");
-      try {
-        await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: bot.group_chat_id, text: mgrMsg, parse_mode: "Markdown" }),
-        });
+    if (!hasMgrData) {
+      mgrMsgLines.push(
+        ``,
+        `Hôm nay chưa có lịch sử chia lead nào cho các dự án của bot này.`,
+        `Nếu vừa chia lead mà chưa thấy ở đây, kiểm tra thời gian lưu trong lead_history.contact_date.`
+      );
+    }
+    mgrMsgLines.push(``, `━━━━━━━━━━━━━━━━━━━━`);
+    const mgrMsg = mgrMsgLines.join("\n");
+    try {
+      const mgrRes = await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: bot.group_chat_id, text: mgrMsg, parse_mode: "Markdown" }),
+      });
+      const mgrJson = await mgrRes.json().catch(() => ({}));
+      if (!mgrJson.ok) {
+        console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, mgrJson.description || mgrRes.statusText);
+      } else {
         console.log(`[daily-reminder] Manager report sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
-      } catch (e) {
-        console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, e.message);
       }
+    } catch (e) {
+      console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, e.message);
     }
   }
 }
