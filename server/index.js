@@ -3797,6 +3797,9 @@ app.post("/api/auto-rotate/toggle", requireAuth, requireAdmin, async (req, res) 
 app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) => {
   try {
     const source = req.query.source === "sprint" ? "sprint-rotate" : "auto-rotate";
+    const projectIdFilter = req.query.projectId && req.query.projectId !== "all"
+      ? Number(req.query.projectId)
+      : null;
     const sourceAliases = source === "sprint-rotate"
       ? ["sprint-rotate", "sprint", "nuoc-rut", "nước-rút"]
       : ["auto-rotate", "auto_rotate", "auto", "rotate"];
@@ -3806,11 +3809,21 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
     const sourcePlaceholders = sourceAliases.map(() => "?").join(",");
     const feedbackWhere = feedbackNeedles.map(() => "lh.feedback LIKE ?").join(" OR ");
     const logRows = await all(db,
-      `SELECT id, lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at
-       FROM auto_rotate_log
-       WHERE LOWER(COALESCE(source, '')) IN (${sourcePlaceholders})
-       ORDER BY id DESC
-       LIMIT 500`,
+      `SELECT arl.id, arl.lead_id, arl.lead_name, arl.lead_phone,
+              COALESCE(
+                arl.project_id,
+                l.project_id,
+                (SELECT l2.project_id FROM leads l2
+                 WHERE (arl.lead_phone != '' AND l2.phone = arl.lead_phone)
+                    OR (arl.lead_name != '' AND l2.name = arl.lead_name)
+                 ORDER BY l2.id DESC LIMIT 1)
+              ) as project_id,
+              arl.from_sale, arl.to_sale, arl.rotated_at
+       FROM auto_rotate_log arl
+       LEFT JOIN leads l ON l.id = arl.lead_id
+       WHERE LOWER(COALESCE(arl.source, '')) IN (${sourcePlaceholders})
+       ORDER BY arl.id DESC
+       LIMIT 5000`,
       sourceAliases
     );
     const historyRows = await all(db,
@@ -3824,7 +3837,7 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
            OR (${feedbackWhere})
          )
        ORDER BY lh.id DESC
-       LIMIT 500`,
+       LIMIT 5000`,
       [...sourceAliases, ...feedbackNeedles]
     );
     const seen = new Set();
@@ -3833,7 +3846,7 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
       leadId: r.lead_id,
       leadName: r.lead_name || "",
       leadPhone: r.lead_phone || "",
-      projectId: r.project_id,
+      projectId: r.project_id != null ? Number(r.project_id) : null,
       fromSale: r.from_sale || "",
       toSale: r.to_sale || "",
       date: r.rotated_at || "",
@@ -3848,13 +3861,14 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
         leadId: r.lead_id,
         leadName: r.lead_name || "",
         leadPhone: r.lead_phone || "",
-        projectId: r.project_id,
+        projectId: r.project_id != null ? Number(r.project_id) : null,
         fromSale: oldSaleMatch ? oldSaleMatch[1].trim() : "",
         toSale: r.sale_name || "",
         date: r.contact_date || "",
       };
     });
     const history = [...fromLog, ...fromHistory].filter(h => {
+      if (projectIdFilter && h.projectId !== projectIdFilter) return false;
       const key = `${h.leadId}|${h.toSale}|${h.date}`;
       if (seen.has(key)) return false;
       seen.add(key);

@@ -3577,7 +3577,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       if (rotateHistTab === tab.key) return;
                       setRotateHistTab(tab.key); setRotateHistDay(null); setRotateHistLoading(true);
                       try {
-                        const r = await apiFetch(`${API}/auto-rotate/history?source=${tab.key === "sprint" ? "sprint" : "auto"}`);
+                        const projectParam = selectedProject && selectedProject !== "all" ? `&projectId=${selectedProject}` : "";
+                        const r = await apiFetch(`${API}/auto-rotate/history?source=${tab.key === "sprint" ? "sprint" : "auto"}${projectParam}`);
                         const data = await r.json();
                         setRotateHistData(data.history || []);
                       } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }
@@ -4992,7 +4993,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             <button onClick={async () => {
               setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null); setRotateHistTab("auto");
               try {
-                const r = await apiFetch(`${API}/auto-rotate/history?source=auto`);
+                const projectParam = selectedProject && selectedProject !== "all" ? `&projectId=${selectedProject}` : "";
+                const r = await apiFetch(`${API}/auto-rotate/history?source=auto${projectParam}`);
                 const data = await r.json();
                 setRotateHistData(data.history || []);
               } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }
