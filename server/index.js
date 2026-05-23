@@ -82,7 +82,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 23; // Bump this when adding new DDL/migrations
+const DB_VERSION = 24; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -221,6 +221,12 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, content TEXT NOT NULL,
       is_active INTEGER DEFAULT 1, created_by TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS auto_rotate_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, lead_name TEXT DEFAULT '',
+      lead_phone TEXT DEFAULT '', project_id INTEGER, from_sale TEXT DEFAULT '',
+      to_sale TEXT DEFAULT '', rotated_at TEXT DEFAULT '', source TEXT DEFAULT '',
+      reason TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
+    )`,
   ];
   for (const sql of ddlStatements) {
     await run(db, sql);
@@ -302,6 +308,13 @@ async function initDb() {
       FOREIGN KEY (lead_id) REFERENCES personal_leads(id)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_plh_lead ON personal_lead_history(lead_id)`,
+    `CREATE TABLE IF NOT EXISTS auto_rotate_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, lead_name TEXT DEFAULT '',
+      lead_phone TEXT DEFAULT '', project_id INTEGER, from_sale TEXT DEFAULT '',
+      to_sale TEXT DEFAULT '', rotated_at TEXT DEFAULT '', source TEXT DEFAULT '',
+      reason TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_arl_source_date ON auto_rotate_log(source, rotated_at)`,
     // v21: hot_lead flag on user_projects
     "ALTER TABLE user_projects ADD COLUMN hot_lead INTEGER DEFAULT 0",
   ];
@@ -431,6 +444,18 @@ async function initDb() {
   if (dbVersion < 23) {
     console.log("[DB] v23 migration: adding daily_report_enabled column to projects...");
     try { await run(db, "ALTER TABLE projects ADD COLUMN daily_report_enabled INTEGER DEFAULT 0"); } catch (_) {}
+  }
+  if (dbVersion < 24) {
+    console.log("[DB] v24 migration: adding durable auto_rotate_log table...");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS auto_rotate_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, lead_name TEXT DEFAULT '',
+        lead_phone TEXT DEFAULT '', project_id INTEGER, from_sale TEXT DEFAULT '',
+        to_sale TEXT DEFAULT '', rotated_at TEXT DEFAULT '', source TEXT DEFAULT '',
+        reason TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_arl_source_date ON auto_rotate_log(source, rotated_at)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3780,7 +3805,15 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
       : ["%Tự động xáo%", "%Tu dong xao%", "%không cập nhật%", "%khong cap nhat%"];
     const sourcePlaceholders = sourceAliases.map(() => "?").join(",");
     const feedbackWhere = feedbackNeedles.map(() => "lh.feedback LIKE ?").join(" OR ");
-    const rows = await all(db,
+    const logRows = await all(db,
+      `SELECT id, lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at
+       FROM auto_rotate_log
+       WHERE LOWER(COALESCE(source, '')) IN (${sourcePlaceholders})
+       ORDER BY id DESC
+       LIMIT 500`,
+      sourceAliases
+    );
+    const historyRows = await all(db,
       `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, lh.source,
               l.name as lead_name, l.phone as lead_phone, l.project_id
        FROM lead_history lh
@@ -3795,7 +3828,17 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
       [...sourceAliases, ...feedbackNeedles]
     );
     const seen = new Set();
-    const history = rows.map(r => {
+    const fromLog = logRows.map(r => ({
+      id: `log-${r.id}`,
+      leadId: r.lead_id,
+      leadName: r.lead_name || "",
+      leadPhone: r.lead_phone || "",
+      projectId: r.project_id,
+      fromSale: r.from_sale || "",
+      toSale: r.to_sale || "",
+      date: r.rotated_at || "",
+    }));
+    const fromHistory = historyRows.map(r => {
       const feedback = r.feedback || "";
       const oldSaleMatch =
         feedback.match(/sale\s+(.+?)\s+không\s+(?:cập nhật|chốt)/i) ||
@@ -3810,7 +3853,8 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
         toSale: r.sale_name || "",
         date: r.contact_date || "",
       };
-    }).filter(h => {
+    });
+    const history = [...fromLog, ...fromHistory].filter(h => {
       const key = `${h.leadId}|${h.toSale}|${h.date}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -3849,7 +3893,7 @@ async function processAutoRotate(db) {
 
   // Get candidate leads (assigned, not locked/booked)
   const candidates = await all(db,
-    `SELECT l.id, l.sale_name, l.status, l.project_id
+    `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
@@ -4042,6 +4086,10 @@ async function processAutoRotate(db) {
     stmts.push({
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       args: [lead.id, nextSale, "Chia lead", nowStr, "", reason, nextSeq, source],
+    });
+    stmts.push({
+      sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, lead.sale_name || "", nextSale, nowStr, source, reason],
     });
     rotated++;
   }
