@@ -1552,14 +1552,17 @@ async function readData(db) {
       else if (act.includes("cập nhật")) source = "admin";
       else source = "sheet";
     }
-    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source });
+    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source, seq: h.seq ?? 0 });
   }
   // Sort each lead's history by date (oldest first) so last entry = newest
   for (const lid in historyMap) {
     historyMap[lid].sort((a, b) => {
       const da = parseLeadDate(a.date);
       const db2 = parseLeadDate(b.date);
-      if (da && db2) return da - db2;
+      if (da && db2) {
+        const diff = da - db2;
+        return diff || ((a.seq ?? 0) - (b.seq ?? 0));
+      }
       if (da) return 1;
       if (db2) return -1;
       return 0;
@@ -1597,6 +1600,28 @@ async function readData(db) {
       const phone = (l.phone || "").replace(/[^0-9+]/g, "");
       const allRegs = phone ? (phoneRegMap[phone] || []) : [];
       const regIndex = allRegs.findIndex(r => r.leadId === l.id);
+      const saleHistory = historyMap[l.id] || [];
+      let displayStatus = l.status;
+      let displayRawStatus = l.raw_status;
+      const currentSaleName = l.sale_name || "";
+      if (currentSaleName && currentSaleName !== "Chưa chia" && saleHistory.length) {
+        for (let i = saleHistory.length - 1; i >= 0; i--) {
+          const h = saleHistory[i];
+          if (!matchSaleName(h.saleName, currentSaleName)) continue;
+          if (h.action === "Chia lead") {
+            if (h.source !== "sheet") {
+              displayStatus = "new";
+              displayRawStatus = "";
+            }
+            break;
+          }
+          if (h.status) {
+            displayStatus = normalizeStatus(h.status);
+            displayRawStatus = h.status;
+            break;
+          }
+        }
+      }
       return {
       id: l.id,
       projectId: l.project_id,
@@ -1609,8 +1634,8 @@ async function readData(db) {
       adName: l.ad_name || "-",
       formName: l.form_name || "-",
       product: l.product,
-      rawStatus: l.raw_status,
-      status: l.status,
+      rawStatus: displayRawStatus,
+      status: displayStatus,
       createdAt: l.created_at,
       inboxUrl: l.inbox_url,
       isHot: Boolean(l.is_hot),
@@ -1618,7 +1643,7 @@ async function readData(db) {
       saleId: l.sale_id,
       saleName: l.sale_name || "",
       managerName: l.manager_name || "",
-      saleHistory: historyMap[l.id] || [],
+      saleHistory,
       source: l.source,
       budget: l.budget,
       syncAt: l.sync_at,
@@ -3631,7 +3656,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
     for (const lid of leadIds) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new' WHERE id = ?", args: [saleName, lid] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -3716,7 +3741,7 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     for (let i = 0; i < leads.length; i++) {
       const l = leads[i];
       const assignedSale = saleNames[i % saleNames.length];
-      stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [assignedSale, l.id] });
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [assignedSale, l.id] });
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [l.id]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
@@ -4080,16 +4105,8 @@ async function processAutoRotate(db) {
 
     if (!nextSale) continue;
 
-    // --- Apply rotation (restore previous feedback if sale had this lead before) ---
-    const prevFeedback = await get(db,
-      `SELECT status FROM lead_history WHERE lead_id = ? AND sale_name = ? AND status != '' ORDER BY seq DESC LIMIT 1`,
-      [lead.id, nextSale]
-    );
-    if (prevFeedback && prevFeedback.status) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = ?, raw_status = ? WHERE id = ?", args: [nextSale, normalizeStatus(prevFeedback.status), prevFeedback.status, lead.id] });
-    } else {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
-    }
+    // A new assignment starts a fresh feedback cycle for the receiving sale.
+    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
@@ -4303,25 +4320,8 @@ async function processSchedules(db, triggerUser) {
       roundCounter++;
       saleCounts[assignedIdx]++;
 
-      // Only set manager if lead has no manager yet
-      const schLead = await get(db, "SELECT manager_name, status FROM leads WHERE id = ?", [lid]);
-      if (schLead?.manager_name) {
-        // Preserve existing status if sale already gave feedback, only reset to 'new' for unprocessed leads
-        if (schLead.status && schLead.status !== "new") {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
-        } else {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
-        }
-      } else {
-        if (schLead?.status && schLead.status !== "new") {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [saleName, lid] });
-        } else {
-          stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
-        }
-      }
-      // Only create 'Chia lead' history if this sale doesn't already have one for this lead
-      const existingChia = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND sale_name = ? LIMIT 1", [lid, saleName]);
-      if (!existingChia) {
+      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
+      {
         const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
         const nextSeq = (maxSeq?.m ?? -1) + 1;
         stmts.push({
@@ -4865,11 +4865,12 @@ function filterLeadsForSale(data, displayName) {
     let foundOwnStatus = false;
     let lastSaleUpdate = null;
     if (l.saleHistory && l.saleHistory.length) {
-      // Walk from newest to oldest, skip "Chia lead" entries (don't break at them)
-      // This handles re-assignment: sale may have feedback BEFORE a later "Chia lead" to same sale
+      // Walk from newest to oldest and stop at this sale's latest assignment boundary.
+      // Feedback before that boundary belongs to a previous ownership cycle.
       for (let i = l.saleHistory.length - 1; i >= 0; i--) {
         const h = l.saleHistory[i];
-        if (h.action === "Chia lead") continue; // Skip assignment entries
+        if (h.action === "Chia lead" && matchSaleName(h.saleName, displayName)) break;
+        if (h.action === "Chia lead") continue;
         if (matchSaleName(h.saleName, displayName)) {
           if (!lastSaleUpdate) {
             lastSaleUpdate = { date: h.date, status: h.status ? normalizeStatus(h.status) : null, feedback: h.feedback, action: h.action, source: h.source };
@@ -5041,7 +5042,11 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
         // Reset status to "new" (Chưa feedback) when reassigning to a new sale
-        if (status === undefined) { reassigning = true; sets.push("status = ?"); params.push("new"); }
+        if (status === undefined) {
+          reassigning = true;
+          sets.push("status = ?"); params.push("new");
+          sets.push("raw_status = ?"); params.push("");
+        }
       }
       // Admin can directly reassign manager (without changing sale)
       if (managerChangeRequested) {
