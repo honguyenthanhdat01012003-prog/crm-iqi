@@ -82,7 +82,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 24; // Bump this when adding new DDL/migrations
+const DB_VERSION = 25; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -456,6 +456,10 @@ async function initDb() {
       )`);
     } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_arl_source_date ON auto_rotate_log(source, rotated_at)"); } catch (_) {}
+  }
+  if (dbVersion < 25) {
+    console.log("[DB] v25 migration: locking booked/closed leads...");
+    try { await run(db, "UPDATE leads SET is_locked = 1 WHERE status IN ('booked', 'booking_other', 'closed')"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3764,6 +3768,10 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
 
 /* ===== Auto-rotate leads (3 days no update → reassign) ===== */
 const LOCKED_STATUSES = new Set(["booked", "booking_other"]);
+const AUTO_LOCK_STATUSES = new Set(["booked", "booking_other", "closed"]);
+function shouldAutoLockStatus(status) {
+  return AUTO_LOCK_STATUSES.has(normalizeStatus(status || ""));
+}
 
 // Get auto-rotate setting for a project
 app.get("/api/auto-rotate", requireAuth, requireAdmin, async (req, res) => {
@@ -4287,8 +4295,8 @@ async function processSchedules(db, triggerUser) {
       if (processedLids.has(lid)) continue;
 
       // Skip locked leads (booking/cọc) — they should not be auto-redistributed
-      const lockCheck = await get(db, "SELECT status FROM leads WHERE id = ?", [lid]);
-      if (lockCheck && (lockCheck.status === "booked" || lockCheck.status === "booking_other")) {
+      const lockCheck = await get(db, "SELECT status, is_locked FROM leads WHERE id = ?", [lid]);
+      if (lockCheck && (lockCheck.is_locked || shouldAutoLockStatus(lockCheck.status))) {
         processedLids.add(lid);
         continue;
       }
@@ -5061,8 +5069,10 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       console.log(`[PUT /api/leads/${actualLeadId}] BLOCKED: manager change requested by role=${req.user.role}, only admin/manager allowed`);
       return res.status(403).json({ error: `Chỉ admin/manager mới được đổi quản lý (role hiện tại: ${req.user.role})` });
     }
-    if (status !== undefined) { sets.push("status = ?"); params.push(status); }
-    if (status === "closed") { sets.push("is_locked = ?"); params.push(1); }
+    if (status !== undefined) {
+      sets.push("status = ?"); params.push(status);
+      if (shouldAutoLockStatus(status)) { sets.push("is_locked = ?"); params.push(1); }
+    }
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
 
     if (sets.length) {
@@ -5253,7 +5263,11 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
         await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
           [leadId, oldStatus, newNorm, req.user.displayName, new Date().toISOString()]);
       }
-      await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [newNorm, status, leadId]);
+      await run(
+        db,
+        `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(newNorm) ? ", is_locked = 1" : ""} WHERE id = ?`,
+        [newNorm, status, leadId]
+      );
 
       // Fire CAPI event if status triggers it
       try {
@@ -5664,7 +5678,11 @@ async function handleTelegramWebhook(req, res) {
 
         // Update lead status + raw_status
         const statusLabel2 = TELE_STATUS_LABELS[statusKey] || statusKey;
-        await run(db, "UPDATE leads SET status = ?, raw_status = ? WHERE id = ?", [statusKey, statusLabel2, leadId]);
+        await run(
+          db,
+          `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(statusKey) ? ", is_locked = 1" : ""} WHERE id = ?`,
+          [statusKey, statusLabel2, leadId]
+        );
 
         // Clear pending
         await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
