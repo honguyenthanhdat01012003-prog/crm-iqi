@@ -5029,13 +5029,6 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       }
     }
 
-    // Block status changes on locked leads for non-admin
-    if (req.body.status !== undefined) {
-      const lockCheck = await get(db, "SELECT is_locked FROM leads WHERE id = ?", [actualLeadId]);
-      if (lockCheck && lockCheck.is_locked && req.user.role !== "admin") {
-        return res.status(403).json({ error: "Lead đã bị khóa, không thể thay đổi trạng thái. Liên hệ Admin để mở khóa." });
-      }
-    }
 
     const { status, notes, saleId, saleName, isHot, managerName } = req.body;
     const sets = [];
@@ -5238,10 +5231,6 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       if (!hist) return res.status(403).json({ error: "You can only update your own leads" });
     }
 
-    // Block locked leads for non-admin
-    if (lead.is_locked && req.user.role !== "admin") {
-      return res.status(403).json({ error: "Lead đã bị khóa. Liên hệ Admin để mở khóa." });
-    }
 
     const { status, feedback } = req.body;
     const saleName = req.user.displayName;

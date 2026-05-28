@@ -5573,7 +5573,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               <span style={{ fontWeight: 700, color: lead.isLocked ? "#dc2626" : "#6b7280" }}>
                 {lead.isLocked ? "Lead đã khóa" : "Lead chưa khóa"}
               </span>
-              {lead.isLocked && <span style={{ fontSize: 11, color: "#9ca3af" }}>Sale không thể thay đổi trạng thái</span>}
+              {lead.isLocked && <span style={{ fontSize: 11, color: "#9ca3af" }}>Không tự luân chuyển sang sale khác</span>}
             </div>
             <button onClick={async () => {
               try {
@@ -5596,7 +5596,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {!isAdmin && lead.isLocked && (
         <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
           <Lock size={16} color="#dc2626" />
-          <span style={{ color: "#dc2626", fontWeight: 600 }}>Lead đã bị khóa — không thể thay đổi trạng thái. Liên hệ Admin nếu cần mở khóa.</span>
+          <span style={{ color: "#dc2626", fontWeight: 600 }}>Lead đã khóa luân chuyển — bạn vẫn có thể cập nhật tình trạng khách.</span>
         </div>
       )}
 
@@ -5621,7 +5621,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </button>
               )}
             </h4>
-            {(!isAdmin || formVisible) && (!isAdmin || showForm) && !(isSale && lead.isLocked) && (
+            {(!isAdmin || formVisible) && (!isAdmin || showForm) && (
               <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 16 : 12, marginBottom: 12 }}>
                 <div style={{ display: "flex", gap: isMobile ? 12 : 8, flexDirection: "column" }}>
                   <div style={{ width: "100%" }}>
