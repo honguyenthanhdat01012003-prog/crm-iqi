@@ -2451,17 +2451,28 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const getFirstSaleFeedbackStatus = useCallback((lead) => {
     const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+    let firstSaleName = "";
+    let latestStatus = "";
     for (const h of history) {
       if (!h || h.action === "Chia lead" || !h.status) continue;
       const src = String(h.source || "").toLowerCase();
       const isSaleFeedback = src === "sale" || src === "telegram" || (!src && h.saleName);
       if (!isSaleFeedback) continue;
-      return STATUS_LABEL_TO_KEY[h.status] || STATUS_LABEL_TO_KEY[String(h.status).trim()] || h.status;
+      firstSaleName = h.saleName || "";
+      latestStatus = h.status;
+      break;
     }
-    return "new";
+    if (!firstSaleName) return "new";
+    for (const h of history) {
+      if (!h || h.action === "Chia lead" || !h.status || h.saleName !== firstSaleName) continue;
+      const src = String(h.source || "").toLowerCase();
+      const isSaleFeedback = src === "sale" || src === "telegram" || (!src && h.saleName);
+      if (isSaleFeedback) latestStatus = h.status;
+    }
+    return STATUS_LABEL_TO_KEY[latestStatus] || STATUS_LABEL_TO_KEY[String(latestStatus).trim()] || latestStatus || "new";
   }, []);
 
-  // Bitrix-style lead categories. Counts/filtering use first sale feedback for reporting;
+  // Bitrix-style lead categories. Counts/filtering use the latest status from the first sale who updated the lead;
   // the table status column below still shows the current assigned sale's status.
   const LEAD_TABS = useMemo(() => [
     { key: "all", label: "Tất cả", Icon: ClipboardList, filter: () => true },
