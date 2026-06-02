@@ -2472,29 +2472,34 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return STATUS_LABEL_TO_KEY[latestStatus] || STATUS_LABEL_TO_KEY[String(latestStatus).trim()] || latestStatus || "new";
   }, []);
 
-  // Bitrix-style lead categories. Counts/filtering use the latest status from the first sale who updated the lead;
-  // the table status column below still shows the current assigned sale's status.
+  const getTabStatus = useCallback((lead) => {
+    if (isSale) return lead?.status || "new";
+    return getFirstSaleFeedbackStatus(lead);
+  }, [isSale, getFirstSaleFeedbackStatus]);
+
+  // Bitrix-style lead categories. Admin/manager use the latest status from the first sale who updated the lead.
+  // Sale users use their own current status, matching the table status column below.
   const LEAD_TABS = useMemo(() => [
     { key: "all", label: "Tất cả", Icon: ClipboardList, filter: () => true },
-    { key: "new", label: "Chưa feedback", Icon: BadgePlus, filter: (l) => getFirstSaleFeedbackStatus(l) === "new" },
-    { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => getFirstSaleFeedbackStatus(l) === "interested" },
-    { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => getFirstSaleFeedbackStatus(l) === "low_interest" },
-    { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => getFirstSaleFeedbackStatus(l) === "other_project" },
-    { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => getFirstSaleFeedbackStatus(l) === "appointment" },
-    { key: "booked", label: "Booking/Cọc", Icon: CheckCircle, filter: (l) => getFirstSaleFeedbackStatus(l) === "booked" },
-    { key: "booking_other", label: "Booking sản khác", Icon: CheckCircle, filter: (l) => getFirstSaleFeedbackStatus(l) === "booking_other" },
-    { key: "closed", label: "Chốt", Icon: Trophy, filter: (l) => getFirstSaleFeedbackStatus(l) === "closed" },
-    { key: "not_interested", label: "Không quan tâm", Icon: ThumbsDown, filter: (l) => getFirstSaleFeedbackStatus(l) === "not_interested" },
-    { key: "spam", label: "Phá/rác", Icon: Ban, filter: (l) => getFirstSaleFeedbackStatus(l) === "spam" },
-    { key: "sale", label: "Sale", Icon: Users, filter: (l) => getFirstSaleFeedbackStatus(l) === "sale" },
-    { key: "weak_finance", label: "Tài chính yếu", Icon: Banknote, filter: (l) => getFirstSaleFeedbackStatus(l) === "weak_finance" },
-    { key: "unreachable", label: "Chưa liên lạc được", Icon: PhoneOff, filter: (l) => getFirstSaleFeedbackStatus(l) === "unreachable" },
-    { key: "callback", label: "Liên lạc lại sau", Icon: PhoneIncoming, filter: (l) => getFirstSaleFeedbackStatus(l) === "callback" },
-    { key: "wrong_phone", label: "Thuê bao", Icon: XCircle, filter: (l) => getFirstSaleFeedbackStatus(l) === "wrong_phone" },
-    { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => getFirstSaleFeedbackStatus(l) === "wrong_number" },
-    { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => getFirstSaleFeedbackStatus(l) === "hung_up" },
-    { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => getFirstSaleFeedbackStatus(l) === "has_sale" },
-  ], [getFirstSaleFeedbackStatus]);
+    { key: "new", label: "Chưa feedback", Icon: BadgePlus, filter: (l) => getTabStatus(l) === "new" },
+    { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => getTabStatus(l) === "interested" },
+    { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => getTabStatus(l) === "low_interest" },
+    { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => getTabStatus(l) === "other_project" },
+    { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => getTabStatus(l) === "appointment" },
+    { key: "booked", label: "Booking/Cọc", Icon: CheckCircle, filter: (l) => getTabStatus(l) === "booked" },
+    { key: "booking_other", label: "Booking sản khác", Icon: CheckCircle, filter: (l) => getTabStatus(l) === "booking_other" },
+    { key: "closed", label: "Chốt", Icon: Trophy, filter: (l) => getTabStatus(l) === "closed" },
+    { key: "not_interested", label: "Không quan tâm", Icon: ThumbsDown, filter: (l) => getTabStatus(l) === "not_interested" },
+    { key: "spam", label: "Phá/rác", Icon: Ban, filter: (l) => getTabStatus(l) === "spam" },
+    { key: "sale", label: "Sale", Icon: Users, filter: (l) => getTabStatus(l) === "sale" },
+    { key: "weak_finance", label: "Tài chính yếu", Icon: Banknote, filter: (l) => getTabStatus(l) === "weak_finance" },
+    { key: "unreachable", label: "Chưa liên lạc được", Icon: PhoneOff, filter: (l) => getTabStatus(l) === "unreachable" },
+    { key: "callback", label: "Liên lạc lại sau", Icon: PhoneIncoming, filter: (l) => getTabStatus(l) === "callback" },
+    { key: "wrong_phone", label: "Thuê bao", Icon: XCircle, filter: (l) => getTabStatus(l) === "wrong_phone" },
+    { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => getTabStatus(l) === "wrong_number" },
+    { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => getTabStatus(l) === "hung_up" },
+    { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => getTabStatus(l) === "has_sale" },
+  ], [getTabStatus]);
 
   // Unique product values for filter
   const uniqueProducts = useMemo(() => {
