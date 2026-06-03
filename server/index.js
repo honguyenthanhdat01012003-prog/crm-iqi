@@ -5030,7 +5030,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
 
-    const { status, notes, saleId, saleName, isHot, managerName } = req.body;
+    const { status, notes, saleId, saleName, isHot, managerName, inboxUrl } = req.body;
     const sets = [];
     const params = [];
 
@@ -5054,6 +5054,9 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         sets.push("manager_name = ?"); params.push(managerName);
         managerChangeApplied = true;
         console.log(`[PUT /api/leads/${actualLeadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
+      }
+      if (req.user.role === "admin" && inboxUrl !== undefined) {
+        sets.push("inbox_url = ?"); params.push(String(inboxUrl || "").trim());
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }

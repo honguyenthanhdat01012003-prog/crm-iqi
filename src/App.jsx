@@ -5223,6 +5223,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingSale, setSavingSale] = useState(false);
   const [editManager, setEditManager] = useState("");
   const [savingManager, setSavingManager] = useState(false);
+  const [editFbUrl, setEditFbUrl] = useState(lead.inboxUrl || "");
+  const [savingFbUrl, setSavingFbUrl] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
   const [adPreview, setAdPreview] = useState(null);
@@ -5241,6 +5243,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [messengerDraft, setMessengerDraft] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
   const messengerEndRef = useRef(null);
+
+  useEffect(() => {
+    setEditFbUrl(lead.inboxUrl || "");
+  }, [lead.id, lead.inboxUrl]);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;
@@ -5364,6 +5370,28 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     }
   };
 
+  const handleSaveFbUrl = async () => {
+    if (savingFbUrl) return;
+    setSavingFbUrl(true);
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ inboxUrl: editFbUrl, phone: lead.phone, name: lead.name }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        showToast(data.error || "Lưu link Facebook thất bại", "error");
+        return;
+      }
+      applyApiData(data);
+      showToast("Đã lưu link Facebook khách", "success");
+    } catch (e) {
+      showToast("Lỗi kết nối: " + e.message, "error");
+    } finally {
+      setSavingFbUrl(false);
+    }
+  };
+
   const handleAssignSale = async () => {
     if (!editSale) return;
     setSavingSale(true);
@@ -5413,31 +5441,40 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     }
   };
 
+  const detailCellStyle = { minWidth: 0 };
+  const detailValueStyle = { fontSize: isMobile ? 11 : 13, lineHeight: 1.35, overflowWrap: "anywhere", wordBreak: "break-word" };
+
   return (
     <div style={{ padding: isMobile ? "12px" : "16px 24px" }}>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: 12, fontSize: 13 }}>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b>{lead.name}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b>{lead.phone || "-"}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b>{projectName}</b></div>
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b>{lead.product || "-"}</b></div>
-        {!isSale && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.createdAt || "-"}</b></div>}
-        {!isSale && <div>
+        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
+        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b style={detailValueStyle}>{lead.phone || "-"}</b></div>
+        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b style={detailValueStyle}>{projectName}</b></div>
+        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b style={detailValueStyle}>{lead.product || "-"}</b></div>
+        {!isSale && <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={detailValueStyle}>{lead.createdAt || "-"}</b></div>}
+        {!isSale && <div style={detailCellStyle}>
           <span style={{ color: "#6b7280", fontSize: 11 }}>Trạng thái lead</span><br />
           {(() => { const t = getLeadTemp(lead.createdAt); return (
             <span style={{ color: t.color, fontWeight: 700 }}>{t.label}</span>
           ); })()}
         </div>}
-        {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.campaign || "-"}</b></div>}
-        {isAdmin && <div><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adsetName || "-"}</b></div>}
-        <div><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
+        {isAdmin && <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Chiến dịch</span><br /><b style={detailValueStyle}>{lead.campaign || "-"}</b></div>}
+        {isAdmin && <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Nhóm QC</span><br /><b style={detailValueStyle}>{lead.adsetName || "-"}</b></div>}
+        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Content</span><br />
           {lead.adName && lead.adName !== "-" ? (
             <b onClick={(e) => { e.stopPropagation(); handleViewAdPreview(lead.adName); }}
-              style={{ fontSize: isMobile ? 11 : 13, color: "#2563eb", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
+              style={{ ...detailValueStyle, color: "#2563eb", cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}
               title="Click để xem quảng cáo">{lead.adName}</b>
           ) : (
-            <b style={{ fontSize: isMobile ? 11 : 13 }}>{lead.adName || "-"}</b>
+            <b style={detailValueStyle}>{lead.adName || "-"}</b>
           )}
         </div>
+        {lead.inboxUrl && (
+          <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Facebook KH</span><br />
+            <a href={lead.inboxUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+              style={{ ...detailValueStyle, color: "#2563eb", fontWeight: 700, textDecoration: "underline" }}>Mở link</a>
+          </div>
+        )}
         {isAdmin && lead.regCount > 1 && (
           <div><span style={{ color: "#6b7280", fontSize: 11 }}>Số lần ĐK</span><br />
             <b style={{ fontSize: 13, color: "#d97706" }}>{lead.regCount} lần</b>
@@ -5506,6 +5543,27 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <button onClick={handleStatusUpdate} disabled={savingStatus}
               style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
               {savingStatus ? "Đang cập nhật..." : <><Check size={14} /> Cập nhật</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Admin only: Facebook customer link */}
+      {user.role === "admin" && (
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Link Facebook khách:</b>
+            {lead.inboxUrl
+              ? <a href={lead.inboxUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb", fontWeight: 700 }}>Mở link hiện tại</a>
+              : <span style={{ fontSize: 11, color: "#64748b" }}>Chưa có link</span>}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={editFbUrl} onChange={(e) => setEditFbUrl(e.target.value)}
+              placeholder="Dán link Facebook/Messenger của khách..."
+              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: "1 1 260px", minHeight: isMobile ? 44 : "auto", background: "#fff" }} />
+            <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
+              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              {savingFbUrl ? "Đang lưu..." : <><Save size={14} /> Lưu link</>}
             </button>
           </div>
         </div>
