@@ -5223,7 +5223,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingSale, setSavingSale] = useState(false);
   const [editManager, setEditManager] = useState("");
   const [savingManager, setSavingManager] = useState(false);
-  const [editFbUrl, setEditFbUrl] = useState(lead.inboxUrl || "");
+  const [editFbUrl, setEditFbUrl] = useState(lead.customerFbUrl || "");
   const [savingFbUrl, setSavingFbUrl] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
@@ -5245,8 +5245,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const messengerEndRef = useRef(null);
 
   useEffect(() => {
-    setEditFbUrl(lead.inboxUrl || "");
-  }, [lead.id, lead.inboxUrl]);
+    setEditFbUrl(lead.customerFbUrl || "");
+  }, [lead.id, lead.customerFbUrl]);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;
@@ -5376,7 +5376,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ inboxUrl: editFbUrl, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ customerFbUrl: editFbUrl, phone: lead.phone, name: lead.name }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -5469,9 +5469,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <b style={detailValueStyle}>{lead.adName || "-"}</b>
           )}
         </div>
-        {lead.inboxUrl && (
+        {lead.customerFbUrl && (
           <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Facebook KH</span><br />
-            <a href={lead.inboxUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            <a href={lead.customerFbUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
               style={{ ...detailValueStyle, color: "#2563eb", fontWeight: 700, textDecoration: "underline" }}>Mở link</a>
           </div>
         )}
@@ -5553,8 +5553,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Link Facebook khách:</b>
-            {lead.inboxUrl
-              ? <a href={lead.inboxUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb", fontWeight: 700 }}>Mở link hiện tại</a>
+            {lead.customerFbUrl
+              ? <a href={lead.customerFbUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb", fontWeight: 700 }}>Mở link hiện tại</a>
               : <span style={{ fontSize: 11, color: "#64748b" }}>Chưa có link</span>}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>

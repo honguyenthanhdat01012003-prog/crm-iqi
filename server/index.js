@@ -82,7 +82,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 25; // Bump this when adding new DDL/migrations
+const DB_VERSION = 26; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -123,7 +123,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, name TEXT NOT NULL, phone TEXT,
       ads_id TEXT DEFAULT '', campaign TEXT, campaign_id INTEGER, adset_name TEXT DEFAULT '-', ad_name TEXT DEFAULT '-',
       form_name TEXT DEFAULT '-', product TEXT, raw_status TEXT, status TEXT, created_at TEXT,
-      inbox_url TEXT, is_hot INTEGER DEFAULT 0, sale_id INTEGER, sale_name TEXT DEFAULT '',
+      inbox_url TEXT, customer_fb_url TEXT DEFAULT '', is_hot INTEGER DEFAULT 0, sale_id INTEGER, sale_name TEXT DEFAULT '',
       manager_name TEXT DEFAULT '', source TEXT, budget TEXT, sync_at TEXT, notes TEXT,
       FOREIGN KEY (campaign_id) REFERENCES campaigns(id))`,
     `CREATE TABLE IF NOT EXISTS projects (
@@ -460,6 +460,10 @@ async function initDb() {
   if (dbVersion < 25) {
     console.log("[DB] v25 migration: locking booked/closed leads...");
     try { await run(db, "UPDATE leads SET is_locked = 1 WHERE status IN ('booked', 'booking_other', 'closed')"); } catch (_) {}
+  }
+  if (dbVersion < 26) {
+    console.log("[DB] v26 migration: adding customer_fb_url to leads...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN customer_fb_url TEXT DEFAULT ''"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -1154,7 +1158,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
-    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked, customer_fb_url FROM leads WHERE project_id = ?",
     [projectId]
   );
   
@@ -1309,6 +1313,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let managerName = "";
     let dealValue = 0;
     let isLockedVal = 0;
+    let customerFbUrl = l.customerFbUrl || "";
 
     // Manual-assign project: new leads (no prev DB record) must NOT be auto-assigned from sheet
     if (isManualAssign && !prev && saleName) {
@@ -1334,6 +1339,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       managerName = prev.manager_name || "";
       if (prev.deal_value) dealValue = prev.deal_value;
       if (prev.is_locked) isLockedVal = prev.is_locked;
+      if (prev.customer_fb_url) customerFbUrl = prev.customer_fb_url;
       // Debug: log manager restoration for leads with specific managers
       if (prev.manager_name && prev.manager_name !== "Trần Văn Quyết") {
         console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${lAdsId && adsIdMap.has(lAdsId) ? 'adsId' : pnKey && phoneNameMap.has(pnKey) ? 'phoneName' : np && phoneMap.has(np) ? 'phone' : 'name'})`);
@@ -1393,12 +1399,12 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       sql: `INSERT INTO leads(
         project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
         product, raw_status, status,
-        created_at, inbox_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, inbox_url, customer_fb_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
         l.adsetName || "-", l.adName || "-", l.formName || "-",
-        l.product, rawStatus, status, l.createdAt, l.inboxUrl, isHot, saleId, saleName, managerName,
+        l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl, isHot, saleId, saleName, managerName,
         l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
       ],
     });
@@ -1642,6 +1648,7 @@ async function readData(db) {
       status: displayStatus,
       createdAt: l.created_at,
       inboxUrl: l.inbox_url,
+      customerFbUrl: l.customer_fb_url || "",
       isHot: Boolean(l.is_hot),
       isLocked: Boolean(l.is_locked),
       saleId: l.sale_id,
@@ -5030,7 +5037,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
 
-    const { status, notes, saleId, saleName, isHot, managerName, inboxUrl } = req.body;
+    const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl } = req.body;
     const sets = [];
     const params = [];
 
@@ -5055,8 +5062,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         managerChangeApplied = true;
         console.log(`[PUT /api/leads/${actualLeadId}] Reassigning manager to: ${managerName} by ${req.user.displayName}`);
       }
-      if (req.user.role === "admin" && inboxUrl !== undefined) {
-        sets.push("inbox_url = ?"); params.push(String(inboxUrl || "").trim());
+      if (req.user.role === "admin" && customerFbUrl !== undefined) {
+        sets.push("customer_fb_url = ?"); params.push(String(customerFbUrl || "").trim());
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
