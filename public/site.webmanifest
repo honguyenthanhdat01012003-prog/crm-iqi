@@ -1,0 +1,20 @@
+{
+  "name": "LUX IQI CRM",
+  "short_name": "IQI CRM",
+  "description": "CRM quan ly lead LUX IQI",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#0f3d1e",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo-iqi.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["business", "productivity"]
+}
