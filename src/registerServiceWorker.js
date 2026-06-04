@@ -78,6 +78,5 @@ export async function subscribeToPushNotifications(apiFetch, apiBase = "/api") {
     throw new Error(err.error || "Không lưu được thiết bị nhận thông báo");
   }
 
-  await apiFetch(`${apiBase}/push/test`, { method: "POST" }).catch(() => {});
   return { ok: true, permission, subscription };
 }

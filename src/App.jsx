@@ -548,6 +548,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushPermission, setPushPermission] = useState(() => getPushPermissionState());
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
+  const [showPushPrompt, setShowPushPrompt] = useState(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
   const lastLeadSoundRef = useRef({ kind: "", at: 0 });
@@ -561,6 +562,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
+  const pushPromptKey = `crm_push_prompt_seen_${user.userId || user.username || user.displayName || "user"}`;
 
   useEffect(() => {
     managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
@@ -597,11 +599,18 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!pushSupported) return;
-    setPushPermission(getPushPermissionState());
+    const permission = getPushPermissionState();
+    setPushPermission(permission);
     getCurrentPushSubscription()
-      .then(sub => setPushEnabled(!!sub && getPushPermissionState() === "granted"))
+      .then(sub => {
+        const enabled = !!sub && getPushPermissionState() === "granted";
+        setPushEnabled(enabled);
+        if (!enabled && permission === "default" && !localStorage.getItem(pushPromptKey)) {
+          setShowPushPrompt(true);
+        }
+      })
       .catch(() => setPushEnabled(false));
-  }, [pushSupported]);
+  }, [pushSupported, pushPromptKey]);
 
   const handleEnablePush = useCallback(async () => {
     if (!pushSupported || pushBusy) return;
@@ -612,8 +621,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushPermission(nextPermission);
       setPushEnabled(!!result.ok && nextPermission === "granted");
       if (result.ok) {
-        showToast("Đã bật thông báo điện thoại. Hệ thống vừa gửi thử 1 thông báo.", "success");
+        localStorage.setItem(pushPromptKey, "1");
+        setShowPushPrompt(false);
+        showToast("Đã bật thông báo điện thoại. Khi có lead mới hệ thống sẽ báo về máy.", "success");
       } else {
+        localStorage.setItem(pushPromptKey, "1");
+        setShowPushPrompt(false);
         showToast(nextPermission === "denied" ? "Bạn đã chặn quyền thông báo trong trình duyệt." : "Bạn chưa cấp quyền thông báo.", "warning");
       }
     } catch (err) {
@@ -621,13 +634,19 @@ function CRMApp({ user, updateUser, onLogout }) {
     } finally {
       setPushBusy(false);
     }
-  }, [pushSupported, pushBusy]);
+  }, [pushSupported, pushBusy, pushPromptKey]);
+
+  const dismissPushPrompt = useCallback(() => {
+    localStorage.setItem(pushPromptKey, "1");
+    setShowPushPrompt(false);
+  }, [pushPromptKey]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
     const onMessage = (event) => {
       if (event.data?.type !== "CRM_PUSH_SOUND") return;
-      const soundKind = event.data.sound === "sale" ? "sale" : user.role === "sale" ? "sale" : "manager";
+      if (event.data.sound !== "sale" && event.data.sound !== "manager") return;
+      const soundKind = event.data.sound;
       playLeadSound(soundKind);
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
@@ -1003,6 +1022,23 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [hoverSubmenu, setHoverSubmenu] = useState(null);
 
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
+  const mobileBottomTabs = [
+    isAdmin && { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { key: "leads", label: "Khách hàng", icon: Users },
+    isAdmin && { key: "projects", label: "Dự án", icon: Building2 },
+    { key: "notifications", label: "Thông báo", icon: Bell },
+    { key: "profile", label: "Tài khoản", icon: User },
+  ].filter(Boolean);
+
+  const handleMobileBottomTab = (tab) => {
+    if (tab.key === "notifications") {
+      setShowNotif(true);
+      return;
+    }
+    setPage(tab.key);
+    setShowNotif(false);
+    setSidebarOpen(false);
+  };
 
   if (serverDown && leads.length === 0) {
     return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
@@ -1365,7 +1401,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {/* Scrolling announcement marquee - one at a time */}
         {announcements.length > 0 && <AnnouncementMarquee announcements={announcements} />}
 
-        <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20 }}>
+        <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20, paddingBottom: isMobile ? 94 : undefined }}>
         {page === "dashboard" && (
           <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={filteredLeads} />
         )}
@@ -1427,6 +1463,97 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "daily_news" && <DailyNewsPage isAdmin={isAdminOnly} />}
         </div>
       </main>
+
+      {isMobile && (
+        <nav style={{
+          position: "fixed",
+          left: 10,
+          right: 10,
+          bottom: 8,
+          height: 62,
+          background: "rgba(255,255,255,.96)",
+          border: "1px solid #e2e8f0",
+          borderRadius: 18,
+          boxShadow: "0 10px 30px rgba(15,23,42,.16)",
+          zIndex: 950,
+          display: "grid",
+          gridTemplateColumns: `repeat(${mobileBottomTabs.length}, 1fr)`,
+          alignItems: "center",
+          padding: "5px 4px calc(5px + env(safe-area-inset-bottom))",
+          backdropFilter: "blur(14px)",
+          WebkitBackdropFilter: "blur(14px)",
+        }}>
+          {mobileBottomTabs.map((tab) => {
+            const active = tab.key === "notifications" ? showNotif : page === tab.key;
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => handleMobileBottomTab(tab)}
+                style={{
+                  position: "relative",
+                  border: "none",
+                  background: "transparent",
+                  color: active ? "#0f3d1e" : "#64748b",
+                  cursor: "pointer",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 3,
+                  minWidth: 0,
+                  height: 52,
+                  fontSize: 10,
+                  fontWeight: active ? 850 : 700,
+                }}
+              >
+                <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Icon size={19} strokeWidth={active ? 2.5 : 2} />
+                  {tab.key === "notifications" && notifications.length > 0 && (
+                    <span style={{
+                      position: "absolute",
+                      top: -8,
+                      right: -10,
+                      minWidth: 16,
+                      height: 16,
+                      padding: "0 4px",
+                      borderRadius: 999,
+                      background: "#ef4444",
+                      color: "#fff",
+                      fontSize: 9,
+                      fontWeight: 900,
+                      lineHeight: "16px",
+                      boxShadow: "0 2px 6px rgba(239,68,68,.35)",
+                    }}>{notifications.length}</span>
+                  )}
+                </span>
+                <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{tab.label}</span>
+                {active && <span style={{ position: "absolute", bottom: 0, width: 18, height: 3, borderRadius: 999, background: "#0f3d1e" }} />}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
+      {showPushPrompt && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 10020, background: "rgba(15,23,42,.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 12 : 18, backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
+          <div style={{ width: isMobile ? "100%" : 420, background: "#fff", borderRadius: isMobile ? "18px 18px 22px 22px" : 18, padding: 20, boxShadow: "0 24px 60px rgba(15,23,42,.28)", border: "1px solid #e2e8f0" }}>
+            <div style={{ width: 44, height: 44, borderRadius: 14, background: "#f0faf1", color: "#0f3d1e", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+              <Bell size={22} />
+            </div>
+            <h3 style={{ margin: "0 0 8px", fontSize: 17, color: "#0f172a", fontWeight: 850 }}>Bật thông báo lead mới</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, lineHeight: 1.55, color: "#475569" }}>
+              CRM sẽ báo về điện thoại khi quản lí nhận lead mới hoặc sale được chia lead. Âm báo riêng sẽ phát khi app đang mở; khi app chạy nền máy sẽ dùng âm thông báo hệ thống.
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <button onClick={dismissPushPrompt} style={{ border: "1px solid #d9e2dc", background: "#fff", color: "#475569", borderRadius: 10, padding: "11px 12px", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Để sau</button>
+              <button onClick={handleEnablePush} disabled={pushBusy} style={{ border: "1px solid #0f3d1e", background: "#0f3d1e", color: "#fff", borderRadius: 10, padding: "11px 12px", fontSize: 13, fontWeight: 850, cursor: pushBusy ? "not-allowed" : "pointer", opacity: pushBusy ? 0.7 : 1 }}>
+                {pushBusy ? "Đang bật..." : "Bật thông báo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Announcement Management Modal */}
       {showAnnounceMgmt && (

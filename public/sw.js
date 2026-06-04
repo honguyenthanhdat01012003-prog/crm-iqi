@@ -76,14 +76,14 @@ self.addEventListener("push", (event) => {
     data: payload.data || { url: "/" },
   };
 
-  event.waitUntil(
-    Promise.all([
-      self.registration.showNotification(title, options),
-      clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-        clientList.forEach((client) => client.postMessage({ type: "CRM_PUSH_SOUND", sound }));
-      }),
-    ])
-  );
+  const tasks = [self.registration.showNotification(title, options)];
+  if (sound) {
+    tasks.push(clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      clientList.forEach((client) => client.postMessage({ type: "CRM_PUSH_SOUND", sound }));
+    }));
+  }
+
+  event.waitUntil(Promise.all(tasks));
 });
 
 self.addEventListener("notificationclick", (event) => {
