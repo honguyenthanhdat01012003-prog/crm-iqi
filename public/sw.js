@@ -64,6 +64,7 @@ self.addEventListener("push", (event) => {
   }
 
   const title = payload.title || "LUX IQI CRM";
+  const sound = payload.sound || payload.data?.sound || "";
   const options = {
     body: payload.body || "Bạn có thông báo mới",
     icon: "/logo-iqi.svg",
@@ -75,7 +76,14 @@ self.addEventListener("push", (event) => {
     data: payload.data || { url: "/" },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+        clientList.forEach((client) => client.postMessage({ type: "CRM_PUSH_SOUND", sound }));
+      }),
+    ])
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

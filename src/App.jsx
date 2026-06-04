@@ -548,6 +548,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushPermission, setPushPermission] = useState(() => getPushPermissionState());
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
+  const managerLeadAudioRef = useRef(null);
+  const saleLeadAudioRef = useRef(null);
+  const lastLeadSoundRef = useRef({ kind: "", at: 0 });
 
   // Announcement marquee state
   const [announcements, setAnnouncements] = useState([]);
@@ -558,6 +561,26 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
+
+  useEffect(() => {
+    managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
+    saleLeadAudioRef.current = new Audio("/sounds/lead-sale.mp3");
+    managerLeadAudioRef.current.preload = "auto";
+    saleLeadAudioRef.current.preload = "auto";
+  }, []);
+
+  const playLeadSound = useCallback((kind) => {
+    const soundKind = kind === "sale" ? "sale" : "manager";
+    const now = Date.now();
+    if (lastLeadSoundRef.current.kind === soundKind && now - lastLeadSoundRef.current.at < 1800) return;
+    lastLeadSoundRef.current = { kind: soundKind, at: now };
+    const audio = soundKind === "sale" ? saleLeadAudioRef.current : managerLeadAudioRef.current;
+    if (!audio) return;
+    try {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } catch (_) {}
+  }, []);
 
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
@@ -600,6 +623,17 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [pushSupported, pushBusy]);
 
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (event) => {
+      if (event.data?.type !== "CRM_PUSH_SOUND") return;
+      const soundKind = event.data.sound === "sale" ? "sale" : user.role === "sale" ? "sale" : "manager";
+      playLeadSound(soundKind);
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, [playLeadSound, user.role]);
+
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
     if (data.noChange) {
@@ -627,6 +661,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           return !prevKeys.has(key) && !seenLeadKeys.has(key);
         });
         if (newLeads.length > 0 && prevArr.length > 0) {
+          playLeadSound(user.role === "sale" ? "sale" : "manager");
           setNotifications(n => {
             const existing = new Set((Array.isArray(n) ? n : []).map(x => `${x.name}||${x.phone}`));
             const fresh = newLeads.filter(l => !existing.has(`${l.name}||${l.phone}`));
@@ -642,7 +677,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, [seenLeadKeys]);
+  }, [seenLeadKeys, playLeadSound, user.role]);
 
   // Mark notifications as seen
   const markAllSeen = useCallback(() => {
@@ -2199,6 +2234,97 @@ function DashboardPage({ stats, cost, saleRanking }) {
 
   const donutSegments = allCards.map(c => ({ label: c.title, value: c.value, color: c.color }));
 
+  if (isMobile) {
+    const updateRate = stats.total ? (((stats.total - (stats.new || 0)) / stats.total) * 100).toFixed(1) : "0.0";
+    const primaryKeys = ["new", "interested", "spam", "not_interested", "booked", "closed", "callback", "unreachable"];
+    const primaryRows = primaryKeys
+      .map((key) => ({ key, label: STATUS_LABELS[key] || key, value: stats[key] || 0, color: STATUS_COLORS[key] || "#64748b" }))
+      .filter((row) => row.value > 0 || ["new", "interested", "spam", "not_interested"].includes(row.key));
+    const distribution = allCards.filter(c => c.value > 0).sort((a, b) => b.value - a.value).slice(0, 6);
+    const urgentRows = [
+      { label: "Chưa feedback", value: stats.new || 0, color: STATUS_COLORS.new },
+      { label: "Gọi lại sau", value: stats.callback || 0, color: STATUS_COLORS.callback },
+      { label: "Chưa liên lạc được", value: stats.unreachable || 0, color: STATUS_COLORS.unreachable },
+    ].filter(r => r.value > 0);
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+          <span style={{ padding: "7px 10px", border: "1px solid #d9e2dc", borderRadius: 999, background: "#fff", color: "#1a3c20", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>Hôm nay</span>
+          <span style={{ padding: "7px 10px", border: "1px solid #d9e2dc", borderRadius: 999, background: "#fff", color: "#374151", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>Tất cả dự án</span>
+        </div>
+
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 14, boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            {[
+              { label: "Tổng lead", value: stats.total, color: "#0f3d1e" },
+              { label: "Chưa FB", value: stats.new || 0, color: "#d97706" },
+              { label: "Cập nhật", value: `${updateRate}%`, color: "#0284c7" },
+            ].map((item) => (
+              <div key={item.label} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
+                <div style={{ fontSize: 20, lineHeight: 1.1, fontWeight: 850, color: item.color, wordBreak: "break-word" }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ height: 8, borderRadius: 999, background: "#edf2f7", overflow: "hidden", display: "flex", marginTop: 14 }}>
+            {distribution.map((item) => (
+              <div key={item.title} style={{ width: `${Math.max(2, Number(pct(item.value)))}%`, background: item.color }} />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            {distribution.slice(0, 4).map((item) => (
+              <span key={item.title} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#475569", fontWeight: 600 }}>
+                <span style={{ width: 7, height: 7, borderRadius: 999, background: item.color }} />{item.title}
+              </span>
+            ))}
+          </div>
+        </section>
+
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+          <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef2f7", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <h4 style={{ margin: 0, fontSize: 13, color: "#0f172a", fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}><Activity size={15} /> Trạng thái chính</h4>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>{primaryRows.length} mục</span>
+          </div>
+          <div>
+            {primaryRows.map((row) => {
+              const percent = stats.total ? Math.min(100, (row.value / stats.total) * 100) : 0;
+              return (
+                <div key={row.key} style={{ padding: "11px 14px", borderBottom: "1px solid #f1f5f9" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginBottom: 7 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 999, background: row.color, flexShrink: 0 }} />
+                      <span style={{ fontSize: 13, fontWeight: 750, color: "#1e293b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                      <span style={{ fontSize: 15, fontWeight: 850, color: "#0f172a" }}>{row.value}</span>
+                      <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>{pct(row.value)}%</span>
+                    </div>
+                  </div>
+                  <div style={{ height: 5, borderRadius: 999, background: "#f1f5f9", overflow: "hidden" }}>
+                    <div style={{ width: `${percent}%`, height: "100%", borderRadius: 999, background: row.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 14, boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+          <h4 style={{ margin: "0 0 10px", fontSize: 13, color: "#0f172a", fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={15} /> Cần xử lý</h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(urgentRows.length ? urgentRows : [{ label: "Không có mục tồn", value: 0, color: "#16a34a" }]).map((row) => (
+              <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 10px", borderRadius: 8, background: "#f8fafc", border: "1px solid #edf2f7" }}>
+                <span style={{ fontSize: 12, color: "#475569", fontWeight: 700 }}>{row.label}</span>
+                <span style={{ fontSize: 13, color: row.color, fontWeight: 850 }}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <>
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
@@ -2511,6 +2637,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const list = Array.isArray(leads) ? leads : [];
     list.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
     return counts;
+  }, [leads]);
+
+  const recentLeadPreview = useMemo(() => {
+    const list = Array.isArray(leads) ? [...leads] : [];
+    return list
+      .sort((a, b) => (parseLeadDate(b.createdAt)?.getTime() || 0) - (parseLeadDate(a.createdAt)?.getTime() || 0))
+      .slice(0, 3);
   }, [leads]);
 
   const getFirstUpdaterStatus = useCallback((lead) => {
@@ -2910,6 +3043,102 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {/* Project selection screen - shown when no project selected */}
       {!selectedProject ? (
         <div>
+          {isMobile ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ position: "relative" }}>
+                <Search size={16} style={{ position: "absolute", left: 12, top: 12, color: "#94a3b8" }} />
+                <input
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  placeholder="Tìm tên, SĐT, chiến dịch..."
+                  style={{ width: "100%", boxSizing: "border-box", padding: "11px 12px 11px 38px", border: "1px solid #d9e2dc", borderRadius: 10, background: "#fff", fontSize: 13, outline: "none" }}
+                />
+              </div>
+
+              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
+                {[
+                  { label: "Tất cả", value: leads.length, active: true },
+                  { label: "Chưa feedback", value: leads.filter(l => (l.status || "new") === "new").length },
+                  { label: "Quan tâm", value: leads.filter(l => (l.status || "") === "interested").length },
+                ].map((chip) => (
+                  <span key={chip.label} style={{ flexShrink: 0, display: "inline-flex", gap: 6, alignItems: "center", padding: "7px 10px", borderRadius: 999, border: `1px solid ${chip.active ? "#0f3d1e" : "#d9e2dc"}`, background: chip.active ? "#f0faf1" : "#fff", color: chip.active ? "#0f3d1e" : "#475569", fontSize: 12, fontWeight: 750 }}>
+                    {chip.label}<b style={{ fontSize: 11 }}>{chip.value}</b>
+                  </span>
+                ))}
+              </div>
+
+              <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+                <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef2f7" }}>
+                  <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800, textTransform: "uppercase", marginBottom: 3 }}>Dự án đang xem</div>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 850 }}>Tất cả dự án</div>
+                    <div style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 850 }}>{leads.length} khách</div>
+                  </div>
+                </div>
+                <div>
+                  {isAdmin && user.role === "admin" && (
+                    <button onClick={() => setSelectedProject("all")} style={{ width: "100%", border: "none", background: "#f8fafc", borderBottom: "1px solid #eef2f7", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                        <ClipboardList size={17} color="#0f3d1e" />
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: "block", fontSize: 13, color: "#0f172a", fontWeight: 850 }}>Tất cả dự án</span>
+                          <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>Tổng hợp toàn hệ thống</span>
+                        </span>
+                      </span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f3d1e", fontSize: 13, fontWeight: 850 }}>{leads.length}<ChevronRight size={16} /></span>
+                    </button>
+                  )}
+                  {availableProjects.map((p) => {
+                    const count = projectLeadCounts[p.id] || 0;
+                    return (
+                      <button key={p.id} onClick={() => setSelectedProject(String(p.id))} style={{ width: "100%", border: "none", background: "#fff", borderBottom: "1px solid #eef2f7", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                          <Building2 size={17} color="#d97706" />
+                          <span style={{ minWidth: 0 }}>
+                            <span style={{ display: "block", fontSize: 13, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</span>
+                            <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>{p.dailyReportEnabled ? "Báo cáo Tele đang bật" : "Dữ liệu dự án"}</span>
+                          </span>
+                        </span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#d97706", fontSize: 13, fontWeight: 850 }}>{count}<ChevronRight size={16} /></span>
+                      </button>
+                    );
+                  })}
+                  <button onClick={() => setSelectedProject("personal")} style={{ width: "100%", border: "none", background: "#fff", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+                      <UserCog size={17} color="#6d28d9" />
+                      <span>
+                        <span style={{ display: "block", fontSize: 13, color: "#0f172a", fontWeight: 850 }}>KH cá nhân</span>
+                        <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>Khách riêng của tôi</span>
+                      </span>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#6d28d9", fontSize: 13, fontWeight: 850 }}>{plLeads.length}<ChevronRight size={16} /></span>
+                  </button>
+                </div>
+              </section>
+
+              <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+                <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef2f7", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <h4 style={{ margin: 0, fontSize: 13, fontWeight: 850, color: "#0f172a" }}>Lead gần đây</h4>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>{recentLeadPreview.length} mục</span>
+                </div>
+                {recentLeadPreview.length ? recentLeadPreview.map((lead) => (
+                  <div key={`${lead.id}-${lead.phone}`} style={{ padding: "12px 14px", borderBottom: "1px solid #f1f5f9" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 5 }}>
+                      <div style={{ minWidth: 0, fontSize: 13, fontWeight: 850, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lead.name}</div>
+                      <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 800, borderRadius: 999, padding: "3px 7px", color: STATUS_COLORS[lead.status || "new"] || "#64748b", background: `${STATUS_COLORS[lead.status || "new"] || "#64748b"}16` }}>{STATUS_LABELS[lead.status || "new"] || "Chưa feedback"}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, color: "#64748b", fontSize: 11, fontWeight: 600 }}>
+                      <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lead.phone || "-"} • {projectMap[lead.projectId] || "-"}</span>
+                      <span>{lead.createdAt || "-"}</span>
+                    </div>
+                  </div>
+                )) : (
+                  <div style={{ padding: 18, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Chưa có lead gần đây</div>
+                )}
+              </section>
+            </div>
+          ) : (
+          <>
           <h2 style={{ fontSize: isMobile ? 16 : 20, fontWeight: 700, color: "#1f2937", marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
             <FolderOpen size={isMobile ? 18 : 22} /> Chọn dự án để xem khách hàng
           </h2>
@@ -2958,6 +3187,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <FolderOpen size={40} style={{ marginBottom: 8, opacity: 0.4 }} />
               <div style={{ fontSize: 14 }}>Chưa được phân công dự án nào</div>
             </div>
+          )}
+          </>
           )}
         </div>
       ) : selectedProject === "personal" ? (
@@ -6376,6 +6607,95 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
       setSyncingId(null);
     }
   };
+
+  if (isMobile) {
+    const mobileActionBtn = {
+      border: "1px solid #d9e2dc",
+      background: "#fff",
+      color: "#334155",
+      borderRadius: 8,
+      padding: "9px 10px",
+      fontSize: 12,
+      fontWeight: 800,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 5,
+      cursor: "pointer",
+      minWidth: 0,
+    };
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800, textTransform: "uppercase" }}>Danh sách</div>
+            <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 850 }}>{projects.length} dự án</div>
+          </div>
+          {isAdminOnly && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={openLegacyImport} style={{ ...mobileActionBtn, color: "#1d4ed8", background: "#eff6ff", borderColor: "#bfdbfe" }}>Data cũ</button>
+              <button onClick={openNewProject} style={{ ...mobileActionBtn, color: "#fff", background: "#0f3d1e", borderColor: "#0f3d1e" }}><Plus size={13} /> Thêm</button>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {projects.map((p) => {
+            const c = p.costData || {};
+            const isSyncing = syncingId === p.id;
+            const metricItems = [
+              { label: "Chi phí", value: formatVND(c.totalSpent) },
+              { label: "Lead", value: c.totalLeads || 0 },
+              { label: "Booking", value: c.totalBooking || 0 },
+              { label: "CPL", value: formatVND(c.cpLead) },
+            ];
+            return (
+              <article key={p.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
+                <div style={{ height: 3, background: p.isLegacy ? "#2563eb" : p.dailyReportEnabled ? "#16a34a" : "#d97706" }} />
+                <div style={{ padding: 14 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <h4 style={{ margin: 0, fontSize: 14, lineHeight: 1.35, color: "#0f172a", fontWeight: 900, overflowWrap: "anywhere" }}>{p.name}</h4>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
+                        {p.isLegacy && <span style={{ fontSize: 10, fontWeight: 800, background: "#dbeafe", color: "#1e40af", padding: "3px 7px", borderRadius: 999 }}>DATA CŨ</span>}
+                        {p.dailyReportEnabled && <span style={{ fontSize: 10, fontWeight: 800, background: "#dcfce7", color: "#166534", padding: "3px 7px", borderRadius: 999 }}>BÁO CÁO TELE</span>}
+                      </div>
+                    </div>
+                    <Building2 size={18} color="#64748b" style={{ flexShrink: 0 }} />
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                    {metricItems.map((item) => (
+                      <div key={item.label} style={{ background: "#f8fafc", border: "1px solid #edf2f7", borderRadius: 8, padding: "9px 10px", minWidth: 0 }}>
+                        <div style={{ fontSize: 10, color: "#64748b", fontWeight: 800, textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
+                        <div style={{ fontSize: 13, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: isAdminOnly ? (p.isLegacy ? "1fr 1fr" : "1fr 1fr 1fr") : "1fr", gap: 8 }}>
+                    {!p.isLegacy && (
+                      <button
+                        onClick={() => syncOne(p.id)}
+                        disabled={!!syncingId}
+                        style={{ ...mobileActionBtn, color: "#fff", background: "#d97706", borderColor: "#d97706", opacity: syncingId ? 0.65 : 1 }}
+                      >
+                        {isSyncing ? <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={13} />}
+                        {isSyncing ? "Đang sync" : "Sync"}
+                      </button>
+                    )}
+                    {isAdminOnly && <button onClick={() => openEditProject(p)} style={mobileActionBtn}><Pencil size={13} /> Sửa</button>}
+                    {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...mobileActionBtn, color: "#dc2626", background: "#fff7f7", borderColor: "#fecaca" }}><Trash2 size={13} /> Xóa</button>}
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>

@@ -71,6 +71,7 @@ async function sendPushToUser(userId, payload) {
     title: payload.title || "LUX IQI CRM",
     body: payload.body || "Bạn có thông báo mới",
     tag: payload.tag || `crm-${Date.now()}`,
+    sound: payload.sound || "",
     data: payload.data || { url: "/" },
     requireInteraction: !!payload.requireInteraction,
   });
@@ -1942,6 +1943,7 @@ async function syncProject(db, projectId) {
                 title: `Có ${mgrNewLeads.length} lead mới`,
                 body: `${projectName}${previewNames ? `: ${previewNames}` : ""}`,
                 tag: `manager-new-${projectId}-${mgr.id}`,
+                sound: "manager",
                 data: { url: "/", type: "manager_new_leads", projectId, leadIds: mgrNewLeads.map(l => l.id) },
                 requireInteraction: true,
               }).catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
@@ -3904,6 +3906,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
         title: `Bạn có ${leadIds.length} lead mới`,
         body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
         tag: `sale-bulk-${saleName}-${Date.now()}`,
+        sound: "sale",
         data: { url: "/", type: "sale_bulk_leads", leadIds },
         requireInteraction: true,
       }).catch(err => console.error(`[Push] Bulk sale notify failed for ${saleName}:`, err.message));
@@ -4623,6 +4626,7 @@ async function processSchedules(db, triggerUser) {
           title: `Bạn có ${saleLeadIds.length} lead mới`,
           body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
           tag: `sale-schedule-${sch.id}-${saleName}-${slotToProcess}`,
+          sound: "sale",
           data: { url: "/", type: "sale_schedule_leads", scheduleId: sch.id, leadIds: saleLeadIds },
           requireInteraction: true,
         }).catch(err => console.error(`[Push] Schedule notify failed for ${saleName}:`, err.message));
@@ -5412,6 +5416,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           title: "Bạn có lead mới",
           body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
           tag: `sale-lead-${actualLeadId}`,
+          sound: "sale",
           data: { url: "/", type: "sale_new_lead", leadId: actualLeadId },
           requireInteraction: true,
         }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
