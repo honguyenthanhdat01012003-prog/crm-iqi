@@ -3938,9 +3938,12 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     const stmts = [];
+    const assignedBySale = new Map();
     for (let i = 0; i < leads.length; i++) {
       const l = leads[i];
       const assignedSale = saleNames[i % saleNames.length];
+      if (!assignedBySale.has(assignedSale)) assignedBySale.set(assignedSale, []);
+      assignedBySale.get(assignedSale).push(l.id);
       stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [assignedSale, l.id] });
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [l.id]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -3950,6 +3953,24 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       });
     }
     await db.batch(stmts, "write");
+
+    try {
+      const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [pid]);
+      for (const [saleName, saleLeadIds] of assignedBySale.entries()) {
+        const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [saleLeadIds[0]]);
+        const extra = saleLeadIds.length > 1 ? ` và ${saleLeadIds.length - 1} lead khác` : "";
+        sendPushToDisplayName(saleName, {
+          title: `Bạn có ${saleLeadIds.length} lead mới`,
+          body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
+          tag: `sale-shuffle-${pid}-${saleName}-${Date.now()}`,
+          sound: "sale",
+          data: { url: "/", type: "sale_shuffle_leads", projectId: pid, leadIds: saleLeadIds },
+          requireInteraction: true,
+        }).catch(err => console.error(`[Push] Shuffle notify failed for ${saleName}:`, err.message));
+      }
+    } catch (pushErr) {
+      console.error("[Push shuffle] Send failed:", pushErr.message);
+    }
 
     lastSyncHash = "";
     emitDataChanged("shuffle-leads");
