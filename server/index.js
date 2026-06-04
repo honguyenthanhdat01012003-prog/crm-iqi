@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import { Server as SocketIOServer } from "socket.io";
 import { fileURLToPath } from "url";
+import webpush from "web-push";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +30,75 @@ const escMd = (s) => String(s || "").replace(/[_*`[\]\\]/g, "\\$&");
 
 // Global Socket.IO instance — set up when server starts
 let io = null;
+
+let pushPublicKey = "";
+let pushEnabled = false;
+const PUSH_SUBJECT = process.env.VAPID_SUBJECT || process.env.BASE_URL || "mailto:admin@crm-iqi.id.vn";
+
+async function initPushNotifications(client) {
+  let publicKey = process.env.VAPID_PUBLIC_KEY || "";
+  let privateKey = process.env.VAPID_PRIVATE_KEY || "";
+
+  if (!publicKey || !privateKey) {
+    const savedPublic = await get(client, "SELECT value FROM settings WHERE key = 'push_vapid_public_key'");
+    const savedPrivate = await get(client, "SELECT value FROM settings WHERE key = 'push_vapid_private_key'");
+    publicKey = savedPublic?.value || "";
+    privateKey = savedPrivate?.value || "";
+  }
+
+  if (!publicKey || !privateKey) {
+    const generated = webpush.generateVAPIDKeys();
+    publicKey = generated.publicKey;
+    privateKey = generated.privateKey;
+    await upsertSetting(client, "push_vapid_public_key", publicKey);
+    await upsertSetting(client, "push_vapid_private_key", privateKey);
+    console.log("[Push] Generated and stored VAPID keys in settings");
+  }
+
+  webpush.setVapidDetails(PUSH_SUBJECT, publicKey, privateKey);
+  pushPublicKey = publicKey;
+  pushEnabled = true;
+  console.log("[Push] Web push ready");
+}
+
+async function sendPushToUser(userId, payload) {
+  if (!pushEnabled || !userId) return { sent: 0, skipped: true };
+  const subs = await all(db, "SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?", [userId]);
+  if (!subs.length) return { sent: 0 };
+
+  let sent = 0;
+  const body = JSON.stringify({
+    title: payload.title || "LUX IQI CRM",
+    body: payload.body || "Bạn có thông báo mới",
+    tag: payload.tag || `crm-${Date.now()}`,
+    data: payload.data || { url: "/" },
+    requireInteraction: !!payload.requireInteraction,
+  });
+
+  for (const sub of subs) {
+    try {
+      await webpush.sendNotification(JSON.parse(sub.subscription_json), body);
+      sent++;
+      await run(db, "UPDATE push_subscriptions SET last_error = '', updated_at = datetime('now') WHERE id = ?", [sub.id]);
+    } catch (err) {
+      const code = err.statusCode || err.status || 0;
+      if (code === 404 || code === 410) {
+        await run(db, "DELETE FROM push_subscriptions WHERE id = ?", [sub.id]);
+      } else {
+        await run(db, "UPDATE push_subscriptions SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [String(err.message || err).slice(0, 500), sub.id]);
+        console.error(`[Push] Send failed for user#${userId}:`, err.message || err);
+      }
+    }
+  }
+  return { sent };
+}
+
+async function sendPushToDisplayName(displayName, payload) {
+  if (!displayName) return { sent: 0 };
+  const user = await get(db, "SELECT id FROM users WHERE display_name = ? LIMIT 1", [displayName]);
+  if (!user?.id) return { sent: 0 };
+  return sendPushToUser(user.id, payload);
+}
 
 const PUBLISH_BASE =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vR768IcRYeqkD4K4tuy78f8C_Bpue7VB_VZ4GRhVVm_N-JiR-PnIfUz9Tm1EyLXIER2XojzoYrNBGgA/pub";
@@ -82,7 +152,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 26; // Bump this when adding new DDL/migrations
+const DB_VERSION = 27; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -226,6 +296,16 @@ async function initDb() {
       lead_phone TEXT DEFAULT '', project_id INTEGER, from_sale TEXT DEFAULT '',
       to_sale TEXT DEFAULT '', rotated_at TEXT DEFAULT '', source TEXT DEFAULT '',
       reason TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      subscription_json TEXT NOT NULL,
+      user_agent TEXT DEFAULT '',
+      last_error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
     )`,
   ];
   for (const sql of ddlStatements) {
@@ -464,6 +544,22 @@ async function initDb() {
   if (dbVersion < 26) {
     console.log("[DB] v26 migration: adding customer_fb_url to leads...");
     try { await run(db, "ALTER TABLE leads ADD COLUMN customer_fb_url TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 27) {
+    console.log("[DB] v27 migration: adding push_subscriptions table...");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        endpoint TEXT NOT NULL UNIQUE,
+        subscription_json TEXT NOT NULL,
+        user_agent TEXT DEFAULT '',
+        last_error TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -1841,6 +1937,15 @@ async function syncProject(db, projectId) {
               mgrLeadMap.get(mgr.id).leads.push(lead);
             }
             for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
+              const previewNames = mgrNewLeads.slice(0, 3).map(l => l.name || "N/A").join(", ");
+              sendPushToUser(mgr.id, {
+                title: `Có ${mgrNewLeads.length} lead mới`,
+                body: `${projectName}${previewNames ? `: ${previewNames}` : ""}`,
+                tag: `manager-new-${projectId}-${mgr.id}`,
+                data: { url: "/", type: "manager_new_leads", projectId, leadIds: mgrNewLeads.map(l => l.id) },
+                requireInteraction: true,
+              }).catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
+
               if (!mgr.telegram_id) {
                 console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" has NO telegram_id, skip notify`);
                 continue;
@@ -1997,6 +2102,12 @@ let dbInitError = null;
 try {
   db = await initDb();
   console.log("[DB] Connected successfully");
+  try {
+    await initPushNotifications(db);
+  } catch (pushErr) {
+    pushEnabled = false;
+    console.error("[Push] Init failed:", pushErr.message);
+  }
 } catch (err) {
   dbInitError = err.message || "Unknown DB error";
   console.error("[DB] Init failed:", dbInitError);
@@ -2024,6 +2135,66 @@ function requireAdminOnly(req, res, next) {
   if (req.user?.role !== "admin") return res.status(403).json({ error: "Forbidden" });
   next();
 }
+
+/* ---------- PWA Push Notifications ---------- */
+app.get("/api/push/public-key", requireAuth, (_req, res) => {
+  res.json({ enabled: pushEnabled && !!pushPublicKey, publicKey: pushPublicKey || "" });
+});
+
+app.post("/api/push/subscribe", requireAuth, async (req, res) => {
+  try {
+    if (!pushEnabled || !pushPublicKey) return res.status(503).json({ error: "Push notification chưa sẵn sàng" });
+    const subscription = req.body?.subscription || req.body;
+    const endpoint = String(subscription?.endpoint || "").trim();
+    if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ error: "Subscription không hợp lệ" });
+    }
+    const userAgent = String(req.body?.userAgent || req.headers["user-agent"] || "").slice(0, 500);
+    await run(db,
+      `INSERT INTO push_subscriptions(user_id, endpoint, subscription_json, user_agent, last_error, updated_at)
+       VALUES(?, ?, ?, ?, '', datetime('now'))
+       ON CONFLICT(endpoint) DO UPDATE SET
+         user_id = excluded.user_id,
+         subscription_json = excluded.subscription_json,
+         user_agent = excluded.user_agent,
+         last_error = '',
+         updated_at = datetime('now')`,
+      [req.user.userId, endpoint, JSON.stringify(subscription), userAgent]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Push] Subscribe failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/push/unsubscribe", requireAuth, async (req, res) => {
+  try {
+    const endpoint = String(req.body?.endpoint || "").trim();
+    if (endpoint) {
+      await run(db, "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?", [req.user.userId, endpoint]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[Push] Unsubscribe failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/push/test", requireAuth, async (req, res) => {
+  try {
+    const result = await sendPushToUser(req.user.userId, {
+      title: "LUX IQI CRM",
+      body: "Thông báo điện thoại đã bật thành công.",
+      tag: `push-test-${req.user.userId}`,
+      data: { url: "/" },
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[Push] Test failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /* ---------- Auth endpoints ---------- */
 app.post("/api/login", loginLimiter, async (req, res) => {
@@ -3725,6 +3896,21 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
       console.error("[Telegram bulk] Send failed:", teleErr.message);
     }
 
+    try {
+      const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadIds[0]]);
+      const projectRow = firstLead ? await get(db, "SELECT name FROM projects WHERE id = ?", [firstLead.project_id]) : null;
+      const extra = leadIds.length > 1 ? ` và ${leadIds.length - 1} lead khác` : "";
+      sendPushToDisplayName(saleName, {
+        title: `Bạn có ${leadIds.length} lead mới`,
+        body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
+        tag: `sale-bulk-${saleName}-${Date.now()}`,
+        data: { url: "/", type: "sale_bulk_leads", leadIds },
+        requireInteraction: true,
+      }).catch(err => console.error(`[Push] Bulk sale notify failed for ${saleName}:`, err.message));
+    } catch (pushErr) {
+      console.error("[Push bulk] Send failed:", pushErr.message);
+    }
+
     lastSyncHash = ""; // invalidate so next poll re-fetches
     emitDataChanged("chia-lead");
     const data = await readData(db);
@@ -4421,6 +4607,28 @@ async function processSchedules(db, triggerUser) {
         }
     } catch (teleErr) {
       console.error("[Telegram schedule] Error:", teleErr.message);
+    }
+
+    try {
+      const bySale = new Map();
+      for (const item of assignedLeads) {
+        if (!bySale.has(item.saleName)) bySale.set(item.saleName, []);
+        bySale.get(item.saleName).push(item.leadId);
+      }
+      for (const [saleName, saleLeadIds] of bySale.entries()) {
+        const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [saleLeadIds[0]]);
+        const projectRow = firstLead ? await get(db, "SELECT name FROM projects WHERE id = ?", [firstLead.project_id]) : null;
+        const extra = saleLeadIds.length > 1 ? ` và ${saleLeadIds.length - 1} lead khác` : "";
+        sendPushToDisplayName(saleName, {
+          title: `Bạn có ${saleLeadIds.length} lead mới`,
+          body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
+          tag: `sale-schedule-${sch.id}-${saleName}-${slotToProcess}`,
+          data: { url: "/", type: "sale_schedule_leads", scheduleId: sch.id, leadIds: saleLeadIds },
+          requireInteraction: true,
+        }).catch(err => console.error(`[Push] Schedule notify failed for ${saleName}:`, err.message));
+      }
+    } catch (pushErr) {
+      console.error("[Push schedule] Send failed:", pushErr.message);
     }
   }
   return totalAssigned;
@@ -5196,6 +5404,19 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         }
       } catch (teleErr) {
         console.error("[Telegram] Send failed:", teleErr.message);
+      }
+
+      try {
+        const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
+        sendPushToDisplayName(saleName, {
+          title: "Bạn có lead mới",
+          body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
+          tag: `sale-lead-${actualLeadId}`,
+          data: { url: "/", type: "sale_new_lead", leadId: actualLeadId },
+          requireInteraction: true,
+        }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
+      } catch (pushErr) {
+        console.error("[Push] Sale notify failed:", pushErr.message);
       }
     }
 

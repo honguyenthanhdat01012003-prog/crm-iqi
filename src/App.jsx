@@ -15,6 +15,7 @@ import {
   Briefcase, AlertTriangle, ArrowUp, ArrowDown
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
+import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 
 const API = "/api";
 
@@ -543,6 +544,10 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
+  const pushSupported = isPushNotificationSupported();
+  const [pushPermission, setPushPermission] = useState(() => getPushPermissionState());
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
 
   // Announcement marquee state
   const [announcements, setAnnouncements] = useState([]);
@@ -566,6 +571,34 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    setPushPermission(getPushPermissionState());
+    getCurrentPushSubscription()
+      .then(sub => setPushEnabled(!!sub && getPushPermissionState() === "granted"))
+      .catch(() => setPushEnabled(false));
+  }, [pushSupported]);
+
+  const handleEnablePush = useCallback(async () => {
+    if (!pushSupported || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const result = await subscribeToPushNotifications(apiFetch, API);
+      const nextPermission = getPushPermissionState();
+      setPushPermission(nextPermission);
+      setPushEnabled(!!result.ok && nextPermission === "granted");
+      if (result.ok) {
+        showToast("Đã bật thông báo điện thoại. Hệ thống vừa gửi thử 1 thông báo.", "success");
+      } else {
+        showToast(nextPermission === "denied" ? "Bạn đã chặn quyền thông báo trong trình duyệt." : "Bạn chưa cấp quyền thông báo.", "warning");
+      }
+    } catch (err) {
+      showToast("Không bật được thông báo: " + (err.message || err), "warning");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [pushSupported, pushBusy]);
 
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
@@ -1158,7 +1191,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               {(() => { const nav = visibleNav.find((n) => n.key === page) || (visibleNav.find(n => n.children)?.children || []).find(c => c.key === page); return nav ? <><span style={{ display: "flex", alignItems: "center" }}>{nav.icon && React.createElement(nav.icon, { size: 20 })}</span> {nav.label}</> : "Dashboard"; })()}
             </h2>
           </div>
-          {isAdmin && (
+          {(isAdmin || pushSupported) && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {/* Notification bell + countdown */}
               <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -1197,6 +1230,37 @@ function CRMApp({ user, updateUser, onLogout }) {
                           </button>
                         )}
                       </div>
+                      {pushSupported && (
+                        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#f8fafc" }}>
+                          <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3c20", display: "flex", alignItems: "center", gap: 6 }}>
+                                <Smartphone size={14} /> Thông báo điện thoại
+                              </div>
+                              <div style={{ fontSize: 11, color: pushPermission === "denied" ? "#dc2626" : "#6b7280", marginTop: 2 }}>
+                                {pushEnabled ? "Đã bật trên thiết bị này" : pushPermission === "denied" ? "Đang bị chặn trong trình duyệt" : "Bật để nhận lead mới khi đóng app"}
+                              </div>
+                            </div>
+                            <button
+                              onClick={handleEnablePush}
+                              disabled={pushBusy || pushEnabled || pushPermission === "denied"}
+                              style={{
+                                border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
+                                background: pushEnabled ? "#dcfce7" : "#fff",
+                                color: pushEnabled ? "#15803d" : "#1f2937",
+                                borderRadius: 8,
+                                padding: "7px 10px",
+                                fontSize: 11,
+                                fontWeight: 700,
+                                cursor: pushBusy || pushEnabled || pushPermission === "denied" ? "not-allowed" : "pointer",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {pushBusy ? "Đang bật..." : pushEnabled ? "Đã bật" : "Bật"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {notifications.length === 0 ? (
                         <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có thông báo mới</div>
                       ) : (

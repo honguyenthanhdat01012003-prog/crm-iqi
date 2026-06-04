@@ -1,4 +1,4 @@
-const CACHE_NAME = "lux-iqi-crm-pwa-v1";
+const CACHE_NAME = "lux-iqi-crm-pwa-v2";
 const APP_SHELL = ["/", "/logo-iqi.svg", "/site.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -51,6 +51,49 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       });
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_) {
+    payload = { body: event.data ? event.data.text() : "" };
+  }
+
+  const title = payload.title || "LUX IQI CRM";
+  const options = {
+    body: payload.body || "Bạn có thông báo mới",
+    icon: "/logo-iqi.svg",
+    badge: "/logo-iqi.svg",
+    tag: payload.tag || "lux-iqi-crm",
+    renotify: true,
+    requireInteraction: !!payload.requireInteraction,
+    vibrate: [180, 80, 180],
+    data: payload.data || { url: "/" },
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data && event.notification.data.url
+    ? event.notification.data.url
+    : "/";
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      const absoluteUrl = new URL(targetUrl, self.location.origin).href;
+      for (const client of clientList) {
+        if (new URL(client.url).origin === self.location.origin) {
+          if ("navigate" in client) return client.navigate(absoluteUrl).then(() => client.focus());
+          return client.focus();
+        }
+      }
+      return clients.openWindow(absoluteUrl);
     })
   );
 });
