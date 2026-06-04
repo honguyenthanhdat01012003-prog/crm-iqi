@@ -1045,7 +1045,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5" }}>
+    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5", WebkitTextSizeAdjust: "100%" }}>
       {/* Server down warning banner */}
       {serverDown && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "linear-gradient(135deg, #dc2626, #b91c1c)", color: "#fff", textAlign: "center", padding: "8px 16px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 2px 12px rgba(220,38,38,.3)" }}>
@@ -1242,7 +1242,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {/* Top bar - sticky */}
         <div style={{
           position: "sticky", top: 0, zIndex: 100, background: "#f8fafb",
-          padding: isMobile ? "10px 14px" : "16px 28px",
+          padding: isMobile ? "8px 12px" : "16px 28px",
           borderBottom: "1px solid #e5e7eb",
           display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
           backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
@@ -1251,14 +1251,14 @@ function CRMApp({ user, updateUser, onLogout }) {
             {isMobile && (
               <button onClick={() => setSidebarOpen(true)} style={{
                 background: "#1a3c20", color: "#fff", border: "none", borderRadius: 8,
-                width: 40, height: 40, fontSize: 18, cursor: "pointer", flexShrink: 0,
+                width: 38, height: 38, fontSize: 18, cursor: "pointer", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 }}
               >
                 <Menu size={20} />
               </button>
             )}
-            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 17 : 22, fontWeight: 700, letterSpacing: "-0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 10 }}>
+            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 16 : 22, fontWeight: 800, letterSpacing: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 8 }}>
               {(() => { const nav = visibleNav.find((n) => n.key === page) || (visibleNav.find(n => n.children)?.children || []).find(c => c.key === page); return nav ? <><span style={{ display: "flex", alignItems: "center" }}>{nav.icon && React.createElement(nav.icon, { size: 20 })}</span> {nav.label}</> : "Dashboard"; })()}
             </h2>
           </div>
@@ -1268,7 +1268,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
                 <button onClick={() => setShowNotif(!showNotif)} style={{
                   background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #e5e7eb",
-                  borderRadius: 10, width: 40, height: 40, fontSize: 18, cursor: "pointer",
+                  borderRadius: 10, width: 38, height: 38, fontSize: 18, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
                   transition: "background .2s, border-color .2s",
                 }}>
@@ -1365,7 +1365,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               {isAdminOnly && (
                 <button onClick={() => setShowAnnounceMgmt(true)} title="Quản lý thông báo chạy" style={{
                   background: announcements.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #e5e7eb",
-                  borderRadius: 10, width: 40, height: 40, cursor: "pointer",
+                  borderRadius: 10, width: 38, height: 38, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   transition: "background .2s",
                 }}>
@@ -1381,14 +1381,14 @@ function CRMApp({ user, updateUser, onLogout }) {
                   border: "none",
                   cursor: syncing ? "not-allowed" : "pointer",
                   display: "flex", flexDirection: "column", alignItems: "center",
-                  padding: "2px 6px", minWidth: 44, flexShrink: 0,
+                  padding: "2px 4px", minWidth: 38, flexShrink: 0,
                 }}
               >
                 <span style={{
-                  fontSize: 22, lineHeight: 1,
+                  fontSize: 20, lineHeight: 1,
                   display: "inline-block",
                   animation: syncing ? "spin 1s linear infinite" : "none",
-                }}><RefreshCw size={22} /></span>
+                }}><RefreshCw size={20} /></span>
                 <span style={{
                   fontSize: 10, fontWeight: 700, marginTop: 1,
                   color: syncing ? "#e88a2e" : "#6b7280",
@@ -1401,7 +1401,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {/* Scrolling announcement marquee - one at a time */}
         {announcements.length > 0 && <AnnouncementMarquee announcements={announcements} />}
 
-        <div style={{ flex: 1, padding: isMobile ? 14 : 28, paddingTop: isMobile ? 10 : 20, paddingBottom: isMobile ? 94 : undefined }}>
+        <div style={{ flex: 1, padding: isMobile ? 12 : 28, paddingTop: isMobile ? 10 : 20, paddingBottom: isMobile ? "calc(96px + env(safe-area-inset-bottom))" : undefined }}>
         {page === "dashboard" && (
           <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={filteredLeads} />
         )}
@@ -1467,19 +1467,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       {isMobile && (
         <nav style={{
           position: "fixed",
-          left: 10,
-          right: 10,
-          bottom: 8,
-          height: 62,
+          left: 12,
+          right: 12,
+          bottom: "calc(8px + env(safe-area-inset-bottom))",
+          height: 58,
           background: "rgba(255,255,255,.96)",
           border: "1px solid #e2e8f0",
-          borderRadius: 18,
-          boxShadow: "0 10px 30px rgba(15,23,42,.16)",
+          borderRadius: 20,
+          boxShadow: "0 10px 28px rgba(15,23,42,.15)",
           zIndex: 950,
           display: "grid",
-          gridTemplateColumns: `repeat(${mobileBottomTabs.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))`,
           alignItems: "center",
-          padding: "5px 4px calc(5px + env(safe-area-inset-bottom))",
+          padding: "4px 5px",
           backdropFilter: "blur(14px)",
           WebkitBackdropFilter: "blur(14px)",
         }}>
@@ -1502,13 +1502,16 @@ function CRMApp({ user, updateUser, onLogout }) {
                   justifyContent: "center",
                   gap: 3,
                   minWidth: 0,
-                  height: 52,
-                  fontSize: 10,
+                  height: 50,
+                  padding: 0,
+                  overflow: "hidden",
+                  fontSize: 9,
+                  lineHeight: 1.1,
                   fontWeight: active ? 850 : 700,
                 }}
               >
                 <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icon size={19} strokeWidth={active ? 2.5 : 2} />
+                  <Icon size={18} strokeWidth={active ? 2.5 : 2} />
                   {tab.key === "notifications" && notifications.length > 0 && (
                     <span style={{
                       position: "absolute",
@@ -1527,8 +1530,8 @@ function CRMApp({ user, updateUser, onLogout }) {
                     }}>{notifications.length}</span>
                   )}
                 </span>
-                <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>{tab.label}</span>
-                {active && <span style={{ position: "absolute", bottom: 0, width: 18, height: 3, borderRadius: 999, background: "#0f3d1e" }} />}
+                <span style={{ display: "block", width: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" }}>{tab.label}</span>
+                {active && <span style={{ position: "absolute", bottom: 1, width: 18, height: 3, borderRadius: 999, background: "#0f3d1e" }} />}
               </button>
             );
           })}
@@ -2863,6 +2866,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return counts;
   }, [processedLeads, LEAD_TABS]);
 
+  const mobilePrimaryTabs = useMemo(() => {
+    const preferred = ["all", "new", "interested", "appointment", "booked", "spam"];
+    return LEAD_TABS
+      .filter((t) => preferred.includes(t.key))
+      .filter((t) => ["all", "new", "interested"].includes(t.key) || (tabCounts[t.key] || 0) > 0)
+      .slice(0, 5);
+  }, [LEAD_TABS, tabCounts]);
+
   const parseDate = (s) => {
     if (!s || s === "-") return 0;
     const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
@@ -2870,11 +2881,21 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const t = new Date(s).getTime();
     return isNaN(t) ? 0 : t;
   };
+  const formatMobileLeadTime = (value) => {
+    const d = parseLeadDate(value);
+    if (!d) return "-";
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    if (sameDay) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+  };
   const tabFiltered = useMemo(() => {
     const tab = LEAD_TABS.find((t) => t.key === activeTab);
     const filtered = tab ? processedLeads.filter(tab.filter) : [...processedLeads];
     return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
   }, [processedLeads, activeTab, LEAD_TABS]);
+
+  const selectedProjectUpdatedPct = leads.length ? (((leads.length - (tabCounts.new || 0)) / leads.length) * 100).toFixed(1) : "0.0";
 
   // Always-valid page: clamp currentPage to data range so rendering never shows empty
   const totalPages = Math.max(1, Math.ceil(tabFiltered.length / pageSize));
@@ -3182,16 +3203,16 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 />
               </div>
 
-              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
-                {[
-                  { label: "Tất cả", value: leads.length, active: true },
-                  { label: "Chưa feedback", value: leads.filter(l => (l.status || "new") === "new").length },
-                  { label: "Quan tâm", value: leads.filter(l => (l.status || "") === "interested").length },
-                ].map((chip) => (
-                  <span key={chip.label} style={{ flexShrink: 0, display: "inline-flex", gap: 6, alignItems: "center", padding: "7px 10px", borderRadius: 999, border: `1px solid ${chip.active ? "#0f3d1e" : "#d9e2dc"}`, background: chip.active ? "#f0faf1" : "#fff", color: chip.active ? "#0f3d1e" : "#475569", fontSize: 12, fontWeight: 750 }}>
-                    {chip.label}<b style={{ fontSize: 11 }}>{chip.value}</b>
-                  </span>
-                ))}
+              <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, WebkitOverflowScrolling: "touch" }}>
+                {mobilePrimaryTabs.map((chip) => {
+                  const active = activeTab === chip.key;
+                  const count = tabCounts[chip.key] || 0;
+                  return (
+                    <button key={chip.key} onClick={() => { setActiveTab(chip.key); setCurrentPage(1); }} style={{ flexShrink: 0, display: "inline-flex", gap: 6, alignItems: "center", padding: "7px 11px", borderRadius: 999, border: `1px solid ${active ? "#0f3d1e" : "#d9e2dc"}`, background: active ? "#f0faf1" : "#fff", color: active ? "#0f3d1e" : "#475569", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                      {chip.label}<b style={{ fontSize: 11 }}>{count}</b>
+                    </button>
+                  );
+                })}
               </div>
 
               <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
@@ -3246,9 +3267,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
                 <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef2f7", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <h4 style={{ margin: 0, fontSize: 13, fontWeight: 850, color: "#0f172a" }}>Lead gần đây</h4>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>{recentLeadPreview.length} mục</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>{Math.min(3, tabFiltered.length)} mục</span>
                 </div>
-                {recentLeadPreview.length ? recentLeadPreview.map((lead) => (
+                {tabFiltered.length ? tabFiltered.slice(0, 3).map((lead) => (
                   <div key={`${lead.id}-${lead.phone}`} style={{ padding: "12px 14px", borderBottom: "1px solid #f1f5f9" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 5 }}>
                       <div style={{ minWidth: 0, fontSize: 13, fontWeight: 850, color: "#0f172a", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lead.name}</div>
@@ -5117,6 +5138,23 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       )}
 
+      {isMobile && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 38px", gap: 8, marginBottom: 10 }}>
+          <div style={{ position: "relative", minWidth: 0 }}>
+            <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "#94a3b8" }} />
+            <input
+              value={searchText}
+              onChange={(e) => { setSearchText(e.target.value); setCurrentPage(1); setActiveTab("all"); }}
+              placeholder="Tìm tên, SĐT, chiến dịch..."
+              style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px 10px 36px", border: "1px solid #d9e2dc", borderRadius: 10, background: "#fff", fontSize: 13, outline: "none", minHeight: 38 }}
+            />
+          </div>
+          <button onClick={() => setShowAdvancedFilter(prev => !prev)} style={{ border: "1px solid #d9e2dc", borderRadius: 10, background: showAdvancedFilter ? "#eff6ff" : "#fff", color: showAdvancedFilter ? "#2563eb" : "#64748b", minHeight: 38, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+            <Filter size={16} />
+          </button>
+        </div>
+      )}
+
       {/* Bitrix-style tabs - horizontal scroll on mobile */}
       <div style={{
         display: "flex", gap: 6, marginBottom: isMobile ? 10 : 16,
@@ -5126,32 +5164,87 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         paddingBottom: isMobile ? 4 : 0,
         msOverflowStyle: "none", scrollbarWidth: "none",
       }}>
-        {LEAD_TABS.map((t) => {
+        {(isMobile ? mobilePrimaryTabs : LEAD_TABS).map((t) => {
           const isActive = activeTab === t.key;
           const count = tabCounts[t.key] || 0;
           return (
             <button key={t.key} onClick={() => { setActiveTab(t.key); setCurrentPage(1); }}
               style={{
-                padding: isMobile ? "8px 12px" : "8px 14px", borderRadius: 20,
-                border: isActive ? "2px solid #e88a2e" : "1px solid #e5e7eb",
+                padding: isMobile ? "7px 11px" : "8px 14px", borderRadius: 20,
+                border: isActive ? "1.5px solid #0f3d1e" : "1px solid #e5e7eb",
                 background: isActive ? "#f0faf1" : "#fff", color: isActive ? "#1a3c20" : "#374151",
-                cursor: "pointer", fontSize: 12, fontWeight: isActive ? 700 : 500,
+                cursor: "pointer", fontSize: isMobile ? 11 : 12, fontWeight: isActive ? 850 : 700,
                 display: "flex", alignItems: "center", gap: 4, transition: "all .15s",
                 whiteSpace: "nowrap", flexShrink: 0,
               }}>
-              <span>{t.Icon && <t.Icon size={14} />}</span>
+              {!isMobile && <span>{t.Icon && <t.Icon size={14} />}</span>}
               <span>{t.label}</span>
               <span style={{
-                background: isActive ? "#e88a2e" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
-                borderRadius: 10, padding: "0 6px", fontSize: 11, fontWeight: 700, minWidth: 20, textAlign: "center",
+                background: isActive ? "#0f3d1e" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
+                borderRadius: 10, padding: "0 6px", fontSize: isMobile ? 10 : 11, fontWeight: 800, minWidth: 18, textAlign: "center",
               }}>{count}</span>
             </button>
           );
         })}
       </div>
 
+      {isMobile && selectedProject && (
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)", marginBottom: 10 }}>
+          <div style={{ padding: "10px 12px", borderBottom: "1px solid #eef2f7" }}>
+            <div style={{ fontSize: 10, color: "#64748b", fontWeight: 850, textTransform: "uppercase", marginBottom: 5 }}>Dự án đang xem</div>
+            <div style={{ display: "grid", gridTemplateColumns: "28px 1fr auto", gap: 8, alignItems: "center" }}>
+              <button onClick={() => setSelectedProject(null)} title="Chọn dự án khác" style={{ width: 28, height: 28, border: "1px solid #d9e2dc", borderRadius: 8, background: "#fff", color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                <ArrowLeft size={14} />
+              </button>
+              <select value={selectedProject || "all"} onChange={(e) => { setSelectedProject(e.target.value); setCurrentPage(1); }} style={{ minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: 14, color: "#0f172a", fontWeight: 850 }}>
+                {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
+                {availableProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <span style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 900 }}>{leads.length} khách</span>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", padding: "9px 12px", gap: 8 }}>
+            {[
+              { label: "Tất cả", value: leads.length, color: "#0f3d1e" },
+              { label: "Chưa FB", value: tabCounts.new || 0, color: "#d97706" },
+              { label: "Cập nhật", value: `${selectedProjectUpdatedPct}%`, color: "#0284c7" },
+            ].map((item) => (
+              <div key={item.label} style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 9, color: "#64748b", fontWeight: 850, textTransform: "uppercase", marginBottom: 3 }}>{item.label}</div>
+                <div style={{ fontSize: 14, color: item.color, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {isMobile && showAdvancedFilter && (
+        <div style={{ background: "#fff", border: "1px solid #dbeafe", borderRadius: 12, padding: 12, marginBottom: 10, boxShadow: "0 4px 18px rgba(37,99,235,.10)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 850, color: "#0f172a", display: "flex", alignItems: "center", gap: 6 }}><Filter size={14} /> Bộ lọc nhanh</div>
+            <button onClick={() => setShowAdvancedFilter(false)} style={{ border: "none", background: "transparent", color: "#64748b", cursor: "pointer", padding: 2 }}><X size={15} /></button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: uniqueProducts.length ? 10 : 0 }}>
+            <button onClick={() => setSortConfig(prev => prev.key === "createdAt" ? { key: "createdAt", direction: prev.direction === "asc" ? "desc" : "asc" } : { key: "createdAt", direction: "desc" })} style={{ border: sortConfig.key === "createdAt" ? "1px solid #2563eb" : "1px solid #e2e8f0", background: sortConfig.key === "createdAt" ? "#eff6ff" : "#fff", color: sortConfig.key === "createdAt" ? "#2563eb" : "#475569", borderRadius: 9, padding: "9px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Ngày nhận {sortConfig.key === "createdAt" ? (sortConfig.direction === "asc" ? "↑" : "↓") : ""}</button>
+            <button onClick={() => { setProductFilter([]); setSortConfig({ key: null, direction: null }); setDateFrom(""); setDateTo(""); }} style={{ border: "1px solid #fecaca", background: "#fff7f7", color: "#dc2626", borderRadius: 9, padding: "9px 10px", fontSize: 11, fontWeight: 800, cursor: "pointer" }}>Xóa lọc</button>
+          </div>
+          {uniqueProducts.length > 0 && (
+            <div style={{ display: "flex", gap: 6, overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 }}>
+              {uniqueProducts.slice(0, 12).map((p) => {
+                const active = productFilter.includes(p);
+                return (
+                  <button key={p} onClick={() => { setProductFilter(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]); setCurrentPage(1); }} style={{ flexShrink: 0, border: active ? "1px solid #2563eb" : "1px solid #e2e8f0", background: active ? "#eff6ff" : "#fff", color: active ? "#2563eb" : "#475569", borderRadius: 999, padding: "6px 9px", fontSize: 10, fontWeight: 800, cursor: "pointer", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {p}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Search / Date / Project filters */}
-      <div style={{ display: "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: isMobile ? "none" : "flex", gap: isMobile ? 8 : 12, marginBottom: isMobile ? 10 : 16, flexWrap: "wrap", alignItems: "center" }}>
         <input
           style={{ ...inputStyle, flex: "1 1 100%", marginBottom: 0, minHeight: 44, fontSize: 14 }}
           placeholder="Tìm tên, SĐT, chiến dịch, sale, nhu cầu..."
@@ -5476,13 +5569,47 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
       {/* Lead cards - card layout for all on mobile, table for admin desktop */}
       {(!isAdmin || isMobile) ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={isMobile ? { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" } : { display: "flex", flexDirection: "column", gap: 8 }}>
+          {isMobile && (
+            <div style={{ display: "grid", gridTemplateColumns: "1.28fr 1fr .72fr 44px", gap: 8, padding: "8px 10px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 9, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
+              <span>Khách hàng</span>
+              <span>Dự án / Sale</span>
+              <span>Trạng thái</span>
+              <span style={{ textAlign: "right" }}>Giờ</span>
+            </div>
+          )}
           {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
             return (
-              <div key={l.id} id={`lead-${l.id}`} style={{ background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
+              <div key={l.id} id={`lead-${l.id}`} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : { background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
+                {isMobile ? (
+                  <button onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
+                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1.28fr 1fr .72fr 44px", gap: 8, alignItems: "center", padding: "10px", textAlign: "left" }}>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 3 }}>
+                        {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
+                        {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 5px", borderRadius: 7, fontSize: 8, fontWeight: 900, flexShrink: 0 }}>NEW</span>}
+                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 11, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                      </span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.phone || "-"}</span>
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "block", color: "#0f172a", fontSize: 10, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{projectMap[l.projectId] || "-"}</span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{isAdmin ? `${l.managerName || "-"} / ${l.saleName || "Chưa chia"}` : (l.product || "-")}</span>
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "2px 6px", borderRadius: 999, fontSize: 9, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {STATUS_LABELS[l.status] || l.status}
+                      </span>
+                    </span>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3, color: "#64748b", fontSize: 9, fontWeight: 800 }}>
+                      {formatMobileLeadTime(l.createdAt)}
+                      {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    </span>
+                  </button>
+                ) : (
                 <div onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -5526,6 +5653,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   </div>
                   <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
+                )}
                 {isOpen && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
                     <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
@@ -6767,7 +6895,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
           )}
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {projects.map((p) => {
             const c = p.costData || {};
             const isSyncing = syncingId === p.id;
@@ -6779,24 +6907,24 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
             ];
             return (
               <article key={p.id} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
-                <div style={{ height: 3, background: p.isLegacy ? "#2563eb" : p.dailyReportEnabled ? "#16a34a" : "#d97706" }} />
-                <div style={{ padding: 14 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 12 }}>
+                <div style={{ height: 2, background: p.isLegacy ? "#2563eb" : p.dailyReportEnabled ? "#16a34a" : "#d97706" }} />
+                <div style={{ padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start", marginBottom: 10 }}>
                     <div style={{ minWidth: 0 }}>
-                      <h4 style={{ margin: 0, fontSize: 14, lineHeight: 1.35, color: "#0f172a", fontWeight: 900, overflowWrap: "anywhere" }}>{p.name}</h4>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
-                        {p.isLegacy && <span style={{ fontSize: 10, fontWeight: 800, background: "#dbeafe", color: "#1e40af", padding: "3px 7px", borderRadius: 999 }}>DATA CŨ</span>}
-                        {p.dailyReportEnabled && <span style={{ fontSize: 10, fontWeight: 800, background: "#dcfce7", color: "#166534", padding: "3px 7px", borderRadius: 999 }}>BÁO CÁO TELE</span>}
+                      <h4 style={{ margin: 0, fontSize: 13, lineHeight: 1.35, color: "#0f172a", fontWeight: 900, overflowWrap: "anywhere" }}>{p.name}</h4>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                        {p.isLegacy && <span style={{ fontSize: 9, fontWeight: 850, background: "#dbeafe", color: "#1e40af", padding: "2px 7px", borderRadius: 999 }}>DATA CŨ</span>}
+                        {p.dailyReportEnabled && <span style={{ fontSize: 9, fontWeight: 850, background: "#dcfce7", color: "#166534", padding: "2px 7px", borderRadius: 999 }}>BÁO CÁO TELE</span>}
                       </div>
                     </div>
                     <Building2 size={18} color="#64748b" style={{ flexShrink: 0 }} />
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1.35fr .65fr .75fr 1fr", border: "1px solid #eef2f7", borderRadius: 9, overflow: "hidden", marginBottom: 10 }}>
                     {metricItems.map((item) => (
-                      <div key={item.label} style={{ background: "#f8fafc", border: "1px solid #edf2f7", borderRadius: 8, padding: "9px 10px", minWidth: 0 }}>
-                        <div style={{ fontSize: 10, color: "#64748b", fontWeight: 800, textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
-                        <div style={{ fontSize: 13, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
+                      <div key={item.label} style={{ background: "#f8fafc", borderRight: item.label === "CPL" ? "none" : "1px solid #eef2f7", padding: "7px 6px", minWidth: 0, textAlign: "center" }}>
+                        <div style={{ fontSize: 8, color: "#64748b", fontWeight: 900, textTransform: "uppercase", marginBottom: 4, whiteSpace: "nowrap" }}>{item.label}</div>
+                        <div style={{ fontSize: 10, color: "#0f172a", fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
                       </div>
                     ))}
                   </div>
