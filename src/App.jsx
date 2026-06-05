@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
+import { getNativePushPermissionState, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications } from "./nativePush.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -552,7 +553,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
-  const pushSupported = isPushNotificationSupported();
+  const webPushSupported = isPushNotificationSupported();
+  const nativePushSupported = isNativePushSupported();
+  const pushSupported = webPushSupported || nativePushSupported;
   const [pushPermission, setPushPermission] = useState(() => getPushPermissionState());
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
@@ -607,6 +610,17 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!pushSupported) return;
+    if (nativePushSupported) {
+      getNativePushPermissionState()
+        .then(permission => {
+          setPushPermission(permission);
+          const enabled = permission === "granted" && localStorage.getItem(`crm_native_push_enabled_${user.userId}`) === "1";
+          setPushEnabled(enabled);
+          if (!enabled && permission === "default" && !localStorage.getItem(pushPromptKey)) setShowPushPrompt(true);
+        })
+        .catch(() => setPushEnabled(false));
+      return;
+    }
     const permission = getPushPermissionState();
     setPushPermission(permission);
     getCurrentPushSubscription()
@@ -618,17 +632,20 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       })
       .catch(() => setPushEnabled(false));
-  }, [pushSupported, pushPromptKey]);
+  }, [pushSupported, nativePushSupported, pushPromptKey, user.userId]);
 
   const handleEnablePush = useCallback(async () => {
     if (!pushSupported || pushBusy) return;
     setPushBusy(true);
     try {
-      const result = await subscribeToPushNotifications(apiFetch, API);
-      const nextPermission = getPushPermissionState();
+      const result = nativePushSupported
+        ? await subscribeToNativePushNotifications(apiFetch, API)
+        : await subscribeToPushNotifications(apiFetch, API);
+      const nextPermission = nativePushSupported ? await getNativePushPermissionState() : getPushPermissionState();
       setPushPermission(nextPermission);
       setPushEnabled(!!result.ok && nextPermission === "granted");
       if (result.ok) {
+        if (nativePushSupported) localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
         localStorage.setItem(pushPromptKey, "1");
         setShowPushPrompt(false);
         showToast("Đã bật thông báo điện thoại. Khi có lead mới hệ thống sẽ báo về máy.", "success");
@@ -642,7 +659,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     } finally {
       setPushBusy(false);
     }
-  }, [pushSupported, pushBusy, pushPromptKey]);
+  }, [pushSupported, nativePushSupported, pushBusy, pushPromptKey, user.userId]);
 
   const dismissPushPrompt = useCallback(() => {
     localStorage.setItem(pushPromptKey, "1");
@@ -650,6 +667,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [pushPromptKey]);
 
   useEffect(() => {
+    if (nativePushSupported) return;
     if (!("serviceWorker" in navigator)) return;
     const onMessage = (event) => {
       if (event.data?.type !== "CRM_PUSH_SOUND") return;
@@ -659,7 +677,29 @@ function CRMApp({ user, updateUser, onLogout }) {
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [playLeadSound, user.role]);
+  }, [playLeadSound, user.role, nativePushSupported]);
+
+  useEffect(() => {
+    if (!nativePushSupported) return;
+    let cleanup = null;
+    let alive = true;
+    setupNativePushListeners({
+      onNotification: (notification) => {
+        const sound = notification?.data?.sound || notification?.data?.type;
+        if (sound === "sale" || sound === "sale_new_lead") playLeadSound("sale");
+        else playLeadSound("manager");
+      },
+      onAction: (event) => {
+        const leadId = Number(event?.notification?.data?.leadId || 0);
+        if (leadId) {
+          setHighlightLeadId(leadId);
+          setSelectedProject("all");
+          setPage("leads");
+        }
+      },
+    }).then((fn) => { if (alive) cleanup = fn; else fn?.(); }).catch(() => {});
+    return () => { alive = false; cleanup?.(); };
+  }, [nativePushSupported, playLeadSound]);
 
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
@@ -2926,6 +2966,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   // Always-valid page: clamp currentPage to data range so rendering never shows empty
   const totalPages = Math.max(1, Math.ceil(tabFiltered.length / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
+  const mobileDetailLead = useMemo(
+    () => (mobileDetailId ? tabFiltered.find((l) => l.id === mobileDetailId) || leads.find((l) => l.id === mobileDetailId) : null),
+    [mobileDetailId, tabFiltered, leads]
+  );
 
   // Auto-clamp currentPage state when filtered data shrinks (e.g. search, filter change)
   useEffect(() => {
@@ -5699,9 +5743,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <>
                     <MobileLeadSummary
                       lead={l}
-                      projectName={projectMap[l.projectId] || "-"}
                       isAdmin={isAdmin}
-                      detailOpen={mobileDetailId === l.id}
                       onCall={(e) => {
                         e.stopPropagation();
                         const phone = String(l.phone || "").replace(/[^\d+]/g, "");
@@ -5712,11 +5754,6 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         setMobileDetailId((prev) => prev === l.id ? null : l.id);
                       }}
                     />
-                    {mobileDetailId === l.id && (
-                      <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
-                      </div>
-                    )}
                   </>
                 )}
                 {isOpen && !isMobile && (
@@ -5799,6 +5836,43 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         </div>
       )}
 
+      {isMobile && mobileDetailLead && (
+        <div
+          onClick={() => setMobileDetailId(null)}
+          style={{ position: "fixed", inset: 0, zIndex: 10030, background: "rgba(15,23,42,.48)", display: "flex", alignItems: "flex-end", justifyContent: "center", padding: 0 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "100%", maxHeight: "92vh", background: "#f8fafc", borderRadius: "18px 18px 0 0", boxShadow: "0 -18px 48px rgba(15,23,42,.26)", overflow: "hidden", display: "flex", flexDirection: "column" }}
+          >
+            <div style={{ padding: "12px 14px", background: "#fff", borderBottom: "1px solid #e2e8f0", display: "grid", gridTemplateColumns: "1fr 38px", gap: 10, alignItems: "center" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ color: "#0f172a", fontSize: 14, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mobileDetailLead.name || "Chi tiết khách hàng"}</div>
+                <div style={{ marginTop: 2, color: "#64748b", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {mobileDetailLead.phone || "-"} · {projectMap[mobileDetailLead.projectId] || "-"}
+                </div>
+              </div>
+              <button onClick={() => setMobileDetailId(null)} style={{ width: 38, height: 38, border: "1px solid #e2e8f0", borderRadius: 12, background: "#fff", color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ overflowY: "auto", WebkitOverflowScrolling: "touch", paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}>
+              <LeadDetail
+                lead={mobileDetailLead}
+                projectName={projectMap[mobileDetailLead.projectId] || "-"}
+                isAdmin={isAdmin}
+                user={user}
+                applyApiData={applyApiData}
+                saleNames={getProjectSaleNames(mobileDetailLead.projectId)}
+                managerNames={allManagerNames}
+                isMobile={isMobile}
+                allUsers={allUsers}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Pagination */}
       {totalPages > 1 && (() => {
         const btnStyle = (disabled) => ({
@@ -5824,33 +5898,23 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   );
 }
 
-function MobileLeadSummary({ lead, projectName, isAdmin, onCall, onToggleDetail, detailOpen }) {
+function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
   const summaryRows = [
     { label: "Nhu cầu", value: lead.product || "-" },
-    { label: "Nội dung", value: lead.content || lead.note || "-" },
-    { label: "Chiến dịch", value: lead.campaign || lead.campaignName || "-" },
-    { label: "Nhóm QC", value: lead.adsetName || lead.adSetName || lead.adset || "-" },
+    { label: "Thời gian nhận lead", value: lead.createdAt || "-" },
+    { label: "Link FB khách", value: lead.customerFbUrl || "Chưa có link", isLink: !!lead.customerFbUrl },
   ];
   return (
-    <div style={{ padding: "11px 12px 12px", background: "#fff", borderTop: "1px solid #eef2f7" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 12px", marginBottom: 11 }}>
-        {[
-          ["Khách hàng", lead.name || "-"],
-          ["SĐT", lead.phone || "-"],
-          ["Dự án", projectName || "-"],
-          ["Sale", lead.saleName || "Chưa chia"],
-        ].map(([label, value]) => (
-          <div key={label} style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 850, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
-            <div style={{ fontSize: 12, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
-          </div>
-        ))}
-      </div>
+    <div style={{ padding: "10px 12px 12px", background: "#fff", borderTop: "1px solid #eef2f7" }}>
       <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
         {summaryRows.map((row) => (
-          <div key={row.label} style={{ display: "grid", gridTemplateColumns: "72px 1fr", gap: 8, fontSize: 11, lineHeight: 1.35, padding: "3px 0" }}>
+          <div key={row.label} style={{ display: "grid", gridTemplateColumns: "112px 1fr", gap: 8, fontSize: 11, lineHeight: 1.35, padding: "4px 0", alignItems: "start" }}>
             <span style={{ color: "#64748b", fontWeight: 800 }}>{row.label}</span>
-            <span style={{ color: row.label === "Nội dung" ? "#334155" : "#0f172a", fontWeight: row.label === "Nội dung" ? 600 : 800, overflowWrap: "anywhere" }}>{row.value}</span>
+            {row.isLink ? (
+              <a href={row.value} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#2563eb", fontWeight: 850, overflowWrap: "anywhere", textDecoration: "underline" }}>Mở link</a>
+            ) : (
+              <span style={{ color: "#0f172a", fontWeight: 800, overflowWrap: "anywhere" }}>{row.value}</span>
+            )}
           </div>
         ))}
       </div>
@@ -5863,8 +5927,8 @@ function MobileLeadSummary({ lead, projectName, isAdmin, onCall, onToggleDetail,
             <MessageSquare size={14} /> Chat
           </button>
         )}
-        <button onClick={onToggleDetail} style={{ minHeight: 36, border: "1px solid #d9e2dc", borderRadius: 9, background: detailOpen ? "#0f3d1e" : "#fff", color: detailOpen ? "#fff" : "#0f172a", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
-          <Eye size={14} /> {detailOpen ? "Thu gọn" : "Xem chi tiết"}
+        <button onClick={onToggleDetail} style={{ minHeight: 36, border: "1px solid #0f3d1e", borderRadius: 9, background: "#0f3d1e", color: "#fff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+          <Eye size={14} /> Xem chi tiết
         </button>
       </div>
     </div>
@@ -6105,10 +6169,14 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   const detailCellStyle = { minWidth: 0 };
   const detailValueStyle = { fontSize: isMobile ? 11 : 13, lineHeight: 1.35, overflowWrap: "anywhere", wordBreak: "break-word" };
+  const mobileControlHeight = isMobile ? 40 : "auto";
+  const mobileControlPadding = isMobile ? "8px 10px" : "6px 8px";
+  const mobileButtonPadding = isMobile ? "9px 12px" : "6px 12px";
+  const mobilePanelPadding = isMobile ? 10 : 12;
 
   return (
-    <div style={{ padding: isMobile ? "12px" : "16px 24px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: 12, fontSize: 13 }}>
+    <div style={{ padding: isMobile ? "10px" : "16px 24px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 7 : 16, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b style={detailValueStyle}>{lead.phone || "-"}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b style={detailValueStyle}>{projectName}</b></div>
@@ -6184,7 +6252,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       )}
 
       {/* === 2-COLUMN LAYOUT: Tương tác (left) | Chat (right) === */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 10 : 16, alignItems: "start" }}>
       {/* --- LEFT COLUMN: Tương tác --- */}
       <div>
 
@@ -6212,7 +6280,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin only: Facebook customer link */}
       {user.role === "admin" && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Link Facebook khách:</b>
             {lead.customerFbUrl
@@ -6222,9 +6290,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <input value={editFbUrl} onChange={(e) => setEditFbUrl(e.target.value)}
               placeholder="Dán link Facebook/Messenger của khách..."
-              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, flex: "1 1 260px", minHeight: isMobile ? 44 : "auto", background: "#fff" }} />
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: "1 1 260px", minHeight: mobileControlHeight, background: "#fff" }} />
             <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
-              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
               {savingFbUrl ? "Đang lưu..." : <><Save size={14} /> Lưu link</>}
             </button>
           </div>
@@ -6269,7 +6337,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Chia lead cho Sale */}
       {isAdmin && (
-        <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
+        <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 16, fontSize: isMobile ? 12 : 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
             {lead.saleName
@@ -6279,12 +6347,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: mobileControlHeight, background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Sale --</option>
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
-              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
               {savingSale ? "Đang chia..." : <><Share2 size={14} /> Chia lead</>}
             </button>
           </div>
@@ -6293,7 +6361,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Đổi Quản lý */}
       {isAdmin && managerNames.length > 0 && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 16, fontSize: 13 }}>
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 16, fontSize: isMobile ? 12 : 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Shield size={14} /> Quản lý phụ trách:</b>
             {lead.managerName
@@ -6303,12 +6371,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editManager} onChange={(e) => setEditManager(e.target.value)}
-              style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 14 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: isMobile ? 44 : "auto", background: "#fff", color: editManager ? "#1f2937" : "#9ca3af" }}>
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: mobileControlHeight, background: "#fff", color: editManager ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Quản lý --</option>
               {managerNames.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <button onClick={handleChangeManager} disabled={savingManager || !editManager || editManager === lead.managerName}
-              style={{ ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 12px", fontSize: isMobile ? 14 : 12, background: (!editManager || editManager === lead.managerName) ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: isMobile ? 44 : "auto", width: isMobile ? "100%" : "auto" }}>
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: (!editManager || editManager === lead.managerName) ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
               {savingManager ? "Đang đổi..." : <><Shield size={14} /> Đổi quản lý</>}
             </button>
           </div>
@@ -6317,7 +6385,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
       {/* Admin: Khóa/Mở khóa Lead */}
       {isAdmin && (
-        <div style={{ background: lead.isLocked ? "#fef2f2" : "#f8fafc", border: `1px solid ${lead.isLocked ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
+        <div style={{ background: lead.isLocked ? "#fef2f2" : "#f8fafc", border: `1px solid ${lead.isLocked ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {lead.isLocked ? <Lock size={16} color="#dc2626" /> : <Lock size={16} color="#9ca3af" />}
@@ -6333,9 +6401,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               } catch {}
             }}
               style={{
-                ...btnPrimary, padding: isMobile ? "10px 16px" : "6px 14px", fontSize: isMobile ? 14 : 12,
+                ...btnPrimary, padding: isMobile ? "9px 12px" : "6px 14px", fontSize: isMobile ? 13 : 12,
                 background: lead.isLocked ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #ef4444, #dc2626)",
-                minHeight: isMobile ? 44 : "auto",
+                minHeight: mobileControlHeight,
               }}>
               {lead.isLocked ? <><Lock size={14} /> Mở khóa</> : <><Lock size={14} /> Khóa lead</>}
             </button>
@@ -6355,8 +6423,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {(() => {
         const formVisible = !isAdmin || showForm;
         return (
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ marginBottom: isMobile ? 12 : 16 }}>
+            <h4 style={{ margin: isMobile ? "0 0 9px" : "0 0 12px", fontSize: isMobile ? 13 : 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <ClipboardList size={16} /> {isAdmin ? "Lịch sử đăng ký & Tương tác" : "Cập nhật thông tin khách hàng"}
                 {isAdmin && lead.saleName && lead.saleName !== "Chưa chia" && (
@@ -6367,18 +6435,18 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               </span>
               {isAdmin && (
                 <button onClick={() => setShowForm(!showForm)}
-                  style={{ ...btnPrimary, padding: isMobile ? "8px 14px" : "4px 12px", fontSize: 12 }}>
+                  style={{ ...btnPrimary, padding: isMobile ? "7px 10px" : "4px 12px", fontSize: 12 }}>
                   {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật thông tin khách hàng</>}
                 </button>
               )}
             </h4>
             {(!isAdmin || formVisible) && (!isAdmin || showForm) && (
-              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 16 : 12, marginBottom: 12 }}>
-                <div style={{ display: "flex", gap: isMobile ? 12 : 8, flexDirection: "column" }}>
+              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 10 : 12, marginBottom: isMobile ? 10 : 12 }}>
+                <div style={{ display: "flex", gap: isMobile ? 9 : 8, flexDirection: "column" }}>
                   <div style={{ width: "100%" }}>
                     <label style={{ fontSize: 12, color: "#374151", fontWeight: 600, marginBottom: 6, display: "block" }}>Trạng thái khách</label>
                     <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
-                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 15 : 13, padding: isMobile ? "12px 14px" : "8px 10px", minHeight: isMobile ? 48 : "auto" }}>
+                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 13 : 13, padding: isMobile ? "9px 10px" : "8px 10px", minHeight: isMobile ? 40 : "auto" }}>
                       <option value="">-- Chọn trạng thái --</option>
                       {Object.entries(STATUS_LABELS).filter(([k]) => !['called', 'lost', 'blocked'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
@@ -6388,10 +6456,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     <textarea value={histFeedback} onChange={(e) => setHistFeedback(e.target.value)}
                       placeholder="Nội dung trao đổi với khách..."
                       rows={3}
-                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 15 : 13, padding: isMobile ? "12px 14px" : "8px 10px", minHeight: isMobile ? 80 : 60, resize: "vertical" }} />
+                      style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 13 : 13, padding: isMobile ? "9px 10px" : "8px 10px", minHeight: isMobile ? 68 : 60, resize: "vertical" }} />
                   </div>
                   <button onClick={handleAddHistory} disabled={saving}
-                    style={{ ...btnPrimary, padding: isMobile ? "14px 16px" : "10px 16px", whiteSpace: "nowrap", width: "100%", minHeight: isMobile ? 48 : 44, fontSize: isMobile ? 15 : 14, borderRadius: 10 }}>
+                    style={{ ...btnPrimary, padding: isMobile ? "10px 12px" : "10px 16px", whiteSpace: "nowrap", width: "100%", minHeight: isMobile ? 42 : 44, fontSize: isMobile ? 13 : 14, borderRadius: 10 }}>
                     {saving ? "Đang lưu..." : <><Save size={16} /> Lưu liên hệ</>}
                   </button>
                 </div>

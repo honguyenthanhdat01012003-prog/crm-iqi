@@ -34,6 +34,8 @@ let io = null;
 let pushPublicKey = "";
 let pushEnabled = false;
 const PUSH_SUBJECT = process.env.VAPID_SUBJECT || process.env.BASE_URL || "mailto:admin@crm-iqi.id.vn";
+let fcmAccessToken = "";
+let fcmAccessTokenExp = 0;
 
 async function initPushNotifications(client) {
   let publicKey = process.env.VAPID_PUBLIC_KEY || "";
@@ -61,10 +63,117 @@ async function initPushNotifications(client) {
   console.log("[Push] Web push ready");
 }
 
+function base64UrlJson(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString("base64url");
+}
+
+function getFirebaseConfig() {
+  return {
+    projectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || "",
+    clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
+    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+  };
+}
+
+async function getFcmAccessToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (fcmAccessToken && fcmAccessTokenExp - 60 > now) return fcmAccessToken;
+  const cfg = getFirebaseConfig();
+  if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) return "";
+
+  const header = { alg: "RS256", typ: "JWT" };
+  const claim = {
+    iss: cfg.clientEmail,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const unsigned = `${base64UrlJson(header)}.${base64UrlJson(claim)}`;
+  const signature = crypto.createSign("RSA-SHA256").update(unsigned).sign(cfg.privateKey, "base64url");
+  const assertion = `${unsigned}.${signature}`;
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) throw new Error(data.error_description || data.error || "Không lấy được FCM access token");
+  fcmAccessToken = data.access_token;
+  fcmAccessTokenExp = now + Number(data.expires_in || 3600);
+  return fcmAccessToken;
+}
+
+function stringifyFcmData(data = {}) {
+  const out = {};
+  Object.entries(data || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    out[key] = typeof value === "string" ? value : String(value);
+  });
+  return out;
+}
+
+async function sendNativePushToUser(userId, payload) {
+  const cfg = getFirebaseConfig();
+  if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) return { sent: 0, skipped: true };
+  const tokens = await all(db, "SELECT id, token, platform FROM native_push_tokens WHERE user_id = ?", [userId]);
+  if (!tokens.length) return { sent: 0 };
+
+  const accessToken = await getFcmAccessToken();
+  let sent = 0;
+  const data = stringifyFcmData({ ...(payload.data || {}), sound: payload.sound || "" });
+  for (const row of tokens) {
+    const message = {
+      token: row.token,
+      notification: {
+        title: payload.title || "LUX IQI CRM",
+        body: payload.body || "Bạn có thông báo mới",
+      },
+      data,
+      android: {
+        priority: "HIGH",
+        notification: {
+          channel_id: "lead_notifications",
+          sound: "default",
+          tag: payload.tag || `crm-${Date.now()}`,
+          click_action: "OPEN_LEAD",
+        },
+      },
+      apns: {
+        payload: { aps: { sound: "default" } },
+      },
+    };
+    try {
+      const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const body = await res.text();
+      if (!res.ok) {
+        if (res.status === 400 || res.status === 404) {
+          await run(db, "DELETE FROM native_push_tokens WHERE id = ?", [row.id]);
+        } else {
+          await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [body.slice(0, 500), row.id]);
+        }
+        console.error(`[NativePush] FCM failed token#${row.id}:`, body.slice(0, 300));
+        continue;
+      }
+      sent++;
+      await run(db, "UPDATE native_push_tokens SET last_error = '', updated_at = datetime('now') WHERE id = ?", [row.id]);
+    } catch (err) {
+      await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [String(err.message || err).slice(0, 500), row.id]);
+    }
+  }
+  return { sent };
+}
+
 async function sendPushToUser(userId, payload) {
-  if (!pushEnabled || !userId) return { sent: 0, skipped: true };
-  const subs = await all(db, "SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?", [userId]);
-  if (!subs.length) return { sent: 0 };
+  if (!userId) return { sent: 0, skipped: true };
+  const subs = pushEnabled ? await all(db, "SELECT id, subscription_json FROM push_subscriptions WHERE user_id = ?", [userId]) : [];
 
   let sent = 0;
   const body = JSON.stringify({
@@ -91,7 +200,11 @@ async function sendPushToUser(userId, payload) {
       }
     }
   }
-  return { sent };
+  const native = await sendNativePushToUser(userId, payload).catch((err) => {
+    console.error(`[NativePush] Send failed for user#${userId}:`, err.message || err);
+    return { sent: 0, error: err.message || String(err) };
+  });
+  return { sent: sent + (native.sent || 0), webSent: sent, nativeSent: native.sent || 0, nativeSkipped: native.skipped };
 }
 
 async function sendPushToDisplayName(displayName, payload) {
@@ -153,7 +266,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 27; // Bump this when adding new DDL/migrations
+const DB_VERSION = 28; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -304,6 +417,16 @@ async function initDb() {
       endpoint TEXT NOT NULL UNIQUE,
       subscription_json TEXT NOT NULL,
       user_agent TEXT DEFAULT '',
+      last_error TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS native_push_tokens (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      token TEXT NOT NULL UNIQUE,
+      platform TEXT DEFAULT '',
+      device_label TEXT DEFAULT '',
       last_error TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
@@ -561,6 +684,22 @@ async function initDb() {
       )`);
     } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)"); } catch (_) {}
+  }
+  if (dbVersion < 28) {
+    console.log("[DB] v28 migration: adding native_push_tokens table...");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS native_push_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        platform TEXT DEFAULT '',
+        device_label TEXT DEFAULT '',
+        last_error TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_native_push_user ON native_push_tokens(user_id)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2179,6 +2318,42 @@ app.post("/api/push/unsubscribe", requireAuth, async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error("[Push] Unsubscribe failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/native-push/register", requireAuth, async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    const platform = String(req.body?.platform || "").trim().slice(0, 50);
+    const deviceLabel = String(req.body?.deviceLabel || req.headers["user-agent"] || "").slice(0, 500);
+    if (!token || token.length < 20) return res.status(400).json({ error: "Native push token không hợp lệ" });
+    await run(db,
+      `INSERT INTO native_push_tokens(user_id, token, platform, device_label, last_error, updated_at)
+       VALUES(?, ?, ?, ?, '', datetime('now'))
+       ON CONFLICT(token) DO UPDATE SET
+         user_id = excluded.user_id,
+         platform = excluded.platform,
+         device_label = excluded.device_label,
+         last_error = '',
+         updated_at = datetime('now')`,
+      [req.user.userId, token, platform, deviceLabel]
+    );
+    const cfg = getFirebaseConfig();
+    res.json({ ok: true, fcmConfigured: !!(cfg.projectId && cfg.clientEmail && cfg.privateKey) });
+  } catch (err) {
+    console.error("[NativePush] Register failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/native-push/unregister", requireAuth, async (req, res) => {
+  try {
+    const token = String(req.body?.token || "").trim();
+    if (token) await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND token = ?", [req.user.userId, token]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[NativePush] Unregister failed:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1,6 +1,6 @@
 # Huong Dan Capacitor Phase 1
 
-Phase 1 chi boc CRM thanh app native shell. Chua them native push, chua doi logic lead, chua doi database.
+Phase 1 boc CRM thanh app native shell. Phase 2 da them khung native push token va server ban song song web push/native push khi co cau hinh FCM. Khong doi logic lead.
 
 ## Muc tieu
 
@@ -9,6 +9,8 @@ Phase 1 chi boc CRM thanh app native shell. Chua them native push, chua doi logi
 - App native goi API ve `https://crm-iqi.id.vn/api`.
 - Socket.IO native goi ve `https://crm-iqi.id.vn`.
 - PWA service worker/web push khong dang ky khi chay trong Capacitor.
+- App native dang ky token bang `@capacitor/push-notifications`.
+- Server luu token native vao bang `native_push_tokens`.
 
 ## Lenh chinh
 
@@ -57,11 +59,34 @@ ALLOWED_ORIGINS=https://crm-iqi.id.vn,https://localhost,capacitor://localhost
 
 Neu bien nay de trong thi server hien tai cho phep moi origin.
 
-## Gioi han phase 1
+## Phase 2 native push
 
-- Chua co native push notification.
-- Chua co am thanh rieng khi app dong nen.
-- Chua tao Firebase/APNs.
-- iOS can may Mac/Xcode de build va test.
+Code da co:
 
-Sau khi phase 1 test on dinh, phase 2 moi them native push token va FCM/APNs.
+- API `POST /api/native-push/register` de luu token app.
+- Server goi FCM HTTP v1 song song voi web push trong cac luong lead moi/chia lead.
+- App xin quyen thong bao va dang ky token khi chay trong Capacitor.
+
+Can cau hinh them tren VPS de native push that su ban khi app dong/nen:
+
+```bash
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxx@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+```
+
+Android can them file Firebase:
+
+```text
+android/app/google-services.json
+```
+
+Sau khi them/sua Firebase config, chay lai:
+
+```bash
+npm run cap:sync
+```
+
+Luu y: am thanh rieng khi app dang dong/nen phu thuoc notification channel cua Android va APNs cua iOS. Hien tai native push dung am thanh he thong; am MP3 rieng van phat khi app dang mo.
+
+iOS can may Mac/Xcode, Apple Developer account va cau hinh APNs trong Firebase de test tren thiet bi that.
