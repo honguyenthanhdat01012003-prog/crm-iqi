@@ -36,14 +36,22 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
   if (perm.receive !== "granted") return { ok: false, permission: perm.receive };
 
   if (typeof PushNotifications.createChannel === "function") {
-    await PushNotifications.createChannel({
-      id: "lead_notifications",
-      name: "Lead moi",
-      description: "Thong bao khi co lead moi hoac lead duoc chia",
-      importance: 5,
-      visibility: 1,
-      sound: "default",
-    }).catch(() => {});
+    const channels = [
+      { id: "lead_notifications_manager", name: "Lead moi quan ly", sound: "lead_manager" },
+      { id: "lead_notifications_sale", name: "Lead moi sale", sound: "lead_sale" },
+      { id: "lead_notifications", name: "Lead moi", sound: "default" },
+    ];
+    for (const channel of channels) {
+      await PushNotifications.createChannel({
+        id: channel.id,
+        name: channel.name,
+        description: "Thong bao khi co lead moi hoac lead duoc chia",
+        importance: 5,
+        visibility: 1,
+        sound: channel.sound,
+        vibration: true,
+      }).catch(() => {});
+    }
   }
 
   const token = await new Promise((resolve, reject) => {

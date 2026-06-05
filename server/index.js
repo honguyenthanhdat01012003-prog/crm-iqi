@@ -141,6 +141,12 @@ function stringifyFcmData(data = {}) {
   return out;
 }
 
+function getNativeNotificationSound(sound) {
+  if (sound === "sale") return { channelId: "lead_notifications_sale", soundName: "lead_sale" };
+  if (sound === "manager") return { channelId: "lead_notifications_manager", soundName: "lead_manager" };
+  return { channelId: "lead_notifications", soundName: "default" };
+}
+
 async function sendNativePushToUser(userId, payload) {
   const cfg = getFirebaseConfig();
   if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) return { sent: 0, skipped: true };
@@ -149,6 +155,7 @@ async function sendNativePushToUser(userId, payload) {
 
   const accessToken = await getFcmAccessToken();
   let sent = 0;
+  const notificationSound = getNativeNotificationSound(payload.sound);
   const data = stringifyFcmData({ ...(payload.data || {}), sound: payload.sound || "" });
   for (const row of tokens) {
     const message = {
@@ -161,8 +168,10 @@ async function sendNativePushToUser(userId, payload) {
       android: {
         priority: "HIGH",
         notification: {
-          channel_id: "lead_notifications",
-          sound: "default",
+          channel_id: notificationSound.channelId,
+          sound: notificationSound.soundName,
+          icon: "ic_stat_notification",
+          color: "#0f4d2a",
           tag: payload.tag || `crm-${Date.now()}`,
           click_action: "OPEN_LEAD",
         },
