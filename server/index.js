@@ -142,8 +142,8 @@ function stringifyFcmData(data = {}) {
 }
 
 function getNativeNotificationSound(sound) {
-  if (sound === "sale") return { channelId: "lead_notifications_sale", soundName: "lead_sale" };
-  if (sound === "manager") return { channelId: "lead_notifications_manager", soundName: "lead_manager" };
+  if (sound === "sale") return { channelId: "lead_notifications_sale_v2", soundName: "lead_sale" };
+  if (sound === "manager") return { channelId: "lead_notifications_manager_v2", soundName: "lead_manager" };
   return { channelId: "lead_notifications", soundName: "default" };
 }
 

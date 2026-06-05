@@ -37,8 +37,8 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
 
   if (typeof PushNotifications.createChannel === "function") {
     const channels = [
-      { id: "lead_notifications_manager", name: "Lead moi quan ly", sound: "lead_manager" },
-      { id: "lead_notifications_sale", name: "Lead moi sale", sound: "lead_sale" },
+      { id: "lead_notifications_manager_v2", name: "Lead moi quan ly", sound: "lead_manager" },
+      { id: "lead_notifications_sale_v2", name: "Lead moi sale", sound: "lead_sale" },
       { id: "lead_notifications", name: "Lead moi", sound: "default" },
     ];
     for (const channel of channels) {

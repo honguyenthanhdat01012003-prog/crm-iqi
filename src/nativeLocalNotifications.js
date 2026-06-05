@@ -3,14 +3,14 @@ function isCapacitorNative() {
 }
 
 const LEAD_CHANNELS = [
-  { id: "lead_notifications_manager", name: "Lead moi quan ly", sound: "lead_manager" },
-  { id: "lead_notifications_sale", name: "Lead moi sale", sound: "lead_sale" },
+  { id: "lead_notifications_manager_v2", name: "Lead moi quan ly", sound: "lead_manager" },
+  { id: "lead_notifications_sale_v2", name: "Lead moi sale", sound: "lead_sale" },
   { id: "lead_notifications", name: "Lead moi", sound: "default" },
 ];
 
 function getLeadChannelId(sound) {
-  if (sound === "sale") return "lead_notifications_sale";
-  if (sound === "manager") return "lead_notifications_manager";
+  if (sound === "sale") return "lead_notifications_sale_v2";
+  if (sound === "manager") return "lead_notifications_manager_v2";
   return "lead_notifications";
 }
 
