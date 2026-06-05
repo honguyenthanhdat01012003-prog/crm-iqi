@@ -44,14 +44,8 @@ const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
 const JWT_SECRET = process.env.JWT_SECRET || "lux-iqi-crm-jwt-2026-xK9mZpQ4vR7wNcE3bY6hT1sA8fJ5gL0d";
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [];
-const DEFAULT_ALLOWED_ORIGINS = ["https://crm-iqi.id.vn", "http://crm-iqi.id.vn"];
-const NATIVE_APP_ORIGINS = ["https://localhost", "http://localhost", "capacitor://localhost", "ionic://localhost"];
-const CORS_ALLOWED_ORIGINS = Array.from(new Set([...DEFAULT_ALLOWED_ORIGINS, ...ALLOWED_ORIGINS, ...NATIVE_APP_ORIGINS]));
 const corsOptions = {
-  origin(origin, callback) {
-    if (!origin || CORS_ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(null, false);
-  },
+  origin: true,
   credentials: true,
 };
 const TELEGRAM_WEBHOOK_SECRET = crypto.createHash("sha256").update("tg-webhook-" + JWT_SECRET).digest("hex").slice(0, 64);
