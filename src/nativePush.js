@@ -35,6 +35,17 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
   if (perm.receive !== "granted") perm = await PushNotifications.requestPermissions();
   if (perm.receive !== "granted") return { ok: false, permission: perm.receive };
 
+  if (typeof PushNotifications.createChannel === "function") {
+    await PushNotifications.createChannel({
+      id: "lead_notifications",
+      name: "Lead moi",
+      description: "Thong bao khi co lead moi hoac lead duoc chia",
+      importance: 5,
+      visibility: 1,
+      sound: "default",
+    }).catch(() => {});
+  }
+
   const token = await new Promise((resolve, reject) => {
     let done = false;
     let removeRegistration = null;
