@@ -1473,23 +1473,32 @@ function CRMApp({ user, updateUser, onLogout }) {
       </main>
 
       {isMobile && (
+        <>
+        <div style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "calc(84px + env(safe-area-inset-bottom))",
+          background: "#fff",
+          zIndex: 949,
+          boxShadow: "0 -10px 26px rgba(15,23,42,.08)",
+        }} />
         <nav style={{
           position: "fixed",
           left: 12,
           right: 12,
           bottom: "calc(8px + env(safe-area-inset-bottom))",
           height: 58,
-          background: "rgba(255,255,255,.96)",
+          background: "#fff",
           border: "1px solid #e2e8f0",
           borderRadius: 20,
           boxShadow: "0 10px 28px rgba(15,23,42,.15)",
-          zIndex: 950,
+          zIndex: 951,
           display: "grid",
           gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))`,
           alignItems: "center",
           padding: "4px 5px",
-          backdropFilter: "blur(14px)",
-          WebkitBackdropFilter: "blur(14px)",
         }}>
           {mobileBottomTabs.map((tab) => {
             const active = tab.key === "notifications" ? showNotif : page === tab.key;
@@ -1544,6 +1553,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             );
           })}
         </nav>
+        </>
       )}
 
       {showPushPrompt && (
@@ -2566,6 +2576,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   // Collapse expanded lead when switching projects
   React.useEffect(() => {
     setExpandedId(null);
+    setMobileDetailId(null);
     expandedPhoneRef.current = null;
   }, [selectedProject]);
 
@@ -2575,6 +2586,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   const [productFilter, setProductFilter] = useState([]);
   const [productFilterOpen, setProductFilterOpen] = useState(false);
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+  const [showMobileStatusMenu, setShowMobileStatusMenu] = useState(false);
+  const [mobileDetailId, setMobileDetailId] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
   const [saleFilterOpen, setSaleFilterOpen] = useState(false);
   const [saleFilterSearch, setSaleFilterSearch] = useState("");
@@ -2875,12 +2888,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   }, [processedLeads, LEAD_TABS]);
 
   const mobilePrimaryTabs = useMemo(() => {
-    const preferred = ["all", "new", "interested", "appointment", "booked", "spam"];
-    return LEAD_TABS
-      .filter((t) => preferred.includes(t.key))
-      .filter((t) => ["all", "new", "interested"].includes(t.key) || (tabCounts[t.key] || 0) > 0)
-      .slice(0, 5);
+    return LEAD_TABS.filter((t) => t.key === "all" || (tabCounts[t.key] || 0) > 0);
   }, [LEAD_TABS, tabCounts]);
+  const mobileVisibleTabs = useMemo(() => {
+    const list = showMobileStatusMenu ? mobilePrimaryTabs : mobilePrimaryTabs.slice(0, 4);
+    if (!showMobileStatusMenu && !list.some((t) => t.key === activeTab)) {
+      const active = mobilePrimaryTabs.find((t) => t.key === activeTab);
+      if (active) return [...list.slice(0, 3), active];
+    }
+    return list;
+  }, [mobilePrimaryTabs, activeTab, showMobileStatusMenu]);
+  const hiddenMobileTabCount = Math.max(0, mobilePrimaryTabs.length - mobileVisibleTabs.length);
 
   const parseDate = (s) => {
     if (!s || s === "-") return 0;
@@ -3212,7 +3230,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               </div>
 
               <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, WebkitOverflowScrolling: "touch" }}>
-                {mobilePrimaryTabs.map((chip) => {
+                {mobileVisibleTabs.map((chip) => {
                   const active = activeTab === chip.key;
                   const count = tabCounts[chip.key] || 0;
                   return (
@@ -3221,6 +3239,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     </button>
                   );
                 })}
+                {mobilePrimaryTabs.length > 4 && (
+                  <button onClick={() => setShowMobileStatusMenu(v => !v)} style={{ flexShrink: 0, width: 34, height: 34, borderRadius: 999, border: `1px solid ${showMobileStatusMenu ? "#0f3d1e" : "#d9e2dc"}`, background: showMobileStatusMenu ? "#f0faf1" : "#fff", color: showMobileStatusMenu ? "#0f3d1e" : "#64748b", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }} title={showMobileStatusMenu ? "Thu gọn trạng thái" : `Xem thêm ${hiddenMobileTabCount} trạng thái`}>
+                    <MoreHorizontal size={17} />
+                  </button>
+                )}
               </div>
 
               <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
@@ -5172,7 +5195,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         paddingBottom: isMobile ? 4 : 0,
         msOverflowStyle: "none", scrollbarWidth: "none",
       }}>
-        {(isMobile ? mobilePrimaryTabs : LEAD_TABS).map((t) => {
+        {(isMobile ? mobileVisibleTabs : LEAD_TABS).map((t) => {
           const isActive = activeTab === t.key;
           const count = tabCounts[t.key] || 0;
           return (
@@ -5194,6 +5217,19 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             </button>
           );
         })}
+        {isMobile && mobilePrimaryTabs.length > 4 && (
+          <button onClick={() => setShowMobileStatusMenu(v => !v)}
+            style={{
+              width: 34, height: 34, borderRadius: 999, flexShrink: 0,
+              border: showMobileStatusMenu ? "1.5px solid #0f3d1e" : "1px solid #e5e7eb",
+              background: showMobileStatusMenu ? "#f0faf1" : "#fff",
+              color: showMobileStatusMenu ? "#0f3d1e" : "#64748b",
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+            title={showMobileStatusMenu ? "Thu gọn trạng thái" : `Xem thêm ${hiddenMobileTabCount} trạng thái`}>
+            <MoreHorizontal size={17} />
+          </button>
+        )}
       </div>
 
       {isMobile && selectedProject && (
@@ -5579,12 +5615,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {(!isAdmin || isMobile) ? (
         <div style={isMobile ? { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" } : { display: "flex", flexDirection: "column", gap: 8 }}>
           {isMobile && (
-            <div style={{ display: "grid", gridTemplateColumns: "1.15fr .9fr .88fr .72fr 36px", gap: 6, padding: "8px 9px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 8, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 34px", gap: 8, padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 9, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
               <span>Khách hàng</span>
-              <span>Dự án / Nguồn</span>
-              <span>QL / Sale</span>
               <span>Trạng thái</span>
-              <span style={{ textAlign: "right" }}>Nhận</span>
+              <span style={{ textAlign: "right" }}>Giờ</span>
             </div>
           )}
           {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).map((l) => {
@@ -5594,30 +5628,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
             return (
               <div key={l.id} id={`lead-${l.id}`} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : { background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
                 {isMobile ? (
-                  <button onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
-                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1.15fr .9fr .88fr .72fr 36px", gap: 6, alignItems: "center", padding: "9px", textAlign: "left" }}>
+                  <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
+                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 3 }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 5px", borderRadius: 7, fontSize: 8, fontWeight: 900, flexShrink: 0 }}>NEW</span>}
-                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 10, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.phone || "-"}</span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {l.phone || "-"} · {projectMap[l.projectId] || "-"}
+                      </span>
                     </span>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "block", color: "#0f172a", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{projectMap[l.projectId] || "-"}</span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 8, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{l.product || "-"}</span>
-                    </span>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "block", color: "#0f172a", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.managerName || "-"}</span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 8, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{l.saleName || "Chưa chia"}</span>
-                    </span>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "3px 7px", borderRadius: 999, fontSize: 9, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
                     </span>
-                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 8, fontWeight: 850 }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
                       {formatMobileLeadTime(l.createdAt)}
                       {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                     </span>
@@ -5667,7 +5695,31 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   <span style={{ fontSize: 14, color: "#9ca3af", flexShrink: 0 }}>{isOpen ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</span>
                 </div>
                 )}
-                {isOpen && (
+                {isOpen && isMobile && (
+                  <>
+                    <MobileLeadSummary
+                      lead={l}
+                      projectName={projectMap[l.projectId] || "-"}
+                      isAdmin={isAdmin}
+                      detailOpen={mobileDetailId === l.id}
+                      onCall={(e) => {
+                        e.stopPropagation();
+                        const phone = String(l.phone || "").replace(/[^\d+]/g, "");
+                        if (phone) window.location.href = `tel:${phone}`;
+                      }}
+                      onToggleDetail={(e) => {
+                        e.stopPropagation();
+                        setMobileDetailId((prev) => prev === l.id ? null : l.id);
+                      }}
+                    />
+                    {mobileDetailId === l.id && (
+                      <div style={{ borderTop: "1px solid #e5e7eb" }}>
+                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
+                      </div>
+                    )}
+                  </>
+                )}
+                {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
                     <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
                   </div>
@@ -5769,6 +5821,53 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     </>
   )}
     </>
+  );
+}
+
+function MobileLeadSummary({ lead, projectName, isAdmin, onCall, onToggleDetail, detailOpen }) {
+  const summaryRows = [
+    { label: "Nhu cầu", value: lead.product || "-" },
+    { label: "Nội dung", value: lead.content || lead.note || "-" },
+    { label: "Chiến dịch", value: lead.campaign || lead.campaignName || "-" },
+    { label: "Nhóm QC", value: lead.adsetName || lead.adSetName || lead.adset || "-" },
+  ];
+  return (
+    <div style={{ padding: "11px 12px 12px", background: "#fff", borderTop: "1px solid #eef2f7" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "9px 12px", marginBottom: 11 }}>
+        {[
+          ["Khách hàng", lead.name || "-"],
+          ["SĐT", lead.phone || "-"],
+          ["Dự án", projectName || "-"],
+          ["Sale", lead.saleName || "Chưa chia"],
+        ].map(([label, value]) => (
+          <div key={label} style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 9, color: "#64748b", fontWeight: 850, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
+            <div style={{ fontSize: 12, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
+        {summaryRows.map((row) => (
+          <div key={row.label} style={{ display: "grid", gridTemplateColumns: "72px 1fr", gap: 8, fontSize: 11, lineHeight: 1.35, padding: "3px 0" }}>
+            <span style={{ color: "#64748b", fontWeight: 800 }}>{row.label}</span>
+            <span style={{ color: row.label === "Nội dung" ? "#334155" : "#0f172a", fontWeight: row.label === "Nội dung" ? 600 : 800, overflowWrap: "anywhere" }}>{row.value}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1fr 1fr 1.2fr" : "1fr 1.2fr", gap: 8 }}>
+        <button onClick={onCall} style={{ minHeight: 36, border: "1px solid #c5d9c8", borderRadius: 9, background: "#fff", color: "#0f3d1e", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+          <Phone size={14} /> Gọi
+        </button>
+        {isAdmin && (
+          <button disabled style={{ minHeight: 36, border: "1px solid #e2e8f0", borderRadius: 9, background: "#f8fafc", color: "#94a3b8", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "not-allowed" }} title="Chưa nối Page Facebook">
+            <MessageSquare size={14} /> Chat
+          </button>
+        )}
+        <button onClick={onToggleDetail} style={{ minHeight: 36, border: "1px solid #d9e2dc", borderRadius: 9, background: detailOpen ? "#0f3d1e" : "#fff", color: detailOpen ? "#fff" : "#0f172a", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+          <Eye size={14} /> {detailOpen ? "Thu gọn" : "Xem chi tiết"}
+        </button>
+      </div>
+    </div>
   );
 }
 
