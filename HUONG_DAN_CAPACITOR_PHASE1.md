@@ -45,6 +45,7 @@ File `.env.capacitor` dang dat:
 ```bash
 VITE_API_BASE_URL=https://crm-iqi.id.vn/api
 VITE_SOCKET_URL=https://crm-iqi.id.vn
+VITE_NATIVE_PUSH_ENABLED=false
 ```
 
 Neu test bang domain khac, sua 2 gia tri nay roi chay lai `npm run cap:sync`.
@@ -80,6 +81,14 @@ Android can them file Firebase:
 ```text
 android/app/google-services.json
 ```
+
+Sau khi Firebase da cau hinh day du moi doi:
+
+```bash
+VITE_NATIVE_PUSH_ENABLED=true
+```
+
+Neu bat bien nay khi Android chua co `google-services.json`, app co the vang/crash luc dang ky push native.
 
 Sau khi them/sua Firebase config, chay lai:
 

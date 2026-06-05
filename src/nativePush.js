@@ -3,7 +3,7 @@ function isCapacitorNative() {
 }
 
 export function isNativePushSupported() {
-  return isCapacitorNative();
+  return isCapacitorNative() && import.meta.env.VITE_NATIVE_PUSH_ENABLED === "true";
 }
 
 export function getNativePushDeviceId() {
