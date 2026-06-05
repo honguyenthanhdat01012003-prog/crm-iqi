@@ -1045,7 +1045,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5", WebkitTextSizeAdjust: "100%" }}>
+    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5", WebkitTextSizeAdjust: "100%", overflowX: "hidden" }}>
       {/* Server down warning banner */}
       {serverDown && (
         <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "linear-gradient(135deg, #dc2626, #b91c1c)", color: "#fff", textAlign: "center", padding: "8px 16px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 2px 12px rgba(220,38,38,.3)" }}>
@@ -1238,7 +1238,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, overflow: "auto", minWidth: 0, background: "#f8fafb", display: "flex", flexDirection: "column", marginLeft: isMobile ? 0 : (sidebarOpen ? 230 : 60), transition: "margin-left .2s ease" }}>
+      <main style={{ flex: 1, overflow: "auto", overflowX: "hidden", minWidth: 0, maxWidth: "100vw", background: "#f8fafb", display: "flex", flexDirection: "column", marginLeft: isMobile ? 0 : (sidebarOpen ? 230 : 60), transition: "margin-left .2s ease" }}>
         {/* Top bar - sticky */}
         <div style={{
           position: "sticky", top: 0, zIndex: 100, background: "#f8fafb",
@@ -5571,11 +5571,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       {(!isAdmin || isMobile) ? (
         <div style={isMobile ? { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" } : { display: "flex", flexDirection: "column", gap: 8 }}>
           {isMobile && (
-            <div style={{ display: "grid", gridTemplateColumns: "1.28fr 1fr .72fr 44px", gap: 8, padding: "8px 10px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 9, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1.15fr .9fr .88fr .72fr 36px", gap: 6, padding: "8px 9px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 8, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
               <span>Khách hàng</span>
-              <span>Dự án / Sale</span>
+              <span>Dự án / Nguồn</span>
+              <span>QL / Sale</span>
               <span>Trạng thái</span>
-              <span style={{ textAlign: "right" }}>Giờ</span>
+              <span style={{ textAlign: "right" }}>Nhận</span>
             </div>
           )}
           {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).map((l) => {
@@ -5586,25 +5587,29 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               <div key={l.id} id={`lead-${l.id}`} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : { background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
                 {isMobile ? (
                   <button onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
-                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1.28fr 1fr .72fr 44px", gap: 8, alignItems: "center", padding: "10px", textAlign: "left" }}>
+                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1.15fr .9fr .88fr .72fr 36px", gap: 6, alignItems: "center", padding: "9px", textAlign: "left" }}>
                     <span style={{ minWidth: 0 }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 3 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 5px", borderRadius: 7, fontSize: 8, fontWeight: 900, flexShrink: 0 }}>NEW</span>}
-                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 11, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 10, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.phone || "-"}</span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.phone || "-"}</span>
                     </span>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "block", color: "#0f172a", fontSize: 10, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{projectMap[l.projectId] || "-"}</span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 9, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{isAdmin ? `${l.managerName || "-"} / ${l.saleName || "Chưa chia"}` : (l.product || "-")}</span>
+                      <span style={{ display: "block", color: "#0f172a", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{projectMap[l.projectId] || "-"}</span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 8, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{l.product || "-"}</span>
                     </span>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "2px 6px", borderRadius: 999, fontSize: 9, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      <span style={{ display: "block", color: "#0f172a", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.managerName || "-"}</span>
+                      <span style={{ display: "block", color: "#64748b", fontSize: 8, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>{l.saleName || "Chưa chia"}</span>
+                    </span>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "2px 5px", borderRadius: 999, fontSize: 8, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {STATUS_LABELS[l.status] || l.status}
                       </span>
                     </span>
-                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 3, color: "#64748b", fontSize: 9, fontWeight: 800 }}>
+                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 8, fontWeight: 850 }}>
                       {formatMobileLeadTime(l.createdAt)}
                       {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                     </span>
@@ -6077,7 +6082,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       <div>
 
       {/* Admin: Cập nhật trạng thái */}
-      {isAdmin && (
+      {isAdmin && !isMobile && (
         <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: isMobile ? 14 : 12, marginBottom: 12, fontSize: 13 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <b style={{ fontSize: 12, color: "#9a3412", display: "flex", alignItems: "center", gap: 4 }}><Settings size={14} /> Trạng thái:</b>
