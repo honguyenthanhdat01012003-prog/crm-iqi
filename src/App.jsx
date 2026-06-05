@@ -17,6 +17,7 @@ import {
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
+import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -556,11 +557,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [highlightLeadId, setHighlightLeadId] = useState(null);
   const webPushSupported = isPushNotificationSupported();
   const nativePushSupported = isNativePushSupported();
-  const pushSupported = webPushSupported || nativePushSupported;
+  const nativeLocalSupported = isNativeLocalNotificationSupported();
+  const pushSupported = webPushSupported || nativePushSupported || nativeLocalSupported;
   const [pushPermission, setPushPermission] = useState(() => getPushPermissionState());
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
+  const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
   const lastLeadSoundRef = useRef({ kind: "", at: 0 });
@@ -612,6 +615,15 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!pushSupported) return;
+    if (nativeLocalSupported && !nativePushSupported) {
+      getNativeLocalPermissionState()
+        .then(permission => {
+          setPushPermission(permission);
+          setPushEnabled(permission === "granted");
+        })
+        .catch(() => setPushEnabled(false));
+      return;
+    }
     if (nativePushSupported) {
       getNativePushPermissionState()
         .then(permission => {
@@ -633,7 +645,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       })
       .catch(() => setPushEnabled(false));
-  }, [pushSupported, nativePushSupported, pushPromptKey, user.userId]);
+  }, [pushSupported, nativePushSupported, nativeLocalSupported, pushPromptKey, user.userId]);
 
   const handleEnablePush = useCallback(async () => {
     if (!pushSupported || pushBusy) return;
@@ -641,8 +653,10 @@ function CRMApp({ user, updateUser, onLogout }) {
     try {
       const result = nativePushSupported
         ? await subscribeToNativePushNotifications(apiFetch, API)
+        : nativeLocalSupported
+          ? await requestNativeLocalNotificationPermission()
         : await subscribeToPushNotifications(apiFetch, API);
-      const nextPermission = nativePushSupported ? await getNativePushPermissionState() : getPushPermissionState();
+      const nextPermission = nativePushSupported ? await getNativePushPermissionState() : nativeLocalSupported ? await getNativeLocalPermissionState() : getPushPermissionState();
       setPushPermission(nextPermission);
       setPushEnabled(!!result.ok && nextPermission === "granted");
       if (result.ok) {
@@ -660,7 +674,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     } finally {
       setPushBusy(false);
     }
-  }, [pushSupported, nativePushSupported, pushBusy, pushPromptKey, user.userId]);
+  }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId]);
 
   useEffect(() => {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
@@ -686,6 +700,23 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     return () => { alive = false; };
   }, [nativePushSupported, pushBusy, user.userId]);
+
+  useEffect(() => {
+    if (!nativeLocalSupported || nativePushSupported || nativeLocalAutoTriedRef.current) return;
+    nativeLocalAutoTriedRef.current = true;
+    let alive = true;
+    (async () => {
+      const result = await requestNativeLocalNotificationPermission();
+      if (!alive) return;
+      const permission = await getNativeLocalPermissionState();
+      setPushPermission(permission);
+      setPushEnabled(!!result.ok && permission === "granted");
+    })().catch((err) => {
+      console.warn("[NativeLocalNotification] Auto permission failed:", err.message || err);
+      setPushEnabled(false);
+    });
+    return () => { alive = false; };
+  }, [nativeLocalSupported, nativePushSupported]);
 
   const dismissPushPrompt = useCallback(() => {
     localStorage.setItem(pushPromptKey, "1");
@@ -754,7 +785,16 @@ function CRMApp({ user, updateUser, onLogout }) {
           return !prevKeys.has(key) && !seenLeadKeys.has(key);
         });
         if (newLeads.length > 0 && prevArr.length > 0) {
-          playLeadSound(user.role === "sale" ? "sale" : "manager");
+          const soundKind = user.role === "sale" ? "sale" : "manager";
+          playLeadSound(soundKind);
+          if (nativeLocalSupported) {
+            const firstLead = newLeads[0];
+            showNativeLeadNotification({
+              title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
+              body: `${firstLead.name || "Khách mới"}${firstLead.phone ? ` - ${firstLead.phone}` : ""}`,
+              leadId: firstLead.id,
+            }).catch(() => {});
+          }
           setNotifications(n => {
             const existing = new Set((Array.isArray(n) ? n : []).map(x => `${x.name}||${x.phone}`));
             const fresh = newLeads.filter(l => !existing.has(`${l.name}||${l.phone}`));
@@ -770,7 +810,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, [seenLeadKeys, playLeadSound, user.role]);
+  }, [seenLeadKeys, playLeadSound, user.role, nativeLocalSupported]);
 
   // Mark notifications as seen
   const markAllSeen = useCallback(() => {
@@ -1386,11 +1426,11 @@ function CRMApp({ user, updateUser, onLogout }) {
                                 {pushEnabled
                                   ? "Đã bật trên thiết bị hiện tại"
                                   : pushPermission === "denied"
-                                    ? (nativePushSupported ? "Đang bị chặn trong cài đặt điện thoại" : "Đang bị chặn trong trình duyệt")
-                                    : (nativePushSupported ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
+                                    ? ((nativePushSupported || nativeLocalSupported) ? "Đang bị chặn trong cài đặt điện thoại" : "Đang bị chặn trong trình duyệt")
+                                    : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
                               </div>
                             </div>
-                            {nativePushSupported ? (
+                            {(nativePushSupported || nativeLocalSupported) ? (
                               <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
                                 {pushEnabled ? "Đã bật" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
                               </span>
