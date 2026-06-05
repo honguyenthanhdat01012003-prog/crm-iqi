@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications } from "./nativePush.js";
+import { getNativePushPermissionState, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -270,6 +270,7 @@ export default function App() {
   }
 
   return <ErrorBoundary><CRMApp user={user} updateUser={updateUser} onLogout={() => {
+    unregisterNativePushNotifications(apiFetch, API).catch(() => {});
     apiFetch(`${API}/logout`, { method: "POST" }).catch(() => {});
     localStorage.removeItem("crm_token");
     localStorage.removeItem("crm_user");
@@ -563,6 +564,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
   const lastLeadSoundRef = useRef({ kind: "", at: 0 });
+  const nativePushAutoTriedRef = useRef(false);
 
   // Announcement marquee state
   const [announcements, setAnnouncements] = useState([]);
@@ -616,7 +618,6 @@ function CRMApp({ user, updateUser, onLogout }) {
           setPushPermission(permission);
           const enabled = permission === "granted" && localStorage.getItem(`crm_native_push_enabled_${user.userId}`) === "1";
           setPushEnabled(enabled);
-          if (!enabled && permission === "default" && !localStorage.getItem(pushPromptKey)) setShowPushPrompt(true);
         })
         .catch(() => setPushEnabled(false));
       return;
@@ -660,6 +661,31 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushBusy(false);
     }
   }, [pushSupported, nativePushSupported, pushBusy, pushPromptKey, user.userId]);
+
+  useEffect(() => {
+    if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
+    nativePushAutoTriedRef.current = true;
+    let alive = true;
+    (async () => {
+      const permission = await getNativePushPermissionState();
+      if (!alive) return;
+      setPushPermission(permission);
+      if (permission === "denied") {
+        setPushEnabled(false);
+        return;
+      }
+      const result = await subscribeToNativePushNotifications(apiFetch, API);
+      if (!alive) return;
+      const nextPermission = await getNativePushPermissionState();
+      setPushPermission(nextPermission);
+      setPushEnabled(!!result.ok && nextPermission === "granted");
+      if (result.ok) localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+    })().catch((err) => {
+      console.warn("[NativePush] Auto registration failed:", err.message || err);
+      setPushEnabled(false);
+    });
+    return () => { alive = false; };
+  }, [nativePushSupported, pushBusy, user.userId]);
 
   const dismissPushPrompt = useCallback(() => {
     localStorage.setItem(pushPromptKey, "1");
@@ -1357,26 +1383,36 @@ function CRMApp({ user, updateUser, onLogout }) {
                                 <Smartphone size={14} /> Thông báo điện thoại
                               </div>
                               <div style={{ fontSize: 11, color: pushPermission === "denied" ? "#dc2626" : "#6b7280", marginTop: 2 }}>
-                                {pushEnabled ? "Đã bật trên thiết bị này" : pushPermission === "denied" ? "Đang bị chặn trong trình duyệt" : "Bật để nhận lead mới khi đóng app"}
+                                {pushEnabled
+                                  ? "Đã bật trên thiết bị hiện tại"
+                                  : pushPermission === "denied"
+                                    ? (nativePushSupported ? "Đang bị chặn trong cài đặt điện thoại" : "Đang bị chặn trong trình duyệt")
+                                    : (nativePushSupported ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
                               </div>
                             </div>
-                            <button
-                              onClick={handleEnablePush}
-                              disabled={pushBusy || pushEnabled || pushPermission === "denied"}
-                              style={{
-                                border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
-                                background: pushEnabled ? "#dcfce7" : "#fff",
-                                color: pushEnabled ? "#15803d" : "#1f2937",
-                                borderRadius: 8,
-                                padding: "7px 10px",
-                                fontSize: 11,
-                                fontWeight: 700,
-                                cursor: pushBusy || pushEnabled || pushPermission === "denied" ? "not-allowed" : "pointer",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {pushBusy ? "Đang bật..." : pushEnabled ? "Đã bật" : "Bật"}
-                            </button>
+                            {nativePushSupported ? (
+                              <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
+                                {pushEnabled ? "Đã bật" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
+                              </span>
+                            ) : (
+                              <button
+                                onClick={handleEnablePush}
+                                disabled={pushBusy || pushEnabled || pushPermission === "denied"}
+                                style={{
+                                  border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
+                                  background: pushEnabled ? "#dcfce7" : "#fff",
+                                  color: pushEnabled ? "#15803d" : "#1f2937",
+                                  borderRadius: 8,
+                                  padding: "7px 10px",
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  cursor: pushBusy || pushEnabled || pushPermission === "denied" ? "not-allowed" : "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {pushBusy ? "Đang bật..." : pushEnabled ? "Đã bật" : "Bật"}
+                              </button>
+                            )}
                           </div>
                         </div>
                       )}
@@ -1596,7 +1632,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         </>
       )}
 
-      {showPushPrompt && (
+      {showPushPrompt && !nativePushSupported && (
         <div style={{ position: "fixed", inset: 0, zIndex: 10020, background: "rgba(15,23,42,.45)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", padding: isMobile ? 12 : 18, backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
           <div style={{ width: isMobile ? "100%" : 420, background: "#fff", borderRadius: isMobile ? "18px 18px 22px 22px" : 18, padding: 20, boxShadow: "0 24px 60px rgba(15,23,42,.28)", border: "1px solid #e2e8f0" }}>
             <div style={{ width: 44, height: 44, borderRadius: 14, background: "#f0faf1", color: "#0f3d1e", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 12 }}>

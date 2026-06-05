@@ -266,7 +266,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 28; // Bump this when adding new DDL/migrations
+const DB_VERSION = 29; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -425,6 +425,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       token TEXT NOT NULL UNIQUE,
+      device_id TEXT DEFAULT '',
       platform TEXT DEFAULT '',
       device_label TEXT DEFAULT '',
       last_error TEXT DEFAULT '',
@@ -692,6 +693,7 @@ async function initDb() {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
         token TEXT NOT NULL UNIQUE,
+        device_id TEXT DEFAULT '',
         platform TEXT DEFAULT '',
         device_label TEXT DEFAULT '',
         last_error TEXT DEFAULT '',
@@ -700,6 +702,11 @@ async function initDb() {
       )`);
     } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_native_push_user ON native_push_tokens(user_id)"); } catch (_) {}
+  }
+  if (dbVersion < 29) {
+    console.log("[DB] v29 migration: adding device_id to native_push_tokens...");
+    try { await run(db, "ALTER TABLE native_push_tokens ADD COLUMN device_id TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_native_push_user_device ON native_push_tokens(user_id, device_id)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2326,18 +2333,25 @@ app.post("/api/native-push/register", requireAuth, async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
     const platform = String(req.body?.platform || "").trim().slice(0, 50);
+    const deviceId = String(req.body?.deviceId || "").trim().slice(0, 120);
     const deviceLabel = String(req.body?.deviceLabel || req.headers["user-agent"] || "").slice(0, 500);
     if (!token || token.length < 20) return res.status(400).json({ error: "Native push token không hợp lệ" });
+    if (deviceId) {
+      await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND (device_id = '' OR device_id != ?)", [req.user.userId, deviceId]);
+    } else {
+      await run(db, "DELETE FROM native_push_tokens WHERE user_id = ?", [req.user.userId]);
+    }
     await run(db,
-      `INSERT INTO native_push_tokens(user_id, token, platform, device_label, last_error, updated_at)
-       VALUES(?, ?, ?, ?, '', datetime('now'))
+      `INSERT INTO native_push_tokens(user_id, token, device_id, platform, device_label, last_error, updated_at)
+       VALUES(?, ?, ?, ?, ?, '', datetime('now'))
        ON CONFLICT(token) DO UPDATE SET
          user_id = excluded.user_id,
+         device_id = excluded.device_id,
          platform = excluded.platform,
          device_label = excluded.device_label,
          last_error = '',
          updated_at = datetime('now')`,
-      [req.user.userId, token, platform, deviceLabel]
+      [req.user.userId, token, deviceId, platform, deviceLabel]
     );
     const cfg = getFirebaseConfig();
     res.json({ ok: true, fcmConfigured: !!(cfg.projectId && cfg.clientEmail && cfg.privateKey) });
@@ -2350,7 +2364,9 @@ app.post("/api/native-push/register", requireAuth, async (req, res) => {
 app.post("/api/native-push/unregister", requireAuth, async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
+    const deviceId = String(req.body?.deviceId || "").trim();
     if (token) await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND token = ?", [req.user.userId, token]);
+    else if (deviceId) await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND device_id = ?", [req.user.userId, deviceId]);
     res.json({ ok: true });
   } catch (err) {
     console.error("[NativePush] Unregister failed:", err.message);

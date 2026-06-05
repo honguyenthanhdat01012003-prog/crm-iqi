@@ -6,6 +6,16 @@ export function isNativePushSupported() {
   return isCapacitorNative();
 }
 
+export function getNativePushDeviceId() {
+  const key = "crm_native_push_device_id";
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 export async function getNativePushPermissionState() {
   if (!isNativePushSupported()) return "unsupported";
   try {
@@ -60,13 +70,27 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
   });
 
   const platform = window.Capacitor?.getPlatform?.() || "unknown";
+  const deviceId = getNativePushDeviceId();
   const res = await apiFetch(`${apiBase}/native-push/register`, {
     method: "POST",
-    body: JSON.stringify({ token, platform }),
+    body: JSON.stringify({ token, platform, deviceId }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "Không lưu được native push token");
-  return { ok: true, permission: "granted", token };
+  localStorage.setItem("crm_native_push_token", token);
+  return { ok: true, permission: "granted", token, deviceId };
+}
+
+export async function unregisterNativePushNotifications(apiFetch, apiBase = "/api") {
+  if (!isNativePushSupported()) return { ok: true, skipped: true };
+  const token = localStorage.getItem("crm_native_push_token") || "";
+  if (!token) return { ok: true, skipped: true };
+  const res = await apiFetch(`${apiBase}/native-push/unregister`, {
+    method: "POST",
+    body: JSON.stringify({ token, deviceId: getNativePushDeviceId() }),
+  });
+  if (res.ok) localStorage.removeItem("crm_native_push_token");
+  return { ok: res.ok };
 }
 
 export async function setupNativePushListeners({ onNotification, onAction } = {}) {
