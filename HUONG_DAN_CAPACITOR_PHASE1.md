@@ -99,3 +99,9 @@ npm run cap:sync
 Luu y: am thanh rieng khi app dang dong/nen phu thuoc notification channel cua Android va APNs cua iOS. Hien tai native push dung am thanh he thong; am MP3 rieng van phat khi app dang mo.
 
 iOS can may Mac/Xcode, Apple Developer account va cau hinh APNs trong Firebase de test tren thiet bi that.
+
+Xem chi tiet cac buoc Firebase/FCM tai:
+
+```text
+HUONG_DAN_FIREBASE_NATIVE_PUSH.md
+```

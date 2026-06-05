@@ -2361,6 +2361,50 @@ app.post("/api/native-push/register", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/api/native-push/status", requireAuth, async (req, res) => {
+  try {
+    const cfg = getFirebaseConfig();
+    const tokens = await all(db,
+      `SELECT id, platform, device_id, device_label, last_error, created_at, updated_at
+       FROM native_push_tokens
+       WHERE user_id = ?
+       ORDER BY updated_at DESC`,
+      [req.user.userId]
+    );
+    res.json({
+      ok: true,
+      fcmConfigured: !!(cfg.projectId && cfg.clientEmail && cfg.privateKey),
+      projectId: cfg.projectId || "",
+      tokenCount: tokens.length,
+      tokens,
+    });
+  } catch (err) {
+    console.error("[NativePush] Status failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/native-push/test", requireAuth, async (req, res) => {
+  try {
+    const cfg = getFirebaseConfig();
+    if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) {
+      return res.status(503).json({ error: "Firebase FCM chưa được cấu hình trên VPS" });
+    }
+    const result = await sendNativePushToUser(req.user.userId, {
+      title: "LUX IQI CRM",
+      body: "Native push đã sẵn sàng trên thiết bị này.",
+      tag: `native-push-test-${req.user.userId}`,
+      sound: "default",
+      data: { url: "/", type: "native_push_test" },
+      requireInteraction: true,
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[NativePush] Test failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post("/api/native-push/unregister", requireAuth, async (req, res) => {
   try {
     const token = String(req.body?.token || "").trim();
