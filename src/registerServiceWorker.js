@@ -1,6 +1,11 @@
 let serviceWorkerRegistrationPromise = null;
 
+function isCapacitorNative() {
+  return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+}
+
 export function registerServiceWorker() {
+  if (isCapacitorNative()) return;
   if (!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
 
   window.addEventListener("load", () => {
@@ -13,6 +18,7 @@ export function registerServiceWorker() {
 
 export function isPushNotificationSupported() {
   return import.meta.env.PROD
+    && !isCapacitorNative()
     && typeof window !== "undefined"
     && "serviceWorker" in navigator
     && "PushManager" in window

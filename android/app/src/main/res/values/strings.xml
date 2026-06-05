@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">LUX IQI CRM</string>
+    <string name="title_activity_main">LUX IQI CRM</string>
+    <string name="package_name">vn.id.crmiqi.app</string>
+    <string name="custom_url_scheme">vn.id.crmiqi.app</string>
+</resources>

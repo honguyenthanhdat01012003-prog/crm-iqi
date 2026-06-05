@@ -17,7 +17,8 @@ import {
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 
-const API = "/api";
+const API = import.meta.env.VITE_API_BASE_URL || "/api";
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
 
 /* ===== Error Boundary ===== */
 class ErrorBoundary extends React.Component {
@@ -744,7 +745,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   useEffect(() => { fetchAnnouncements(); }, [fetchAnnouncements]);
 
   useEffect(() => {
-    const socket = socketIOClient(window.location.origin, { transports: ["websocket", "polling"] });
+    const socket = socketIOClient(SOCKET_URL, { transports: ["websocket", "polling"] });
     socket.on("connect", () => {
       console.log("[socket.io] Connected:", socket.id);
       setServerDown(false);
