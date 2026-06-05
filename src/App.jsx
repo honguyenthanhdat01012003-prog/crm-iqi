@@ -96,10 +96,17 @@ function ConfirmModal_() {
 }
 
 /* ===== Mobile detection hook ===== */
+function isCapacitorNativeRuntime() {
+  return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+}
+
 function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(() => typeof window !== "undefined" && window.innerWidth <= breakpoint);
+  const [isMobile, setIsMobile] = useState(() => (
+    isCapacitorNativeRuntime() || (typeof window !== "undefined" && window.innerWidth <= breakpoint)
+  ));
   useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
+    const handler = () => setIsMobile(isCapacitorNativeRuntime() || window.innerWidth <= breakpoint);
+    handler();
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
   }, [breakpoint]);
