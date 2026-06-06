@@ -11,6 +11,7 @@ import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 
+import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
@@ -20,6 +21,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
+        PushNotificationsPlugin.sendRemoteMessage(message);
         Map<String, String> data = message.getData();
         if (data == null || data.isEmpty()) return;
 
@@ -63,6 +65,12 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         if (manager != null) {
             manager.notify((int) (System.currentTimeMillis() & 0x7fffffff), builder.build());
         }
+    }
+
+    @Override
+    public void onNewToken(String token) {
+        super.onNewToken(token);
+        PushNotificationsPlugin.onNewToken(token);
     }
 
     private void createLeadChannel(String id, String name, int soundResId) {
