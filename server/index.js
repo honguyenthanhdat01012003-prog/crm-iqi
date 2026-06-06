@@ -156,7 +156,13 @@ async function sendNativePushToUser(userId, payload) {
   const accessToken = await getFcmAccessToken();
   let sent = 0;
   const notificationSound = getNativeNotificationSound(payload.sound);
-  const data = stringifyFcmData({ ...(payload.data || {}), sound: payload.sound || "" });
+  const data = stringifyFcmData({
+    ...(payload.data || {}),
+    title: payload.title || "LUX IQI CRM",
+    body: payload.body || "Ban co thong bao moi",
+    sound: payload.sound || "manager",
+    channelId: notificationSound.channelId,
+  });
   for (const row of tokens) {
     const message = {
       token: row.token,
@@ -180,6 +186,10 @@ async function sendNativePushToUser(userId, payload) {
         payload: { aps: { sound: "default" } },
       },
     };
+    if (String(row.platform || "").toLowerCase() === "android") {
+      delete message.notification;
+      message.android = { priority: "HIGH" };
+    }
     try {
       const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {
         method: "POST",
@@ -2424,11 +2434,12 @@ app.post("/api/native-push/test", requireAuth, async (req, res) => {
     if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) {
       return res.status(503).json({ error: "Firebase FCM chưa được cấu hình trên VPS" });
     }
+    const sound = req.body?.sound === "sale" ? "sale" : "manager";
     const result = await sendNativePushToUser(req.user.userId, {
       title: "LUX IQI CRM",
       body: "Native push đã sẵn sàng trên thiết bị này.",
       tag: `native-push-test-${req.user.userId}`,
-      sound: "default",
+      sound,
       data: { url: "/", type: "native_push_test" },
       requireInteraction: true,
     });
