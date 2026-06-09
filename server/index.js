@@ -4809,6 +4809,11 @@ async function processSchedules(db, triggerUser) {
 
       // Skip locked leads (booking/cọc) — they should not be auto-redistributed
       const lockCheck = await get(db, "SELECT status, is_locked FROM leads WHERE id = ?", [lid]);
+      if (!lockCheck) {
+        processedLids.add(lid);
+        addSkipLog({ leadId: lid, saleName: "", reason: "lead_missing", reasonLabel: "Lead khong con ton tai trong DB" });
+        continue;
+      }
       if (lockCheck && (lockCheck.is_locked || shouldAutoLockStatus(lockCheck.status))) {
         processedLids.add(lid);
         addSkipLog({ leadId: lid, saleName: "", reason: "lead_locked", reasonLabel: "Lead đã khóa hoặc đã Booking/Cọc/Chốt" });
@@ -4831,6 +4836,11 @@ async function processSchedules(db, triggerUser) {
 
       // Check if this sale already has this lead (from another schedule or manual assign)
       const existingLead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      if (!existingLead) {
+        processedLids.add(lid);
+        addSkipLog({ leadId: lid, saleName, reason: "lead_missing", reasonLabel: "Lead khong con ton tai trong DB" });
+        continue;
+      }
       if (existingLead && !isUnassignedSaleName(existingLead.sale_name)) {
         processedLids.add(lid);
         addSkipLog({
@@ -5412,8 +5422,9 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
     const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
     if (!sch) return res.status(404).json({ error: "Schedule not found" });
     const formatted = formatSchedule(sch);
-    // Get lead details for all leads in this schedule
-    const leadIds = formatted.leadIds;
+    // Get lead details for all leads in this schedule and historical log entries.
+    const logLeadIds = (formatted.assignmentLog || []).map(e => e.leadId).filter(Boolean);
+    const leadIds = [...new Set([...(formatted.leadIds || []), ...logLeadIds])];
     const leadDetails = [];
     for (const lid of leadIds) {
       const lead = await get(db, "SELECT id, name, phone, status, sale_name, created_at FROM leads WHERE id = ?", [lid]);

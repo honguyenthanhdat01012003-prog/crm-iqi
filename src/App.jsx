@@ -5204,7 +5204,13 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                       const isExpanded = !!scheduleExpandedSales[sale];
                                       const plannedCount = saleEntries.filter(e => e.planned).length;
                                       const skippedCount = saleEntries.filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done").length;
-                                      const doneCount = saleEntries.length - plannedCount - skippedCount;
+                                      const staleCount = saleEntries.filter(e => {
+                                        if (e.planned || e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done") return false;
+                                        const lead = leadMap[e.leadId];
+                                        if (!lead) return true;
+                                        return e.saleName && lead.saleName && String(lead.saleName).trim().toLowerCase() !== String(e.saleName).trim().toLowerCase();
+                                      }).length;
+                                      const doneCount = Math.max(0, saleEntries.length - plannedCount - skippedCount - staleCount);
                                       return (
                                         <div key={sale} style={{ borderBottom: idx < filteredSaleList.length - 1 ? "1px solid #f3f4f6" : "none" }}>
                                           {/* Sale header - clickable */}
@@ -5240,6 +5246,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                                   {skippedCount} bỏ qua/dừng
                                                 </span>
                                               )}
+                                              {staleCount > 0 && (
+                                                <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#fee2e2", color: "#b91c1c" }}>
+                                                  {staleCount} cần kiểm tra
+                                                </span>
+                                              )}
                                               <span style={{
                                                 fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
                                                 background: color, color: "#fff", minWidth: 28, textAlign: "center",
@@ -5255,6 +5266,17 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                               {saleEntries.map((entry, ei) => {
                                                 const lead = leadMap[entry.leadId];
                                                 const isSkippedEntry = entry.skipped || entry.stopped || entry.type === "schedule_stopped" || entry.type === "sale_done";
+                                                const isMissingAssigned = !lead && !entry.planned && !isSkippedEntry;
+                                                const isSaleMismatch = lead && !entry.planned && !isSkippedEntry && entry.saleName && lead.saleName && String(lead.saleName).trim().toLowerCase() !== String(entry.saleName).trim().toLowerCase();
+                                                const entryLabel = entry.planned
+                                                  ? "Dự kiến"
+                                                  : isSkippedEntry
+                                                    ? (entry.stopped ? "Dừng" : "Bỏ qua")
+                                                    : isMissingAssigned
+                                                      ? "Không thấy lead"
+                                                      : isSaleMismatch
+                                                        ? "Lệch sale"
+                                                        : "✓ Đã chia";
                                                 return (
                                                   <div key={ei} style={{
                                                     padding: isMobile ? "6px 14px 6px 30px" : "5px 14px 5px 30px",
@@ -5266,13 +5288,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                                       <span style={{ color: "#6b7280", fontSize: 11, marginRight: 4 }}>{ei + 1}.</span>
                                                       {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : (entry.reasonLabel || `#${entry.leadId || "-"}`)}
                                                       {entry.reasonLabel && <span style={{ color: "#a16207", fontSize: 11, marginLeft: 6 }}>{entry.reasonLabel}</span>}
+                                                      {isSaleMismatch && <span style={{ color: "#dc2626", fontSize: 11, marginLeft: 6 }}>Hiện tại: {lead.saleName || "Chưa chia"}</span>}
                                                     </span>
                                                     <span style={{
                                                       fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
-                                                      background: entry.planned ? "#fef3c7" : isSkippedEntry ? "#fef9c3" : "#d1fae5",
-                                                      color: entry.planned ? "#92400e" : isSkippedEntry ? "#a16207" : "#065f46",
+                                                      background: entry.planned ? "#fef3c7" : isSkippedEntry ? "#fef9c3" : (isMissingAssigned || isSaleMismatch) ? "#fee2e2" : "#d1fae5",
+                                                      color: entry.planned ? "#92400e" : isSkippedEntry ? "#a16207" : (isMissingAssigned || isSaleMismatch) ? "#b91c1c" : "#065f46",
                                                     }}>
-                                                      {entry.planned ? "Dự kiến" : isSkippedEntry ? (entry.stopped ? "Dừng" : "Bỏ qua") : "✓ Đã chia"}
+                                                      {entryLabel}
                                                     </span>
                                                   </div>
                                                 );
