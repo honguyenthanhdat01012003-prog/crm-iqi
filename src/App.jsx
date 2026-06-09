@@ -2867,6 +2867,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
       showRequiredFeedbackAlert("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.");
       return;
     }
+    if (plHistStatus === "new") {
+      showRequiredFeedbackAlert("Không thể lưu trạng thái Mới/Chưa feedback. Vui lòng chọn tình trạng khách đã cập nhật thực tế.");
+      return;
+    }
     if (!feedbackText) {
       showRequiredFeedbackAlert("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.");
       return;
@@ -3606,7 +3610,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                             <select value={plHistStatus} onChange={e => setPlHistStatus(e.target.value)}
                               style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}>
                               <option value="">-- Chọn trạng thái --</option>
-                              {Object.entries(PL_STATUS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                              {Object.entries(PL_STATUS).filter(([k]) => k !== "new").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                             </select>
                           </div>
                           <div>
@@ -6219,6 +6223,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       showRequiredFeedbackAlert("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.");
       return;
     }
+    if (histStatus === "new") {
+      showRequiredFeedbackAlert("Không thể lưu trạng thái Chưa feedback. Vui lòng chọn tình trạng khách đã cập nhật thực tế.");
+      return;
+    }
     if (!feedbackText) {
       showRequiredFeedbackAlert("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.");
       return;
@@ -6613,7 +6621,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                     <select value={histStatus} onChange={(e) => setHistStatus(e.target.value)}
                       style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 13 : 13, padding: isMobile ? "9px 10px" : "8px 10px", minHeight: isMobile ? 40 : "auto" }}>
                       <option value="">-- Chọn trạng thái --</option>
-                      {Object.entries(STATUS_LABELS).filter(([k]) => !['called', 'lost', 'blocked'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                      {Object.entries(STATUS_LABELS).filter(([k]) => !['new', 'called', 'lost', 'blocked'].includes(k)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                     </select>
                   </div>
                   <div style={{ width: "100%" }}>
