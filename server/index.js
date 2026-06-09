@@ -1556,10 +1556,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   const stmts = [];
 
-  // 3. Delete ALL existing data for this project (clean slate)
+  // 3. Keep lead IDs stable. Older syncs deleted and reinserted all leads, which
+  // broke lead_schedules.assignment_log because logs point to lead_id.
   stmts.push({ sql: "UPDATE leads SET campaign_id = NULL WHERE project_id = ?", args: [projectId] });
-  stmts.push({ sql: "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", args: [projectId] });
-  stmts.push({ sql: "DELETE FROM leads WHERE project_id = ?", args: [projectId] });
   stmts.push({ sql: "DELETE FROM campaigns WHERE project_id = ?", args: [projectId] });
 
   // 4. Insert campaigns
@@ -1570,8 +1569,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     });
   }
 
-  // 5. Insert all leads from new sheet, restoring status/sale from old data where name matches
+  // 5. Upsert all leads from new sheet, restoring status/sale from old data where matched.
   let matchByAdsId = 0, matchByPhoneName = 0, matchByPhone = 0, matchByName = 0, noMatch = 0;
+  let updatedLeads = 0, insertedLeads = 0;
   for (const l of leads) {
     const np = normPhone(l.phone);
     const nName = (l.name || "").trim().toLowerCase();
@@ -1682,19 +1682,47 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       }
     }
 
-    stmts.push({
-      sql: `INSERT INTO leads(
-        project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
-        product, raw_status, status,
-        created_at, inbox_url, customer_fb_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [
-        projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
-        l.adsetName || "-", l.adName || "-", l.formName || "-",
-        l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl, isHot, saleId, saleName, managerName,
-        l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
-      ],
-    });
+    const historyLeadIdSql = prev ? "?" : "(SELECT MAX(id) FROM leads)";
+    const historyLeadIdArg = prev ? [prev.id] : [];
+    const historySeqSql = prev
+      ? "(SELECT COALESCE(MAX(seq) + 1, 0) FROM lead_history WHERE lead_id = ?)"
+      : "(SELECT COALESCE(MAX(seq) + 1, 0) FROM lead_history WHERE lead_id = (SELECT MAX(id) FROM leads))";
+    const historySeqArg = prev ? [prev.id] : [];
+
+    if (prev) {
+      updatedLeads++;
+      stmts.push({
+        sql: `UPDATE leads SET
+          name = ?, phone = ?, ads_id = ?, campaign = ?, campaign_id = NULL,
+          adset_name = ?, ad_name = ?, form_name = ?, product = ?,
+          raw_status = ?, status = ?, created_at = ?, inbox_url = ?, customer_fb_url = ?,
+          is_hot = ?, sale_id = ?, sale_name = ?, manager_name = ?, source = ?, budget = ?,
+          sync_at = ?, notes = ?, deal_value = ?, is_locked = ?
+          WHERE id = ?`,
+        args: [
+          l.name, l.phone, lAdsId || "", l.campaign,
+          l.adsetName || "-", l.adName || "-", l.formName || "-", l.product,
+          rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
+          isHot, saleId, saleName, managerName, l.source, l.budget,
+          l.syncAt, notes, dealValue, isLockedVal, prev.id,
+        ],
+      });
+    } else {
+      insertedLeads++;
+      stmts.push({
+        sql: `INSERT INTO leads(
+          project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
+          product, raw_status, status,
+          created_at, inbox_url, customer_fb_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [
+          projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
+          l.adsetName || "-", l.adName || "-", l.formName || "-",
+          l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl, isHot, saleId, saleName, managerName,
+          l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
+        ],
+      });
+    }
 
     // Insert sheet history FIRST (lower seq) so CRM entries always have higher priority
     // crmHist already defined above for DATE-FIX
@@ -1708,24 +1736,25 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         );
         if (!isDup) {
           stmts.push({
-            sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
-            args: [sh.saleName, sh.action, sh.date, sh.status, sh.feedback, seqCounter, "sheet"],
+            sql: `INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source)
+                  VALUES(${historyLeadIdSql}, ?, ?, ?, ?, ?, ${historySeqSql}, ?)`,
+            args: [...historyLeadIdArg, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, ...historySeqArg, "sheet"],
           });
           seqCounter++;
         }
       }
     }
 
-    // Then restore CRM history (higher seq = higher priority in post-sync fix)
-    // IMPORTANT: crmHist is ordered by seq DESC (newest first) from the backup query,
-    // so we must reverse it to restore correct chronological order (oldest = lowest seq)
-    if (crmHist && crmHist.length) {
+    // Then restore CRM history only for newly inserted leads. Matched leads keep their
+    // existing history untouched because their lead_id is preserved.
+    if (!prev && crmHist && crmHist.length) {
       const crmHistAsc = [...crmHist].reverse();
       for (let si = 0; si < crmHistAsc.length; si++) {
         const h = crmHistAsc[si];
         stmts.push({
-          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES((SELECT MAX(id) FROM leads), ?, ?, ?, ?, ?, ?, ?)",
-          args: [h.sale_name, h.action, h.contact_date, h.status, h.feedback, seqCounter + si, h.source || "crm"],
+          sql: `INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source)
+                VALUES(${historyLeadIdSql}, ?, ?, ?, ?, ?, ${historySeqSql}, ?)`,
+          args: [...historyLeadIdArg, h.sale_name, h.action, h.contact_date, h.status, h.feedback, ...historySeqArg, h.source || "crm"],
         });
       }
     }
@@ -1740,7 +1769,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     const pnKey = np && nName ? `${np}||${nName}` : "";
     return !(aid && adsIdMap.has(aid)) && !(pnKey && phoneNameMap.has(pnKey)) && !(np && phoneMap.has(np));
   }).map(l => normPhone(l.phone));
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch} newPhones=${newPhones.length}`);
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} updated=${updatedLeads} inserted=${insertedLeads} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch} newPhones=${newPhones.length}`);
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
 
