@@ -5030,7 +5030,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         const allLeadIds = det.schedule.leadIds;
                         const consumedLeadIds = new Set(pastEntries.filter(e => e.leadId).map(e => e.leadId));
                         let startTour = currentTour;
-                        let startIdx = 0;
+                        let startIdx = Math.max(0, Math.min(det.schedule.assignedIndex || 0, allLeadIds.length));
 
                         for (let tour = startTour; tour < totalTours; tour++) {
                           const remaining = allLeadIds.slice(tour === startTour ? startIdx : 0).filter(id => !consumedLeadIds.has(id));
@@ -5280,7 +5280,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                       const staleCount = saleEntries.filter(e => {
                                         if (e.planned || e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done") return false;
                                         const lead = leadMap[e.leadId];
-                                        if (!lead) return true;
+                                        if (!lead || lead.missingFromDb) return true;
                                         return e.saleName && lead.saleName && normalizePersonName(lead.saleName) !== normalizePersonName(e.saleName);
                                       }).length;
                                       const doneCount = Math.max(0, saleEntries.length - plannedCount - skippedCount - staleCount);
@@ -5339,14 +5339,14 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                               {saleEntries.map((entry, ei) => {
                                                 const lead = leadMap[entry.leadId];
                                                 const isSkippedEntry = entry.skipped || entry.stopped || entry.type === "schedule_stopped" || entry.type === "sale_done";
-                                                const isMissingAssigned = !lead && !entry.planned && !isSkippedEntry;
-                                                const isSaleMismatch = lead && !entry.planned && !isSkippedEntry && entry.saleName && lead.saleName && normalizePersonName(lead.saleName) !== normalizePersonName(entry.saleName);
+                                                const isMissingAssigned = (!lead || lead.missingFromDb) && !entry.planned && !isSkippedEntry;
+                                                const isSaleMismatch = lead && !lead.missingFromDb && !entry.planned && !isSkippedEntry && entry.saleName && lead.saleName && normalizePersonName(lead.saleName) !== normalizePersonName(entry.saleName);
                                                 const entryLabel = entry.planned
                                                   ? "Dự kiến"
                                                   : isSkippedEntry
                                                     ? (entry.stopped ? "Dừng" : "Bỏ qua")
                                                     : isMissingAssigned
-                                                      ? "Không thấy lead"
+                                                      ? "Lead không còn trong DB"
                                                       : isSaleMismatch
                                                         ? "Lệch sale"
                                                         : "✓ Đã chia";

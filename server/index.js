@@ -4652,6 +4652,47 @@ function getNowHHMM() {
   return new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+function safeParseArray(value) {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeScheduleStatusFilter(value = "") {
+  const v = String(value || "").trim();
+  return !v || v === "all" ? "" : normalizeStatus(v);
+}
+
+async function getScheduleLeadPool(db, sch) {
+  const storedIds = [...new Set(safeParseArray(sch.lead_ids).map(v => Number(v)).filter(Boolean))];
+  const statusFilter = normalizeScheduleStatusFilter(sch.status_filter);
+  const args = [sch.project_id];
+  let whereStatus = "";
+  if (statusFilter) {
+    whereStatus = " AND status = ?";
+    args.push(statusFilter);
+  }
+  const activeRows = await all(db,
+    `SELECT id FROM leads
+     WHERE project_id = ?
+       ${whereStatus}
+       AND COALESCE(is_locked, 0) = 0
+       AND LOWER(COALESCE(status, '')) NOT IN ('booked','booking','booking_other','closed','deposit')
+     ORDER BY datetime(created_at) ASC, id ASC`,
+    args
+  );
+  const activeIds = activeRows.map(r => Number(r.id)).filter(Boolean);
+  const activeSet = new Set(activeIds);
+  const validStored = storedIds.filter(id => activeSet.has(id));
+  const validSet = new Set(validStored);
+  const replacement = activeIds.filter(id => !validSet.has(id));
+  const reconciled = [...validStored, ...replacement];
+  return { leadIds: reconciled, changed: reconciled.join(",") !== storedIds.join(","), missingCount: storedIds.length - validStored.length };
+}
+
 // Sync active schedules after a sale is removed from project(s)
 async function syncSchedulesAfterProjectChange(db, userId, removedProjectIds) {
   if (!removedProjectIds || !removedProjectIds.length) return;
@@ -4723,8 +4764,13 @@ async function processSchedules(db, triggerUser) {
     if (sch.last_processed_date === today && slotToProcess < lastSlot) continue;
     if (sch.last_processed_date === today && slotToProcess === lastSlot - 1) continue;
 
-    let saleList = JSON.parse(sch.sale_names || "[]");
-    const leadIdList = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
+    let saleList = safeParseArray(sch.sale_names);
+    const pool = await getScheduleLeadPool(db, sch);
+    const leadIdList = pool.leadIds;
+    if (pool.changed) {
+      await run(db, "UPDATE lead_schedules SET lead_ids = ?, total_count = ? WHERE id = ?", [JSON.stringify(leadIdList), leadIdList.length, sch.id]);
+      console.log(`[processSchedules] Schedule #${sch.id}: reconciled lead pool, removed ${pool.missingCount} missing/stale ids, active=${leadIdList.length}`);
+    }
 
     // Guard: filter out sales no longer in the project
     if (saleList.length && sch.project_id) {
@@ -4752,7 +4798,8 @@ async function processSchedules(db, triggerUser) {
     const currentTour = sch.current_tour || 0;
     const totalTours = saleList.length;
 
-    const remaining = leadIdList;
+    const startIndex = Math.max(0, Math.min(Number(sch.assigned_index) || 0, leadIdList.length));
+    const remaining = leadIdList.slice(startIndex);
     if (!remaining.length) {
       const nextTour = currentTour + 1;
       if (nextTour >= totalTours) {
@@ -4835,24 +4882,13 @@ async function processSchedules(db, triggerUser) {
       const saleName = saleList[assignedIdx];
 
       // Check if this sale already has this lead (from another schedule or manual assign)
-      const existingLead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      const existingLead = await get(db, "SELECT id, name, phone, sale_name FROM leads WHERE id = ?", [lid]);
       if (!existingLead) {
         processedLids.add(lid);
         addSkipLog({ leadId: lid, saleName, reason: "lead_missing", reasonLabel: "Lead khong con ton tai trong DB" });
         continue;
       }
-      if (existingLead && !isUnassignedSaleName(existingLead.sale_name)) {
-        processedLids.add(lid);
-        addSkipLog({
-          leadId: lid,
-          saleName,
-          reason: normSaleName(existingLead.sale_name) === normSaleName(saleName) ? "sale_already_received" : "lead_already_assigned",
-          reasonLabel: normSaleName(existingLead.sale_name) === normSaleName(saleName)
-            ? "Sale đã có lead này"
-            : `Lead đã được chia cho ${existingLead.sale_name}`,
-        });
-        continue;
-      }
+      const sameCurrentSale = normSaleName(existingLead.sale_name) === normSaleName(saleName);
 
       const saleHadLead = await get(db,
         "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1",
@@ -4863,10 +4899,10 @@ async function processSchedules(db, triggerUser) {
         addSkipLog({ leadId: lid, saleName, reason: "sale_already_received", reasonLabel: "Sale đã từng nhận lead này" });
         continue;
       }
-      if (existingLead && existingLead.sale_name === saleName) {
+      if (sameCurrentSale) {
         // Same sale already has this lead → skip, don't re-assign or duplicate history
         processedLids.add(lid);
-        logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour, skipped: true });
+        addSkipLog({ leadId: lid, saleName, leadName: existingLead.name || "", leadPhone: existingLead.phone || "", reason: "sale_already_received", reasonLabel: "Sale da co lead nay" });
         continue;
       }
 
@@ -4884,7 +4920,7 @@ async function processSchedules(db, triggerUser) {
         });
       }
       assignedLeads.push({ leadId: lid, saleName });
-      logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour, type: "assigned", status: "assigned" });
+      logEntries.push({ leadId: lid, saleName, leadName: existingLead.name || "", leadPhone: existingLead.phone || "", previousSaleName: existingLead.sale_name || "", date: today, tour: currentTour, type: "assigned", status: "assigned" });
     }
 
     // Append to assignment_log
@@ -4901,7 +4937,7 @@ async function processSchedules(db, triggerUser) {
     }
     const updatedLog = [...existingLog, ...logEntries];
 
-    const newIndex = sch.assigned_index + assignedLeads.length;
+    const newIndex = startIndex + batchIdx;
     let isDone = false;
     let newTour = currentTour;
     if (!assignedLeads.length) {
@@ -5017,10 +5053,20 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
 
     // Deduplicate leadIds to prevent double assignments
-    const uniqueLeadIds = [...new Set(leadIds)];
+    let uniqueLeadIds = [...new Set(leadIds.map(v => Number(v)).filter(Boolean))];
     if (uniqueLeadIds.length !== leadIds.length) {
-      console.log(`[Schedule] Removed ${leadIds.length - uniqueLeadIds.length} duplicate lead IDs`);
+      console.log(`[Schedule] Removed ${leadIds.length - uniqueLeadIds.length} duplicate/invalid lead IDs`);
     }
+    const validRows = [];
+    for (const lid of uniqueLeadIds) {
+      const row = await get(db, "SELECT id FROM leads WHERE id = ? AND project_id = ?", [lid, Number(projectId)]);
+      if (row) validRows.push(Number(row.id));
+    }
+    if (validRows.length !== uniqueLeadIds.length) {
+      console.log(`[Schedule] Removed ${uniqueLeadIds.length - validRows.length} lead IDs not found in project ${projectId}`);
+    }
+    uniqueLeadIds = validRows;
+    if (!uniqueLeadIds.length) return res.status(400).json({ error: "Không tìm thấy lead hợp lệ trong dự án để tạo lịch chia" });
 
     // Pre-calculate the full assignment plan
     const plan = [];
@@ -5429,6 +5475,21 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
     for (const lid of leadIds) {
       const lead = await get(db, "SELECT id, name, phone, status, sale_name, created_at FROM leads WHERE id = ?", [lid]);
       if (lead) leadDetails.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, saleName: lead.sale_name, createdAt: lead.created_at });
+    }
+    const knownLeadIds = new Set(leadDetails.map(l => Number(l.id)));
+    for (const entry of formatted.assignmentLog || []) {
+      const lid = Number(entry.leadId);
+      if (!lid || knownLeadIds.has(lid) || (!entry.leadName && !entry.leadPhone)) continue;
+      leadDetails.push({
+        id: lid,
+        name: entry.leadName || `Lead #${lid}`,
+        phone: entry.leadPhone || "",
+        status: "missing",
+        saleName: entry.saleName || "",
+        createdAt: "",
+        missingFromDb: true,
+      });
+      knownLeadIds.add(lid);
     }
     res.json({ schedule: formatted, leadDetails });
   } catch (err) {
