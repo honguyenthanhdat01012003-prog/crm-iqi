@@ -49,6 +49,15 @@ let _toastFn = null;
 let _confirmFn = null;
 function showToast(msg, type = "info") { _toastFn && _toastFn(typeof msg === "string" ? msg : String(msg || ""), type); }
 function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : resolve(window.confirm(msg)); }); }
+function normalizePersonName(value = "") {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
 function ToastContainer() {
   const [toasts, setToasts] = useState([]);
@@ -1027,16 +1036,17 @@ function CRMApp({ user, updateUser, onLogout }) {
       list = list.filter((l) => (l.managerName || "") === managerFilter);
     }
     if (saleFilter && saleFilter !== "all") {
+      const saleFilterKey = normalizePersonName(saleFilter);
       list = list.filter((l) =>
-        (l.saleName || "") === saleFilter ||
-        (l.saleHistory && l.saleHistory.some(h => h.saleName === saleFilter))
+        normalizePersonName(l.saleName) === saleFilterKey ||
+        (l.saleHistory && l.saleHistory.some(h => normalizePersonName(h.saleName) === saleFilterKey))
       );
       // Override status: show selected sale's own latest feedback status
       list = list.map(l => {
         if (l.saleHistory && l.saleHistory.length) {
           for (let i = l.saleHistory.length - 1; i >= 0; i--) {
             const h = l.saleHistory[i];
-            if (h.status && h.action !== "Chia lead" && h.saleName === saleFilter) {
+            if (h.status && h.action !== "Chia lead" && normalizePersonName(h.saleName) === saleFilterKey) {
               const key = STATUS_LABEL_TO_KEY[h.status] || STATUS_LABEL_TO_KEY[h.status.trim()];
               if (key) return { ...l, status: key, rawStatus: h.status };
               break;
@@ -2844,12 +2854,24 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const plHandleAddHistory = async (leadId) => {
-    if (!plHistStatus && !plHistFeedback) return;
+    const feedbackText = String(plHistFeedback || "").trim();
+    if (!plHistStatus && !feedbackText) {
+      showToast("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.", "warning");
+      return;
+    }
+    if (!plHistStatus) {
+      showToast("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.", "warning");
+      return;
+    }
+    if (!feedbackText) {
+      showToast("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.", "warning");
+      return;
+    }
     setPlSavingHist(true);
     try {
       const r = await fetch(`/api/personal-leads/${leadId}/history`, {
         method: "POST", headers: { "Content-Type": "application/json", ...plHeaders() },
-        body: JSON.stringify({ status: plHistStatus, feedback: plHistFeedback }),
+        body: JSON.stringify({ status: plHistStatus, feedback: feedbackText }),
       });
       if (r.ok) {
         const data = await r.json();
@@ -3590,8 +3612,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               rows={2}
                               style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, resize: "vertical" }} />
                           </div>
-                          <button onClick={() => plHandleAddHistory(l.id)} disabled={plSavingHist || (!plHistStatus && !plHistFeedback)}
-                            style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: plSavingHist || (!plHistStatus && !plHistFeedback) ? 0.5 : 1 }}>
+                          <button onClick={() => plHandleAddHistory(l.id)} disabled={plSavingHist}
+                            style={{ background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", color: "#fff", border: "none", borderRadius: 8, padding: "10px 16px", fontWeight: 700, cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: plSavingHist || !plHistStatus || !String(plHistFeedback || "").trim() ? 0.6 : 1 }}>
                             {plSavingHist ? "Đang lưu..." : <><Save size={14} /> Lưu liên hệ</>}
                           </button>
                         </div>
@@ -5002,7 +5024,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           if (saleSummary[e.saleName]) {
                             if (e.planned) saleSummary[e.saleName].planned++;
                             else if (e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done") saleSummary[e.saleName].skipped++;
-                            else saleSummary[e.saleName].done++;
+                            else {
+                              const lead = leadMap[e.leadId];
+                              if (lead && normalizePersonName(lead.saleName) === normalizePersonName(e.saleName)) saleSummary[e.saleName].done++;
+                              else saleSummary[e.saleName].skipped++;
+                            }
                           }
                         });
 
@@ -5208,7 +5234,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                         if (e.planned || e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done") return false;
                                         const lead = leadMap[e.leadId];
                                         if (!lead) return true;
-                                        return e.saleName && lead.saleName && String(lead.saleName).trim().toLowerCase() !== String(e.saleName).trim().toLowerCase();
+                                        return e.saleName && lead.saleName && normalizePersonName(lead.saleName) !== normalizePersonName(e.saleName);
                                       }).length;
                                       const doneCount = Math.max(0, saleEntries.length - plannedCount - skippedCount - staleCount);
                                       return (
@@ -5267,7 +5293,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                                 const lead = leadMap[entry.leadId];
                                                 const isSkippedEntry = entry.skipped || entry.stopped || entry.type === "schedule_stopped" || entry.type === "sale_done";
                                                 const isMissingAssigned = !lead && !entry.planned && !isSkippedEntry;
-                                                const isSaleMismatch = lead && !entry.planned && !isSkippedEntry && entry.saleName && lead.saleName && String(lead.saleName).trim().toLowerCase() !== String(entry.saleName).trim().toLowerCase();
+                                                const isSaleMismatch = lead && !entry.planned && !isSkippedEntry && entry.saleName && lead.saleName && normalizePersonName(lead.saleName) !== normalizePersonName(entry.saleName);
                                                 const entryLabel = entry.planned
                                                   ? "Dự kiến"
                                                   : isSkippedEntry
@@ -6590,7 +6616,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       style={{ ...inputStyle, marginBottom: 0, fontSize: isMobile ? 13 : 13, padding: isMobile ? "9px 10px" : "8px 10px", minHeight: isMobile ? 68 : 60, resize: "vertical" }} />
                   </div>
                   <button onClick={handleAddHistory} disabled={saving}
-                    style={{ ...btnPrimary, padding: isMobile ? "10px 12px" : "10px 16px", whiteSpace: "nowrap", width: "100%", minHeight: isMobile ? 42 : 44, fontSize: isMobile ? 13 : 14, borderRadius: 10 }}>
+                    style={{ ...btnPrimary, padding: isMobile ? "10px 12px" : "10px 16px", whiteSpace: "nowrap", width: "100%", minHeight: isMobile ? 42 : 44, fontSize: isMobile ? 13 : 14, borderRadius: 10, opacity: saving || !histStatus || !histFeedback.trim() ? 0.6 : 1 }}>
                     {saving ? "Đang lưu..." : <><Save size={16} /> Lưu liên hệ</>}
                   </button>
                 </div>

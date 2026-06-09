@@ -7372,7 +7372,9 @@ app.post("/api/personal-leads/:id/history", requireAuth, async (req, res) => {
     const { status, feedback } = req.body;
     const statusText = String(status || "").trim();
     const feedbackText = String(feedback || "").trim();
-    if (!statusText && !feedbackText) return res.status(400).json({ error: "Chưa nhập trạng thái hoặc ghi chú" });
+    if (!statusText && !feedbackText) return res.status(400).json({ error: "Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu." });
+    if (!statusText) return res.status(400).json({ error: "Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu." });
+    if (!feedbackText) return res.status(400).json({ error: "Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu." });
     const saleName = req.user.displayName;
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM personal_lead_history WHERE lead_id = ?", [id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
