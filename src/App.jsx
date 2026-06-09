@@ -4761,8 +4761,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                     const projName = projects.find(p => p.id === sch.projectId)?.name || `#${sch.projectId}`;
                     const totalTours = sch.totalTours || sch.saleNames.length || 1;
                     const curTour = sch.currentTour || 0;
-                    const overallDone = curTour * sch.totalCount + sch.assignedIndex;
-                    const overallTotal = totalTours * sch.totalCount;
+                    const assignedLog = (sch.assignmentLog || []).filter(e => !e.skipped && !e.stopped && e.type !== "schedule_stopped" && e.type !== "sale_done");
+                    const skippedLog = (sch.assignmentLog || []).filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done");
+                    const overallDone = assignedLog.length;
+                    const overallTotal = sch.totalCount || 0;
                     const pct = overallTotal ? Math.round(overallDone / overallTotal * 100) : 0;
                     return (
                       <div key={sch.id} style={{
@@ -4798,7 +4800,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                           <div style={{ background: sch.isActive ? "#22c55e" : "#9ca3af", height: "100%", width: `${pct}%`, transition: "width .3s" }} />
                         </div>
                         <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                          Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia: {overallDone}/{overallTotal} ({pct}%)
+                          Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia thật: {overallDone}/{overallTotal} ({pct}%)
+                          {skippedLog.length > 0 && ` | Bỏ qua/dừng: ${skippedLog.length}`}
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
                       </div>
@@ -4956,11 +4959,12 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                         // Current tour remaining
                         const allLeadIds = det.schedule.leadIds;
+                        const consumedLeadIds = new Set(pastEntries.filter(e => e.leadId).map(e => e.leadId));
                         let startTour = currentTour;
-                        let startIdx = det.schedule.assignedIndex;
+                        let startIdx = 0;
 
                         for (let tour = startTour; tour < totalTours; tour++) {
-                          const remaining = allLeadIds.slice(tour === startTour ? startIdx : 0);
+                          const remaining = allLeadIds.slice(tour === startTour ? startIdx : 0).filter(id => !consumedLeadIds.has(id));
                           if (!remaining.length) continue;
                           let rIdx = 0;
                           while (rIdx < remaining.length) {
@@ -4993,10 +4997,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                         });
 
                         const saleSummary = {};
-                        sNames.forEach(s => { saleSummary[s] = { done: 0, planned: 0 }; });
+                        sNames.forEach(s => { saleSummary[s] = { done: 0, planned: 0, skipped: 0 }; });
                         allEntries.forEach(e => {
                           if (saleSummary[e.saleName]) {
                             if (e.planned) saleSummary[e.saleName].planned++;
+                            else if (e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done") saleSummary[e.saleName].skipped++;
                             else saleSummary[e.saleName].done++;
                           }
                         });
@@ -5041,6 +5046,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: saleColors[si % saleColors.length], display: "inline-block" }} />
                                   <strong>{name}</strong>
                                   <span style={{ color: "#6b7280" }}>{saleSummary[name].done} đã chia</span>
+                                  {saleSummary[name].skipped > 0 && <span style={{ color: "#ca8a04" }}>{saleSummary[name].skipped} bỏ qua/dừng</span>}
                                   {saleSummary[name].planned > 0 && <span style={{ color: "#d97706" }}>+ {saleSummary[name].planned} dự kiến</span>}
                                 </div>
                               ))}
@@ -5084,8 +5090,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                           {dayEntries.length > 0 && (() => {
                                             const bySale = {};
                                             dayEntries.forEach(e => {
-                                              if (!bySale[e.saleName]) bySale[e.saleName] = [];
-                                              bySale[e.saleName].push(e);
+                                              const groupName = e.saleName || (e.stopped || e.type === "schedule_stopped" ? "Dừng lịch" : "Bỏ qua");
+                                              if (!bySale[groupName]) bySale[groupName] = [];
+                                              bySale[groupName].push(e);
                                             });
                                             const saleEntries = Object.entries(bySale);
                                             const maxShow = isMobile ? 1 : 3;
@@ -5132,8 +5139,9 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                               const isPast = scheduleCalDay < todayStr;
                               const bySale = {};
                               entries.forEach(e => {
-                                if (!bySale[e.saleName]) bySale[e.saleName] = [];
-                                bySale[e.saleName].push(e);
+                                const groupName = e.saleName || (e.stopped || e.type === "schedule_stopped" ? "Dừng lịch" : "Bỏ qua");
+                                if (!bySale[groupName]) bySale[groupName] = [];
+                                bySale[groupName].push(e);
                               });
                               const saleList = Object.entries(bySale).sort((a, b) => b[1].length - a[1].length);
                               const filteredSaleList = scheduleSaleSearch
@@ -5195,7 +5203,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                       const color = saleColors[si >= 0 ? si % saleColors.length : 0];
                                       const isExpanded = !!scheduleExpandedSales[sale];
                                       const plannedCount = saleEntries.filter(e => e.planned).length;
-                                      const doneCount = saleEntries.length - plannedCount;
+                                      const skippedCount = saleEntries.filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done").length;
+                                      const doneCount = saleEntries.length - plannedCount - skippedCount;
                                       return (
                                         <div key={sale} style={{ borderBottom: idx < filteredSaleList.length - 1 ? "1px solid #f3f4f6" : "none" }}>
                                           {/* Sale header - clickable */}
@@ -5226,6 +5235,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                                   {plannedCount} dự kiến
                                                 </span>
                                               )}
+                                              {skippedCount > 0 && (
+                                                <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 10, background: "#fef9c3", color: "#a16207" }}>
+                                                  {skippedCount} bỏ qua/dừng
+                                                </span>
+                                              )}
                                               <span style={{
                                                 fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
                                                 background: color, color: "#fff", minWidth: 28, textAlign: "center",
@@ -5240,23 +5254,25 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                                             <div style={{ background: "#f9fafb", borderTop: "1px solid #f0f0f0" }}>
                                               {saleEntries.map((entry, ei) => {
                                                 const lead = leadMap[entry.leadId];
+                                                const isSkippedEntry = entry.skipped || entry.stopped || entry.type === "schedule_stopped" || entry.type === "sale_done";
                                                 return (
                                                   <div key={ei} style={{
                                                     padding: isMobile ? "6px 14px 6px 30px" : "5px 14px 5px 30px",
                                                     fontSize: 12, borderBottom: "1px solid #f3f4f6",
                                                     display: "flex", justifyContent: "space-between", alignItems: "center",
-                                                    background: entry.planned ? "#fffbeb" : "#fff",
+                                                    background: entry.planned ? "#fffbeb" : isSkippedEntry ? "#fefce8" : "#fff",
                                                   }}>
                                                     <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
                                                       <span style={{ color: "#6b7280", fontSize: 11, marginRight: 4 }}>{ei + 1}.</span>
-                                                      {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : `#${entry.leadId}`}
+                                                      {lead ? <><strong>{lead.name}</strong> <span style={{ color: "#9ca3af", fontSize: 11 }}>{lead.phone}</span></> : (entry.reasonLabel || `#${entry.leadId || "-"}`)}
+                                                      {entry.reasonLabel && <span style={{ color: "#a16207", fontSize: 11, marginLeft: 6 }}>{entry.reasonLabel}</span>}
                                                     </span>
                                                     <span style={{
                                                       fontSize: 10, fontWeight: 600, padding: "2px 6px", borderRadius: 4, flexShrink: 0, marginLeft: 4,
-                                                      background: entry.planned ? "#fef3c7" : "#d1fae5",
-                                                      color: entry.planned ? "#92400e" : "#065f46",
+                                                      background: entry.planned ? "#fef3c7" : isSkippedEntry ? "#fef9c3" : "#d1fae5",
+                                                      color: entry.planned ? "#92400e" : isSkippedEntry ? "#a16207" : "#065f46",
                                                     }}>
-                                                      {entry.planned ? "Dự kiến" : "✓ Đã chia"}
+                                                      {entry.planned ? "Dự kiến" : isSkippedEntry ? (entry.stopped ? "Dừng" : "Bỏ qua") : "✓ Đã chia"}
                                                     </span>
                                                   </div>
                                                 );
@@ -6137,14 +6153,30 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   };
 
   const handleAddHistory = async () => {
-    if (!histStatus && !histFeedback) return;
+    const feedbackText = histFeedback.trim();
+    if (!histStatus && !feedbackText) {
+      showToast("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.", "warning");
+      return;
+    }
+    if (!histStatus) {
+      showToast("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.", "warning");
+      return;
+    }
+    if (!feedbackText) {
+      showToast("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.", "warning");
+      return;
+    }
     setSaving(true);
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/history`, {
         method: "POST",
-        body: JSON.stringify({ status: histStatus, feedback: histFeedback }),
+        body: JSON.stringify({ status: histStatus, feedback: feedbackText }),
       });
       const data = await r.json();
+      if (!r.ok) {
+        showToast(data.error || "Không thể lưu cập nhật khách hàng", "error");
+        return;
+      }
       applyApiData(data);
       setHistStatus("");
       setHistFeedback("");

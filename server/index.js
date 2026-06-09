@@ -4690,8 +4690,18 @@ async function processSchedules(db, triggerUser) {
   const nowHHMM = getNowHHMM();
   const schedules = await all(db, "SELECT * FROM lead_schedules WHERE is_active = 1");
   let totalAssigned = 0;
+  const normSaleName = (v) => String(v || "").trim().toLowerCase();
+  const isUnassignedSaleName = (v) => {
+    const n = normSaleName(v);
+    return !n || n === "chưa chia" || n === "chua chia" || (n.includes("chia") && n.includes("ch"));
+  };
 
   for (const sch of schedules) {
+    if (sch.start_date && today < sch.start_date) continue;
+    if (sch.end_date && today > sch.end_date) {
+      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
+      continue;
+    }
     // Parse distribute times (array or legacy single string)
     let distTimes = [];
     try { distTimes = JSON.parse(sch.distribute_time || '["08:00"]'); } catch { distTimes = [sch.distribute_time || '08:00']; }
@@ -4742,7 +4752,7 @@ async function processSchedules(db, triggerUser) {
     const currentTour = sch.current_tour || 0;
     const totalTours = saleList.length;
 
-    const remaining = leadIdList.slice(sch.assigned_index);
+    const remaining = leadIdList;
     if (!remaining.length) {
       const nextTour = currentTour + 1;
       if (nextTour >= totalTours) {
@@ -4766,12 +4776,12 @@ async function processSchedules(db, triggerUser) {
     }
     if (leadsPerPersonThisBatch <= 0) continue; // no leads for these slots
     const idealBatch = leadsPerPersonThisBatch * saleList.length;
-    const batch = remaining.slice(0, Math.min(idealBatch, remaining.length));
+    const batch = remaining;
 
     // Build per-sale assignment count: distribute evenly, max diff = 1 lead
     const numSales = saleList.length;
-    const actualPerPerson = Math.floor(batch.length / numSales);
-    const extraLeads = batch.length % numSales;
+    const actualPerPerson = Math.floor(Math.min(idealBatch, batch.length) / numSales);
+    const extraLeads = Math.min(idealBatch, batch.length) % numSales;
     // saleQuota[i] = how many leads sale i gets this batch
     const saleQuota = saleList.map((_, idx) => actualPerPerson + (idx < extraLeads ? 1 : 0));
 
@@ -4779,6 +4789,12 @@ async function processSchedules(db, triggerUser) {
     const stmts = [];
     const assignedLeads = []; // {leadId, saleName} for Telegram
     const logEntries = []; // for assignment_log
+    const skipStats = {};
+    const addSkipLog = (entry) => {
+      const reason = entry.reason || "skipped";
+      skipStats[reason] = (skipStats[reason] || 0) + 1;
+      logEntries.push({ date: today, tour: currentTour, type: "skipped", skipped: true, ...entry });
+    };
 
     // Distribute leads: round-robin 1-by-1 across all sales (with tour offset)
     // Skip leads already assigned to the target sale (avoid duplicate from parallel schedules)
@@ -4795,6 +4811,7 @@ async function processSchedules(db, triggerUser) {
       const lockCheck = await get(db, "SELECT status, is_locked FROM leads WHERE id = ?", [lid]);
       if (lockCheck && (lockCheck.is_locked || shouldAutoLockStatus(lockCheck.status))) {
         processedLids.add(lid);
+        addSkipLog({ leadId: lid, saleName: "", reason: "lead_locked", reasonLabel: "Lead đã khóa hoặc đã Booking/Cọc/Chốt" });
         continue;
       }
 
@@ -4814,6 +4831,28 @@ async function processSchedules(db, triggerUser) {
 
       // Check if this sale already has this lead (from another schedule or manual assign)
       const existingLead = await get(db, "SELECT sale_name FROM leads WHERE id = ?", [lid]);
+      if (existingLead && !isUnassignedSaleName(existingLead.sale_name)) {
+        processedLids.add(lid);
+        addSkipLog({
+          leadId: lid,
+          saleName,
+          reason: normSaleName(existingLead.sale_name) === normSaleName(saleName) ? "sale_already_received" : "lead_already_assigned",
+          reasonLabel: normSaleName(existingLead.sale_name) === normSaleName(saleName)
+            ? "Sale đã có lead này"
+            : `Lead đã được chia cho ${existingLead.sale_name}`,
+        });
+        continue;
+      }
+
+      const saleHadLead = await get(db,
+        "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1",
+        [lid, saleName]
+      );
+      if (saleHadLead) {
+        processedLids.add(lid);
+        addSkipLog({ leadId: lid, saleName, reason: "sale_already_received", reasonLabel: "Sale đã từng nhận lead này" });
+        continue;
+      }
       if (existingLead && existingLead.sale_name === saleName) {
         // Same sale already has this lead → skip, don't re-assign or duplicate history
         processedLids.add(lid);
@@ -4835,17 +4874,31 @@ async function processSchedules(db, triggerUser) {
         });
       }
       assignedLeads.push({ leadId: lid, saleName });
-      logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour });
+      logEntries.push({ leadId: lid, saleName, date: today, tour: currentTour, type: "assigned", status: "assigned" });
     }
 
     // Append to assignment_log
     const existingLog = JSON.parse(sch.assignment_log || "[]");
+    if (!assignedLeads.length) {
+      logEntries.push({
+        date: today,
+        type: "schedule_stopped",
+        stopped: true,
+        reason: "no_eligible_leads",
+        reasonLabel: "Không còn lead hợp lệ để chia cho các sale trong lịch này",
+        skippedStats: skipStats,
+      });
+    }
     const updatedLog = [...existingLog, ...logEntries];
 
-    const newIndex = sch.assigned_index + batch.length;
+    const newIndex = sch.assigned_index + assignedLeads.length;
     let isDone = false;
     let newTour = currentTour;
-    if (newIndex >= leadIdList.length) {
+    if (!assignedLeads.length) {
+      isDone = true;
+    } else if (sch.end_date && today >= sch.end_date && slotToProcess >= numSlots - 1) {
+      isDone = true;
+    } else if (newIndex >= leadIdList.length) {
       const nextTour = currentTour + 1;
       if (nextTour >= totalTours) {
         isDone = true;
@@ -4860,7 +4913,7 @@ async function processSchedules(db, triggerUser) {
     });
 
     await db.batch(stmts, "write");
-    totalAssigned += batch.length;
+    totalAssigned += assignedLeads.length;
 
     // Send Telegram notifications
     try {
@@ -5551,6 +5604,19 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
 
     const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl } = req.body;
+    if (req.user.role === "sale" && status !== undefined) {
+      const saleStatusText = String(status || "").trim();
+      const saleNoteText = String(notes || "").trim();
+      if (!saleStatusText && !saleNoteText) {
+        return res.status(400).json({ error: "Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu." });
+      }
+      if (!saleStatusText) {
+        return res.status(400).json({ error: "Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu." });
+      }
+      if (!saleNoteText) {
+        return res.status(400).json({ error: "Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu." });
+      }
+    }
     const sets = [];
     const params = [];
 
@@ -5770,6 +5836,19 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
 
 
     const { status, feedback } = req.body;
+    const statusText = String(status || "").trim();
+    const feedbackText = String(feedback || "").trim();
+    if (req.user.role === "sale") {
+      if (!statusText && !feedbackText) {
+        return res.status(400).json({ error: "Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu." });
+      }
+      if (!statusText) {
+        return res.status(400).json({ error: "Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu." });
+      }
+      if (!feedbackText) {
+        return res.status(400).json({ error: "Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu." });
+      }
+    }
     const saleName = req.user.displayName;
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -5778,13 +5857,13 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, saleName, "Cập nhật", now, status || "", feedback || "", nextSeq, req.user.role === "sale" ? "sale" : "admin"]
+      [leadId, saleName, "Cập nhật", now, statusText, feedbackText, nextSeq, req.user.role === "sale" ? "sale" : "admin"]
     );
 
     // Also update lead status if provided
-    if (status) {
+    if (statusText) {
       const oldStatus = lead.status || "new";
-      const newNorm = normalizeStatus(status);
+      const newNorm = normalizeStatus(statusText);
       if (oldStatus !== newNorm) {
         await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
           [leadId, oldStatus, newNorm, req.user.displayName, new Date().toISOString()]);
@@ -5792,7 +5871,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       await run(
         db,
         `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(newNorm) ? ", is_locked = 1" : ""} WHERE id = ?`,
-        [newNorm, status, leadId]
+        [newNorm, statusText, leadId]
       );
 
       // Fire CAPI event if status triggers it
@@ -7280,20 +7359,22 @@ app.post("/api/personal-leads/:id/history", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Không có quyền" });
     }
     const { status, feedback } = req.body;
-    if (!status && !feedback) return res.status(400).json({ error: "Chưa nhập trạng thái hoặc ghi chú" });
+    const statusText = String(status || "").trim();
+    const feedbackText = String(feedback || "").trim();
+    if (!statusText && !feedbackText) return res.status(400).json({ error: "Chưa nhập trạng thái hoặc ghi chú" });
     const saleName = req.user.displayName;
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM personal_lead_history WHERE lead_id = ?", [id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     await run(db, "INSERT INTO personal_lead_history(lead_id, sale_name, status, feedback, seq, contact_date) VALUES(?, ?, ?, ?, ?, ?)",
-      [id, saleName, status || "", feedback || "", nextSeq, now]);
+      [id, saleName, statusText, feedbackText, nextSeq, now]);
     // Also update lead status if provided
-    if (status) {
-      await run(db, "UPDATE personal_leads SET status = ?, updated_at = ? WHERE id = ?", [status, now, id]);
+    if (statusText) {
+      await run(db, "UPDATE personal_leads SET status = ?, updated_at = ? WHERE id = ?", [statusText, now, id]);
     }
     // Return updated history
     const rows = await all(db, "SELECT * FROM personal_lead_history WHERE lead_id = ? ORDER BY seq ASC", [id]);
-    res.json({ success: true, history: rows, newStatus: status || lead.status });
+    res.json({ success: true, history: rows, newStatus: statusText || lead.status });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
