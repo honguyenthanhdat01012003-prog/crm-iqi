@@ -47,8 +47,10 @@ class ErrorBoundary extends React.Component {
 /* ===== Toast + Confirm global helpers ===== */
 let _toastFn = null;
 let _confirmFn = null;
+let _alertFn = null;
 function showToast(msg, type = "info") { _toastFn && _toastFn(typeof msg === "string" ? msg : String(msg || ""), type); }
-function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : resolve(window.confirm(msg)); }); }
+function showConfirm(msg) { return new Promise(resolve => { _confirmFn ? _confirmFn(msg, resolve) : (showToast(msg, "warning"), resolve(false)); }); }
+function showAlert(msg, type = "warning") { return new Promise(resolve => { _alertFn ? _alertFn(msg, type, resolve) : (showToast(msg, type), resolve(true)); }); }
 function normalizePersonName(value = "") {
   return String(value || "")
     .normalize("NFD")
@@ -109,6 +111,42 @@ function ConfirmModal_() {
 /* ===== Mobile detection hook ===== */
 function isCapacitorNativeRuntime() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+}
+
+function AlertModal_() {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    _alertFn = (msg, type, resolve) => setState({ msg, type, resolve });
+    return () => { _alertFn = null; };
+  }, []);
+  if (!state) return null;
+  const close = () => { state.resolve?.(true); setState(null); };
+  const palette = {
+    warning: { bg: "#fff7ed", border: "#fed7aa", iconBg: "#ffedd5", icon: "#ea580c", title: "Cần bổ sung thông tin" },
+    error: { bg: "#fef2f2", border: "#fecaca", iconBg: "#fee2e2", icon: "#dc2626", title: "Không thể thực hiện" },
+    success: { bg: "#f0fdf4", border: "#bbf7d0", iconBg: "#dcfce7", icon: "#16a34a", title: "Thành công" },
+    info: { bg: "#f0faf1", border: "#c5d9c8", iconBg: "#e8f5e9", icon: "#1a3c20", title: "Thông báo" },
+  }[state.type] || { bg: "#f0faf1", border: "#c5d9c8", iconBg: "#e8f5e9", icon: "#1a3c20", title: "Thông báo" };
+  return (
+    <div onClick={close} style={{ position: "fixed", inset: 0, background: "rgba(5, 20, 10, .52)", backdropFilter: "blur(5px)", WebkitBackdropFilter: "blur(5px)", zIndex: 100002, display: "flex", alignItems: "center", justifyContent: "center", padding: 18, animation: "fadeIn .18s ease" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 18, width: "min(92vw, 430px)", overflow: "hidden", boxShadow: "0 24px 70px rgba(0,0,0,.22), 0 0 0 1px rgba(26,60,32,.08)" }}>
+        <div style={{ padding: "22px 24px", background: palette.bg, borderBottom: `1px solid ${palette.border}`, display: "flex", gap: 14, alignItems: "flex-start" }}>
+          <div style={{ width: 42, height: 42, borderRadius: 14, background: palette.iconBg, color: palette.icon, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <AlertCircle size={22} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "#1a3c20", fontWeight: 800, fontSize: 16, marginBottom: 6 }}>{palette.title}</div>
+            <div style={{ color: "#334155", fontSize: 13.5, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{state.msg}</div>
+          </div>
+        </div>
+        <div style={{ padding: "14px 18px", display: "flex", justifyContent: "flex-end", background: "#fff" }}>
+          <button onClick={close} autoFocus style={{ border: "none", borderRadius: 12, padding: "10px 22px", cursor: "pointer", fontWeight: 800, fontSize: 13, color: "#fff", background: "linear-gradient(135deg, #1a3c20, #0f5132)", boxShadow: "0 8px 20px rgba(26,60,32,.22)" }}>
+            Đã hiểu
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function useIsMobile(breakpoint = 768) {
@@ -1892,6 +1930,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       <ChatSidebar currentUser={user} />
       <ToastContainer />
       <ConfirmModal_ />
+      <AlertModal_ />
 
       {/* Pending leads popup for sale users */}
       {showPendingPopup && pendingLeadsData && pendingLeadsData.totalPending > 0 && (
@@ -2830,7 +2869,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const plHandleDelete = async (id) => {
-    if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
+    if (!(await showConfirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)"))) return;
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
       if (r.ok) { fetchPlLeads(); showToast("Đã xóa", "success"); }
@@ -2857,7 +2896,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const feedbackText = String(plHistFeedback || "").trim();
     const showRequiredFeedbackAlert = (msg) => {
       showToast(msg, "warning");
-      if (typeof window !== "undefined") window.alert(msg);
+      showAlert(msg, "warning");
     };
     if (!plHistStatus && !feedbackText) {
       showRequiredFeedbackAlert("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.");
@@ -2892,7 +2931,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const plHandleDeleteHistory = async (leadId, histId) => {
-    if (!confirm("Xóa lịch sử liên hệ này?")) return;
+    if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
     try {
       const r = await fetch(`/api/personal-leads/${leadId}/history/${histId}`, { method: "DELETE", headers: plHeaders() });
       if (r.ok) { const data = await r.json(); setPlHistory(prev => ({ ...prev, [leadId]: data.history })); showToast("Đã xóa", "success"); }
@@ -3288,7 +3327,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const handleRevokeSchedule = async (scheduleId) => {
-    if (!window.confirm("Thu hồi TẤT CẢ lead đã chia từ lịch này? Lead sẽ trở về trạng thái chưa chia.")) return;
+    if (!(await showConfirm("Thu hồi TẤT CẢ lead đã chia từ lịch này? Lead sẽ trở về trạng thái chưa chia."))) return;
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/revoke`, { method: "POST" });
       const data = await r.json();
@@ -3302,7 +3341,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   };
 
   const handleRestoreSchedule = async (scheduleId) => {
-    if (!window.confirm("Khôi phục lead về sale cũ dựa trên lịch sử feedback? Chỉ khôi phục lead hiện chưa có sale.")) return;
+    if (!(await showConfirm("Khôi phục lead về sale cũ dựa trên lịch sử feedback? Chỉ khôi phục lead hiện chưa có sale."))) return;
     try {
       const r = await apiFetch(`${API}/leads/schedules/${scheduleId}/restore`, { method: "POST" });
       const data = await r.json();
@@ -3742,7 +3781,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
               disabled={redistributing}
               onClick={async () => {
                 if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
-                if (!window.confirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?")) return;
+                if (!(await showConfirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?"))) return;
                 setRedistributing(true);
                 try {
                   const r = await apiFetch(`${API}/admin/redistribute-managers/${selectedProject}`, { method: "POST" });
@@ -3767,7 +3806,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {isAdminOnly && selectedProject && (
             <button
               onClick={async () => {
-                if (!window.confirm("Khôi phục lại Sale + Trạng thái từ lịch sử liên hệ?\nDùng khi bị mất dữ liệu sale sau sync lỗi.")) return;
+                if (!(await showConfirm("Khôi phục lại Sale + Trạng thái từ lịch sử liên hệ?\nDùng khi bị mất dữ liệu sale sau sync lỗi."))) return;
                 try {
                   const r = await apiFetch(`${API}/recover-sales`, {
                     method: "POST",
@@ -3797,7 +3836,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           {isAdminOnly && selectedProject && (
             <button
               onClick={async () => {
-                if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu.")) return;
+                if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu."))) return;
                 try {
                   const r = await apiFetch(`${API}/recover-from-backup`, {
                     method: "POST",
@@ -3820,7 +3859,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           )}
           {isAdminOnly && <button
             onClick={async () => {
-              if (!window.confirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ")) return;
+              if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ"))) return;
               try {
                 const r = await apiFetch(`${API}/recover-sale-from-dbbackup`, { method: "POST", body: JSON.stringify({}) });
                 const data = await r.json();
@@ -3850,7 +3889,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
           </button>}
           {isAdminOnly && <button
             onClick={async () => {
-              if (!window.confirm("Backup database ngay bây giờ?")) return;
+              if (!(await showConfirm("Backup database ngay bây giờ?"))) return;
               try {
                 const r = await apiFetch(`${API}/backup-now`, { method: "POST" });
                 const data = await r.json();
@@ -3873,7 +3912,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                 const idx = parseInt(choice) - 1;
                 if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
                 const selected = data.backups[idx];
-                if (!window.confirm(`⚠️ Khôi phục DB từ:\n${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nDB hiện tại sẽ được backup trước khi restore.\nSau khi restore cần RESTART server.`)) return;
+                if (!(await showConfirm(`⚠️ Khôi phục DB từ:\n${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nDB hiện tại sẽ được backup trước khi restore.\nSau khi restore cần RESTART server.`))) return;
                 const r2 = await apiFetch(`${API}/restore-backup`, { method: "POST", body: JSON.stringify({ filename: selected.filename }) });
                 const d2 = await r2.json();
                 if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
@@ -6213,7 +6252,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     const feedbackText = histFeedback.trim();
     const showRequiredFeedbackAlert = (msg) => {
       showToast(msg, "warning");
-      if (typeof window !== "undefined") window.alert(msg);
+      showAlert(msg, "warning");
     };
     if (!histStatus && !feedbackText) {
       showRequiredFeedbackAlert("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.");
@@ -11093,7 +11132,7 @@ function PersonalLeadsPage({ user }) {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)")) return;
+    if (!(await showConfirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)"))) return;
     try {
       const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
       if (r.ok) { fetchLeads(); showToast("Đã xóa khách hàng", "success"); }
@@ -14149,7 +14188,7 @@ function DailyNewsPage({ isAdmin }) {
     setSavingSettings(false);
   };
   const handleDelete = async (id) => {
-    if (!confirm("Xóa bản tin này?")) return;
+    if (!(await showConfirm("Xóa bản tin này?"))) return;
     try {
       await apiFetch(`${API}/daily-news/${id}`, { method: "DELETE" });
       await loadHistory(page);
