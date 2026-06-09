@@ -5467,6 +5467,14 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
   try {
     const sch = await get(db, "SELECT * FROM lead_schedules WHERE id = ?", [req.params.id]);
     if (!sch) return res.status(404).json({ error: "Schedule not found" });
+    if (sch.is_active) {
+      const pool = await getScheduleLeadPool(db, sch);
+      if (pool.changed) {
+        await run(db, "UPDATE lead_schedules SET lead_ids = ?, total_count = ? WHERE id = ?", [JSON.stringify(pool.leadIds), pool.leadIds.length, sch.id]);
+        sch.lead_ids = JSON.stringify(pool.leadIds);
+        sch.total_count = pool.leadIds.length;
+      }
+    }
     const formatted = formatSchedule(sch);
     // Get lead details for all leads in this schedule and historical log entries.
     const logLeadIds = (formatted.assignmentLog || []).map(e => e.leadId).filter(Boolean);
