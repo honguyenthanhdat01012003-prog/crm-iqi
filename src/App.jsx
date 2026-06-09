@@ -2855,16 +2855,20 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
   const plHandleAddHistory = async (leadId) => {
     const feedbackText = String(plHistFeedback || "").trim();
+    const showRequiredFeedbackAlert = (msg) => {
+      showToast(msg, "warning");
+      if (typeof window !== "undefined") window.alert(msg);
+    };
     if (!plHistStatus && !feedbackText) {
-      showToast("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.");
       return;
     }
     if (!plHistStatus) {
-      showToast("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.");
       return;
     }
     if (!feedbackText) {
-      showToast("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.");
       return;
     }
     setPlSavingHist(true);
@@ -6203,16 +6207,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   const handleAddHistory = async () => {
     const feedbackText = histFeedback.trim();
+    const showRequiredFeedbackAlert = (msg) => {
+      showToast(msg, "warning");
+      if (typeof window !== "undefined") window.alert(msg);
+    };
     if (!histStatus && !feedbackText) {
-      showToast("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Vui lòng chọn trạng thái khách và nhập ghi chú trước khi lưu.");
       return;
     }
     if (!histStatus) {
-      showToast("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Chưa chọn trạng thái khách. Vui lòng chọn trạng thái trước khi lưu.");
       return;
     }
     if (!feedbackText) {
-      showToast("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.", "warning");
+      showRequiredFeedbackAlert("Chưa nhập ghi chú. Vui lòng nhập nội dung trao đổi với khách trước khi lưu.");
       return;
     }
     setSaving(true);
