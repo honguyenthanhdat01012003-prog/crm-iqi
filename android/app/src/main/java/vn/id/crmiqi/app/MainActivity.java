@@ -8,6 +8,8 @@ import android.media.AudioAttributes;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -16,12 +18,24 @@ import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
     private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 901;
+    private boolean notificationPermissionRequested = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         createLeadNotificationChannels();
-        requestNotificationPermissionIfNeeded();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        requestNotificationPermissionAfterFirstFrame();
+    }
+
+    private void requestNotificationPermissionAfterFirstFrame() {
+        if (notificationPermissionRequested) return;
+        notificationPermissionRequested = true;
+        new Handler(Looper.getMainLooper()).postDelayed(this::requestNotificationPermissionIfNeeded, 600);
     }
 
     private void requestNotificationPermissionIfNeeded() {
