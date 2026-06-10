@@ -6297,12 +6297,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ status: editStatus }),
+        body: JSON.stringify({ status: editStatus, phone: lead.phone, name: lead.name }),
       });
       const data = await r.json();
+      if (!r.ok) {
+        const msg = data.error || "Không thể cập nhật trạng thái khách hàng";
+        showToast(msg, "error");
+        showAlert(msg, "error");
+        return;
+      }
       applyApiData(data);
+      showToast("Đã cập nhật trạng thái khách hàng", "success");
     } catch (e) {
       console.error(e);
+      showToast("Lỗi kết nối: " + (e.message || "Không thể cập nhật"), "error");
     } finally {
       setSavingStatus(false);
     }

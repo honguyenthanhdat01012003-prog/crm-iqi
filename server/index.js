@@ -1930,7 +1930,24 @@ async function readData(db) {
       let displayStatus = l.status;
       let displayRawStatus = l.raw_status;
       const currentSaleName = l.sale_name || "";
-      if (currentSaleName && currentSaleName !== "Chưa chia" && saleHistory.length) {
+      let latestStatusHistory = null;
+      if (saleHistory.length) {
+        for (let i = saleHistory.length - 1; i >= 0; i--) {
+          const h = saleHistory[i];
+          if (h.action === "Chia lead") {
+            if (h.source !== "sheet") break;
+            continue;
+          }
+          if (!h.status) continue;
+          latestStatusHistory = h;
+          break;
+        }
+      }
+      const latestStatusSource = String(latestStatusHistory?.source || "").toLowerCase();
+      if (latestStatusHistory && (latestStatusSource === "admin" || latestStatusSource === "manager")) {
+        displayStatus = normalizeStatus(latestStatusHistory.status);
+        displayRawStatus = latestStatusHistory.status;
+      } else if (currentSaleName && currentSaleName !== "Chưa chia" && saleHistory.length) {
         for (let i = saleHistory.length - 1; i >= 0; i--) {
           const h = saleHistory[i];
           if (!matchSaleName(h.saleName, currentSaleName)) continue;
@@ -5713,6 +5730,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
 
     const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl } = req.body;
+    const normalizedStatus = status !== undefined ? normalizeStatus(status) : undefined;
     if (req.user.role === "sale" && status !== undefined) {
       const saleStatusText = String(status || "").trim();
       const saleNoteText = String(notes || "").trim();
@@ -5761,8 +5779,10 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       return res.status(403).json({ error: `Chỉ admin/manager mới được đổi quản lý (role hiện tại: ${req.user.role})` });
     }
     if (status !== undefined) {
-      sets.push("status = ?"); params.push(status);
-      if (shouldAutoLockStatus(status)) { sets.push("is_locked = ?"); params.push(1); }
+      const statusLabel = STATUS_LABELS_VI[normalizedStatus] || String(status || "");
+      sets.push("status = ?"); params.push(normalizedStatus);
+      sets.push("raw_status = ?"); params.push(statusLabel);
+      if (shouldAutoLockStatus(normalizedStatus)) { sets.push("is_locked = ?"); params.push(1); }
     }
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
 
@@ -5771,7 +5791,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (status !== undefined || reassigning) {
         const oldLead = await get(db, "SELECT status FROM leads WHERE id = ?", [actualLeadId]);
         const oldStatus = oldLead?.status || "new";
-        const newStatus = status !== undefined ? status : "new";
+        const newStatus = status !== undefined ? normalizedStatus : "new";
         if (oldStatus !== newStatus) {
           await run(db, "INSERT INTO lead_status_log(lead_id, old_status, new_status, changed_by, changed_at) VALUES(?, ?, ?, ?, ?)",
             [actualLeadId, oldStatus, newStatus, req.user.displayName, new Date().toISOString()]);
@@ -5802,12 +5822,12 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         try {
           const eventsJson = (await get(db, "SELECT value FROM settings WHERE key='capi_events'"))?.value;
           const eventMap = eventsJson ? JSON.parse(eventsJson) : CAPI_EVENT_MAP;
-          const eventName = eventMap[status];
+          const eventName = eventMap[normalizedStatus];
           if (eventName) {
             const updatedLead = await get(db, "SELECT * FROM leads WHERE id = ?", [actualLeadId]);
             const capiResult = await sendCapiEvent(db, updatedLead, eventName);
             await run(db, "INSERT INTO capi_log(lead_id, event_name, lead_name, lead_phone, project, status, result) VALUES(?,?,?,?,?,?,?)",
-              [actualLeadId, eventName, updatedLead?.name || "", updatedLead?.phone || "", updatedLead?.product || "", status, JSON.stringify(capiResult || {})]);
+              [actualLeadId, eventName, updatedLead?.name || "", updatedLead?.phone || "", updatedLead?.product || "", normalizedStatus, JSON.stringify(capiResult || {})]);
           }
         } catch (capiErr) { console.error("[CAPI] Hook error:", capiErr.message); }
       }
