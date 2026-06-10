@@ -2,6 +2,14 @@ function isCapacitorNative() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
 }
 
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export function isNativePushSupported() {
   return isCapacitorNative() && import.meta.env.VITE_NATIVE_PUSH_ENABLED === "true";
 }
@@ -20,7 +28,11 @@ export async function getNativePushPermissionState() {
   if (!isNativePushSupported()) return "unsupported";
   try {
     const { PushNotifications } = await import("@capacitor/push-notifications");
-    const perm = await PushNotifications.checkPermissions();
+    const perm = await withTimeout(
+      PushNotifications.checkPermissions(),
+      4000,
+      "Không kiểm tra được quyền thông báo native"
+    );
     return perm.receive === "granted" ? "granted" : perm.receive === "denied" ? "denied" : "default";
   } catch {
     return "unsupported";
@@ -32,7 +44,13 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
   const { PushNotifications } = await import("@capacitor/push-notifications");
 
   let perm = await PushNotifications.checkPermissions();
-  if (perm.receive !== "granted") perm = await PushNotifications.requestPermissions();
+  if (perm.receive !== "granted") {
+    perm = await withTimeout(
+      PushNotifications.requestPermissions(),
+      10000,
+      "Không mở được hộp thoại xin quyền thông báo"
+    );
+  }
   if (perm.receive !== "granted") return { ok: false, permission: perm.receive };
 
   if (typeof PushNotifications.createChannel === "function") {
@@ -84,8 +102,15 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
       cleanup();
       reject(new Error(error?.error || "Đăng ký native push thất bại"));
     }).then((handle) => { removeError = handle; });
-
-    PushNotifications.register();
+    try {
+      PushNotifications.register();
+    } catch (err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error(err?.message || "Đăng ký native push thất bại"));
+    }
   });
 
   const platform = window.Capacitor?.getPlatform?.() || "unknown";

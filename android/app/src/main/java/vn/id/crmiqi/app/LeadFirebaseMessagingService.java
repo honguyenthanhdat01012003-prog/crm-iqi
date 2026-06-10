@@ -21,7 +21,10 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     @Override
     public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
-        PushNotificationsPlugin.sendRemoteMessage(message);
+        try {
+            PushNotificationsPlugin.sendRemoteMessage(message);
+        } catch (Exception ignored) {
+        }
         Map<String, String> data = message.getData();
         if (data == null || data.isEmpty()) return;
 
@@ -70,7 +73,10 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     @Override
     public void onNewToken(String token) {
         super.onNewToken(token);
-        PushNotificationsPlugin.onNewToken(token);
+        try {
+            PushNotificationsPlugin.onNewToken(token);
+        } catch (Exception ignored) {
+        }
     }
 
     private void createLeadChannel(String id, String name, int soundResId) {

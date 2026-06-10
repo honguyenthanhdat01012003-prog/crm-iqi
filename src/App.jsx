@@ -727,7 +727,10 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
     nativePushAutoTriedRef.current = true;
     let alive = true;
+    let timer = null;
     (async () => {
+      await new Promise(resolve => { timer = setTimeout(resolve, 900); });
+      if (!alive) return;
       const permission = await getNativePushPermissionState();
       if (!alive) return;
       setPushPermission(permission);
@@ -745,7 +748,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       console.warn("[NativePush] Auto registration failed:", err.message || err);
       setPushEnabled(false);
     });
-    return () => { alive = false; };
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [nativePushSupported, pushBusy, user.userId]);
 
   useEffect(() => {
