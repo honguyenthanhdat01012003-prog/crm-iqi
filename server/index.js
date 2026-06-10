@@ -142,8 +142,8 @@ function stringifyFcmData(data = {}) {
 }
 
 function getNativeNotificationSound(sound) {
-  if (sound === "sale") return { channelId: "lead_notifications_sale_v2", soundName: "lead_sale" };
-  if (sound === "manager") return { channelId: "lead_notifications_manager_v2", soundName: "lead_manager" };
+  if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale" };
+  if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager" };
   return { channelId: "lead_notifications", soundName: "default" };
 }
 
@@ -164,31 +164,22 @@ async function sendNativePushToUser(userId, payload) {
     channelId: notificationSound.channelId,
   });
   for (const row of tokens) {
+    const isAndroid = String(row.platform || "").toLowerCase() === "android";
     const message = {
       token: row.token,
-      notification: {
-        title: payload.title || "LUX IQI CRM",
-        body: payload.body || "Bạn có thông báo mới",
-      },
       data,
-      android: {
-        priority: "HIGH",
-        notification: {
-          channel_id: notificationSound.channelId,
-          sound: notificationSound.soundName,
-          icon: "ic_stat_notification",
-          color: "#0f4d2a",
-          tag: payload.tag || `crm-${Date.now()}`,
-          click_action: "OPEN_LEAD",
-        },
-      },
+      android: { priority: "HIGH" },
       apns: {
-        payload: { aps: { sound: "default" } },
+        payload: { aps: { sound: "default", alert: { title: payload.title || "LUX IQI CRM", body: payload.body || "Ban co thong bao moi" } } },
       },
     };
-    if (String(row.platform || "").toLowerCase() === "android") {
-      delete message.notification;
-      message.android = { priority: "HIGH" };
+    // Android: data-only so LeadFirebaseMessagingService always receives the message
+    // (foreground + background). Top-level notification breaks in-app handling.
+    if (!isAndroid) {
+      message.notification = {
+        title: payload.title || "LUX IQI CRM",
+        body: payload.body || "Bạn có thông báo mới",
+      };
     }
     try {
       const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {

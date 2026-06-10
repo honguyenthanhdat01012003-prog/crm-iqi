@@ -60,16 +60,19 @@ public class MainActivity extends BridgeActivity {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
 
-        createLeadChannel(manager, attrs, "lead_notifications_manager_v2", "Lead moi quan ly", R.raw.lead_manager);
-        createLeadChannel(manager, attrs, "lead_notifications_sale_v2", "Lead moi sale", R.raw.lead_sale);
+        createLeadChannel(manager, attrs, "lead_notifications_manager_v4", "Lead moi quan ly", R.raw.lead_manager);
+        createLeadChannel(manager, attrs, "lead_notifications_sale_v4", "Lead moi sale", R.raw.lead_sale);
+        createLeadChannel(manager, attrs, "lead_notifications", "Lead moi", 0);
     }
 
     private void createLeadChannel(NotificationManager manager, AudioAttributes attrs, String id, String name, int soundResId) {
-        Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/" + soundResId);
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("Thong bao khi co lead moi trong CRM");
         channel.enableVibration(true);
-        channel.setSound(soundUri, attrs);
+        if (soundResId != 0) {
+            Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/" + soundResId);
+            channel.setSound(soundUri, attrs);
+        }
         manager.createNotificationChannel(channel);
     }
 }

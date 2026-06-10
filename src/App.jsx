@@ -16,8 +16,9 @@ import {
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
+import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
+import { requestNativeNotificationPermissionOnStartup } from "./nativeStartup.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -59,6 +60,10 @@ function normalizePersonName(value = "") {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function isSamePersonName(a, b) {
+  return normalizePersonName(a) === normalizePersonName(b);
 }
 
 function ToastContainer() {
@@ -297,6 +302,13 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      requestNativeNotificationPermissionOnStartup().catch(() => {});
+    }, 700);
+    return () => clearTimeout(timer);
+  }, []);
 
   const updateUser = (u, t) => {
     setUser(u);
@@ -610,6 +622,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
+  const [nativePushServerStatus, setNativePushServerStatus] = useState(null);
   const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
@@ -660,6 +673,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     }).catch(() => {});
   }, []);
 
+  const refreshNativePushServerStatus = useCallback(async () => {
+    if (!nativePushSupported) {
+      setNativePushServerStatus(null);
+      return null;
+    }
+    const status = await getNativePushServerStatus(apiFetch, API);
+    if (status.ok) setNativePushServerStatus(status);
+    return status;
+  }, [nativePushSupported]);
+
   useEffect(() => {
     if (!pushSupported) return;
     if (nativeLocalSupported && !nativePushSupported) {
@@ -672,10 +695,15 @@ function CRMApp({ user, updateUser, onLogout }) {
       return;
     }
     if (nativePushSupported) {
-      getNativePushPermissionState()
-        .then(permission => {
+      Promise.all([
+        getNativePushPermissionState(),
+        getNativePushServerStatus(apiFetch, API),
+      ])
+        .then(([permission, status]) => {
           setPushPermission(permission);
-          const enabled = permission === "granted" && localStorage.getItem(`crm_native_push_enabled_${user.userId}`) === "1";
+          if (status.ok) setNativePushServerStatus(status);
+          const hasServerToken = !!(status.ok && status.tokenCount > 0);
+          const enabled = permission === "granted" && hasServerToken;
           setPushEnabled(enabled);
         })
         .catch(() => setPushEnabled(false));
@@ -705,9 +733,17 @@ function CRMApp({ user, updateUser, onLogout }) {
         : await subscribeToPushNotifications(apiFetch, API);
       const nextPermission = nativePushSupported ? await getNativePushPermissionState() : nativeLocalSupported ? await getNativeLocalPermissionState() : getPushPermissionState();
       setPushPermission(nextPermission);
-      setPushEnabled(!!result.ok && nextPermission === "granted");
+      let enabled = !!result.ok && nextPermission === "granted";
+      if (enabled && nativePushSupported) {
+        const status = await refreshNativePushServerStatus();
+        enabled = !!(status?.ok && status.tokenCount > 0);
+      }
+      setPushEnabled(enabled);
       if (result.ok) {
-        if (nativePushSupported) localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+        if (nativePushSupported) {
+          localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+          await refreshNativePushServerStatus();
+        }
         localStorage.setItem(pushPromptKey, "1");
         setShowPushPrompt(false);
         showToast("Đã bật thông báo điện thoại. Khi có lead mới hệ thống sẽ báo về máy.", "success");
@@ -721,7 +757,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     } finally {
       setPushBusy(false);
     }
-  }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId]);
+  }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId, refreshNativePushServerStatus]);
 
   useEffect(() => {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
@@ -729,33 +765,54 @@ function CRMApp({ user, updateUser, onLogout }) {
     let alive = true;
     let timer = null;
     const registerNativePushIfAllowed = async () => {
-      const permission = await getNativePushPermissionState();
+      let permission = await getNativePushPermissionState();
+      if (permission !== "granted") {
+        try {
+          const { PushNotifications } = await import("@capacitor/push-notifications");
+          const perm = await PushNotifications.requestPermissions();
+          permission = perm.receive === "granted" ? "granted" : perm.receive === "denied" ? "denied" : "default";
+        } catch (err) {
+          console.warn("[NativePush] Permission request failed:", err.message || err);
+          permission = "denied";
+        }
+      }
       if (!alive) return;
       setPushPermission(permission);
       if (permission !== "granted") {
         setPushEnabled(false);
+        showToast("App chưa được cấp quyền thông báo. Vào Cài đặt Android → Apps → LUX IQI CRM → Notifications để bật.", "warning");
         return;
       }
-      const hasToken = !!localStorage.getItem("crm_native_push_token");
-      const wasEnabled = localStorage.getItem(`crm_native_push_enabled_${user.userId}`) === "1";
-      if (hasToken && wasEnabled) {
+      const status = await getNativePushServerStatus(apiFetch, API);
+      if (!alive) return;
+      if (status.ok) setNativePushServerStatus(status);
+      if (status.ok && status.tokenCount > 0) {
         setPushEnabled(true);
+        localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
         return;
       }
       const result = await subscribeToNativePushNotifications(apiFetch, API);
       if (!alive) return;
       const nextPermission = await getNativePushPermissionState();
-      const enabled = !!result.ok && nextPermission === "granted";
+      const refreshed = await refreshNativePushServerStatus();
+      const enabled = !!result.ok && nextPermission === "granted" && !!(refreshed?.ok && refreshed.tokenCount > 0);
       setPushPermission(nextPermission);
       setPushEnabled(enabled);
       if (enabled) {
         localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+        showToast("Đã đăng ký thông báo nền (FCM). Bạn có thể tắt app và vẫn nhận lead.", "success");
+      } else {
+        localStorage.removeItem(`crm_native_push_enabled_${user.userId}`);
+        showToast("Chưa đăng ký được FCM: " + (result.ok ? "Server chưa lưu token" : (result.permission === "denied" ? "Quyền thông báo bị chặn" : "BlueStacks/thiết bị chưa hỗ trợ Google Play Services")), "warning");
       }
     };
     timer = setTimeout(() => {
       registerNativePushIfAllowed().catch((err) => {
         console.warn("[NativePush] Auto registration failed:", err.message || err);
-        if (alive) setPushEnabled(false);
+        if (alive) {
+          setPushEnabled(false);
+          showToast("Không đăng ký được push nền: " + (err.message || err), "warning");
+        }
       });
     }, 1800);
     return () => {
@@ -805,9 +862,27 @@ function CRMApp({ user, updateUser, onLogout }) {
     let alive = true;
     setupNativePushListeners({
       onNotification: (notification) => {
-        const sound = notification?.data?.sound || notification?.data?.type;
+        const data = notification?.data || {};
+        const sound = data.sound || data.type;
         if (sound === "sale" || sound === "sale_new_lead") playLeadSound("sale");
         else playLeadSound("manager");
+
+        const leadId = Number(data.leadId || 0);
+        const title = notification?.title || data.title || "LUX IQI CRM";
+        const body = notification?.body || data.body || "Bạn có lead mới";
+        setNotifications((n) => {
+          const existing = Array.isArray(n) ? n : [];
+          if (leadId && existing.some((x) => x.id === leadId)) return existing;
+          const nameMatch = body.match(/:\s*([^•]+)/);
+          const item = {
+            id: leadId || Date.now(),
+            name: nameMatch ? nameMatch[1].trim() : title,
+            phone: "",
+            notifTime: Date.now(),
+            fromPush: true,
+          };
+          return [item, ...existing].slice(0, 50);
+        });
       },
       onAction: (event) => {
         const leadId = Number(event?.notification?.data?.leadId || 0);
@@ -841,26 +916,40 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (Array.isArray(data.leads)) {
       setLeads((prev) => {
         const prevArr = Array.isArray(prev) ? prev : [];
-        // Use name+phone as stable key (IDs change every sync)
-        const prevKeys = new Set(prevArr.map(l => `${l.name}||${l.phone}`));
-        const newLeads = data.leads.filter(l => {
-          const key = `${l.name}||${l.phone}`;
+        const userSaleKey = normalizePersonName(user.displayName);
+        const leadKey = (l) => `${l.name}||${l.phone}`;
+        const prevKeys = new Set(prevArr.map(leadKey));
+
+        const newLeads = data.leads.filter((l) => {
+          const key = leadKey(l);
           return !prevKeys.has(key) && !seenLeadKeys.has(key);
         });
-        if (newLeads.length > 0 && prevArr.length > 0) {
+
+        const newlyAssigned = user.role === "sale" ? data.leads.filter((l) => {
+          const key = leadKey(l);
+          const prevLead = prevArr.find((p) => leadKey(p) === key);
+          if (!prevLead) return false;
+          return !isSamePersonName(prevLead.saleName, user.displayName)
+            && isSamePersonName(l.saleName, user.displayName);
+        }) : [];
+
+        const notifyLeads = [...newLeads, ...newlyAssigned.filter((l) => !newLeads.some((n) => leadKey(n) === leadKey(l)))];
+
+        if (notifyLeads.length > 0 && prevArr.length > 0) {
           const soundKind = user.role === "sale" ? "sale" : "manager";
           playLeadSound(soundKind);
           if (nativeLocalSupported) {
-            const firstLead = newLeads[0];
+            const firstLead = notifyLeads[0];
             showNativeLeadNotification({
               title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
               body: `${firstLead.name || "Khách mới"}${firstLead.phone ? ` - ${firstLead.phone}` : ""}`,
               leadId: firstLead.id,
+              sound: soundKind,
             }).catch(() => {});
           }
           setNotifications(n => {
-            const existing = new Set((Array.isArray(n) ? n : []).map(x => `${x.name}||${x.phone}`));
-            const fresh = newLeads.filter(l => !existing.has(`${l.name}||${l.phone}`));
+            const existing = new Set((Array.isArray(n) ? n : []).map(x => leadKey(x)));
+            const fresh = notifyLeads.filter(l => !existing.has(leadKey(l)));
             return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...(Array.isArray(n) ? n : [])].slice(0, 50);
           });
         }
@@ -873,7 +962,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, [seenLeadKeys, playLeadSound, user.role, nativeLocalSupported]);
+  }, [seenLeadKeys, playLeadSound, user.role, user.displayName, nativeLocalSupported]);
 
   // Mark notifications as seen
   const markAllSeen = useCallback(() => {
@@ -1488,16 +1577,42 @@ function CRMApp({ user, updateUser, onLogout }) {
                               </div>
                               <div style={{ fontSize: 11, color: pushPermission === "denied" ? "#dc2626" : "#6b7280", marginTop: 2 }}>
                                 {pushEnabled
-                                  ? "Đã bật trên thiết bị hiện tại"
+                                  ? (nativePushSupported ? "Đã đăng ký FCM — nhận lead khi tắt app" : "Chỉ báo khi app đang mở")
                                   : pushPermission === "denied"
                                     ? ((nativePushSupported || nativeLocalSupported) ? "Đang bị chặn trong cài đặt điện thoại" : "Đang bị chặn trong trình duyệt")
-                                    : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
+                                    : nativePushSupported
+                                      ? (nativePushServerStatus?.fcmConfigured === false
+                                        ? "Server chưa cấu hình Firebase — kiểm tra .env VPS"
+                                        : nativePushServerStatus?.tokenCount > 0
+                                          ? "Đang đồng bộ token..."
+                                          : "Chưa đăng ký FCM — bấm Đăng ký lại bên phải")
+                                      : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
                               </div>
                             </div>
                             {(nativePushSupported || nativeLocalSupported) ? (
+                              nativePushSupported ? (
+                                <button
+                                  onClick={handleEnablePush}
+                                  disabled={pushBusy}
+                                  style={{
+                                    border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
+                                    background: pushEnabled ? "#dcfce7" : "#fff",
+                                    color: pushEnabled ? "#15803d" : "#1f2937",
+                                    borderRadius: 8,
+                                    padding: "7px 10px",
+                                    fontSize: 11,
+                                    fontWeight: 700,
+                                    cursor: pushBusy ? "not-allowed" : "pointer",
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
+                                </button>
+                              ) : (
                               <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
-                                {pushEnabled ? "Đã bật" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
+                                {pushEnabled ? "App mở" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
                               </span>
+                              )
                             ) : (
                               <button
                                 onClick={handleEnablePush}

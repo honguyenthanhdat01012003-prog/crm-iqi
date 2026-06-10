@@ -55,8 +55,8 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
 
   if (typeof PushNotifications.createChannel === "function") {
     const channels = [
-      { id: "lead_notifications_manager_v2", name: "Lead moi quan ly", sound: "lead_manager" },
-      { id: "lead_notifications_sale_v2", name: "Lead moi sale", sound: "lead_sale" },
+      { id: "lead_notifications_manager_v4", name: "Lead moi quan ly", sound: "lead_manager" },
+      { id: "lead_notifications_sale_v4", name: "Lead moi sale", sound: "lead_sale" },
       { id: "lead_notifications", name: "Lead moi", sound: "default" },
     ];
     for (const channel of channels) {
@@ -72,7 +72,9 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
     }
   }
 
-  const token = await new Promise((resolve, reject) => {
+  let token;
+  try {
+    token = await new Promise((resolve, reject) => {
     let done = false;
     let removeRegistration = null;
     let removeError = null;
@@ -85,7 +87,7 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
       done = true;
       cleanup();
       reject(new Error("Không nhận được native push token"));
-    }, 15000);
+    }, 30000);
 
     PushNotifications.addListener("registration", (result) => {
       if (done) return;
@@ -112,6 +114,9 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
       reject(new Error(err?.message || "Đăng ký native push thất bại"));
     }
   });
+  } catch (err) {
+    throw new Error(err?.message || "Firebase chưa cấu hình. Thêm android/app/google-services.json rồi build lại APK.");
+  }
 
   const platform = window.Capacitor?.getPlatform?.() || "unknown";
   const deviceId = getNativePushDeviceId();
@@ -135,6 +140,18 @@ export async function unregisterNativePushNotifications(apiFetch, apiBase = "/ap
   });
   if (res.ok) localStorage.removeItem("crm_native_push_token");
   return { ok: res.ok };
+}
+
+export async function getNativePushServerStatus(apiFetch, apiBase = "/api") {
+  if (!isNativePushSupported()) return { ok: false, supported: false };
+  try {
+    const res = await apiFetch(`${apiBase}/native-push/status`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || "Không kiểm tra được trạng thái push" };
+    return { ok: true, ...data };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
 }
 
 export async function setupNativePushListeners({ onNotification, onAction } = {}) {

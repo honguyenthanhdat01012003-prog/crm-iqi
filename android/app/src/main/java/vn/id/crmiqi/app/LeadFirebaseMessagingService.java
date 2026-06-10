@@ -32,6 +32,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         String title = valueOrDefault(data.get("title"), "LUX IQI CRM");
         String body = valueOrDefault(data.get("body"), "Ban co lead moi");
         String channelId = getChannelId(sound);
+
         int soundResId = "sale".equals(sound) ? R.raw.lead_sale : R.raw.lead_manager;
 
         createLeadChannel(channelId, getChannelName(sound), soundResId);
@@ -60,8 +61,9 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent);
 
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            builder.setSound(getSoundUri(soundResId));
+        Uri soundUri = getSoundUri(soundResId);
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundUri != null) {
+            builder.setSound(soundUri);
         }
 
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -84,6 +86,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null || manager.getNotificationChannel(id) != null) return;
 
+        Uri soundUri = getSoundUri(soundResId);
         AudioAttributes attrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -92,7 +95,9 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("Thong bao khi co lead moi trong CRM");
         channel.enableVibration(true);
-        channel.setSound(getSoundUri(soundResId), attrs);
+        if (soundUri != null) {
+            channel.setSound(soundUri, attrs);
+        }
         manager.createNotificationChannel(channel);
     }
 
@@ -101,8 +106,8 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     private String getChannelId(String sound) {
-        if ("sale".equals(sound)) return "lead_notifications_sale_v3";
-        return "lead_notifications_manager_v3";
+        if ("sale".equals(sound)) return "lead_notifications_sale_v4";
+        return "lead_notifications_manager_v4";
     }
 
     private String getChannelName(String sound) {
