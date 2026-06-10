@@ -6,6 +6,7 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.graphics.Color;
 import android.media.AudioAttributes;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 
@@ -15,6 +16,7 @@ import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.google.firebase.messaging.FirebaseMessagingService;
 import com.google.firebase.messaging.RemoteMessage;
 
+import java.util.HashMap;
 import java.util.Map;
 
 public class LeadFirebaseMessagingService extends FirebaseMessagingService {
@@ -25,17 +27,22 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             PushNotificationsPlugin.sendRemoteMessage(message);
         } catch (Exception ignored) {
         }
-        Map<String, String> data = message.getData();
-        if (data == null || data.isEmpty()) return;
+
+        Map<String, String> data = new HashMap<>();
+        if (message.getData() != null) data.putAll(message.getData());
+        RemoteMessage.Notification notification = message.getNotification();
+        if (notification != null) {
+            if (notification.getTitle() != null) data.put("title", notification.getTitle());
+            if (notification.getBody() != null) data.put("body", notification.getBody());
+        }
+        if (data.isEmpty()) return;
 
         String sound = valueOrDefault(data.get("sound"), "manager");
         String title = valueOrDefault(data.get("title"), "LUX IQI CRM");
         String body = valueOrDefault(data.get("body"), "Ban co lead moi");
         String channelId = getChannelId(sound);
 
-        int soundResId = "sale".equals(sound) ? R.raw.lead_sale : R.raw.lead_manager;
-
-        createLeadChannel(channelId, getChannelName(sound), soundResId);
+        createLeadChannel(channelId, getChannelName(sound));
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_LEAD");
@@ -61,7 +68,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(pendingIntent);
 
-        Uri soundUri = getSoundUri(soundResId);
+        Uri soundUri = getSoundUri();
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundUri != null) {
             builder.setSound(soundUri);
         }
@@ -81,12 +88,12 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
-    private void createLeadChannel(String id, String name, int soundResId) {
+    private void createLeadChannel(String id, String name) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null || manager.getNotificationChannel(id) != null) return;
 
-        Uri soundUri = getSoundUri(soundResId);
+        Uri soundUri = getSoundUri();
         AudioAttributes attrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -101,8 +108,8 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         manager.createNotificationChannel(channel);
     }
 
-    private Uri getSoundUri(int soundResId) {
-        return Uri.parse("android.resource://" + getPackageName() + "/" + soundResId);
+    private Uri getSoundUri() {
+        return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
     }
 
     private String getChannelId(String sound) {

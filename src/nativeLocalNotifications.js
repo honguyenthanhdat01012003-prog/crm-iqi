@@ -44,7 +44,7 @@ export async function requestNativeLocalNotificationPermission() {
         description: "Thong bao khi co lead moi trong CRM",
         importance: 5,
         visibility: 1,
-        sound: channel.sound,
+        sound: "default",
         vibration: true,
       });
     }
@@ -64,7 +64,7 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
       title: title || "LUX IQI CRM",
       body: body || "Ban co lead moi",
       channelId: getLeadChannelId(sound),
-      sound: sound === "sale" ? "lead_sale" : sound === "manager" ? "lead_manager" : sound,
+      sound: "default",
       extra: { leadId },
       schedule: { at: new Date(Date.now() + 100) },
     }],

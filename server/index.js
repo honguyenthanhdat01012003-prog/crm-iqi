@@ -239,6 +239,7 @@ async function sendPushToUser(userId, payload) {
     console.error(`[NativePush] Send failed for user#${userId}:`, err.message || err);
     return { sent: 0, error: err.message || String(err) };
   });
+  emitLeadNotification(userId, payload);
   return { sent: sent + (native.sent || 0), webSent: sent, nativeSent: native.sent || 0, nativeSkipped: native.skipped };
 }
 
@@ -3394,12 +3395,25 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
 // Global sync hash — updated after each sync
 let lastSyncHash = "";
+let dataVersion = 0;
 let syncInProgress = false; // Lock to prevent PUT/sync race condition
+
+function emitLeadNotification(userId, payload = {}) {
+  if (!io || !userId) return;
+  io.to(`user-${userId}`).emit("lead-notification", {
+    title: payload.title || "LUX IQI CRM",
+    body: payload.body || "Ban co thong bao moi",
+    sound: payload.sound || "manager",
+    leadId: payload.data?.leadId || payload.leadId || null,
+    ts: Date.now(),
+  });
+}
 
 // Helper: notify all connected clients that data changed
 function emitDataChanged(reason) {
+  dataVersion += 1;
   if (io) {
-    io.emit("data-changed", { reason, ts: Date.now() });
+    io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
 }
 
@@ -3416,7 +3430,7 @@ app.get("/api/data/poll", requireAuth, async (req, res) => {
       lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
     } catch { lastSyncHash = "init"; }
   }
-  res.json({ hash: lastSyncHash, changed: clientHash !== lastSyncHash });
+  res.json({ hash: String(dataVersion), changed: clientHash !== String(dataVersion), version: dataVersion });
 });
 
 /* ===== Recovery: Restore sale assignments + status from lead_history ===== */
@@ -10176,8 +10190,25 @@ if (!process.env.VERCEL) {
   const server = http.createServer(app);
   io = new SocketIOServer(server, { cors: corsOptions });
 
+  io.use((socket, next) => {
+    try {
+      const token = socket.handshake.auth?.token
+        || String(socket.handshake.headers?.authorization || "").replace(/^Bearer\s+/i, "");
+      if (!token) return next();
+      socket.user = jwt.verify(token, JWT_SECRET);
+      next();
+    } catch {
+      next();
+    }
+  });
+
   io.on("connection", (socket) => {
-    console.log(`[socket.io] Client connected: ${socket.id}`);
+    if (socket.user?.userId) {
+      socket.join(`user-${socket.user.userId}`);
+      console.log(`[socket.io] Client connected: ${socket.id} user#${socket.user.userId}`);
+    } else {
+      console.log(`[socket.io] Client connected: ${socket.id} (anonymous)`);
+    }
     socket.on("disconnect", () => {
       console.log(`[socket.io] Client disconnected: ${socket.id}`);
     });

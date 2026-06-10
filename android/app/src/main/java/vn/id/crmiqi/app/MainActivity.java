@@ -5,6 +5,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.pm.PackageManager;
 import android.media.AudioAttributes;
+import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -55,22 +56,22 @@ public class MainActivity extends BridgeActivity {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null) return;
 
+        Uri defaultSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
         AudioAttributes attrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
 
-        createLeadChannel(manager, attrs, "lead_notifications_manager_v4", "Lead moi quan ly", R.raw.lead_manager);
-        createLeadChannel(manager, attrs, "lead_notifications_sale_v4", "Lead moi sale", R.raw.lead_sale);
-        createLeadChannel(manager, attrs, "lead_notifications", "Lead moi", 0);
+        createLeadChannel(manager, attrs, "lead_notifications_manager_v4", "Lead moi quan ly", defaultSound);
+        createLeadChannel(manager, attrs, "lead_notifications_sale_v4", "Lead moi sale", defaultSound);
+        createLeadChannel(manager, attrs, "lead_notifications", "Lead moi", defaultSound);
     }
 
-    private void createLeadChannel(NotificationManager manager, AudioAttributes attrs, String id, String name, int soundResId) {
+    private void createLeadChannel(NotificationManager manager, AudioAttributes attrs, String id, String name, Uri soundUri) {
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
         channel.setDescription("Thong bao khi co lead moi trong CRM");
         channel.enableVibration(true);
-        if (soundResId != 0) {
-            Uri soundUri = Uri.parse("android.resource://" + getPackageName() + "/" + soundResId);
+        if (soundUri != null) {
             channel.setSound(soundUri, attrs);
         }
         manager.createNotificationChannel(channel);

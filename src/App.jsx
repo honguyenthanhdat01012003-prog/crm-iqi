@@ -18,7 +18,8 @@ import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
-import { requestNativeNotificationPermissionOnStartup } from "./nativeStartup.js";
+import { requestNativeNotificationPermissionOnStartup, isCapacitorNativeApp } from "./nativeStartup.js";
+import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNotify.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -584,6 +585,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, []);
 
   const [leads, setLeads] = useState([]);
+  const leadsRef = useRef([]);
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -653,12 +655,53 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (lastLeadSoundRef.current.kind === soundKind && now - lastLeadSoundRef.current.at < 1800) return;
     lastLeadSoundRef.current = { kind: soundKind, at: now };
     const audio = soundKind === "sale" ? saleLeadAudioRef.current : managerLeadAudioRef.current;
-    if (!audio) return;
+    const playBeep = () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = soundKind === "sale" ? 880 : 660;
+        gain.gain.value = 0.15;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        setTimeout(() => { osc.stop(); ctx.close(); }, 280);
+      } catch (_) {}
+    };
+    if (!audio) { playBeep(); return; }
     try {
       audio.currentTime = 0;
-      audio.play().catch(() => {});
-    } catch (_) {}
+      audio.play().catch(playBeep);
+    } catch (_) {
+      playBeep();
+    }
   }, []);
+
+  const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null } = {}) => {
+    const items = pushItem ? [pushItem] : notifyLeads;
+    if (!items.length) return;
+    playLeadSound(soundKind);
+    const first = items[0];
+    if (nativeLocalSupported) {
+      showNativeLeadNotification({
+        title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
+        body: first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới"),
+        leadId: first.id,
+        sound: soundKind,
+      }).catch(() => {});
+    }
+    setNotifications((n) => {
+      const existing = Array.isArray(n) ? n : [];
+      const fresh = items.filter((item) => {
+        if (item.fromPush && item.id) return !existing.some((x) => x.id === item.id);
+        const key = leadKey(item);
+        return key !== "||" && !existing.some((x) => leadKey(x) === key);
+      });
+      if (!fresh.length) return existing;
+      return [...fresh.map((l) => ({ ...l, notifTime: Date.now() })), ...existing].slice(0, 50);
+    });
+  }, [nativeLocalSupported, playLeadSound, user.role]);
 
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
@@ -863,25 +906,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     setupNativePushListeners({
       onNotification: (notification) => {
         const data = notification?.data || {};
-        const sound = data.sound || data.type;
-        if (sound === "sale" || sound === "sale_new_lead") playLeadSound("sale");
-        else playLeadSound("manager");
-
-        const leadId = Number(data.leadId || 0);
-        const title = notification?.title || data.title || "LUX IQI CRM";
-        const body = notification?.body || data.body || "Bạn có lead mới";
-        setNotifications((n) => {
-          const existing = Array.isArray(n) ? n : [];
-          if (leadId && existing.some((x) => x.id === leadId)) return existing;
-          const nameMatch = body.match(/:\s*([^•]+)/);
-          const item = {
-            id: leadId || Date.now(),
-            name: nameMatch ? nameMatch[1].trim() : title,
-            phone: "",
-            notifTime: Date.now(),
-            fromPush: true,
-          };
-          return [item, ...existing].slice(0, 50);
+        const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale" : "manager";
+        triggerLeadAlerts({
+          soundKind,
+          pushItem: leadFromPushPayload({
+            title: notification?.title || data.title,
+            body: notification?.body || data.body,
+            leadId: data.leadId,
+            sound: data.sound || data.type,
+          }),
         });
       },
       onAction: (event) => {
@@ -894,7 +927,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       },
     }).then((fn) => { if (alive) cleanup = fn; else fn?.(); }).catch(() => {});
     return () => { alive = false; cleanup?.(); };
-  }, [nativePushSupported, playLeadSound]);
+  }, [nativePushSupported, triggerLeadAlerts]);
 
   const applyApiData = useCallback((data) => {
     // If server says no change, skip all state updates
@@ -912,49 +945,20 @@ function CRMApp({ user, updateUser, onLogout }) {
       ));
       return;
     }
-    if (data.hash) setSyncHash(data.hash);
+    if (data.hash) setSyncHash(String(data.hash));
+    if (data.version != null) setSyncHash(String(data.version));
     if (Array.isArray(data.leads)) {
-      setLeads((prev) => {
-        const prevArr = Array.isArray(prev) ? prev : [];
-        const userSaleKey = normalizePersonName(user.displayName);
-        const leadKey = (l) => `${l.name}||${l.phone}`;
-        const prevKeys = new Set(prevArr.map(leadKey));
-
-        const newLeads = data.leads.filter((l) => {
-          const key = leadKey(l);
-          return !prevKeys.has(key) && !seenLeadKeys.has(key);
-        });
-
-        const newlyAssigned = user.role === "sale" ? data.leads.filter((l) => {
-          const key = leadKey(l);
-          const prevLead = prevArr.find((p) => leadKey(p) === key);
-          if (!prevLead) return false;
-          return !isSamePersonName(prevLead.saleName, user.displayName)
-            && isSamePersonName(l.saleName, user.displayName);
-        }) : [];
-
-        const notifyLeads = [...newLeads, ...newlyAssigned.filter((l) => !newLeads.some((n) => leadKey(n) === leadKey(l)))];
-
-        if (notifyLeads.length > 0 && prevArr.length > 0) {
-          const soundKind = user.role === "sale" ? "sale" : "manager";
-          playLeadSound(soundKind);
-          if (nativeLocalSupported) {
-            const firstLead = notifyLeads[0];
-            showNativeLeadNotification({
-              title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
-              body: `${firstLead.name || "Khách mới"}${firstLead.phone ? ` - ${firstLead.phone}` : ""}`,
-              leadId: firstLead.id,
-              sound: soundKind,
-            }).catch(() => {});
-          }
-          setNotifications(n => {
-            const existing = new Set((Array.isArray(n) ? n : []).map(x => leadKey(x)));
-            const fresh = notifyLeads.filter(l => !existing.has(leadKey(l)));
-            return [...fresh.map(l => ({ ...l, notifTime: Date.now() })), ...(Array.isArray(n) ? n : [])].slice(0, 50);
-          });
-        }
-        return data.leads;
+      const prevLeads = leadsRef.current;
+      const { notifyLeads, soundKind } = detectLeadNotifications(prevLeads, data.leads, {
+        role: user.role,
+        displayName: user.displayName,
+        seenLeadKeys,
       });
+      if (notifyLeads.length > 0) {
+        triggerLeadAlerts({ notifyLeads, soundKind });
+      }
+      leadsRef.current = data.leads;
+      setLeads(data.leads);
     }
     if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
     if (Array.isArray(data.projects)) setProjects(data.projects);
@@ -962,7 +966,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
-  }, [seenLeadKeys, playLeadSound, user.role, user.displayName, nativeLocalSupported]);
+  }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
   // Mark notifications as seen
   const markAllSeen = useCallback(() => {
@@ -999,6 +1003,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           });
         }
         applyApiData(data);
+        if (Array.isArray(data.leads)) leadsRef.current = data.leads;
       })
       .catch(() => setServerDown(true));
   }, [applyApiData]);
@@ -1010,7 +1015,11 @@ function CRMApp({ user, updateUser, onLogout }) {
   useEffect(() => { fetchAnnouncements(); }, [fetchAnnouncements]);
 
   useEffect(() => {
-    const socket = socketIOClient(SOCKET_URL, { transports: ["websocket", "polling"] });
+    const token = localStorage.getItem("crm_token") || "";
+    const socket = socketIOClient(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+      auth: { token },
+    });
     socket.on("connect", () => {
       console.log("[socket.io] Connected:", socket.id);
       setServerDown(false);
@@ -1018,15 +1027,45 @@ function CRMApp({ user, updateUser, onLogout }) {
     socket.on("disconnect", () => {
       console.log("[socket.io] Disconnected");
     });
+    socket.on("lead-notification", (payload) => {
+      const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale" : "manager";
+      triggerLeadAlerts({ soundKind, pushItem: leadFromPushPayload(payload) });
+    });
     socket.on("data-changed", () => {
       apiFetch(`${API}/data`)
         .then(r => r.ok ? r.json() : Promise.reject())
-        .then(applyApiData)
+        .then((data) => {
+          applyApiData(data);
+          if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+        })
         .catch(() => {});
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, fetchAnnouncements]);
+  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts]);
+
+  useEffect(() => {
+    const pollMs = isCapacitorNativeApp() ? 10000 : 20000;
+    const pollIv = setInterval(() => {
+      const hash = syncHash || "";
+      apiFetch(`${API}/data/poll?hash=${encodeURIComponent(hash)}`)
+        .then(r => r.ok ? r.json() : null)
+        .then((d) => {
+          if (!d) return;
+          if (d.hash) setSyncHash(String(d.hash));
+          if (d.changed) {
+            return apiFetch(`${API}/data`)
+              .then(r => r.ok ? r.json() : Promise.reject())
+              .then((data) => {
+                applyApiData(data);
+                if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+              });
+          }
+        })
+        .catch(() => {});
+    }, pollMs);
+    return () => clearInterval(pollIv);
+  }, [syncHash, applyApiData]);
 
   // Connection health check - detect server down (fallback, 30s)
   const [serverDown, setServerDown] = useState(false);
