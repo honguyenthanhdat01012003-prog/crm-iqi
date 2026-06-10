@@ -727,28 +727,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
     nativePushAutoTriedRef.current = true;
     let alive = true;
-    let timer = null;
     (async () => {
-      await new Promise(resolve => { timer = setTimeout(resolve, 900); });
-      if (!alive) return;
       const permission = await getNativePushPermissionState();
       if (!alive) return;
       setPushPermission(permission);
-      if (permission === "denied") {
-        setPushEnabled(false);
-        return;
-      }
-      const result = await subscribeToNativePushNotifications(apiFetch, API);
-      if (!alive) return;
-      const nextPermission = await getNativePushPermissionState();
-      setPushPermission(nextPermission);
-      setPushEnabled(!!result.ok && nextPermission === "granted");
-      if (result.ok) localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+      setPushEnabled(permission === "granted" && localStorage.getItem(`crm_native_push_enabled_${user.userId}`) === "1");
     })().catch((err) => {
-      console.warn("[NativePush] Auto registration failed:", err.message || err);
+      console.warn("[NativePush] Permission check failed:", err.message || err);
       setPushEnabled(false);
     });
-    return () => { alive = false; if (timer) clearTimeout(timer); };
+    return () => { alive = false; };
   }, [nativePushSupported, pushBusy, user.userId]);
 
   useEffect(() => {
