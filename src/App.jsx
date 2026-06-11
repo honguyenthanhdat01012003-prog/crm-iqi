@@ -1800,6 +1800,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "leads" && (
           <LeadsPage
             leads={filteredLeads}
+            allLeads={leads}
             searchText={searchText}
             setSearchText={setSearchText}
             statusFilter={statusFilter}
@@ -2933,6 +2934,7 @@ function DashboardPage({ stats, cost, saleRanking }) {
 const LeadsPage = (props) => {
   const {
     leads,
+    allLeads,
     searchText,
     setSearchText,
     statusFilter,
@@ -2962,6 +2964,7 @@ const LeadsPage = (props) => {
   } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
+  const allLeadList = useMemo(() => (Array.isArray(allLeads) ? allLeads : (Array.isArray(leads) ? leads : [])), [allLeads, leads]);
   const [expandedId, setExpandedId] = useState(null);
   const expandedPhoneRef = React.useRef(null);
 
@@ -3221,10 +3224,10 @@ const LeadsPage = (props) => {
   // Lead counts per project (from ALL leads passed to this page, not filtered)
   const projectLeadCounts = useMemo(() => {
     const counts = {};
-    const list = Array.isArray(leads) ? leads : [];
+    const list = allLeadList;
     list.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
     return counts;
-  }, [leads]);
+  }, [allLeadList]);
 
   const recentLeadPreview = useMemo(() => {
     const list = Array.isArray(leads) ? [...leads] : [];
@@ -3427,7 +3430,7 @@ const LeadsPage = (props) => {
     if (projectSales.length > 0) return [...new Set(projectSales)].sort();
     // Fallback: get sale names from leads of this specific project only
     const projectLeadSales = new Set();
-    (Array.isArray(leads) ? leads : []).forEach(l => {
+    allLeadList.forEach(l => {
       if (l.projectId === pid && l.saleName && l.saleName.toLowerCase() !== "chưa chia") projectLeadSales.add(l.saleName);
     });
     return [...projectLeadSales].sort();
@@ -3437,7 +3440,7 @@ const LeadsPage = (props) => {
   useEffect(() => {
     if (!shuffleProject) { setShuffleStartDate(""); return; }
     const pid = Number(shuffleProject);
-    const projectLeads = leads.filter(l => l.projectId === pid);
+    const projectLeads = allLeadList.filter(l => l.projectId === pid);
     let earliest = null;
     for (const l of projectLeads) {
       const d = parseLeadDate(l.createdAt);
@@ -3451,16 +3454,61 @@ const LeadsPage = (props) => {
     } else {
       setShuffleStartDate("");
     }
-  }, [shuffleProject, leads]);
+  }, [shuffleProject, allLeadList]);
+
+  const normalizeLeadStatusKey = useCallback((status) => {
+    const raw = String(status || "").trim();
+    if (!raw) return "new";
+    return STATUS_LABEL_TO_KEY[raw] || STATUS_LABEL_TO_KEY[raw.toLowerCase()] || raw;
+  }, []);
+
+  const getFeedbackHistoryEntries = useCallback((lead) => {
+    const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+    const validSources = new Set(["sale", "telegram", "admin", "manager"]);
+    return history.filter((h) => {
+      if (!h || h.action === "Chia lead" || !h.status) return false;
+      const src = String(h.source || "").toLowerCase();
+      return validSources.has(src) || (!src && h.saleName);
+    });
+  }, []);
+
+  const leadMatchesShuffleStatus = useCallback((lead, status) => {
+    if (!status || status === "all") return true;
+    if (status === "unassigned") return !lead.saleName || lead.saleName === "Chưa chia";
+    const target = normalizeLeadStatusKey(status);
+    const historyEntries = getFeedbackHistoryEntries(lead);
+    if (historyEntries.some((h) => normalizeLeadStatusKey(h.status) === target)) return true;
+    return normalizeLeadStatusKey(lead.status) === target;
+  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey]);
+
+  const getShuffleLeadStatus = useCallback((lead) => {
+    if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") return shuffleStatus;
+    const entries = getFeedbackHistoryEntries(lead);
+    const last = entries[entries.length - 1];
+    return normalizeLeadStatusKey(last?.status || lead?.status);
+  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey, shuffleStatus]);
+
+  const getShuffleLeadOwner = useCallback((lead) => {
+    if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") {
+      const target = normalizeLeadStatusKey(shuffleStatus);
+      const entries = getFeedbackHistoryEntries(lead);
+      for (let i = entries.length - 1; i >= 0; i -= 1) {
+        if (normalizeLeadStatusKey(entries[i].status) === target) {
+          return entries[i].saleName || entries[i].source || lead.saleName || "Chưa chia";
+        }
+      }
+    }
+    return lead.saleName || "Chưa chia";
+  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey, shuffleStatus]);
 
   // Get leads filtered for chia lead panel
   const shuffleFilteredLeads = useMemo(() => {
     const pid = Number(shuffleProject);
     if (!pid) return [];
-    let list = leads.filter(l => l.projectId === pid);
+    let list = allLeadList.filter(l => l.projectId === pid);
     if (shuffleStatus !== "all") {
       if (shuffleStatus === "unassigned") list = list.filter(l => !l.saleName || l.saleName === "Chưa chia");
-      else list = list.filter(l => l.status === shuffleStatus);
+      else list = list.filter(l => leadMatchesShuffleStatus(l, shuffleStatus));
     }
     if (shuffleProduct.length > 0) {
       list = list.filter(l => shuffleProduct.includes(l.product || "-"));
@@ -3489,16 +3537,16 @@ const LeadsPage = (props) => {
       return true;
     });
     return list;
-  }, [leads, shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
+  }, [allLeadList, leadMatchesShuffleStatus, shuffleProject, shuffleStatus, shuffleProduct, shuffleStartDate, shuffleEndDate]);
 
   // Unique products for shuffle project
   const shuffleUniqueProducts = useMemo(() => {
     const pid = Number(shuffleProject);
     if (!pid) return [];
     const set = new Set();
-    leads.filter(l => l.projectId === pid).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
+    allLeadList.filter(l => l.projectId === pid).forEach(l => { if (l.product && l.product !== "-") set.add(l.product); });
     return [...set].sort((a, b) => a.localeCompare(b, "vi"));
-  }, [leads, shuffleProject]);
+  }, [allLeadList, shuffleProject]);
 
   // Auto-select based on pick count
   useEffect(() => {
@@ -5063,31 +5111,35 @@ const LeadsPage = (props) => {
                       </div>
                     </div>
                     {shuffleFilteredLeads.length === 0 && <div style={{ padding: 16, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có lead nào</div>}
-                    {shuffleFilteredLeads.map(l => (
-                      <label key={l.id} style={{
-                        display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
-                        borderBottom: "1px solid #f3f4f6", cursor: "pointer",
-                        background: shuffleSelected.has(l.id) ? "#f0faf1" : "#fff",
-                        transition: "background .1s",
-                      }}>
-                        <input type="checkbox" checked={shuffleSelected.has(l.id)}
-                          onChange={() => {
-                            const next = new Set(shuffleSelected);
-                            next.has(l.id) ? next.delete(l.id) : next.add(l.id);
-                            setShuffleSelected(next);
-                            setShufflePickCount("manual");
-                          }}
-                          style={{ width: 16, height: 16, accentColor: "#1a3c20" }} />
-                        <span style={{ flex: 1, fontSize: 12 }}>
-                          <strong>{l.name}</strong>
-                          <span style={{ color: "#6b7280", marginLeft: 6 }}>{l.phone || ""}</span>
-                        </span>
-                        <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: (STATUS_COLORS[l.status] || "#d1d5db") + "18", color: STATUS_COLORS[l.status] || "#6b7280", fontWeight: 600 }}>
-                          {STATUS_LABELS[l.status] || l.status || "Chưa feedback"}
-                        </span>
-                        <span style={{ fontSize: 10, color: "#9ca3af" }}>{l.saleName || "Chưa chia"}</span>
-                      </label>
-                    ))}
+                    {shuffleFilteredLeads.map(l => {
+                      const rowStatus = getShuffleLeadStatus(l);
+                      const rowOwner = getShuffleLeadOwner(l);
+                      return (
+                        <label key={l.id} style={{
+                          display: "flex", alignItems: "center", gap: 8, padding: "6px 12px",
+                          borderBottom: "1px solid #f3f4f6", cursor: "pointer",
+                          background: shuffleSelected.has(l.id) ? "#f0faf1" : "#fff",
+                          transition: "background .1s",
+                        }}>
+                          <input type="checkbox" checked={shuffleSelected.has(l.id)}
+                            onChange={() => {
+                              const next = new Set(shuffleSelected);
+                              next.has(l.id) ? next.delete(l.id) : next.add(l.id);
+                              setShuffleSelected(next);
+                              setShufflePickCount("manual");
+                            }}
+                            style={{ width: 16, height: 16, accentColor: "#1a3c20" }} />
+                          <span style={{ flex: 1, fontSize: 12 }}>
+                            <strong>{l.name}</strong>
+                            <span style={{ color: "#6b7280", marginLeft: 6 }}>{l.phone || ""}</span>
+                          </span>
+                          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: (STATUS_COLORS[rowStatus] || "#d1d5db") + "18", color: STATUS_COLORS[rowStatus] || "#6b7280", fontWeight: 600 }}>
+                            {STATUS_LABELS[rowStatus] || rowStatus || "Chưa feedback"}
+                          </span>
+                          <span style={{ fontSize: 10, color: "#9ca3af" }}>{rowOwner}</span>
+                        </label>
+                      );
+                    })}
                   </div>
 
                   {/* Action button */}
