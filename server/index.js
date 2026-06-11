@@ -4945,10 +4945,8 @@ async function processSchedules(db, triggerUser) {
 
   for (const sch of schedules) {
     if (sch.start_date && today < sch.start_date) continue;
-    if (sch.end_date && today > sch.end_date) {
-      await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [sch.id]);
-      continue;
-    }
+    // lead_ids is a fixed pool selected at schedule creation time. Do not hard-stop
+    // on end_date while there are still selected leads left to distribute.
     // Parse distribute times (array or legacy single string)
     let distTimes = [];
     try { distTimes = JSON.parse(sch.distribute_time || '["08:00"]'); } catch { distTimes = [sch.distribute_time || '08:00']; }
@@ -5153,8 +5151,6 @@ async function processSchedules(db, triggerUser) {
     let isDone = false;
     let newTour = currentTour;
     if (!assignedLeads.length) {
-      isDone = true;
-    } else if (sch.end_date && today >= sch.end_date && slotToProcess >= numSlots - 1) {
       isDone = true;
     } else if (newIndex >= leadIdList.length) {
       const nextTour = currentTour + 1;
