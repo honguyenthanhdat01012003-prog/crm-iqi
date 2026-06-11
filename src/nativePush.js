@@ -1,3 +1,5 @@
+import { areSystemNotificationsEnabled } from "./crmNotifications.js";
+
 function isCapacitorNative() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
 }
@@ -33,14 +35,88 @@ export async function getNativePushPermissionState() {
       4000,
       "Không kiểm tra được quyền thông báo native"
     );
-    return perm.receive === "granted" ? "granted" : perm.receive === "denied" ? "denied" : "default";
+    if (perm.receive !== "granted") {
+      return perm.receive === "denied" ? "denied" : "default";
+    }
+    const systemEnabled = await areSystemNotificationsEnabled();
+    return systemEnabled ? "granted" : "denied";
   } catch {
     return "unsupported";
   }
 }
 
-export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/api") {
-  if (!isNativePushSupported()) throw new Error("Native push chỉ hỗ trợ trong app Capacitor");
+async function ensureNativePushChannels(PushNotifications) {
+  if (typeof PushNotifications.createChannel !== "function") return;
+  const channels = [
+    { id: "lead_notifications_manager_v4", name: "Lead moi quan ly", sound: "default" },
+    { id: "lead_notifications_sale_v4", name: "Lead moi sale", sound: "default" },
+    { id: "lead_notifications", name: "Lead moi", sound: "default" },
+  ];
+  for (const channel of channels) {
+    await PushNotifications.createChannel({
+      id: channel.id,
+      name: channel.name,
+      description: "Thong bao khi co lead moi hoac lead duoc chia",
+      importance: 5,
+      visibility: 1,
+      sound: channel.sound,
+      vibration: true,
+    }).catch(() => {});
+  }
+}
+
+async function waitForNativePushToken(PushNotifications, timeoutMs = 30000) {
+  const existing = localStorage.getItem("crm_native_push_token");
+  if (existing && existing.length > 20) return existing;
+
+  return new Promise((resolve, reject) => {
+    let done = false;
+    let removeRegistration = null;
+    let removeError = null;
+    const cleanup = () => {
+      removeRegistration?.remove?.();
+      removeError?.remove?.();
+    };
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error("Không nhận được FCM token từ Google"));
+    }, timeoutMs);
+
+    PushNotifications.addListener("registration", (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      const value = result?.value || "";
+      if (value) localStorage.setItem("crm_native_push_token", value);
+      resolve(value);
+    }).then((handle) => { removeRegistration = handle; });
+
+    PushNotifications.addListener("registrationError", (error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error(error?.error || "Đăng ký FCM thất bại"));
+    }).then((handle) => { removeError = handle; });
+
+    try {
+      PushNotifications.register();
+    } catch (err) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error(err?.message || "Đăng ký FCM thất bại"));
+    }
+  });
+}
+
+/** Xin quyền + lấy FCM token (chưa cần login). */
+export async function obtainNativePushDeviceToken() {
+  if (!isNativePushSupported()) return { ok: false, reason: "unsupported" };
   const { PushNotifications } = await import("@capacitor/push-notifications");
 
   let perm = await PushNotifications.checkPermissions();
@@ -53,71 +129,28 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
   }
   if (perm.receive !== "granted") return { ok: false, permission: perm.receive };
 
-  if (typeof PushNotifications.createChannel === "function") {
-    const channels = [
-      { id: "lead_notifications_manager_v4", name: "Lead moi quan ly", sound: "default" },
-      { id: "lead_notifications_sale_v4", name: "Lead moi sale", sound: "default" },
-      { id: "lead_notifications", name: "Lead moi", sound: "default" },
-    ];
-    for (const channel of channels) {
-      await PushNotifications.createChannel({
-        id: channel.id,
-        name: channel.name,
-        description: "Thong bao khi co lead moi hoac lead duoc chia",
-        importance: 5,
-        visibility: 1,
-        sound: channel.sound,
-        vibration: true,
-      }).catch(() => {});
-    }
-  }
+  const systemEnabled = await areSystemNotificationsEnabled();
+  if (!systemEnabled) return { ok: false, permission: "denied", reason: "system-disabled" };
 
-  let token;
+  await ensureNativePushChannels(PushNotifications);
+
   try {
-    token = await new Promise((resolve, reject) => {
-    let done = false;
-    let removeRegistration = null;
-    let removeError = null;
-    const cleanup = () => {
-      removeRegistration?.remove?.();
-      removeError?.remove?.();
-    };
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      cleanup();
-      reject(new Error("Không nhận được native push token"));
-    }, 30000);
-
-    PushNotifications.addListener("registration", (result) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      resolve(result.value);
-    }).then((handle) => { removeRegistration = handle; });
-
-    PushNotifications.addListener("registrationError", (error) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      reject(new Error(error?.error || "Đăng ký native push thất bại"));
-    }).then((handle) => { removeError = handle; });
-    try {
-      PushNotifications.register();
-    } catch (err) {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      cleanup();
-      reject(new Error(err?.message || "Đăng ký native push thất bại"));
-    }
-  });
+    const token = await waitForNativePushToken(PushNotifications);
+    if (!token || token.length < 20) return { ok: false, error: "FCM token rỗng" };
+    return { ok: true, permission: "granted", token };
   } catch (err) {
-    throw new Error(err?.message || "Firebase chưa cấu hình. Thêm android/app/google-services.json rồi build lại APK.");
+    return { ok: false, error: err?.message || String(err) };
   }
+}
 
+export async function syncNativePushTokenToServer(apiFetch, apiBase = "/api") {
+  if (!isNativePushSupported()) return { ok: false, skipped: true };
+  let token = localStorage.getItem("crm_native_push_token") || "";
+  if (!token || token.length < 20) {
+    const obtained = await obtainNativePushDeviceToken();
+    if (!obtained.ok) return obtained;
+    token = obtained.token;
+  }
   const platform = window.Capacitor?.getPlatform?.() || "unknown";
   const deviceId = getNativePushDeviceId();
   const res = await apiFetch(`${apiBase}/native-push/register`, {
@@ -125,9 +158,25 @@ export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/a
     body: JSON.stringify({ token, platform, deviceId }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "Không lưu được native push token");
+  if (!res.ok) return { ok: false, error: data.error || "Không lưu được FCM token lên server" };
   localStorage.setItem("crm_native_push_token", token);
-  return { ok: true, permission: "granted", token, deviceId };
+  return { ok: true, token, deviceId, fcmConfigured: data.fcmConfigured };
+}
+
+export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/api") {
+  if (!isNativePushSupported()) throw new Error("Native push chỉ hỗ trợ trong app Capacitor");
+  const obtained = await obtainNativePushDeviceToken();
+  if (!obtained.ok) {
+    return {
+      ok: false,
+      permission: obtained.permission || "denied",
+      reason: obtained.reason,
+      error: obtained.error,
+    };
+  }
+  const synced = await syncNativePushTokenToServer(apiFetch, apiBase);
+  if (!synced.ok) throw new Error(synced.error || "Không lưu được native push token");
+  return { ok: true, permission: "granted", token: synced.token, deviceId: synced.deviceId };
 }
 
 export async function unregisterNativePushNotifications(apiFetch, apiBase = "/api") {
