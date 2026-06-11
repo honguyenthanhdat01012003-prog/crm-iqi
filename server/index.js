@@ -92,12 +92,71 @@ function base64UrlJson(obj) {
   return Buffer.from(JSON.stringify(obj)).toString("base64url");
 }
 
+function normalizeFirebasePrivateKey(raw = "") {
+  let key = String(raw || "").trim();
+  if (!key) return "";
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1);
+  }
+  key = key.replace(/\\n/g, "\n");
+  if (!key.includes("\n") && key.includes("\\n")) {
+    key = key.replace(/\\n/g, "\n");
+  }
+  if (!key.includes("\n") && key.includes("-----BEGIN")) {
+    key = key
+      .replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+      .replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----\n");
+  }
+  return key.trim();
+}
+
+function loadFirebaseConfigFromServiceAccountFile() {
+  const configuredPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || process.env.GOOGLE_APPLICATION_CREDENTIALS || "";
+  const candidates = [
+    configuredPath,
+    path.join(__dirname, "..", "secrets", "firebase-service-account.json"),
+    path.join(__dirname, "..", "firebase-service-account.json"),
+  ].filter(Boolean);
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      const json = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      const privateKey = normalizeFirebasePrivateKey(json.private_key || "");
+      if (!json.project_id || !json.client_email || !privateKey) continue;
+      console.log(`[Firebase] Using service account file: ${filePath}`);
+      return {
+        projectId: json.project_id,
+        clientEmail: json.client_email,
+        privateKey,
+        source: filePath,
+      };
+    } catch (err) {
+      console.warn(`[Firebase] Cannot read ${filePath}:`, err.message);
+    }
+  }
+  return null;
+}
+
 function getFirebaseConfig() {
+  const fromFile = loadFirebaseConfigFromServiceAccountFile();
+  if (fromFile) return fromFile;
   return {
     projectId: process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || "",
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL || "",
-    privateKey: (process.env.FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
+    privateKey: normalizeFirebasePrivateKey(process.env.FIREBASE_PRIVATE_KEY),
+    source: ".env",
   };
+}
+
+function validateFirebasePrivateKey(privateKey) {
+  if (!privateKey) return "Thiếu FIREBASE_PRIVATE_KEY";
+  if (!privateKey.includes("BEGIN PRIVATE KEY")) return "FIREBASE_PRIVATE_KEY không đúng định dạng PEM";
+  try {
+    crypto.createSign("RSA-SHA256").update("crm-fcm-key-check").sign(privateKey);
+    return "";
+  } catch (err) {
+    return err?.message || String(err);
+  }
 }
 
 async function getFcmAccessToken() {
@@ -165,21 +224,29 @@ async function sendNativePushToUser(userId, payload) {
   });
   for (const row of tokens) {
     const isAndroid = String(row.platform || "").toLowerCase() === "android";
+    const title = payload.title || "LUX IQI CRM";
+    const body = payload.body || "Ban co thong bao moi";
     const message = {
       token: row.token,
       data,
-      android: { priority: "HIGH" },
+      android: { priority: "HIGH", ttl: "86400s" },
       apns: {
-        payload: { aps: { sound: "default", alert: { title: payload.title || "LUX IQI CRM", body: payload.body || "Ban co thong bao moi" } } },
+        payload: { aps: { sound: "default", alert: { title, body } } },
       },
     };
-    // Android: data-only so LeadFirebaseMessagingService always receives the message
-    // (foreground + background). Top-level notification breaks in-app handling.
-    if (!isAndroid) {
-      message.notification = {
-        title: payload.title || "LUX IQI CRM",
-        body: payload.body || "Bạn có thông báo mới",
+    // Android: gửi cả notification + data để hệ thống hiện tray khi app tắt/background.
+    // data giữ để LeadFirebaseMessagingService xử lý khi app đang mở.
+    if (isAndroid) {
+      message.notification = { title, body };
+      message.android.notification = {
+        channel_id: notificationSound.channelId,
+        sound: "default",
+        priority: "HIGH",
+        default_vibrate_timings: true,
+        default_sound: true,
       };
+    } else {
+      message.notification = { title, body: payload.body || "Bạn có thông báo mới" };
     }
     try {
       const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {
@@ -1889,7 +1956,11 @@ async function readData(db) {
   const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
   const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectMap = {};
-  for (const p of projectRows) { projectMap[p.id] = p.name; }
+  const projectLegacyMap = {};
+  for (const p of projectRows) {
+    projectMap[p.id] = p.name;
+    projectLegacyMap[p.id] = Boolean(p.is_legacy);
+  }
 
   // Build phone-based registration map for re-registration detection
   const phoneRegMap = {};
@@ -1960,6 +2031,7 @@ async function readData(db) {
       return {
       id: l.id,
       projectId: l.project_id,
+      projectIsLegacy: Boolean(projectLegacyMap[l.project_id]),
       name: l.name,
       phone: l.phone,
       campaign: l.campaign,
@@ -2446,6 +2518,8 @@ app.post("/api/native-push/register", requireAuth, async (req, res) => {
 app.get("/api/native-push/status", requireAuth, async (req, res) => {
   try {
     const cfg = getFirebaseConfig();
+    const keyError = validateFirebasePrivateKey(cfg.privateKey);
+    const fcmConfigured = !!(cfg.projectId && cfg.clientEmail && cfg.privateKey && !keyError);
     const tokens = await all(db,
       `SELECT id, platform, device_id, device_label, last_error, created_at, updated_at
        FROM native_push_tokens
@@ -2455,7 +2529,8 @@ app.get("/api/native-push/status", requireAuth, async (req, res) => {
     );
     res.json({
       ok: true,
-      fcmConfigured: !!(cfg.projectId && cfg.clientEmail && cfg.privateKey),
+      fcmConfigured,
+      fcmKeyError: keyError || "",
       projectId: cfg.projectId || "",
       tokenCount: tokens.length,
       tokens,
@@ -2469,8 +2544,12 @@ app.get("/api/native-push/status", requireAuth, async (req, res) => {
 app.post("/api/native-push/test", requireAuth, async (req, res) => {
   try {
     const cfg = getFirebaseConfig();
+    const keyError = validateFirebasePrivateKey(cfg.privateKey);
     if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) {
       return res.status(503).json({ error: "Firebase FCM chưa được cấu hình trên VPS" });
+    }
+    if (keyError) {
+      return res.status(503).json({ error: `FIREBASE_PRIVATE_KEY không hợp lệ: ${keyError}` });
     }
     const sound = req.body?.sound === "sale" ? "sale" : "manager";
     const result = await sendNativePushToUser(req.user.userId, {
@@ -3890,9 +3969,56 @@ app.post("/api/recover-selective", requireAuth, requireAdminOnly, async (req, re
 // ==================== DATABASE BACKUP SYSTEM ====================
 const BACKUP_DIR = path.join(DB_DIR, "backups");
 const BACKUP_KEEP_DAYS = 7;
+const BACKUP_MAX_FILES = 10;
+const STARTUP_BACKUP_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+function cleanupBackupDirOnBoot() {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) return;
+    const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    for (const f of fs.readdirSync(BACKUP_DIR)) {
+      if (!f.startsWith("crm_") || !f.endsWith(".db")) continue;
+      const fPath = path.join(BACKUP_DIR, f);
+      if (fs.statSync(fPath).mtimeMs < cutoff) fs.unlinkSync(fPath);
+    }
+    enforceBackupLimit();
+  } catch (e) {
+    console.error("[backup] Boot cleanup error:", e.message);
+  }
+}
+
+function listBackupFiles() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs
+    .readdirSync(BACKUP_DIR)
+    .filter((f) => f.startsWith("crm_") && f.endsWith(".db"))
+    .map((f) => {
+      const fPath = path.join(BACKUP_DIR, f);
+      return { f, fPath, mtime: fs.statSync(fPath).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+}
+
+function shouldSkipStartupBackup() {
+  const latestStartup = listBackupFiles().find((x) => x.f.includes("_startup_"));
+  if (!latestStartup) return false;
+  return Date.now() - latestStartup.mtime < STARTUP_BACKUP_MIN_INTERVAL_MS;
+}
+
+function enforceBackupLimit() {
+  const files = listBackupFiles();
+  if (files.length <= BACKUP_MAX_FILES) return;
+  const excess = files.slice(BACKUP_MAX_FILES);
+  for (const { fPath } of excess) fs.unlinkSync(fPath);
+  console.log(`[backup] Trimmed ${excess.length} excess backup(s), keep=${BACKUP_MAX_FILES}`);
+}
 
 function performBackup(label = "auto") {
   try {
+    if (label === "startup" && shouldSkipStartupBackup()) {
+      console.log("[backup] Skip startup backup (recent backup exists)");
+      return null;
+    }
     if (!fs.existsSync(DB_PATH)) return null;
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
     const now = new Date();
@@ -3915,6 +4041,7 @@ function performBackup(label = "auto") {
       }
     }
     if (removed) console.log(`[backup] Cleaned ${removed} old backup(s)`);
+    enforceBackupLimit();
 
     return { filename, sizeMB, removed };
   } catch (e) {
@@ -4007,10 +4134,19 @@ app.get("/api/projects", requireAuth, async (req, res) => {
 
 app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled } = req.body;
+    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, isLegacy } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: "Name required" });
     const existing = await get(db, "SELECT id FROM projects WHERE name = ?", [String(name).trim()]);
     if (existing) return res.status(409).json({ error: "Dự án đã tồn tại" });
+    if (isLegacy) {
+      const result = await run(
+        db,
+        "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, is_legacy) VALUES(?, '', '', '', '', 0, 1)",
+        [String(name).trim()]
+      );
+      const data = await readData(db);
+      return res.json({ ...data, newProjectId: result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID });
+    }
     const cleanLead = sanitizeSheetUrl(leadUrl);
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
@@ -5092,7 +5228,7 @@ async function processSchedules(db, triggerUser) {
 /* POST /api/leads/schedule-distribution - Create a new distribution schedule */
 app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const { projectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTimes } = req.body;
+    const { projectId, targetProjectId, saleNames: sNames, statusFilter, startDate, endDate, leadsPerDay, leadIds, distributeTimes } = req.body;
     if (!sNames || !sNames.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 sale" });
     if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
     if (!startDate || !endDate) return res.status(400).json({ error: "Cần chọn ngày bắt đầu và ngày kết thúc" });
@@ -5102,6 +5238,17 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     const distTimeStr = JSON.stringify(distTimesArr);
 
     const perDay = Math.max(1, Math.min(100, Number(leadsPerDay) || 5));
+    const sourceProjectId = Number(projectId);
+    const storageProjectId = targetProjectId ? Number(targetProjectId) : 0;
+    const useMktStorage = !!storageProjectId && storageProjectId !== sourceProjectId;
+    const sourceProject = await get(db, "SELECT id, name FROM projects WHERE id = ?", [sourceProjectId]);
+    if (!sourceProject) return res.status(400).json({ error: "Khong tim thay du an nguon" });
+    let targetProject = null;
+    if (useMktStorage) {
+      targetProject = await get(db, "SELECT id, name, is_legacy FROM projects WHERE id = ?", [storageProjectId]);
+      if (!targetProject) return res.status(400).json({ error: "Khong tim thay kho Data Xao (MKT Cu)" });
+      if (!targetProject.is_legacy) return res.status(400).json({ error: "Kho luu Data Xao phai la du an Data Cu/MKT Cu" });
+    }
 
     // Deduplicate leadIds to prevent double assignments
     let uniqueLeadIds = [...new Set(leadIds.map(v => Number(v)).filter(Boolean))];
@@ -5110,7 +5257,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     }
     const validRows = [];
     for (const lid of uniqueLeadIds) {
-      const row = await get(db, "SELECT id FROM leads WHERE id = ? AND project_id = ?", [lid, Number(projectId)]);
+      const row = await get(db, "SELECT id FROM leads WHERE id = ? AND project_id = ?", [lid, sourceProjectId]);
       if (row) validRows.push(Number(row.id));
     }
     if (validRows.length !== uniqueLeadIds.length) {
@@ -5118,6 +5265,56 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     }
     uniqueLeadIds = validRows;
     if (!uniqueLeadIds.length) return res.status(400).json({ error: "Không tìm thấy lead hợp lệ trong dự án để tạo lịch chia" });
+
+    let scheduleProjectId = sourceProjectId;
+    let copiedCount = 0;
+    let reusedCount = 0;
+    if (useMktStorage) {
+      scheduleProjectId = storageProjectId;
+      const copiedLeadIds = [];
+      const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+      for (const sourceLeadId of uniqueLeadIds) {
+        const lead = await get(db, "SELECT * FROM leads WHERE id = ? AND project_id = ?", [sourceLeadId, sourceProjectId]);
+        if (!lead) continue;
+        const marker = lead.ads_id ? `mktxao:ads:${lead.ads_id}` : `mktxao:lead:${sourceProjectId}:${sourceLeadId}`;
+        const existingCopy = await get(db, "SELECT id FROM leads WHERE project_id = ? AND ads_id = ?", [storageProjectId, marker]);
+        if (existingCopy) {
+          copiedLeadIds.push(Number(existingCopy.id));
+          reusedCount++;
+          continue;
+        }
+        const result = await run(
+          db,
+          `INSERT INTO leads(
+            project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
+            product, raw_status, status, created_at, inbox_url, customer_fb_url, is_hot,
+            sale_id, sale_name, manager_name, source, budget, sync_at, notes
+          ) VALUES(?, ?, ?, ?, '', NULL, '-', '-', '-', ?, '', 'new', ?, '', ?, ?, NULL, '', '', 'MKT Cu Xao', '-', ?, ?)`,
+          [
+            storageProjectId,
+            lead.name,
+            lead.phone || "",
+            marker,
+            lead.product || "-",
+            lead.created_at || now,
+            lead.customer_fb_url || "",
+            lead.is_hot ? 1 : 0,
+            now,
+            `Copy tu ${sourceProject.name} #${sourceLeadId}`,
+          ]
+        );
+        const newLeadId = Number(result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID);
+        copiedLeadIds.push(newLeadId);
+        copiedCount++;
+        await run(
+          db,
+          "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, '', 'Copy Data MKT Cu', ?, '', ?, 0, 'mkt-xao')",
+          [newLeadId, now, `Copy tu ${sourceProject.name}`]
+        );
+      }
+      uniqueLeadIds = [...new Set(copiedLeadIds.filter(Boolean))];
+      if (!uniqueLeadIds.length) return res.status(400).json({ error: "Khong copy duoc lead sang kho Data Xao" });
+    }
 
     // Pre-calculate the full assignment plan
     const plan = [];
@@ -5142,7 +5339,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
       `INSERT INTO lead_schedules(project_id, status_filter, start_date, end_date, leads_per_day, sale_names, lead_ids, assigned_index, total_count, created_by, is_active, last_processed_date, assignment_log, distribute_time, last_processed_slot)
        VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 1, '', ?, ?, 0)`,
       [
-        Number(projectId),
+        scheduleProjectId,
         statusFilter || "all",
         startDate,
         endDate,
@@ -10257,11 +10454,12 @@ if (!process.env.VERCEL) {
   }, SYNC_INTERVAL);
   console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s`);
 
-  // Auto-backup every 8 hours (00:00, 08:00, 16:00)
+  // Auto-backup every 8 hours (no backup on every restart — caused disk full)
   const BACKUP_INTERVAL = 8 * 60 * 60 * 1000;
-  performBackup("startup"); // Backup on server start
+  cleanupBackupDirOnBoot();
   setInterval(() => performBackup("auto"), BACKUP_INTERVAL);
-  console.log(`[auto-backup] Enabled, interval=8h, keep=${BACKUP_KEEP_DAYS} days`);
+  setInterval(() => enforceBackupLimit(), 10 * 60 * 1000);
+  console.log(`[auto-backup] Enabled, interval=8h, keep=${BACKUP_KEEP_DAYS} days, maxFiles=${BACKUP_MAX_FILES}`);
 
   // Auto-rotate leads every 30 minutes (checks 3-day inactivity)
   const AUTO_ROTATE_INTERVAL = 30 * 60 * 1000; // 30 min

@@ -16,9 +16,11 @@ import {
 } from "lucide-react";
 import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, unregisterNativePushNotifications } from "./nativePush.js";
+import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
-import { requestNativeNotificationPermissionOnStartup, isCapacitorNativeApp } from "./nativeStartup.js";
+import { isCapacitorNativeApp } from "./nativeStartup.js";
+import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext, shouldShowNativeNotificationPrompt } from "./nativeNotificationPermission.js";
+import { NativeNotificationPermissionPrompt } from "./NativeNotificationPermissionPrompt.jsx";
 import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNotify.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -303,12 +305,21 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
+  const [showNativePermPrompt, setShowNativePermPrompt] = useState(false);
+  const [nativePermChecked, setNativePermChecked] = useState(!isCapacitorNativeApp());
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      requestNativeNotificationPermissionOnStartup().catch(() => {});
-    }, 700);
-    return () => clearTimeout(timer);
+    if (!isCapacitorNativeApp()) return;
+    let alive = true;
+    (async () => {
+      const shouldPrompt = await shouldShowNativeNotificationPrompt();
+      if (!alive) return;
+      if (shouldPrompt) setShowNativePermPrompt(true);
+      setNativePermChecked(true);
+    })().catch(() => {
+      if (alive) setNativePermChecked(true);
+    });
+    return () => { alive = false; };
   }, []);
 
   const updateUser = (u, t) => {
@@ -316,6 +327,19 @@ export default function App() {
     if (t) { setToken(t); localStorage.setItem("crm_token", t); }
     localStorage.setItem("crm_user", JSON.stringify(u));
   };
+
+  if (!nativePermChecked) {
+    return null;
+  }
+
+  if (showNativePermPrompt) {
+    return (
+      <NativeNotificationPermissionPrompt
+        onDone={() => setShowNativePermPrompt(false)}
+        onLater={() => setShowNativePermPrompt(false)}
+      />
+    );
+  }
 
   if (!user || !token) {
     return <ErrorBoundary><LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} /></ErrorBoundary>;
@@ -808,24 +832,23 @@ function CRMApp({ user, updateUser, onLogout }) {
     let alive = true;
     let timer = null;
     const registerNativePushIfAllowed = async () => {
-      let permission = await getNativePushPermissionState();
-      if (permission !== "granted") {
-        try {
-          const { PushNotifications } = await import("@capacitor/push-notifications");
-          const perm = await PushNotifications.requestPermissions();
-          permission = perm.receive === "granted" ? "granted" : perm.receive === "denied" ? "denied" : "default";
-        } catch (err) {
-          console.warn("[NativePush] Permission request failed:", err.message || err);
-          permission = "denied";
+      const snapshot = await getNativeNotificationPermissionSnapshot();
+      if (!alive) return;
+      let permission = snapshot.permission;
+      if (!snapshot.ready) {
+        const result = await requestNativeNotificationPermissionWithContext();
+        if (!alive) return;
+        permission = result.permission === "granted" && result.systemEnabled === false ? "denied" : (result.permission || permission);
+        if (!result.ok) {
+          setPushPermission(permission);
+          setPushEnabled(false);
+          if (permission === "denied") {
+            showToast("Chưa có quyền thông báo. Bấm Mở cài đặt trong menu chuông để bật.", "warning");
+          }
+          return;
         }
       }
-      if (!alive) return;
-      setPushPermission(permission);
-      if (permission !== "granted") {
-        setPushEnabled(false);
-        showToast("App chưa được cấp quyền thông báo. Vào Cài đặt Android → Apps → LUX IQI CRM → Notifications để bật.", "warning");
-        return;
-      }
+      setPushPermission(snapshot.ready || permission === "granted" ? "granted" : permission);
       const status = await getNativePushServerStatus(apiFetch, API);
       if (!alive) return;
       if (status.ok) setNativePushServerStatus(status);
@@ -843,21 +866,34 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushEnabled(enabled);
       if (enabled) {
         localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
-        showToast("Đã đăng ký thông báo nền (FCM). Bạn có thể tắt app và vẫn nhận lead.", "success");
+        showToast("Đã đăng ký FCM. Tắt app vẫn nhận lead + tiếng thông báo.", "success");
       } else {
         localStorage.removeItem(`crm_native_push_enabled_${user.userId}`);
-        showToast("Chưa đăng ký được FCM: " + (result.ok ? "Server chưa lưu token" : (result.permission === "denied" ? "Quyền thông báo bị chặn" : "BlueStacks/thiết bị chưa hỗ trợ Google Play Services")), "warning");
+        const errMsg = result.error || (result.ok ? "Server chưa lưu token" : (result.permission === "denied" ? "Quyền thông báo bị chặn" : "Chưa lấy được FCM token — bấm Kích hoạt lại khi mở app"));
+        showToast("Chưa đăng ký FCM: " + errMsg, "warning");
       }
     };
     timer = setTimeout(() => {
-      registerNativePushIfAllowed().catch((err) => {
+      registerNativePushIfAllowed().catch(async (err) => {
         console.warn("[NativePush] Auto registration failed:", err.message || err);
-        if (alive) {
-          setPushEnabled(false);
-          showToast("Không đăng ký được push nền: " + (err.message || err), "warning");
-        }
+        if (!alive) return;
+        try {
+          const synced = await syncNativePushTokenToServer(apiFetch, API);
+          if (synced.ok) {
+            const refreshed = await refreshNativePushServerStatus();
+            if (refreshed?.ok && refreshed.tokenCount > 0) {
+              setPushEnabled(true);
+              setPushPermission("granted");
+              localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
+              showToast("Đã đồng bộ FCM token lên server.", "success");
+              return;
+            }
+          }
+        } catch {}
+        setPushEnabled(false);
+        showToast("Không đăng ký được push nền: " + (err.message || err), "warning");
       });
-    }, 1800);
+    }, 800);
     return () => {
       alive = false;
       if (timer) clearTimeout(timer);
@@ -1618,7 +1654,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                                 {pushEnabled
                                   ? (nativePushSupported ? "Đã đăng ký FCM — nhận lead khi tắt app" : "Chỉ báo khi app đang mở")
                                   : pushPermission === "denied"
-                                    ? ((nativePushSupported || nativeLocalSupported) ? "Đang bị chặn trong cài đặt điện thoại" : "Đang bị chặn trong trình duyệt")
+                                    ? ((nativePushSupported || nativeLocalSupported) ? "Quyền thông báo Android đang tắt — bấm Mở cài đặt" : "Đang bị chặn trong trình duyệt")
                                     : nativePushSupported
                                       ? (nativePushServerStatus?.fcmConfigured === false
                                         ? "Server chưa cấu hình Firebase — kiểm tra .env VPS"
@@ -1630,6 +1666,19 @@ function CRMApp({ user, updateUser, onLogout }) {
                             </div>
                             {(nativePushSupported || nativeLocalSupported) ? (
                               nativePushSupported ? (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                                  {pushPermission === "denied" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => openAppNotificationSettings()}
+                                      style={{
+                                        border: "1px solid #fcd34d", background: "#fffbeb", color: "#92400e",
+                                        borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 800, cursor: "pointer",
+                                      }}
+                                    >
+                                      Mở cài đặt
+                                    </button>
+                                  )}
                                 <button
                                   onClick={handleEnablePush}
                                   disabled={pushBusy}
@@ -1647,6 +1696,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                                 >
                                   {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
                                 </button>
+                                </div>
                               ) : (
                               <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
                                 {pushEnabled ? "App mở" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
@@ -2880,7 +2930,36 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
-function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFilter, dateFrom, setDateFrom, dateTo, setDateTo, projects, user, applyApiData, onLogout, highlightLeadId, setHighlightLeadId, selectedProject, setSelectedProject, schedules, setSchedules, managerFilter, setManagerFilter, saleFilter, setSaleFilter, autoRotateProjects, setAutoRotateProjects, sprintRotateProjects, setSprintRotateProjects }) {
+const LeadsPage = (props) => {
+  const {
+    leads,
+    searchText,
+    setSearchText,
+    statusFilter,
+    setStatusFilter,
+    dateFrom,
+    setDateFrom,
+    dateTo,
+    setDateTo,
+    projects,
+    user,
+    applyApiData,
+    onLogout,
+    highlightLeadId,
+    setHighlightLeadId,
+    selectedProject,
+    setSelectedProject,
+    schedules,
+    setSchedules,
+    managerFilter,
+    setManagerFilter,
+    saleFilter,
+    setSaleFilter,
+    autoRotateProjects,
+    setAutoRotateProjects,
+    sprintRotateProjects,
+    setSprintRotateProjects,
+  } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);
@@ -2935,6 +3014,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
   }, [saleFilterOpen]);
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [shuffleProject, setShuffleProject] = useState("");
+  const [shuffleMktMode, setShuffleMktMode] = useState(false);
+  const [shuffleTargetProject, setShuffleTargetProject] = useState("");
   const [shuffleSaleSearch, setShuffleSaleSearch] = useState("");
   const [shuffleStatus, setShuffleStatus] = useState("all");
   const [shuffleProduct, setShuffleProduct] = useState([]);
@@ -3333,6 +3414,10 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     return (Array.isArray(allUsers) ? allUsers : []).filter(u => (u.role === "manager" || u.role === "admin") && u.displayName).map(u => u.displayName).sort();
   }, [allUsers]);
 
+  const legacyShuffleProjects = useMemo(() => {
+    return (Array.isArray(projects) ? projects : []).filter(p => p.isLegacy);
+  }, [projects]);
+
   const getProjectSaleNames = (projectId) => {
     const pid = Number(projectId);
     // Only show sales that are assigned to this project via user_projects
@@ -3454,6 +3539,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
     const ids = [...shuffleSelected];
     if (!ids.length) return;
     if (!shuffleStartDate || !shuffleEndDate) { setShuffleMsg("[ERR] Cần chọn ngày bắt đầu và ngày kết thúc"); return; }
+    if (shuffleMktMode && !shuffleTargetProject) { setShuffleMsg("[ERR] Cần chọn kho lưu Data Xáo (MKT Cũ)"); return; }
     setShuffling(true);
     setShuffleMsg("");
     try {
@@ -3461,6 +3547,7 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
         method: "POST",
         body: JSON.stringify({
           projectId: shuffleProject,
+          targetProjectId: shuffleMktMode ? shuffleTargetProject : null,
           saleNames: shuffleSelectedSales,
           statusFilter: shuffleStatus,
           startDate: shuffleStartDate,
@@ -4723,8 +4810,45 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                   </select>
                 </div>
 
-                {/* Row 2: Chọn Sale (multi-select) */}
                 {shuffleProject && (
+                  <div style={{ minWidth: 230 }}>
+                    <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>Lưu Data Xáo (MKT Cũ)</label>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShuffleMktMode(v => !v);
+                          setShuffleTargetProject("");
+                          setShuffleSelectedSales([]);
+                        }}
+                        style={{
+                          width: 42, height: 24, borderRadius: 999, border: "none", cursor: "pointer",
+                          background: shuffleMktMode ? "#16a34a" : "#d1d5db", position: "relative", flexShrink: 0,
+                        }}
+                      >
+                        <span style={{
+                          position: "absolute", top: 3, left: shuffleMktMode ? 21 : 3, width: 18, height: 18,
+                          borderRadius: "50%", background: "#fff", transition: "left .15s",
+                        }} />
+                      </button>
+                      <select
+                        value={shuffleTargetProject}
+                        onChange={(e) => { setShuffleTargetProject(e.target.value); setShuffleSelectedSales([]); }}
+                        disabled={!shuffleMktMode}
+                        style={{ display: "block", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, width: "100%", color: shuffleTargetProject ? "#1f2937" : "#9ca3af", background: shuffleMktMode ? "#fff" : "#f3f4f6" }}
+                      >
+                        <option value="">-- Chọn kho lưu --</option>
+                        {legacyShuffleProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      </select>
+                    </div>
+                    {shuffleMktMode && legacyShuffleProjects.length === 0 && (
+                      <div style={{ marginTop: 5, fontSize: 11, color: "#dc2626" }}>Chưa có kho Data MKT Cũ. Vào Dự án để tạo trước.</div>
+                    )}
+                  </div>
+                )}
+
+                {/* Row 2: Chọn Sale (multi-select) */}
+                {shuffleProject && (!shuffleMktMode || shuffleTargetProject) && (
                   <div style={{ minWidth: 200, flex: 1, position: "relative" }}>
                     <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600 }}>2. Chọn Sale (nhiều người)</label>
                     <input value={shuffleSaleSearch} onChange={(e) => setShuffleSaleSearch(e.target.value)}
@@ -4734,10 +4858,11 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
                       style={{ ...inputStyle, marginBottom: 0, marginTop: 4, width: "100%", fontSize: 13 }} />
                     {(() => {
                       const q = shuffleSaleSearch.toLowerCase();
-                      const pid = Number(shuffleProject);
+                      const pid = Number(shuffleMktMode && shuffleTargetProject ? shuffleTargetProject : shuffleProject);
                       const projectSales = allUsers.filter(u => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid)).map(u => u.displayName);
                       let allSales;
                       if (projectSales.length > 0) { allSales = [...new Set(projectSales)].sort(); }
+                      else if (shuffleMktMode) { allSales = allSaleUsers; }
                       else { const pls = new Set(); leads.forEach(l => { if (l.projectId === pid && l.saleName && l.saleName.toLowerCase() !== "chưa chia") pls.add(l.saleName); }); allSales = [...pls].sort(); }
                       const filtered = allSales.filter(s => (!q || s.toLowerCase().includes(q)) && !shuffleSelectedSales.includes(s));
                       if (shuffleSaleFocused) return (
@@ -4967,8 +5092,8 @@ function LeadsPage({ leads, searchText, setSearchText, statusFilter, setStatusFi
 
                   {/* Action button */}
                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <button onClick={handleScheduleDistribution} disabled={shuffling || !shuffleSelected.size || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate}
-                      style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate) ? 0.5 : 1 }}>
+                    <button onClick={handleScheduleDistribution} disabled={shuffling || !shuffleSelected.size || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate || (shuffleMktMode && !shuffleTargetProject)}
+                      style={{ ...btnPrimary, padding: "10px 24px", fontSize: 14, opacity: (!shuffleSelected.size || shuffling || !shuffleSelectedSales.length || !shuffleStartDate || !shuffleEndDate || (shuffleMktMode && !shuffleTargetProject)) ? 0.5 : 1 }}>
                       {shuffling ? "Đang tạo lịch..." : <><Share2 size={14} /> Tạo lịch chia {shuffleSelected.size} lead cho {shuffleSelectedSales.length} sale</>}
                     </button>
                   </div>
@@ -6291,7 +6416,7 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
       </div>
     </div>
   );
-}
+};
 
 function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, allUsers = [] }) {
   const isSale = user.role === "sale";
@@ -7413,6 +7538,33 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject, apiFetch, applyApiData, isAdminOnly, openLegacyImport }) {
   const isMobile = useIsMobile();
   const [syncingId, setSyncingId] = React.useState(null);
+  const [showMktProjectModal, setShowMktProjectModal] = React.useState(false);
+  const [mktProjectName, setMktProjectName] = React.useState("");
+  const [savingMktProject, setSavingMktProject] = React.useState(false);
+
+  const createMktProject = async () => {
+    const name = mktProjectName.trim();
+    if (!name) { showToast("Vui lòng nhập tên kho Data MKT Cũ", "warning"); return; }
+    if (savingMktProject) return;
+    setSavingMktProject(true);
+    try {
+      const r = await apiFetch(`${API}/projects`, { method: "POST", body: JSON.stringify({ name, isLegacy: true }) });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        showToast(err.error || "Không tạo được kho Data MKT Cũ", "error");
+        return;
+      }
+      const data = await r.json();
+      applyApiData(data);
+      setShowMktProjectModal(false);
+      setMktProjectName("");
+      showToast("Đã tạo kho Data MKT Cũ (Xáo)", "success");
+    } catch (e) {
+      showToast("Không tạo được kho Data MKT Cũ: " + e.message, "error");
+    } finally {
+      setSavingMktProject(false);
+    }
+  };
 
   const syncOne = async (id) => {
     if (syncingId) return;
@@ -7433,6 +7585,37 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
     }
   };
 
+  const mktProjectModal = showMktProjectModal && (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 2000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+      <div style={{ width: "min(420px, 100%)", background: "#fff", borderRadius: 14, boxShadow: "0 20px 60px rgba(15,23,42,.25)", border: "1px solid #e2e8f0", overflow: "hidden" }}>
+        <div style={{ padding: "14px 16px", borderBottom: "1px solid #eef2f7", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 900, color: "#0f3d1e" }}>Tạo Data MKT Cũ (Xáo)</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>Kho này chỉ dùng để lưu lead xáo từ dự án khác.</div>
+          </div>
+          <button onClick={() => setShowMktProjectModal(false)} style={{ border: "none", background: "#f8fafc", width: 32, height: 32, borderRadius: 8, cursor: "pointer", color: "#64748b" }}><X size={18} /></button>
+        </div>
+        <div style={{ padding: 16 }}>
+          <label style={{ display: "block", fontSize: 12, fontWeight: 800, color: "#334155", marginBottom: 6 }}>Tên kho lưu</label>
+          <input
+            value={mktProjectName}
+            onChange={(e) => setMktProjectName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createMktProject(); }}
+            placeholder="Ví dụ: Data Xáo MKT Cũ Vinhomes"
+            style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
+            autoFocus
+          />
+        </div>
+        <div style={{ padding: "12px 16px", borderTop: "1px solid #eef2f7", display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button onClick={() => setShowMktProjectModal(false)} style={btnSecondary}>Hủy</button>
+          <button onClick={createMktProject} disabled={savingMktProject} style={{ ...btnPrimary, opacity: savingMktProject ? .65 : 1 }}>
+            {savingMktProject ? "Đang tạo..." : "+ Tạo kho"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (isMobile) {
     const mobileActionBtn = {
       border: "1px solid #d9e2dc",
@@ -7452,6 +7635,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {mktProjectModal}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div>
             <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800, textTransform: "uppercase" }}>Danh sách</div>
@@ -7460,6 +7644,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
           {isAdminOnly && (
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={openLegacyImport} style={{ ...mobileActionBtn, color: "#1d4ed8", background: "#eff6ff", borderColor: "#bfdbfe" }}>Data cũ</button>
+              <button onClick={() => setShowMktProjectModal(true)} style={{ ...mobileActionBtn, color: "#7c2d12", background: "#fff7ed", borderColor: "#fed7aa" }}>Data Xáo</button>
               <button onClick={openNewProject} style={{ ...mobileActionBtn, color: "#fff", background: "#0f3d1e", borderColor: "#0f3d1e" }}><Plus size={13} /> Thêm</button>
             </div>
           )}
@@ -7524,11 +7709,13 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
 
   return (
     <>
+      {mktProjectModal}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>{projects.length} dự án</div>
         {isAdminOnly && (
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={openLegacyImport} style={{ ...btnPrimary, background: "linear-gradient(135deg, #2563eb, #1d4ed8)" }}>+ Thêm Data Cũ</button>
+            <button onClick={() => setShowMktProjectModal(true)} style={{ ...btnPrimary, background: "linear-gradient(135deg, #f97316, #c2410c)" }}>+ Data MKT Cũ (Xáo)</button>
             <button onClick={openNewProject} style={btnPrimary}>+ Thêm dự án</button>
           </div>
         )}
