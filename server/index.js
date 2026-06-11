@@ -4856,6 +4856,29 @@ function normalizeScheduleStatusFilter(value = "") {
 async function getScheduleLeadPool(db, sch) {
   const storedIds = [...new Set(safeParseArray(sch.lead_ids).map(v => Number(v)).filter(Boolean))];
   const statusFilter = normalizeScheduleStatusFilter(sch.status_filter);
+  const baseWhere = `
+     WHERE project_id = ?
+       AND COALESCE(is_locked, 0) = 0
+       AND LOWER(COALESCE(status, '')) NOT IN ('booked','booking','booking_other','closed','deposit')`;
+
+  let validStored = [];
+  if (storedIds.length) {
+    const placeholders = storedIds.map(() => "?").join(",");
+    const storedRows = await all(db,
+      `SELECT id FROM leads
+       ${baseWhere}
+         AND id IN (${placeholders})`,
+      [sch.project_id, ...storedIds]
+    );
+    const storedSet = new Set(storedRows.map(r => Number(r.id)).filter(Boolean));
+    validStored = storedIds.filter(id => storedSet.has(id));
+  }
+
+  const replacementLimit = storedIds.length ? storedIds.length - validStored.length : 0;
+  if (storedIds.length && replacementLimit <= 0) {
+    return { leadIds: validStored, changed: validStored.join(",") !== storedIds.join(","), missingCount: storedIds.length - validStored.length };
+  }
+
   const args = [sch.project_id];
   let whereStatus = "";
   if (statusFilter) {
@@ -4864,19 +4887,15 @@ async function getScheduleLeadPool(db, sch) {
   }
   const activeRows = await all(db,
     `SELECT id FROM leads
-     WHERE project_id = ?
+     ${baseWhere}
        ${whereStatus}
-       AND COALESCE(is_locked, 0) = 0
-       AND LOWER(COALESCE(status, '')) NOT IN ('booked','booking','booking_other','closed','deposit')
      ORDER BY datetime(created_at) ASC, id ASC`,
     args
   );
   const activeIds = activeRows.map(r => Number(r.id)).filter(Boolean);
-  const activeSet = new Set(activeIds);
-  const validStored = storedIds.filter(id => activeSet.has(id));
   const validSet = new Set(validStored);
-  const replacement = activeIds.filter(id => !validSet.has(id));
-  const reconciled = [...validStored, ...replacement];
+  const replacement = activeIds.filter(id => !validSet.has(id)).slice(0, replacementLimit || activeIds.length);
+  const reconciled = storedIds.length ? [...validStored, ...replacement] : activeIds;
   return { leadIds: reconciled, changed: reconciled.join(",") !== storedIds.join(","), missingCount: storedIds.length - validStored.length };
 }
 
@@ -4959,8 +4978,14 @@ async function processSchedules(db, triggerUser) {
       console.log(`[processSchedules] Schedule #${sch.id}: reconciled lead pool, removed ${pool.missingCount} missing/stale ids, active=${leadIdList.length}`);
     }
 
-    // Guard: filter out sales no longer in the project
-    if (saleList.length && sch.project_id) {
+    // Guard: filter out sales no longer in the project.
+    // MKT old-data storage projects are neutral buckets, so selected sales do not need
+    // to be members of the storage project to receive copied leads.
+    const scheduleProject = sch.project_id
+      ? await get(db, "SELECT is_legacy FROM projects WHERE id = ?", [sch.project_id])
+      : null;
+    const skipProjectSaleGuard = !!scheduleProject?.is_legacy;
+    if (!skipProjectSaleGuard && saleList.length && sch.project_id) {
       const activeSales = await all(db,
         `SELECT u.display_name FROM users u INNER JOIN user_projects up ON up.user_id = u.id
          WHERE up.project_id = ? AND u.role = 'sale'`, [sch.project_id]);
