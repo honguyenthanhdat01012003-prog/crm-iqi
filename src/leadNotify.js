@@ -2,7 +2,8 @@ export function normalizePersonName(value = "") {
   return String(value || "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[đĐ]/g, "d")
+    .replace(/\u0111/g, "d")
+    .replace(/\u0110/g, "d")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -13,23 +14,29 @@ export function isSamePersonName(a, b) {
 }
 
 export function leadKey(lead) {
-  return `${lead?.name || ""}||${lead?.phone || ""}`;
+  if (lead?.notifKey) return String(lead.notifKey);
+  const id = lead?.leadId || lead?.id;
+  if (id && !String(id).startsWith("push:")) return `id:${id}`;
+  const name = String(lead?.name || "").trim();
+  const phone = String(lead?.phone || "").trim();
+  return name || phone ? `${name}||${phone}` : "";
 }
 
 export function detectLeadNotifications(prevLeads, nextLeads, { role, displayName, seenLeadKeys }) {
   const prevArr = Array.isArray(prevLeads) ? prevLeads : [];
   const nextArr = Array.isArray(nextLeads) ? nextLeads : [];
-  const prevKeys = new Set(prevArr.map(leadKey));
+  const prevKeys = new Set(prevArr.map(leadKey).filter(Boolean));
   const seen = seenLeadKeys instanceof Set ? seenLeadKeys : new Set();
 
   const newLeads = nextArr.filter((l) => {
     const key = leadKey(l);
-    return !prevKeys.has(key) && !seen.has(key);
+    return key && !prevKeys.has(key) && !seen.has(key);
   });
 
   const newlyAssigned = role === "sale"
     ? nextArr.filter((l) => {
       const key = leadKey(l);
+      if (!key || seen.has(key)) return false;
       const prevLead = prevArr.find((p) => leadKey(p) === key);
       if (!prevLead) return false;
       return !isSamePersonName(prevLead.saleName, displayName)
@@ -46,12 +53,16 @@ export function detectLeadNotifications(prevLeads, nextLeads, { role, displayNam
 }
 
 export function leadFromPushPayload(payload = {}) {
-  const body = payload.body || "";
-  const nameMatch = body.match(/:\s*([^•]+)/);
+  const body = String(payload.body || "");
+  const leadId = Number(payload.leadId || payload.id || 0) || 0;
+  const fallbackKey = payload.tag || payload.title || body || String(Date.now());
+  const nameFromBody = body.split("-")[0]?.replace(/^.*?:/, "").trim();
   return {
-    id: Number(payload.leadId || 0) || Date.now(),
-    name: nameMatch ? nameMatch[1].trim() : (payload.title || "Lead mới"),
-    phone: "",
+    id: leadId || `push:${fallbackKey}`,
+    leadId,
+    notifKey: leadId ? `id:${leadId}` : `push:${fallbackKey}`,
+    name: nameFromBody || payload.title || "Lead moi",
+    phone: payload.phone || "",
     notifTime: Date.now(),
     fromPush: true,
   };

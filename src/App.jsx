@@ -638,6 +638,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   // Notification state
   const [notifications, setNotifications] = useState([]);
+  const notificationsRef = useRef([]);
   const [showNotif, setShowNotif] = useState(false);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
   const webPushSupported = isPushNotificationSupported();
@@ -665,6 +666,10 @@ function CRMApp({ user, updateUser, onLogout }) {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
   const pushPromptKey = `crm_push_prompt_seen_${user.userId || user.username || user.displayName || "user"}`;
+
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
 
   useEffect(() => {
     managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
@@ -703,29 +708,35 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, []);
 
   const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null } = {}) => {
-    const items = pushItem ? [pushItem] : notifyLeads;
+    const items = (pushItem ? [pushItem] : notifyLeads).filter(Boolean);
     if (!items.length) return;
+    const existing = Array.isArray(notificationsRef.current) ? notificationsRef.current : [];
+    const fresh = items.filter((item) => {
+      const key = leadKey(item);
+      if (!key || seenLeadKeys.has(key)) return false;
+      return !existing.some((x) => leadKey(x) === key);
+    });
+    if (!fresh.length) return;
     playLeadSound(soundKind);
-    const first = items[0];
+    const first = fresh[0];
     if (nativeLocalSupported) {
       showNativeLeadNotification({
         title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
         body: first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới"),
-        leadId: first.id,
+        leadId: first.leadId || first.id,
         sound: soundKind,
       }).catch(() => {});
     }
     setNotifications((n) => {
-      const existing = Array.isArray(n) ? n : [];
-      const fresh = items.filter((item) => {
-        if (item.fromPush && item.id) return !existing.some((x) => x.id === item.id);
+      const current = Array.isArray(n) ? n : [];
+      const stillFresh = fresh.filter((item) => {
         const key = leadKey(item);
-        return key !== "||" && !existing.some((x) => leadKey(x) === key);
+        return key && !seenLeadKeys.has(key) && !current.some((x) => leadKey(x) === key);
       });
-      if (!fresh.length) return existing;
-      return [...fresh.map((l) => ({ ...l, notifTime: Date.now() })), ...existing].slice(0, 50);
+      if (!stillFresh.length) return current;
+      return [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
     });
-  }, [nativeLocalSupported, playLeadSound, user.role]);
+  }, [nativeLocalSupported, playLeadSound, seenLeadKeys, user.role]);
 
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
@@ -965,7 +976,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     return () => { alive = false; cleanup?.(); };
   }, [nativePushSupported, triggerLeadAlerts]);
 
-  const applyApiData = useCallback((data) => {
+  const applyApiData = useCallback((data, options = {}) => {
+    const suppressNotifications = !!options.suppressNotifications;
     // If server says no change, skip all state updates
     if (data.noChange) {
       if (data.hash) setSyncHash(data.hash);
@@ -985,13 +997,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.version != null) setSyncHash(String(data.version));
     if (Array.isArray(data.leads)) {
       const prevLeads = leadsRef.current;
-      const { notifyLeads, soundKind } = detectLeadNotifications(prevLeads, data.leads, {
-        role: user.role,
-        displayName: user.displayName,
-        seenLeadKeys,
-      });
-      if (notifyLeads.length > 0) {
-        triggerLeadAlerts({ notifyLeads, soundKind });
+      if (!suppressNotifications) {
+        const { notifyLeads, soundKind } = detectLeadNotifications(prevLeads, data.leads, {
+          role: user.role,
+          displayName: user.displayName,
+          seenLeadKeys,
+        });
+        if (notifyLeads.length > 0) {
+          triggerLeadAlerts({ notifyLeads, soundKind });
+        }
       }
       leadsRef.current = data.leads;
       setLeads(data.leads);
@@ -1008,7 +1022,10 @@ function CRMApp({ user, updateUser, onLogout }) {
   const markAllSeen = useCallback(() => {
     setSeenLeadKeys(prev => {
       const next = new Set(prev);
-      notifications.forEach(n => next.add(`${n.name}||${n.phone}`));
+      notifications.forEach(n => {
+        const key = leadKey(n);
+        if (key) next.add(key);
+      });
       localStorage.setItem("crm_seen_keys", JSON.stringify([...next]));
       return next;
     });
@@ -1031,14 +1048,14 @@ function CRMApp({ user, updateUser, onLogout }) {
         if (data.leads) {
           setSeenLeadKeys(prev => {
             if (prev.size === 0) {
-              const keys = new Set(data.leads.map(l => `${l.name}||${l.phone}`));
+              const keys = new Set(data.leads.map(leadKey).filter(Boolean));
               localStorage.setItem("crm_seen_keys", JSON.stringify([...keys]));
               return keys;
             }
             return prev;
           });
         }
-        applyApiData(data);
+        applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.leads)) leadsRef.current = data.leads;
       })
       .catch(() => setServerDown(true));
@@ -3213,6 +3230,13 @@ const LeadsPage = (props) => {
     list.forEach((p) => (m[p.id] = p.name));
     return m;
   }, [projects]);
+
+  const getLeadProjectName = useCallback((lead, { includeSource = true } = {}) => {
+    const base = projectMap[lead?.projectId] || "-";
+    if (!includeSource || isSale) return base;
+    if (lead?.isMktXao && lead?.sourceProjectName) return `${base} <- ${lead.sourceProjectName}`;
+    return base;
+  }, [projectMap, isSale]);
 
   // Available projects for this user
   const availableProjects = useMemo(() => {
@@ -6216,7 +6240,7 @@ const LeadsPage = (props) => {
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
                       <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {l.phone || "-"} · {projectMap[l.projectId] || "-"}
+                        {l.phone || "-"} · {getLeadProjectName(l)}
                       </span>
                     </span>
                     <span style={{ minWidth: 0 }}>
@@ -6254,7 +6278,7 @@ const LeadsPage = (props) => {
                       {!isSale && histCount > 0 && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><ClipboardList size={12} /> {histCount}</span>}
                       {isAdmin && l.saleName && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><User size={12} /> {l.saleName}</span>}
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
-                      {isAdmin && <span style={{ fontSize: 11 }}>{projectMap[l.projectId] || "-"}</span>}
+                      {isAdmin && <span style={{ fontSize: 11 }}>{getLeadProjectName(l)}</span>}
                     </div>
                     {isSale && l.lastSaleUpdate && (
                       <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
@@ -6293,7 +6317,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
                   </div>
                 )}
               </div>
@@ -6341,7 +6365,7 @@ const LeadsPage = (props) => {
                     </td>
                     <td style={{ ...tdStyle, fontSize: 12, color: "#4b5563" }}>{l.managerName || "-"}</td>
                     <td style={tdStyle}>{l.saleName || "Chưa chia"}</td>
-                    <td style={{ ...tdStyle, fontSize: 11 }}>{projectMap[l.projectId] || "-"}</td>
+                    <td style={{ ...tdStyle, fontSize: 11 }}>{getLeadProjectName(l)}</td>
                     {!isSale && <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>}
                     {!isSale && <td style={tdStyle}>
                       {(() => { const t = getLeadTemp(l.createdAt); return (
@@ -6354,7 +6378,7 @@ const LeadsPage = (props) => {
                   rows.push(
                     <tr key={`${l.id}-detail`}>
                       <td colSpan={isSale ? 8 : 10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
-                        <LeadDetail lead={l} projectName={projectMap[l.projectId] || "-"} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} allUsers={allUsers} />
+                        <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} allUsers={allUsers} />
                       </td>
                     </tr>
                   );
@@ -6384,7 +6408,7 @@ const LeadsPage = (props) => {
               <div style={{ minWidth: 0 }}>
                 <div style={{ color: "#0f172a", fontSize: 14, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mobileDetailLead.name || "Chi tiết khách hàng"}</div>
                 <div style={{ marginTop: 2, color: "#64748b", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {mobileDetailLead.phone || "-"} · {projectMap[mobileDetailLead.projectId] || "-"}
+                  {mobileDetailLead.phone || "-"} · {getLeadProjectName(mobileDetailLead)}
                 </div>
               </div>
               <button onClick={() => setMobileDetailId(null)} style={{ width: 38, height: 38, border: "1px solid #e2e8f0", borderRadius: 12, background: "#fff", color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
@@ -6394,7 +6418,7 @@ const LeadsPage = (props) => {
             <div style={{ overflowY: "auto", WebkitOverflowScrolling: "touch", paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}>
               <LeadDetail
                 lead={mobileDetailLead}
-                projectName={projectMap[mobileDetailLead.projectId] || "-"}
+                projectName={getLeadProjectName(mobileDetailLead)}
                 isAdmin={isAdmin}
                 user={user}
                 applyApiData={applyApiData}
@@ -6747,6 +6771,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b style={detailValueStyle}>{lead.phone || "-"}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b style={detailValueStyle}>{projectName}</b></div>
+        {isAdmin && lead.isMktXao && lead.sourceProjectName && (
+          <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Nguồn data</span><br /><b style={detailValueStyle}>{lead.sourceProjectName}</b></div>
+        )}
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b style={detailValueStyle}>{lead.product || "-"}</b></div>
         {!isSale && <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={detailValueStyle}>{lead.createdAt || "-"}</b></div>}
         {!isSale && <div style={detailCellStyle}>
@@ -7059,8 +7086,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         // Collect all events from history and sort by date
         const allEvents = [];
         history.forEach((h) => {
-          const isChia = (h.action || "").toLowerCase().includes("chia");
-          const isRecall = (h.action || "").toLowerCase().includes("thu h");
+          const actionText = String(h.action || "").toLowerCase();
+          const sourceText = String(h.source || "").toLowerCase();
+          if (sourceText === "mkt-xao" || actionText.includes("copy data mkt")) return;
+          const isChia = actionText.includes("chia");
+          const isRecall = actionText.includes("thu h");
           if (isChia) {
             const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
             allEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id, _ts: parseVNDate(h.date) });

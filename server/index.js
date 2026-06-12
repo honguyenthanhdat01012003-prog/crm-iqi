@@ -1919,6 +1919,19 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   return { newPhones };
 }
 
+function getMktXaoMeta(lead = {}) {
+  const source = String(lead.source || "").toLowerCase();
+  const adsId = String(lead.ads_id || "");
+  const notes = String(lead.notes || "");
+  const isMktXao = source.includes("mkt cu xao") || source.includes("mkt") || adsId.startsWith("mktxao:") || /^Copy tu /i.test(notes);
+  const match = notes.match(/^Copy tu (.+?) #(\d+)/i);
+  return {
+    isMktXao,
+    sourceProjectName: match ? match[1].trim() : "",
+    sourceLeadId: match ? Number(match[2]) : null,
+  };
+}
+
 async function readData(db) {
   const leads = await all(db, "SELECT * FROM leads ORDER BY id ASC");
 
@@ -1965,6 +1978,10 @@ async function readData(db) {
   // Build phone-based registration map for re-registration detection
   const phoneRegMap = {};
   for (const l of leads) {
+    // Data Xao/MKT Cu copies are storage copies, not new customer registrations.
+    // Counting them here creates artificial "Dang ky lan 2/3/..." every time the
+    // same lead is copied into a storage project.
+    if (getMktXaoMeta(l).isMktXao) continue;
     const phone = (l.phone || "").replace(/[^0-9+]/g, "");
     if (!phone) continue;
     if (!phoneRegMap[phone]) phoneRegMap[phone] = [];
@@ -1986,6 +2003,7 @@ async function readData(db) {
 
   return {
     leads: leads.map((l) => {
+      const mktXaoMeta = getMktXaoMeta(l);
       const phone = (l.phone || "").replace(/[^0-9+]/g, "");
       const allRegs = phone ? (phoneRegMap[phone] || []) : [];
       const regIndex = allRegs.findIndex(r => r.leadId === l.id);
@@ -2053,6 +2071,9 @@ async function readData(db) {
       managerName: l.manager_name || "",
       saleHistory,
       source: l.source,
+      isMktXao: mktXaoMeta.isMktXao,
+      sourceProjectName: mktXaoMeta.sourceProjectName,
+      sourceLeadId: mktXaoMeta.sourceLeadId,
       budget: l.budget,
       syncAt: l.sync_at,
       notes: l.notes,
@@ -5297,9 +5318,18 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
       for (const sourceLeadId of uniqueLeadIds) {
         const lead = await get(db, "SELECT * FROM leads WHERE id = ? AND project_id = ?", [sourceLeadId, sourceProjectId]);
         if (!lead) continue;
-        const marker = lead.ads_id ? `mktxao:ads:${lead.ads_id}` : `mktxao:lead:${sourceProjectId}:${sourceLeadId}`;
-        const existingCopy = await get(db, "SELECT id FROM leads WHERE project_id = ? AND ads_id = ?", [storageProjectId, marker]);
+        const marker = lead.ads_id ? `mktxao:ads:${sourceProjectId}:${lead.ads_id}` : `mktxao:lead:${sourceProjectId}:${sourceLeadId}`;
+        const legacyMarker = lead.ads_id ? `mktxao:ads:${lead.ads_id}` : "";
+        const copyNote = `Copy tu ${sourceProject.name} #${sourceLeadId}`;
+        const existingCopy = legacyMarker
+          ? await get(
+            db,
+            "SELECT id FROM leads WHERE project_id = ? AND (ads_id = ? OR (ads_id = ? AND notes = ?))",
+            [storageProjectId, marker, legacyMarker, copyNote]
+          )
+          : await get(db, "SELECT id FROM leads WHERE project_id = ? AND ads_id = ?", [storageProjectId, marker]);
         if (existingCopy) {
+          await run(db, "UPDATE leads SET ads_id = ?, notes = ? WHERE id = ?", [marker, copyNote, existingCopy.id]);
           copiedLeadIds.push(Number(existingCopy.id));
           reusedCount++;
           continue;
@@ -5321,7 +5351,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
             lead.customer_fb_url || "",
             lead.is_hot ? 1 : 0,
             now,
-            `Copy tu ${sourceProject.name} #${sourceLeadId}`,
+            copyNote,
           ]
         );
         const newLeadId = Number(result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID);

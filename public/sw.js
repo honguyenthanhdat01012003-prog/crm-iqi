@@ -1,5 +1,31 @@
 const CACHE_NAME = "lux-iqi-crm-pwa-v2";
 const APP_SHELL = ["/", "/logo-iqi.svg", "/site.webmanifest"];
+const RECENT_PUSH_TTL = 10 * 60 * 1000;
+const recentPushKeys = new Map();
+
+function getPushKey(payload = {}) {
+  const data = payload.data || {};
+  const leadIds = Array.isArray(data.leadIds) ? data.leadIds.join(",") : "";
+  return String(
+    data.leadId ||
+    payload.leadId ||
+    payload.id ||
+    leadIds ||
+    payload.tag ||
+    `${payload.title || ""}|${payload.body || ""}`
+  ).trim();
+}
+
+function isRecentDuplicatePush(key) {
+  if (!key) return false;
+  const now = Date.now();
+  for (const [cachedKey, at] of recentPushKeys.entries()) {
+    if (now - at > RECENT_PUSH_TTL) recentPushKeys.delete(cachedKey);
+  }
+  if (recentPushKeys.has(key)) return true;
+  recentPushKeys.set(key, now);
+  return false;
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -65,15 +91,27 @@ self.addEventListener("push", (event) => {
 
   const title = payload.title || "LUX IQI CRM";
   const sound = payload.sound || payload.data?.sound || "";
+  const pushKey = getPushKey(payload);
+  if (isRecentDuplicatePush(pushKey)) {
+    event.waitUntil(Promise.resolve());
+    return;
+  }
+
+  const data = {
+    ...(payload.data || {}),
+    url: payload.data?.url || "/",
+    leadId: payload.data?.leadId || payload.leadId || payload.id || null,
+    pushKey,
+  };
   const options = {
     body: payload.body || "Bạn có thông báo mới",
     icon: "/logo-iqi.svg",
     badge: "/logo-iqi.svg",
-    tag: payload.tag || "lux-iqi-crm",
-    renotify: true,
+    tag: payload.tag || (pushKey ? `lux-iqi-${pushKey}` : "lux-iqi-crm"),
+    renotify: false,
     requireInteraction: !!payload.requireInteraction,
     vibrate: [180, 80, 180],
-    data: payload.data || { url: "/" },
+    data,
   };
 
   const tasks = [self.registration.showNotification(title, options)];
