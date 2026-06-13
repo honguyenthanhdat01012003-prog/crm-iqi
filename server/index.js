@@ -1018,13 +1018,16 @@ function getFirstUpdaterReportStatus(lead = {}, history = []) {
 
 function getLeadReportStatusFromHistory(lead = {}, history = []) {
   let hasInterested = false;
+  let hasLowInterest = false;
   for (const h of history) {
     if (!isReportFeedbackHistory(h)) continue;
     const key = normalizeStatus(h.status);
     if (key === "appointment") return "appointment";
-    if (key === "interested" || key === "low_interest") hasInterested = true;
+    if (key === "interested") hasInterested = true;
+    if (key === "low_interest") hasLowInterest = true;
   }
   if (hasInterested) return "interested";
+  if (hasLowInterest) return "low_interest";
   return getFirstUpdaterReportStatus(lead, history);
 }
 
