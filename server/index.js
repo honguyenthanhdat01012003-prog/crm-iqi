@@ -3346,10 +3346,10 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
       const chunk = leadIds.slice(i, i + 500);
       const placeholders = chunk.map(() => "?").join(",");
       const rows = await all(db,
-        `SELECT lead_id, sale_name, action, status, source, date, seq
+        `SELECT lead_id, sale_name, action, status, source, contact_date AS date, seq
          FROM lead_history
          WHERE lead_id IN (${placeholders})
-         ORDER BY lead_id ASC, COALESCE(seq, 0) ASC, date ASC`,
+         ORDER BY lead_id ASC, COALESCE(seq, 0) ASC, contact_date ASC`,
         chunk
       );
       for (const row of rows) {
