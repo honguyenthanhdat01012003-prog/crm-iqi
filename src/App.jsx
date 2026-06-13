@@ -224,6 +224,51 @@ const STATUS_COLORS = {
 const STATUS_LABEL_TO_KEY = {};
 Object.entries(STATUS_LABELS).forEach(([k, v]) => { STATUS_LABEL_TO_KEY[v] = k; STATUS_LABEL_TO_KEY[k] = k; });
 
+function normalizeLeadStatusKey(status) {
+  const raw = String(status || "").trim();
+  if (!raw) return "new";
+  return STATUS_LABEL_TO_KEY[raw] || STATUS_LABEL_TO_KEY[raw.toLowerCase()] || raw;
+}
+
+function isFeedbackStatusHistoryItem(h) {
+  if (!h || h.action === "Chia lead" || !h.status) return false;
+  const src = String(h.source || "").toLowerCase();
+  const validSources = new Set(["sale", "telegram", "admin", "manager"]);
+  return validSources.has(src) || (!src && h.saleName);
+}
+
+function getFirstUpdaterInfo(lead) {
+  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+  let firstUpdater = "";
+  let latestStatus = "";
+  for (const h of history) {
+    if (!isFeedbackStatusHistoryItem(h)) continue;
+    firstUpdater = h.saleName || h.source || "";
+    latestStatus = h.status;
+    break;
+  }
+  if (!firstUpdater) return { updater: "", status: normalizeLeadStatusKey(lead?.status || "new") };
+  for (const h of history) {
+    const updater = h?.saleName || h?.source || "";
+    if (!isFeedbackStatusHistoryItem(h) || updater !== firstUpdater) continue;
+    latestStatus = h.status;
+  }
+  return { updater: firstUpdater, status: normalizeLeadStatusKey(latestStatus || lead?.status || "new") };
+}
+
+function getLeadReportStatus(lead) {
+  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+  let hasInterested = false;
+  for (const h of history) {
+    if (!isFeedbackStatusHistoryItem(h)) continue;
+    const key = normalizeLeadStatusKey(h.status);
+    if (key === "appointment") return "appointment";
+    if (key === "interested") hasInterested = true;
+  }
+  if (hasInterested) return "interested";
+  return getFirstUpdaterInfo(lead).status || "new";
+}
+
 function formatVND(n) {
   if (!n && n !== 0) return "0 ₫";
   return Number(n).toLocaleString("vi-VN") + " ₫";
@@ -1320,7 +1365,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     const statusCounts = {};
     Object.keys(STATUS_LABELS).forEach((s) => (statusCounts[s] = 0));
     filteredLeads.forEach((l) => {
-      const key = l.status || "new";
+      const key = getLeadReportStatus(l);
       statusCounts[key] = (statusCounts[key] || 0) + 1;
     });
     return { total: filteredLeads.length, ...statusCounts };
@@ -1337,7 +1382,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         statusKeys.forEach(k => map[sale][k] = 0);
       }
       map[sale].total++;
-      const st = l.status || "new";
+      const st = getLeadReportStatus(l);
       if (map[sale][st] !== undefined) map[sale][st]++;
       if (st === "closed" && l.dealValue) {
         map[sale].totalDealValue += Number(l.dealValue) || 0;
@@ -4796,8 +4841,10 @@ const LeadsPage = (props) => {
                     width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width .5s ease",
                   });
 
+                  const interestedReportLabel = "Quan tâm (Quan tâm + QT hời hợt)";
                   const rows = [
-                    { ...grps.interested, color: "#16a34a", emoji: "✅" },
+                    { ...grps.interested, label: interestedReportLabel, color: "#16a34a", emoji: "✅" },
+                    ...(grps.appointment ? [{ ...grps.appointment, color: "#8b5cf6", emoji: "📅" }] : []),
                     { ...grps.noFeedback, color: "#f59e0b", emoji: "⏳" },
                     { ...grps.notInterested, color: "#dc2626", emoji: "❌" },
                     { ...grps.booked, color: "#8b5cf6", emoji: "🎉" },
@@ -4805,7 +4852,8 @@ const LeadsPage = (props) => {
                   ];
 
                   // Copy text
-                  const copyText = `Thống kê ${d.projectName} từ ${fmtDate(d.startDate)} đến ${fmtDate(d.endDate)}:\n- Tổng số lead: ${d.total}\n+ ${grps.interested.label}: ${grps.interested.count} (~${grps.interested.pct}%)\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(d.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(d.cpLead)}`;
+                  const appointmentLine = grps.appointment ? `\n+ ${grps.appointment.label}: ${grps.appointment.count} (~${grps.appointment.pct}%)` : "";
+                  const copyText = `Thống kê ${d.projectName} từ ${fmtDate(d.startDate)} đến ${fmtDate(d.endDate)}:\n- Tổng số lead: ${d.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(d.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(d.cpLead)}`;
 
                   return (
                     <div>
