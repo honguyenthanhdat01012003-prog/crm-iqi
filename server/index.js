@@ -1022,7 +1022,7 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
     if (!isReportFeedbackHistory(h)) continue;
     const key = normalizeStatus(h.status);
     if (key === "appointment") return "appointment";
-    if (key === "interested") hasInterested = true;
+    if (key === "interested" || key === "low_interest") hasInterested = true;
   }
   if (hasInterested) return "interested";
   return getFirstUpdaterReportStatus(lead, history);

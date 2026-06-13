@@ -263,7 +263,7 @@ function getLeadReportStatus(lead) {
     if (!isFeedbackStatusHistoryItem(h)) continue;
     const key = normalizeLeadStatusKey(h.status);
     if (key === "appointment") return "appointment";
-    if (key === "interested") hasInterested = true;
+    if (key === "interested" || key === "low_interest") hasInterested = true;
   }
   if (hasInterested) return "interested";
   return getFirstUpdaterInfo(lead).status || "new";
