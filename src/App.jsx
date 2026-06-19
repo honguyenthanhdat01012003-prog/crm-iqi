@@ -22,6 +22,7 @@ import { isCapacitorNativeApp } from "./nativeStartup.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext, shouldShowNativeNotificationPrompt } from "./nativeNotificationPermission.js";
 import { NativeNotificationPermissionPrompt } from "./NativeNotificationPermissionPrompt.jsx";
 import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNotify.js";
+import { useServerConnection } from "./useServerConnection.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -687,6 +688,16 @@ function CRMApp({ user, updateUser, onLogout }) {
   });
   useEffect(() => { localStorage.setItem("crm_page", page); }, [page]);
 
+  const {
+    serverDown,
+    initialDataLoaded,
+    markApiOk,
+    markInitialDataLoaded,
+    markApiFailure,
+    markSocketConnected,
+    markSocketDisconnected,
+  } = useServerConnection(API);
+
   // Refresh user data (projectIds etc.) from server on mount
   useEffect(() => {
     apiFetch(`${API}/me`).then(r => r.json()).then(data => {
@@ -1119,17 +1130,13 @@ function CRMApp({ user, updateUser, onLogout }) {
     setShowNotif(false);
   }, [notifications]);
 
+  const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
+
   useEffect(() => {
-    // Connection health state
-    const checkHealth = () => fetch(`${API}/version`, { signal: AbortSignal.timeout(8000) })
-      .then(r => { if (r.ok) { setServerDown(false); return r.json(); } throw new Error(); })
-      .then(v => console.log(`[CRM] Server version: ${v.version} uptime: ${Math.round(v.uptime)}s`))
-      .catch(() => setServerDown(true));
-    checkHealth();
     apiFetch(`${API}/data`)
       .then((r) => r.json())
       .then((data) => {
-        setServerDown(false);
+        markInitialDataLoaded();
         // First load: mark all current leads as seen so they don't trigger notifications
         if (data.leads) {
           setSeenLeadKeys(prev => {
@@ -1144,8 +1151,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.leads)) leadsRef.current = data.leads;
       })
-      .catch(() => setServerDown(true));
-  }, [applyApiData]);
+      .catch(() => markApiFailure())
+      .finally(() => setDataLoadAttempted(true));
+  }, [applyApiData, markInitialDataLoaded, markApiFailure]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -1161,10 +1169,11 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     socket.on("connect", () => {
       console.log("[socket.io] Connected:", socket.id);
-      setServerDown(false);
+      markSocketConnected();
     });
     socket.on("disconnect", () => {
       console.log("[socket.io] Disconnected");
+      markSocketDisconnected();
     });
     socket.on("lead-notification", (payload) => {
       const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale" : "manager";
@@ -1174,6 +1183,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       apiFetch(`${API}/data`)
         .then(r => r.ok ? r.json() : Promise.reject())
         .then((data) => {
+          markApiOk();
           applyApiData(data);
           if (Array.isArray(data.leads)) leadsRef.current = data.leads;
         })
@@ -1181,7 +1191,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts]);
+  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected]);
 
   useEffect(() => {
     const pollMs = isCapacitorNativeApp() ? 10000 : 20000;
@@ -1191,11 +1201,13 @@ function CRMApp({ user, updateUser, onLogout }) {
         .then(r => r.ok ? r.json() : null)
         .then((d) => {
           if (!d) return;
+          markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
             return apiFetch(`${API}/data`)
               .then(r => r.ok ? r.json() : Promise.reject())
               .then((data) => {
+                markApiOk();
                 applyApiData(data);
                 if (Array.isArray(data.leads)) leadsRef.current = data.leads;
               });
@@ -1204,26 +1216,17 @@ function CRMApp({ user, updateUser, onLogout }) {
         .catch(() => {});
     }, pollMs);
     return () => clearInterval(pollIv);
-  }, [syncHash, applyApiData]);
-
-  // Connection health check - detect server down (fallback, 30s)
-  const [serverDown, setServerDown] = useState(false);
-  useEffect(() => {
-    const healthIv = setInterval(() => {
-      fetch(`${API}/version`, { signal: AbortSignal.timeout(8000) })
-        .then(r => { if (r.ok) setServerDown(false); else setServerDown(true); })
-        .catch(() => setServerDown(true));
-    }, 30000);
-    return () => clearInterval(healthIv);
-  }, []);
+  }, [syncHash, applyApiData, markApiOk]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
-    const beat = () => apiFetch(`${API}/heartbeat`, { method: "POST" }).catch(() => {});
+    const beat = () => apiFetch(`${API}/heartbeat`, { method: "POST" })
+      .then((r) => { if (r.ok) markApiOk(); })
+      .catch(() => {});
     beat();
     const iv = setInterval(beat, 60000);
     return () => clearInterval(iv);
-  }, []);
+  }, [markApiOk]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -1485,7 +1488,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     setSidebarOpen(false);
   };
 
-  if (serverDown && leads.length === 0) {
+  if (serverDown && !initialDataLoaded && dataLoadAttempted) {
     return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
   }
 

@@ -54,6 +54,25 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY----
 
 Luu y `FIREBASE_PRIVATE_KEY` phai giu ky tu `\n` hoac xuong dong dung nhu private key.
 
+**Cach on dinh nhat (khuyen dung tren VPS):** upload file JSON tu Firebase:
+
+```text
+/www/wwwroot/crm-iqi/secrets/firebase-service-account.json
+```
+
+(Tai tu Firebase Console → Project settings → Service accounts → Generate new private key)
+
+Server tu doc file nay, khong can dan private key vao `.env`.
+
+Kiem tra key tren VPS:
+
+```bash
+cd /www/wwwroot/crm-iqi
+node server/check-firebase-key.js
+```
+
+Neu aaPanel Node co muc Environment Variables rieng, **xoa** `FIREBASE_PRIVATE_KEY` o do (neu co) — no ghi de `.env` va hay bi loi format.
+
 ## 3. Bat native push trong app build
 
 Sau khi da co `android/app/google-services.json`, sua file:
@@ -95,7 +114,13 @@ native_push_tokens
 
 ## 5. Test
 
-Dang nhap app tren dien thoai/BlueStacks. App se xin quyen thong bao. Sau khi dong y, token se duoc luu ve server.
+Dang nhap app tren dien thoai that (uu tien hon BlueStacks). Khi mo app lan dau:
+
+1. Man hinh giai thich "Nhan thong bao lead" se hien truoc
+2. Bam **Cho phep thong bao** → hop thoai he thong Android (POST_NOTIFICATIONS) → chon **Cho phep**
+3. Dang nhap → app tu dang ky FCM token len server
+
+Tren Android 13+, thong bao mac dinh **tat** cho den khi nguoi dung cap quyen. Neu da tu choi, vao menu chuong → **Mo cai dat** de bat lai.
 
 Kiem tra token:
 

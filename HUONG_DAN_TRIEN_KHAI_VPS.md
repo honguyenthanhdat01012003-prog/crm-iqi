@@ -75,6 +75,47 @@
 - Chọn Node version: v22.x (hoặc bản phù hợp)
 - Bấm **Submit** để tạo project
 
+### 3.1. Bật / Tắt bằng nút aaPanel (Start / Stop)
+
+**Vì sao nút Start hay lỗi `EADDRINUSE :4000`?**
+- Process Node cũ vẫn chạy ngầm nhưng aaPanel báo **Stopped**
+- Bấm **Start** = chạy thêm 1 process → trùng port 4000
+
+**Sửa 1 lần — sau đó bật/tắt bằng nút bình thường:**
+
+#### Bước A — SSH (chỉ 1 lần)
+```bash
+chmod +x /www/wwwroot/crm-iqi/scripts/start-server.sh
+chmod +x /www/wwwroot/crm-iqi/scripts/stop-server.sh
+bash /www/wwwroot/crm-iqi/scripts/stop-server.sh
+```
+
+#### Bước B — aaPanel Setting
+1. **Node** → `crm_backend` → **Setting** → **Project config**
+2. **Path:** `/www/wwwroot/crm-iqi`
+3. **Run opt:** **Custom command**
+4. **Lệnh:**
+   ```bash
+   bash /www/wwwroot/crm-iqi/scripts/start-server.sh
+   ```
+5. **Save**
+
+#### Cách dùng hàng ngày
+
+| Muốn | Làm |
+|------|-----|
+| **Bật / Restart** | aaPanel → **Start** |
+| **Tắt** | aaPanel → **Stop** (khi đang **Running**) |
+| Stop không tắt web | SSH 1 lần: `bash /www/wwwroot/crm-iqi/scripts/stop-server.sh` rồi aaPanel sẽ khớp lại |
+
+**Kiểm tra:**
+```bash
+curl -s http://127.0.0.1:4000/api/version   # Bật = có JSON
+lsof -i:4000                                 # Tắt = không có dòng node
+```
+
+**Lưu ý:** Đừng bấm **Start** liên tục nhiều lần — bấm 1 lần, đợi 3–5 giây.
+
 ## 4. Cấu hình biến môi trường (Cực chi tiết)
 
 > **KHÔNG CẦN Turso nữa!** App sẽ tự dùng SQLite local trên VPS (nhanh hơn, ổn định hơn).
