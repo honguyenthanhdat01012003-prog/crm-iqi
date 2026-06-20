@@ -7,6 +7,7 @@ import fs from "fs";
 import helmet from "helmet";
 import http from "http";
 import jwt from "jsonwebtoken";
+import zlib from "zlib";
 import path from "path";
 import { Server as SocketIOServer } from "socket.io";
 import { fileURLToPath } from "url";
@@ -37,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-pwa-boot";
+const BUILD_VERSION = "2026-06-10-fast-load";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2078,6 +2079,107 @@ function buildPhoneRegMap(leads, projectMap) {
   return phoneRegMap;
 }
 
+function inferHistorySource(h) {
+  let source = h.source || "";
+  if (source) return source;
+  const act = (h.action || "").toLowerCase();
+  const fb = (h.feedback || "").toLowerCase();
+  if (act.includes("telegram")) return "telegram";
+  if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) return "schedule";
+  if (fb.includes("admin") || fb.includes("xáo lead")) return "admin";
+  if (act.includes("cập nhật")) return "admin";
+  return "sheet";
+}
+
+function formatHistoryRow(h) {
+  return {
+    id: h.id,
+    saleName: h.sale_name,
+    action: h.action,
+    date: h.contact_date,
+    status: h.status,
+    feedback: h.feedback,
+    source: inferHistorySource(h),
+    seq: h.seq ?? 0,
+  };
+}
+
+function sortSaleHistoryEntries(entries) {
+  return entries.sort((a, b) => {
+    const da = parseLeadDate(a.date);
+    const db2 = parseLeadDate(b.date);
+    if (da && db2) {
+      const diff = da - db2;
+      return diff || ((a.seq ?? 0) - (b.seq ?? 0));
+    }
+    if (da) return 1;
+    if (db2) return -1;
+    return 0;
+  });
+}
+
+function buildLeadHistorySummary(saleHistory) {
+  const pastSaleNames = [];
+  const seenSales = new Set();
+  const feedbackHistorySummary = [];
+  const saleFeedbackStatus = {};
+  const validSources = new Set(["sale", "telegram", "admin", "manager"]);
+
+  for (const h of saleHistory) {
+    if (h.saleName && h.saleName !== "Chưa chia" && !seenSales.has(h.saleName)) {
+      seenSales.add(h.saleName);
+      pastSaleNames.push(h.saleName);
+    }
+    if (h.action !== "Chia lead" && h.status) {
+      const src = String(h.source || "").toLowerCase();
+      const isFeedback = validSources.has(src) || (!src && h.saleName);
+      if (isFeedback) {
+        feedbackHistorySummary.push({
+          status: h.status,
+          saleName: h.saleName || "",
+          source: h.source || "",
+          action: h.action || "",
+        });
+      }
+    }
+  }
+
+  for (let i = saleHistory.length - 1; i >= 0; i--) {
+    const h = saleHistory[i];
+    if (!h.status || h.action === "Chia lead") continue;
+    const key = normalizePersonNameServer(h.saleName);
+    if (key && !saleFeedbackStatus[key]) {
+      saleFeedbackStatus[key] = {
+        status: normalizeStatus(h.status),
+        rawStatus: h.status,
+      };
+    }
+  }
+
+  return {
+    historyCount: saleHistory.length,
+    pastSaleNames,
+    feedbackHistorySummary,
+    saleFeedbackStatus,
+  };
+}
+
+function stripLeadsForClient(data) {
+  if (!Array.isArray(data?.leads)) return data;
+  for (const l of data.leads) {
+    if (!l.saleHistory) continue;
+    Object.assign(l, buildLeadHistorySummary(l.saleHistory));
+    delete l.saleHistory;
+  }
+  return data;
+}
+
+async function fetchLeadHistoryFormatted(db, leadId) {
+  const rows = await all(db, "SELECT * FROM lead_history WHERE lead_id = ? ORDER BY lead_id, seq", [leadId]);
+  const entries = rows.map(formatHistoryRow);
+  return sortSaleHistoryEntries(entries);
+}
+
 async function readData(db) {
   const t0 = Date.now();
   const [leads, historyRows, campaigns, projectRows] = await Promise.all([
@@ -2090,30 +2192,10 @@ async function readData(db) {
   const historyMap = {};
   for (const h of historyRows) {
     if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    let source = h.source || "";
-    if (!source) {
-      const act = (h.action || "").toLowerCase();
-      const fb = (h.feedback || "").toLowerCase();
-      if (act.includes("telegram")) source = "telegram";
-      else if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) source = "schedule";
-      else if (fb.includes("admin") || fb.includes("xáo lead")) source = "admin";
-      else if (act.includes("cập nhật")) source = "admin";
-      else source = "sheet";
-    }
-    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source, seq: h.seq ?? 0 });
+    historyMap[h.lead_id].push(formatHistoryRow(h));
   }
   for (const lid in historyMap) {
-    historyMap[lid].sort((a, b) => {
-      const da = parseLeadDate(a.date);
-      const db2 = parseLeadDate(b.date);
-      if (da && db2) {
-        const diff = da - db2;
-        return diff || ((a.seq ?? 0) - (b.seq ?? 0));
-      }
-      if (da) return 1;
-      if (db2) return -1;
-      return 0;
-    });
+    sortSaleHistoryEntries(historyMap[lid]);
   }
   const projectMap = {};
   const projectLegacyMap = {};
@@ -2472,11 +2554,36 @@ async function syncAllProjects(db) {
 
 const app = express();
 
+function gzipJsonMiddleware(req, res, next) {
+  const accept = req.headers["accept-encoding"] || "";
+  if (!accept.includes("gzip")) return next();
+  const sendJson = res.json.bind(res);
+  res.json = (body) => {
+    let payload;
+    try {
+      payload = JSON.stringify(body);
+    } catch (err) {
+      return sendJson(body);
+    }
+    if (Buffer.byteLength(payload) < 2048) return sendJson(body);
+    zlib.gzip(payload, (err, buffer) => {
+      if (err) return sendJson(body);
+      res.setHeader("Content-Encoding", "gzip");
+      res.setHeader("Vary", "Accept-Encoding");
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.removeHeader("Content-Length");
+      res.status(res.statusCode || 200).end(buffer);
+    });
+  };
+  next();
+}
+
 // --- Security headers ---
 app.set("trust proxy", 1); // behind Nginx reverse proxy
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
+app.use("/api", gzipJsonMiddleware);
 
 // Rate limiters
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 15, message: { error: "Quá nhiều lần đăng nhập. Vui lòng thử lại sau 15 phút." }, standardHeaders: true, legacyHeaders: false });
@@ -3799,9 +3906,13 @@ app.get("/api/data", requireAuth, async (req, res) => {
       const pid = r.key.replace('sprint_rotate_project_', '');
       sprintRotateProjects[pid] = r.value === "1";
     }
-    res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects });
+    const payload = { ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects };
+    res.json(payload);
     const totalMs = Date.now() - t0;
-    if (totalMs > 2000) console.log(`[GET /api/data] ${totalMs}ms — ${data.leads?.length || 0} leads (user=${req.user?.displayName})`);
+    if (totalMs > 2000) {
+      const mb = (Buffer.byteLength(JSON.stringify(payload)) / 1024 / 1024).toFixed(2);
+      console.log(`[GET /api/data] ${totalMs}ms — ${data.leads?.length || 0} leads, ~${mb}MB (user=${req.user?.displayName})`);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -4480,6 +4591,7 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
         [String(name).trim()]
       );
       const data = await readData(db);
+      stripLeadsForClient(data);
       return res.json({ ...data, newProjectId: result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID });
     }
     const cleanLead = sanitizeSheetUrl(leadUrl);
@@ -4490,6 +4602,7 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
       [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0]
     );
     const data = await readData(db);
+    stripLeadsForClient(data);
     res.json({ ...data, newProjectId: result.lastID });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4564,6 +4677,7 @@ app.post("/api/projects/import-legacy", requireAuth, requireAdminOnly, async (re
     lastSyncHash = "";
     emitDataChanged("import-legacy");
     const data = await readData(db);
+    stripLeadsForClient(data);
     console.log(`[import-legacy] Created project "${name}" (id=${projectId}) with ${imported} legacy leads`);
     res.json({ ...data, newProjectId: projectId, imported });
   } catch (err) {
@@ -4613,6 +4727,7 @@ app.post("/api/projects/:id/toggle-manual-assign", requireAuth, requireAdminOnly
     await run(db, "UPDATE projects SET manual_assign = ? WHERE id = ?", [newVal, id]);
     console.log(`[toggle-manual-assign] Project "${proj.name}" (id=${id}) manual_assign=${newVal} by ${req.user.displayName}`);
     const data = await readData(db);
+    stripLeadsForClient(data);
     res.json({ manual_assign: newVal, projectName: proj.name, ...data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -6194,6 +6309,7 @@ async function filterDataForRole(data, user) {
     const projectIds = await getUserProjectIds(user.userId);
     filterLeadsForManager(data, projectIds);
   }
+  stripLeadsForClient(data);
   return data;
 }
 
@@ -6248,6 +6364,18 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
   } catch (err) {
     console.error(`[POST manager] ERROR:`, err);
     res.status(500).json({ error: err.message || "Manager update failed" });
+  }
+});
+
+app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const lead = await get(db, "SELECT id FROM leads WHERE id = ?", [leadId]);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    const history = await fetchLeadHistoryFormatted(db, leadId);
+    res.json({ history });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Could not load history" });
   }
 });
 

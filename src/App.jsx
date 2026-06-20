@@ -29,6 +29,7 @@ import { StatusBadge, NewLeadBadge } from "./components/ui/StatusBadge.jsx";
 import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
 import {
   STATUS_LABEL_TO_KEY,
+  getLeadHistoryEntries,
   getLeadReportStatus,
   getLeadTabStatus,
   labelToStatusKey,
@@ -590,23 +591,6 @@ function AnnouncementMarquee({ announcements }) {
   );
 }
 
-function BootLoadingScreen({ message = "Đang tải dữ liệu CRM..." }) {
-  return (
-    <div style={{
-      minHeight: "100dvh", display: "flex", flexDirection: "column",
-      alignItems: "center", justifyContent: "center", gap: 16,
-      background: "linear-gradient(160deg, #f8fafc 0%, #eef6f0 100%)",
-      fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-    }}>
-      <img src="/logo-iqi.svg" alt="LUX IQI CRM" width={72} height={72} />
-      <div className="boot-spinner" style={{
-        width: 28, height: 28, border: "3px solid rgba(15,61,30,0.15)",
-        borderTopColor: "#0f3d1e", borderRadius: "50%",
-      }} />
-      <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#64748b" }}>{message}</p>
-    </div>
-  );
-}
 
 function CRMApp({ user, updateUser, onLogout }) {
   const isAdmin = user.role === "admin" || user.role === "manager";
@@ -1089,9 +1073,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         });
         clearTimeout(timeout);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        markInitialDataLoaded();
         const data = await r.json();
         if (cancelled) return;
-        markInitialDataLoaded();
         if (data.leads) {
           setSeenLeadKeys(prev => {
             if (prev.size === 0) {
@@ -1352,20 +1336,11 @@ function CRMApp({ user, updateUser, onLogout }) {
       const saleFilterKey = normalizePersonName(saleFilter);
       list = list.filter((l) =>
         normalizePersonName(l.saleName) === saleFilterKey ||
-        (l.saleHistory && l.saleHistory.some(h => normalizePersonName(h.saleName) === saleFilterKey))
+        (l.pastSaleNames || []).some((n) => normalizePersonName(n) === saleFilterKey)
       );
-      // Override status: show selected sale's own latest feedback status
-      list = list.map(l => {
-        if (l.saleHistory && l.saleHistory.length) {
-          for (let i = l.saleHistory.length - 1; i >= 0; i--) {
-            const h = l.saleHistory[i];
-            if (h.status && h.action !== "Chia lead" && normalizePersonName(h.saleName) === saleFilterKey) {
-              const key = STATUS_LABEL_TO_KEY[h.status] || STATUS_LABEL_TO_KEY[h.status.trim()];
-              if (key) return { ...l, status: key, rawStatus: h.status };
-              break;
-            }
-          }
-        }
+      list = list.map((l) => {
+        const fb = l.saleFeedbackStatus?.[saleFilterKey];
+        if (fb) return { ...l, status: fb.status, rawStatus: fb.rawStatus };
         return l;
       });
     }
@@ -1479,10 +1454,6 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   if (bootFailed && dataLoadAttempted) {
     return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
-  }
-
-  if (!initialDataLoaded && !bootFailed) {
-    return <BootLoadingScreen message="Đang tải dữ liệu khách hàng..." />;
   }
 
   return (
@@ -3104,6 +3075,17 @@ const LeadsPage = (props) => {
   const [crossRefInput, setCrossRefInput] = useState("");
   const [crossRefResults, setCrossRefResults] = useState(null);
   const [crossRefExpandedId, setCrossRefExpandedId] = useState(null);
+  const [crossRefHistories, setCrossRefHistories] = useState({});
+  const loadCrossRefHistory = useCallback(async (leadId, rowKey) => {
+    if (crossRefHistories[rowKey]) return;
+    try {
+      const r = await apiFetch(`${API}/leads/${leadId}/history`);
+      const d = r.ok ? await r.json() : { history: [] };
+      setCrossRefHistories((prev) => ({ ...prev, [rowKey]: d.history || [] }));
+    } catch {
+      setCrossRefHistories((prev) => ({ ...prev, [rowKey]: [] }));
+    }
+  }, [crossRefHistories]);
   const [rotateHistOpen, setRotateHistOpen] = useState(false);
   const [rotateHistData, setRotateHistData] = useState(null);
   const [rotateHistLoading, setRotateHistLoading] = useState(false);
@@ -3295,30 +3277,7 @@ const LeadsPage = (props) => {
       .slice(0, 3);
   }, [leads]);
 
-  const getFirstUpdaterStatus = useCallback((lead) => {
-    const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
-    const validSources = new Set(["sale", "telegram", "admin", "manager"]);
-    let firstUpdater = "";
-    let latestStatus = "";
-    for (const h of history) {
-      if (!h || h.action === "Chia lead" || !h.status) continue;
-      const src = String(h.source || "").toLowerCase();
-      const isFeedbackUpdate = validSources.has(src) || (!src && h.saleName);
-      if (!isFeedbackUpdate) continue;
-      firstUpdater = h.saleName || h.source || "";
-      latestStatus = h.status;
-      break;
-    }
-    if (!firstUpdater) return "new";
-    for (const h of history) {
-      const updater = h?.saleName || h?.source || "";
-      if (!h || h.action === "Chia lead" || !h.status || updater !== firstUpdater) continue;
-      const src = String(h.source || "").toLowerCase();
-      const isFeedbackUpdate = validSources.has(src) || (!src && h.saleName);
-      if (isFeedbackUpdate) latestStatus = h.status;
-    }
-    return STATUS_LABEL_TO_KEY[latestStatus] || STATUS_LABEL_TO_KEY[String(latestStatus).trim()] || latestStatus || "new";
-  }, []);
+  const getFirstUpdaterStatus = useCallback((lead) => getLeadTabStatus(lead, false), []);
 
   const LEAD_TABS = useMemo(() => buildLeadTabs(isSale), [isSale]);
 
@@ -3444,7 +3403,8 @@ const LeadsPage = (props) => {
     const names = new Set();
     (Array.isArray(leads) ? leads : []).forEach(l => {
       if (l.saleName) names.add(l.saleName);
-      if (l.saleHistory) l.saleHistory.forEach(h => { if (h.saleName && h.saleName !== "chưa chia") names.add(h.saleName); });
+      if (l.pastSaleNames) l.pastSaleNames.forEach((n) => { if (n && n !== "chưa chia") names.add(n); });
+      else if (l.saleName && l.saleName !== "chưa chia") names.add(l.saleName);
     });
     return [...names].sort();
   }, [leads]);
@@ -3497,7 +3457,7 @@ const LeadsPage = (props) => {
   }, [shuffleProject, allLeadList]);
 
   const getFeedbackHistoryEntries = useCallback((lead) => {
-    const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+    const history = getLeadHistoryEntries(lead);
     const validSources = new Set(["sale", "telegram", "admin", "manager"]);
     return history.filter((h) => {
       if (!h || h.action === "Chia lead" || !h.status) return false;
@@ -4549,10 +4509,18 @@ const LeadsPage = (props) => {
                                   <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[r.lead.status] || "#6b7280") + "18", color: STATUS_COLORS[r.lead.status] || "#6b7280", whiteSpace: "nowrap", textAlign: "center" }}>
                                     {STATUS_LABELS[r.lead.status] || r.lead.status || "Chưa feedback"}
                                   </span>
-                                  <button onClick={() => setCrossRefExpandedId(crossRefExpandedId === `${i}` ? null : `${i}`)}
+                                  <button onClick={() => {
+                                    const key = `${i}`;
+                                    if (crossRefExpandedId === key) {
+                                      setCrossRefExpandedId(null);
+                                      return;
+                                    }
+                                    setCrossRefExpandedId(key);
+                                    if (r.found && r.lead?.id) loadCrossRefHistory(r.lead.id, key);
+                                  }}
                                     style={{ background: "none", border: "none", cursor: "pointer", color: "#2563eb", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 2 }}>
                                     <ChevronDown size={14} style={{ transform: crossRefExpandedId === `${i}` ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
-                                    {(r.lead.saleHistory || []).length}
+                                    {r.lead.historyCount ?? crossRefHistories[`${i}`]?.length ?? 0}
                                   </button>
                                 </>
                               ) : (
@@ -4564,11 +4532,20 @@ const LeadsPage = (props) => {
                               )}
                             </div>
                             {/* Expanded: sale history */}
-                            {r.found && crossRefExpandedId === `${i}` && (r.lead.saleHistory || []).length > 0 && (
+                            {r.found && crossRefExpandedId === `${i}` && (() => {
+                              const rowHistory = crossRefHistories[`${i}`] || [];
+                              if (!rowHistory.length) {
+                                return (
+                                  <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "8px 12px 10px 24px", fontSize: 11, color: "#9ca3af" }}>
+                                    {crossRefHistories[`${i}`] ? "Không có lịch sử" : "Đang tải lịch sử..."}
+                                  </div>
+                                );
+                              }
+                              return (
                               <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "6px 12px 10px 24px" }}>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>Lịch sử tương tác ({r.lead.saleHistory.length})</div>
-                                {r.lead.saleHistory.slice().reverse().map((h, hi) => (
-                                  <div key={hi} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0", borderBottom: hi < r.lead.saleHistory.length - 1 ? "1px solid #f0f0f0" : "none", fontSize: 11 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>Lịch sử tương tác ({rowHistory.length})</div>
+                                {rowHistory.slice().reverse().map((h, hi) => (
+                                  <div key={hi} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0", borderBottom: hi < rowHistory.length - 1 ? "1px solid #f0f0f0" : "none", fontSize: 11 }}>
                                     <span style={{ color: h.status === "Chia lead" || h.action === "Chia lead" ? "#e88a2e" : "#16a34a", fontSize: 10, marginTop: 2 }}>●</span>
                                     <div style={{ flex: 1, minWidth: 0 }}>
                                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
@@ -4582,7 +4559,8 @@ const LeadsPage = (props) => {
                                   </div>
                                 ))}
                               </div>
-                            )}
+                              );
+                            })()}
                           </div>
                         ))}
                       </div>
@@ -6241,7 +6219,7 @@ const LeadsPage = (props) => {
           )}
           {paginatedLeads.map((l) => {
             const isOpen = expandedId === l.id;
-            const histCount = (l.saleHistory || []).length;
+            const histCount = l.historyCount ?? 0;
             const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
             return (
               <div key={l.id} id={`lead-${l.id}`} className={[
@@ -6482,7 +6460,8 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
 
 function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {} }) {
   const isSale = user.role === "sale";
-  const history = lead.saleHistory || [];
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [registrations, setRegistrations] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
@@ -6518,6 +6497,17 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [messengerDraft, setMessengerDraft] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
   const messengerEndRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryLoading(true);
+    apiFetch(`${API}/leads/${lead.id}/history`)
+      .then((r) => (r.ok ? r.json() : { history: [] }))
+      .then((d) => { if (!cancelled) setHistory(d.history || []); })
+      .catch(() => { if (!cancelled) setHistory([]); })
+      .finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  }, [lead.id, lead.historyCount]);
 
   useEffect(() => {
     setEditFbUrl(lead.customerFbUrl || "");

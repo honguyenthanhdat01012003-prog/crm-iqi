@@ -61,8 +61,13 @@ export function isFeedbackStatusHistoryItem(h) {
   return validSources.has(src) || (!src && h.saleName);
 }
 
+export function getLeadHistoryEntries(lead) {
+  if (Array.isArray(lead?.saleHistory) && lead.saleHistory.length) return lead.saleHistory;
+  return Array.isArray(lead?.feedbackHistorySummary) ? lead.feedbackHistorySummary : [];
+}
+
 export function getFirstUpdaterInfo(lead) {
-  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+  const history = getLeadHistoryEntries(lead);
   let firstUpdater = "";
   let latestStatus = "";
   for (const h of history) {
@@ -81,7 +86,7 @@ export function getFirstUpdaterInfo(lead) {
 }
 
 export function getLeadReportStatus(lead) {
-  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
+  const history = getLeadHistoryEntries(lead);
   let hasInterested = false;
   let hasLowInterest = false;
   for (const h of history) {
