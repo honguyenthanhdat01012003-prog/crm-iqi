@@ -3544,7 +3544,7 @@ const LeadsPage = (props) => {
     }
   }, [shuffleProject, allLeadList]);
 
-  const normalizeLeadStatusKey = useCallback((status) => {
+  const normalizeShuffleStatusKey = useCallback((status) => {
     const raw = String(status || "").trim();
     if (!raw) return "new";
     return STATUS_LABEL_TO_KEY[raw] || STATUS_LABEL_TO_KEY[raw.toLowerCase()] || raw;
@@ -3563,31 +3563,31 @@ const LeadsPage = (props) => {
   const leadMatchesShuffleStatus = useCallback((lead, status) => {
     if (!status || status === "all") return true;
     if (status === "unassigned") return !lead.saleName || lead.saleName === "Chưa chia";
-    const target = normalizeLeadStatusKey(status);
+    const target = normalizeShuffleStatusKey(status);
     const historyEntries = getFeedbackHistoryEntries(lead);
-    if (historyEntries.some((h) => normalizeLeadStatusKey(h.status) === target)) return true;
-    return normalizeLeadStatusKey(lead.status) === target;
-  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey]);
+    if (historyEntries.some((h) => normalizeShuffleStatusKey(h.status) === target)) return true;
+    return normalizeShuffleStatusKey(lead.status) === target;
+  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey]);
 
   const getShuffleLeadStatus = useCallback((lead) => {
     if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") return shuffleStatus;
     const entries = getFeedbackHistoryEntries(lead);
     const last = entries[entries.length - 1];
-    return normalizeLeadStatusKey(last?.status || lead?.status);
-  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey, shuffleStatus]);
+    return normalizeShuffleStatusKey(last?.status || lead?.status);
+  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey, shuffleStatus]);
 
   const getShuffleLeadOwner = useCallback((lead) => {
     if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") {
-      const target = normalizeLeadStatusKey(shuffleStatus);
+      const target = normalizeShuffleStatusKey(shuffleStatus);
       const entries = getFeedbackHistoryEntries(lead);
       for (let i = entries.length - 1; i >= 0; i -= 1) {
-        if (normalizeLeadStatusKey(entries[i].status) === target) {
+        if (normalizeShuffleStatusKey(entries[i].status) === target) {
           return entries[i].saleName || entries[i].source || lead.saleName || "Chưa chia";
         }
       }
     }
     return lead.saleName || "Chưa chia";
-  }, [getFeedbackHistoryEntries, normalizeLeadStatusKey, shuffleStatus]);
+  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey, shuffleStatus]);
 
   // Get leads filtered for chia lead panel
   const shuffleFilteredLeads = useMemo(() => {
