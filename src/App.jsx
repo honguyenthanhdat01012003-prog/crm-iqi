@@ -672,6 +672,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [notifications, setNotifications] = useState([]);
   const notificationsRef = useRef([]);
   const [showNotif, setShowNotif] = useState(false);
+  const [showMobileNotif, setShowMobileNotif] = useState(false);
+  const [bottomNavHidden, setBottomNavHidden] = useState(false);
+  const lastScrollYRef = useRef(0);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
   const webPushSupported = isPushNotificationSupported();
   const nativePushSupported = isNativePushSupported();
@@ -1089,6 +1092,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     setNotifications([]);
     setShowNotif(false);
+    setShowMobileNotif(false);
   }, [notifications]);
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
@@ -1526,8 +1530,8 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const visibleNav = NAV.filter((n) => !n.adminOnly || isAdmin);
   const mobileBottomTabs = [
-    isAdmin && { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { key: "leads", label: "Khách hàng", icon: Users },
+    isAdmin && { key: "dashboard", label: "Tổng quan", icon: LayoutDashboard },
+    { key: "leads", label: "Khách", icon: Users },
     isAdmin && { key: "projects", label: "Dự án", icon: Building2 },
     { key: "notifications", label: "Thông báo", icon: Bell },
     { key: "profile", label: "Tài khoản", icon: User },
@@ -1535,13 +1539,146 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const handleMobileBottomTab = (tab) => {
     if (tab.key === "notifications") {
-      setShowNotif(true);
+      setShowMobileNotif(true);
+      setShowNotif(false);
       return;
     }
     setPage(tab.key);
     setShowNotif(false);
+    setShowMobileNotif(false);
     setSidebarOpen(false);
   };
+
+  useEffect(() => {
+    if (!isMobile) {
+      setBottomNavHidden(false);
+      return;
+    }
+    const onScroll = () => {
+      const y = window.scrollY || document.documentElement.scrollTop || 0;
+      const dy = y - lastScrollYRef.current;
+      if (dy > 10 && y > 72) setBottomNavHidden(true);
+      else if (dy < -8) setBottomNavHidden(false);
+      lastScrollYRef.current = y;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    document.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      document.removeEventListener("scroll", onScroll, { capture: true });
+    };
+  }, [isMobile]);
+
+  const renderNotificationBody = (closePanel) => (
+    <>
+      {pushSupported && (
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#f8fafc" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3c20", display: "flex", alignItems: "center", gap: 6 }}>
+                <Smartphone size={14} /> Thông báo điện thoại
+              </div>
+              <div style={{ fontSize: 11, color: pushPermission === "denied" ? "#dc2626" : "#6b7280", marginTop: 2 }}>
+                {pushEnabled
+                  ? (nativePushSupported ? "Đã đăng ký FCM — nhận lead khi tắt app" : "Chỉ báo khi app đang mở")
+                  : pushPermission === "denied"
+                    ? ((nativePushSupported || nativeLocalSupported) ? "Quyền thông báo Android đang tắt — bấm Mở cài đặt" : "Đang bị chặn trong trình duyệt")
+                    : nativePushSupported
+                      ? (nativePushServerStatus?.fcmConfigured === false
+                        ? "Server chưa cấu hình Firebase — kiểm tra .env VPS"
+                        : nativePushServerStatus?.tokenCount > 0
+                          ? "Đang đồng bộ token..."
+                          : "Chưa đăng ký FCM — bấm Đăng ký lại bên phải")
+                      : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
+              </div>
+            </div>
+            {(nativePushSupported || nativeLocalSupported) ? (
+              nativePushSupported ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                  {pushPermission === "denied" && (
+                    <button
+                      type="button"
+                      onClick={() => openAppNotificationSettings()}
+                      style={{
+                        border: "1px solid #fcd34d", background: "#fffbeb", color: "#92400e",
+                        borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 800, cursor: "pointer",
+                      }}
+                    >
+                      Mở cài đặt
+                    </button>
+                  )}
+                  <button
+                    onClick={handleEnablePush}
+                    disabled={pushBusy}
+                    style={{
+                      border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
+                      background: pushEnabled ? "#dcfce7" : "#fff",
+                      color: pushEnabled ? "#15803d" : "#1f2937",
+                      borderRadius: 8,
+                      padding: "7px 10px",
+                      fontSize: 11,
+                      fontWeight: 700,
+                      cursor: pushBusy ? "not-allowed" : "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
+                  </button>
+                </div>
+              ) : (
+                <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
+                  {pushEnabled ? "App mở" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
+                </span>
+              )
+            ) : (
+              <button
+                onClick={handleEnablePush}
+                disabled={pushBusy || pushEnabled || pushPermission === "denied"}
+                style={{
+                  border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
+                  background: pushEnabled ? "#dcfce7" : "#fff",
+                  color: pushEnabled ? "#15803d" : "#1f2937",
+                  borderRadius: 8,
+                  padding: "7px 10px",
+                  fontSize: 11,
+                  fontWeight: 700,
+                  cursor: pushBusy || pushEnabled || pushPermission === "denied" ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {pushBusy ? "Đang bật..." : pushEnabled ? "Đã bật" : "Bật"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {notifications.length === 0 ? (
+        <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có thông báo mới</div>
+      ) : (
+        <div style={{ padding: 8 }}>
+          {notifications.map((n) => {
+            const proj = projects.find(p => p.id === n.projectId);
+            return (
+              <div key={n.id} style={{
+                padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
+                background: "#f0faf1", border: "1px solid #e8f5e9", transition: "background .15s",
+              }} onClick={() => { setHighlightLeadId(n.id); setPage("leads"); closePanel(); }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
+                  <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
+                </div>
+                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {n.phone || "-"}</span>
+                  {proj && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Building2 size={12} /> {proj.name}</span>}
+                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {n.createdAt || "-"}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
 
 
   return (
@@ -1769,7 +1906,10 @@ function CRMApp({ user, updateUser, onLogout }) {
             <div className="crm-header-actions">
               {/* Notification bell + countdown */}
               <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <button onClick={() => setShowNotif(!showNotif)} style={{
+                <button onClick={() => {
+                  if (isMobile) setShowMobileNotif((v) => !v);
+                  else setShowNotif((v) => !v);
+                }} style={{
                   background: notifications.length > 0 ? "#fef3c7" : "#f3f4f6", border: "1px solid #e5e7eb",
                   borderRadius: 10, width: 38, height: 38, fontSize: 18, cursor: "pointer",
                   display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
@@ -1785,15 +1925,13 @@ function CRMApp({ user, updateUser, onLogout }) {
                     }}>{notifications.length}</span>
                   )}
                 </button>
-                {showNotif && (
+                {showNotif && !isMobile && (
                   <>
                     <div onClick={() => setShowNotif(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
                     <div style={{
-                      position: isMobile ? "fixed" : "absolute",
-                      ...(isMobile
-                        ? { top: 60, left: 12, right: 12, width: "auto" }
-                        : { top: 44, right: 0, width: 360 }),
-                      maxHeight: isMobile ? "calc(100vh - 80px)" : 400, overflowY: "auto", background: "#fff", borderRadius: 12,
+                      position: "absolute",
+                      top: 44, right: 0, width: 360,
+                      maxHeight: 400, overflowY: "auto", background: "#fff", borderRadius: 12,
                       boxShadow: "0 8px 30px rgba(0,0,0,.18)", border: "1px solid #e5e7eb", zIndex: 999,
                     }}>
                       <div style={{ padding: "12px 16px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1804,112 +1942,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                           </button>
                         )}
                       </div>
-                      {pushSupported && (
-                        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#f8fafc" }}>
-                          <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3c20", display: "flex", alignItems: "center", gap: 6 }}>
-                                <Smartphone size={14} /> Thông báo điện thoại
-                              </div>
-                              <div style={{ fontSize: 11, color: pushPermission === "denied" ? "#dc2626" : "#6b7280", marginTop: 2 }}>
-                                {pushEnabled
-                                  ? (nativePushSupported ? "Đã đăng ký FCM — nhận lead khi tắt app" : "Chỉ báo khi app đang mở")
-                                  : pushPermission === "denied"
-                                    ? ((nativePushSupported || nativeLocalSupported) ? "Quyền thông báo Android đang tắt — bấm Mở cài đặt" : "Đang bị chặn trong trình duyệt")
-                                    : nativePushSupported
-                                      ? (nativePushServerStatus?.fcmConfigured === false
-                                        ? "Server chưa cấu hình Firebase — kiểm tra .env VPS"
-                                        : nativePushServerStatus?.tokenCount > 0
-                                          ? "Đang đồng bộ token..."
-                                          : "Chưa đăng ký FCM — bấm Đăng ký lại bên phải")
-                                      : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
-                              </div>
-                            </div>
-                            {(nativePushSupported || nativeLocalSupported) ? (
-                              nativePushSupported ? (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
-                                  {pushPermission === "denied" && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openAppNotificationSettings()}
-                                      style={{
-                                        border: "1px solid #fcd34d", background: "#fffbeb", color: "#92400e",
-                                        borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 800, cursor: "pointer",
-                                      }}
-                                    >
-                                      Mở cài đặt
-                                    </button>
-                                  )}
-                                <button
-                                  onClick={handleEnablePush}
-                                  disabled={pushBusy}
-                                  style={{
-                                    border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
-                                    background: pushEnabled ? "#dcfce7" : "#fff",
-                                    color: pushEnabled ? "#15803d" : "#1f2937",
-                                    borderRadius: 8,
-                                    padding: "7px 10px",
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    cursor: pushBusy ? "not-allowed" : "pointer",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
-                                </button>
-                                </div>
-                              ) : (
-                              <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
-                                {pushEnabled ? "App mở" : pushPermission === "denied" ? "Bị chặn" : "Đang chờ"}
-                              </span>
-                              )
-                            ) : (
-                              <button
-                                onClick={handleEnablePush}
-                                disabled={pushBusy || pushEnabled || pushPermission === "denied"}
-                                style={{
-                                  border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#d1d5db"),
-                                  background: pushEnabled ? "#dcfce7" : "#fff",
-                                  color: pushEnabled ? "#15803d" : "#1f2937",
-                                  borderRadius: 8,
-                                  padding: "7px 10px",
-                                  fontSize: 11,
-                                  fontWeight: 700,
-                                  cursor: pushBusy || pushEnabled || pushPermission === "denied" ? "not-allowed" : "pointer",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
-                                {pushBusy ? "Đang bật..." : pushEnabled ? "Đã bật" : "Bật"}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      {notifications.length === 0 ? (
-                        <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có thông báo mới</div>
-                      ) : (
-                        <div style={{ padding: 8 }}>
-                          {notifications.map((n) => {
-                            const proj = projects.find(p => p.id === n.projectId);
-                            return (
-                              <div key={n.id} style={{
-                                padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
-                                background: "#f0faf1", border: "1px solid #e8f5e9", transition: "background .15s",
-                              }} onClick={() => { setHighlightLeadId(n.id); setPage("leads"); setShowNotif(false); }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                                  <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
-                                  <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
-                                </div>
-                                <div style={{ fontSize: 11, color: "#6b7280", display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Smartphone size={12} /> {n.phone || "-"}</span>
-                                  {proj && <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Building2 size={12} /> {proj.name}</span>}
-                                  <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Calendar size={12} /> {n.createdAt || "-"}</span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                      {renderNotificationBody(() => setShowNotif(false))}
                     </div>
                   </>
                 )}
@@ -2038,14 +2071,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       </main>
 
       {isMobile && (
-        <>
-        <div className="crm-bottom-nav-spacer" />
         <nav
-          className="crm-bottom-nav"
+          className={`crm-bottom-nav${bottomNavHidden || showMobileNotif ? " crm-bottom-nav--hidden" : ""}`}
           style={{ gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))` }}
         >
           {mobileBottomTabs.map((tab) => {
-            const active = tab.key === "notifications" ? showNotif : page === tab.key;
+            const active = tab.key === "notifications" ? showMobileNotif : page === tab.key;
             const Icon = tab.icon;
             return (
               <button
@@ -2054,18 +2085,42 @@ function CRMApp({ user, updateUser, onLogout }) {
                 onClick={() => handleMobileBottomTab(tab)}
                 className={`crm-bottom-nav-item${active ? " crm-bottom-nav-item--active" : ""}`}
               >
-                <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icon size={18} strokeWidth={active ? 2.5 : 2} />
+                <span className="crm-bottom-nav-icon">
+                  <Icon size={20} strokeWidth={active ? 2.5 : 2} />
                   {tab.key === "notifications" && notifications.length > 0 && (
                     <span className="crm-bottom-nav-badge">{notifications.length}</span>
                   )}
                 </span>
-                <span style={{ display: "block", width: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" }}>{tab.label}</span>
+                <span className="crm-bottom-nav-label">{tab.label}</span>
                 {active && <span className="crm-bottom-nav-indicator" />}
               </button>
             );
           })}
         </nav>
+      )}
+
+      {isMobile && showMobileNotif && (
+        <>
+          <div className="crm-mobile-notif-backdrop" onClick={() => setShowMobileNotif(false)} />
+          <div className="crm-mobile-notif-sheet" role="dialog" aria-label="Thông báo">
+            <div className="crm-mobile-notif-handle" />
+            <div className="crm-mobile-notif-header">
+              <b><Bell size={16} /> Thông báo</b>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {notifications.length > 0 && (
+                  <button type="button" className="crm-mobile-notif-mark-read" onClick={markAllSeen}>
+                    Đánh dấu đã đọc
+                  </button>
+                )}
+                <button type="button" className="crm-mobile-notif-close" onClick={() => setShowMobileNotif(false)} aria-label="Đóng">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+            <div className="crm-mobile-notif-body">
+              {renderNotificationBody(() => setShowMobileNotif(false))}
+            </div>
+          </div>
         </>
       )}
 
@@ -3187,6 +3242,7 @@ const LeadsPage = (props) => {
     return () => document.removeEventListener("mousedown", handler);
   }, [saleFilterOpen]);
   const [shuffleOpen, setShuffleOpen] = useState(false);
+  const [adminToolsOpen, setAdminToolsOpen] = useState(false);
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleMktMode, setShuffleMktMode] = useState(false);
   const [shuffleTargetProject, setShuffleTargetProject] = useState("");
@@ -4231,7 +4287,38 @@ const LeadsPage = (props) => {
       ) : (
       <>
       {isAdmin && (
-        <div style={{ marginBottom: 16, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+        <div className={isMobile ? "crm-admin-tools-wrap" : ""} style={{ marginBottom: isMobile ? 10 : 16 }}>
+          {isMobile && !adminToolsOpen && !shuffleOpen && (
+            <div className="crm-admin-tools-mobile-bar">
+              <button
+                type="button"
+                className="crm-admin-tools-mobile-primary"
+                onClick={() => setShuffleOpen(!shuffleOpen)}
+              >
+                <Shuffle size={15} /> Chia Lead
+              </button>
+              <button
+                type="button"
+                className="crm-admin-tools-mobile-toggle"
+                onClick={() => setAdminToolsOpen(true)}
+              >
+                <MoreHorizontal size={15} /> Công cụ
+              </button>
+            </div>
+          )}
+          {isMobile && adminToolsOpen && (
+            <button type="button" className="crm-admin-tools-mobile-collapse" onClick={() => setAdminToolsOpen(false)}>
+              <ChevronDown size={14} style={{ transform: "rotate(180deg)" }} /> Thu gọn công cụ
+            </button>
+          )}
+        <div
+          className={isMobile
+            ? `crm-admin-tools-grid${!adminToolsOpen && shuffleOpen ? " crm-admin-tools-grid--shuffle-only" : ""}`
+            : ""}
+          style={isMobile
+            ? ((adminToolsOpen || shuffleOpen) ? undefined : { display: "none" })
+            : { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}
+        >
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
             <Shuffle size={16} /> Chia Lead cho Sale
@@ -5921,6 +6008,7 @@ const LeadsPage = (props) => {
               {shuffleMsg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: shuffleMsg.startsWith("[OK]") || shuffleMsg.includes("thành công") ? "#059669" : "#dc2626" }}>{shuffleMsg.replace(/^\[(OK|ERR)\] /, "")}</div>}
             </div>
           )}
+        </div>
         </div>
       )}
 
