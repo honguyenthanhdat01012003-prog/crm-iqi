@@ -10768,23 +10768,25 @@ if (!process.env.VERCEL) {
     }, 3000);
   });
 
-  // Auto-sync Google Sheets every 3 minutes (configurable via SYNC_INTERVAL_MS env)
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS) || 3 * 60 * 1000; // default 3 min
+  // Auto-sync Google Sheets (default 30s, configurable via SYNC_INTERVAL_MS)
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 30 * 1000;
   let isSyncing = false;
-  setInterval(async () => {
+  const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
     isSyncing = true;
     try {
-      console.log("[auto-sync] Starting...");
+      console.log(`[${label}] Starting...`);
       await syncAllProjects(db);
-      console.log("[auto-sync] Done");
+      console.log(`[${label}] Done`);
     } catch (e) {
-      console.error("[auto-sync] Error:", e.message);
+      console.error(`[${label}] Error:`, e.message);
     } finally {
       isSyncing = false;
     }
-  }, SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s`);
+  };
+  setTimeout(() => runAutoSync("auto-sync-boot"), 15000);
+  setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 15s`);
 
   // Auto-backup every 8 hours (no backup on every restart — caused disk full)
   const BACKUP_INTERVAL = 8 * 60 * 60 * 1000;

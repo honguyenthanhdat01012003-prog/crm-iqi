@@ -1131,7 +1131,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [applyApiData, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
-    const pollMs = isCapacitorNativeApp() ? 10000 : 20000;
+    const pollMs = 10000;
     const poll = () => {
       if (document.hidden) return;
       const hash = syncHash || "";
@@ -15382,7 +15382,7 @@ function SystemFlowDiagram() {
           <B icon="📰" t="Nguồn tin BĐS" d="Batdongsan · Chợ Tốt · Tin tức thị trường" c="#0891b2" w={170}/>
         </R>
       </S>
-      <R gap={30}><A down l="3 phút/lần" c="#0891b2"/><A down l="Webhook" c="#0891b2"/><A down l="REST API" c="#0891b2"/><A down l="REST API" c="#0891b2"/></R>
+      <R gap={30}><A down l="30 giây/lần" c="#0891b2"/><A down l="Webhook" c="#0891b2"/><A down l="REST API" c="#0891b2"/><A down l="REST API" c="#0891b2"/></R>
       <S title="⚙️ SERVER — Node.js + Express 5.1 (Port 4000)" color="#16a34a">
         <C gap={10}>
           <R gap={8} wrap>
@@ -15449,7 +15449,7 @@ function SystemFlowDiagram() {
       </S>
       <S title="⏰ BACKGROUND JOBS — Tự động chạy" color="#64748b">
         <R gap={6} wrap>
-          <Tag text="🔄 Sync Sheet: 3 phút" color="#16a34a"/>
+          <Tag text="🔄 Sync Sheet: 30 giây" color="#16a34a"/>
           <Tag text="🔁 Auto-Rotate: 30 phút" color="#dc2626"/>
           <Tag text="💾 Backup DB: 8 giờ" color="#d97706"/>
           <Tag text="📰 Daily News: 10 phút check" color="#0891b2"/>
@@ -15462,7 +15462,7 @@ function SystemFlowDiagram() {
 
   const renderSync = () => (
     <C gap={4}>
-      <B icon="⏰" t="TRIGGER" d="Mỗi 3 phút tự động HOẶC Admin bấm nút Đồng bộ" c="#e88a2e" w={300}/>
+      <B icon="⏰" t="TRIGGER" d="Mỗi 30 giây tự động HOẶC Admin bấm nút Đồng bộ" c="#e88a2e" w={300}/>
       <A down l="" c="#e88a2e"/>
       <S title="PHASE 1 — Đọc dữ liệu từ Google Sheet" color="#0891b2">
         <C gap={4}>
@@ -15666,7 +15666,7 @@ function SystemFlowDiagram() {
         <C gap={4}>
           {[
             {btn:"🔄 Bấm nút Đồng bộ (Admin)",steps:["POST /api/sync → Trigger syncAllProjects()","→ Đọc Sheet → 4-tier match → Replace → Post-sync fix","→ Detect lead mới → Telegram notify → Socket.IO refresh"]},
-            {btn:"⏰ Auto-Sync (3 phút/lần)",steps:["setInterval → syncAllProjects()","Cùng flow như bấm nút nhưng tự động","Log: [auto-sync] synced X projects"]}
+            {btn:"⏰ Auto-Sync (30 giây/lần)",steps:["setInterval → syncAllProjects()","Cùng flow như bấm nút nhưng tự động","Log: [auto-sync] synced X projects"]}
           ].map((item,i) => (
             <div key={i} style={{background:"#fff",borderRadius:10,border:"1px solid #e5e7eb",padding:"10px 14px",marginBottom:4}}>
               <div style={{fontSize:12,fontWeight:700,color:"#0891b2"}}>{item.btn}</div>
@@ -15913,7 +15913,7 @@ function GuidePage() {
           { role: "Sale", color: "#059669", desc: "Chỉ xem lead được chia cho mình, cập nhật trạng thái/feedback, không thấy lead sale khác" },
         ]},
         { type: "table", title: "Tự động hóa", headers: ["Tính năng", "Tần suất", "Mô tả"], rows: [
-          ["🔄 Sync Google Sheet", "3 phút/lần", "Đọc lead mới từ Sheet → cập nhật DB → giữ nguyên dữ liệu CRM"],
+          ["🔄 Sync Google Sheet", "30 giây/lần", "Đọc lead mới từ Sheet → cập nhật DB → giữ nguyên dữ liệu CRM"],
           ["🤖 Auto-Rotate", "30 phút/lần", "Lead 3 ngày không feedback → tự xáo qua sale khác"],
           ["📅 Lịch chia tự động", "Theo giờ đặt", "Chia lead đều cho sale theo lịch + tour xoay vòng"],
           ["💾 Backup tự động", "8 giờ/lần", "Sao lưu database + giữ 7 ngày gần nhất"],
@@ -16019,7 +16019,7 @@ function GuidePage() {
       icon: "🔄",
       title: "Đồng bộ Google Sheet",
       content: [
-        { type: "text", value: "Hệ thống tự đồng bộ dữ liệu lead từ Google Sheet mỗi 3 phút. Có thể đồng bộ thủ công bất cứ lúc nào." },
+        { type: "text", value: "Hệ thống tự đồng bộ dữ liệu lead từ Google Sheet mỗi 30 giây. Có thể đồng bộ thủ công bất cứ lúc nào." },
         { type: "steps", title: "Cách cấu hình Sheet", items: [
           "Vào Cấu hình Sheet → chọn dự án",
           "Dán URL Google Sheet (phải publish ra web: File → Share → Publish to web)",
@@ -16227,7 +16227,7 @@ function GuidePage() {
 
             {/* Arrows: External → Server */}
             <line x1="110" y1="78" x2="110" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
-            <text x="118" y="108" fontSize="7" fill="#0891b2">3 phút/lần</text>
+            <text x="118" y="108" fontSize="7" fill="#0891b2">30 giây/lần</text>
             <line x1="300" y1="78" x2="300" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
             <text x="308" y="108" fontSize="7" fill="#0891b2">Webhook</text>
             <line x1="490" y1="78" x2="490" y2="130" stroke="#0891b2" strokeWidth="1.5" strokeDasharray="4,3" markerEnd="url(#ah)"/>
@@ -16238,7 +16238,7 @@ function GuidePage() {
             <text x="30" y="152" fontSize="11" fontWeight="800" fill="#16a34a">⚙️ SERVER (Node.js + Express)</text>
             <rect x="30" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
             <text x="105" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">🔄 Đồng bộ Sheet</text>
-            <text x="105" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">3 phút → Post-sync</text>
+            <text x="105" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">30 giây → Post-sync</text>
             <rect x="200" y="162" width="150" height="50" rx="8" fill="#fff" stroke="#16a34a" strokeWidth="1" filter="url(#shadow)"/>
             <text x="275" y="182" textAnchor="middle" fontSize="10" fontWeight="700" fill="#16a34a">📋 Quản lý Lead</text>
             <text x="275" y="196" textAnchor="middle" fontSize="8" fill="#6b7280">Chia · Xáo · Feedback</text>
