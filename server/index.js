@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-fix-dup-fn";
+const BUILD_VERSION = "2026-06-20-show-leads";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2399,6 +2399,19 @@ async function querySaleRankingSummary(db, user, filters = {}) {
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
 
+async function queryProjectLeadCounts(db, user) {
+  const f = { statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
+  const byProject = {};
+  let all = 0;
+  for (const r of rows) {
+    byProject[r.project_id] = r.c;
+    all += r.c;
+  }
+  return { byProject, all };
+}
+
 async function queryLeadsPage(db, user, filters, page, limit) {
   const { where, params } = await buildLeadsSqlFilters(db, user, filters);
   const offset = (page - 1) * limit;
@@ -4144,11 +4157,12 @@ app.get("/api/data", requireAuth, async (req, res) => {
       return res.json(payload);
     }
 
-    const [bootstrap, pageData, tabCounts, saleRanking] = await Promise.all([
+    const [bootstrap, pageData, tabCounts, saleRanking, projectLeadCounts] = await Promise.all([
       getBootstrapPayload(db, req.user),
       queryLeadsPage(db, req.user, filters, q.page, q.limit),
       queryLeadsTabCounts(db, req.user, filters),
       querySaleRankingSummary(db, req.user, filters),
+      queryProjectLeadCounts(db, req.user),
     ]);
 
     const data = {
@@ -4160,6 +4174,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
       paginated: true,
       tabCounts,
       saleRanking,
+      projectLeadCounts,
       phoneRegistrations: pageData.phoneRegistrations,
     };
     stripLeadsForClient(data);

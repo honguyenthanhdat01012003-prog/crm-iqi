@@ -638,7 +638,23 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [sprintRotateProjects, setSprintRotateProjects] = useState({});
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
-  const [selectedProject, setSelectedProject] = useState(null);
+  const [selectedProject, setSelectedProject] = useState(() => {
+    try {
+      const saved = localStorage.getItem("crm_selected_project");
+      if (saved) return saved;
+    } catch {}
+    return null;
+  });
+  useEffect(() => {
+    try {
+      if (selectedProject) localStorage.setItem("crm_selected_project", selectedProject);
+    } catch {}
+  }, [selectedProject]);
+  useEffect(() => {
+    if (selectedProject === null && (user.role === "admin" || user.role === "manager")) {
+      setSelectedProject("all");
+    }
+  }, [user.role, selectedProject]);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -687,6 +703,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [serverTabCounts, setServerTabCounts] = useState({ all: 0 });
   const [serverSaleRanking, setServerSaleRanking] = useState([]);
+  const [projectLeadCounts, setProjectLeadCounts] = useState({ byProject: {}, all: 0 });
   const [leadsFetching, setLeadsFetching] = useState(false);
   const leadsQueryRef = useRef({
     page: 1,
@@ -1056,6 +1073,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.leadsTotal != null) setLeadsTotal(Number(data.leadsTotal) || 0);
     if (data.tabCounts && typeof data.tabCounts === "object") setServerTabCounts(data.tabCounts);
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
+    if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
+      setProjectLeadCounts(data.projectLeadCounts);
+    }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
   // Mark notifications as seen
@@ -1867,6 +1887,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             leads={leads}
             leadsTotal={leadsTotal}
             serverTabCounts={serverTabCounts}
+            projectLeadCounts={projectLeadCounts}
             onLeadsQueryChange={updateLeadsQuery}
             leadsFetching={leadsFetching}
             searchText={searchText}
@@ -2983,6 +3004,7 @@ const LeadsPage = (props) => {
     leads,
     leadsTotal = 0,
     serverTabCounts = { all: 0 },
+    projectLeadCounts = { byProject: {}, all: 0 },
     onLeadsQueryChange,
     leadsFetching = false,
     searchText,
@@ -3297,13 +3319,12 @@ const LeadsPage = (props) => {
     return list;
   }, [projects, isSale, user.projectIds, user.role]);
 
-  // Lead counts per project (from ALL leads passed to this page, not filtered)
-  const projectLeadCounts = useMemo(() => {
-    const counts = {};
-    const list = allLeadList;
-    list.forEach(l => { counts[l.projectId] = (counts[l.projectId] || 0) + 1; });
-    return counts;
-  }, [allLeadList]);
+  // Lead counts per project (from server — full DB counts, not current page)
+  const projectLeadCountsMap = useMemo(() => {
+    const counts = projectLeadCounts?.byProject || {};
+    return Object.fromEntries(Object.entries(counts).map(([k, v]) => [Number(k), v]));
+  }, [projectLeadCounts]);
+  const totalLeadCount = projectLeadCounts?.all ?? serverTabCounts?.all ?? leadsTotal ?? 0;
 
   const recentLeadPreview = useMemo(() => {
     const list = Array.isArray(leads) ? [...leads] : [];
@@ -3778,7 +3799,7 @@ const LeadsPage = (props) => {
                   <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800, textTransform: "uppercase", marginBottom: 3 }}>Dự án đang xem</div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 850 }}>Tất cả dự án</div>
-                    <div style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 850 }}>{leads.length} khách</div>
+                    <div style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 850 }}>{totalLeadCount} khách</div>
                   </div>
                 </div>
                 <div>
@@ -3791,11 +3812,11 @@ const LeadsPage = (props) => {
                           <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>Tổng hợp toàn hệ thống</span>
                         </span>
                       </span>
-                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f3d1e", fontSize: 13, fontWeight: 850 }}>{leads.length}<ChevronRight size={16} /></span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f3d1e", fontSize: 13, fontWeight: 850 }}>{totalLeadCount}<ChevronRight size={16} /></span>
                     </button>
                   )}
                   {availableProjects.map((p) => {
-                    const count = projectLeadCounts[p.id] || 0;
+                    const count = projectLeadCountsMap[p.id] || 0;
                     return (
                       <button key={p.id} onClick={() => setSelectedProject(String(p.id))} style={{ width: "100%", border: "none", background: "#fff", borderBottom: "1px solid #eef2f7", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
@@ -3857,12 +3878,12 @@ const LeadsPage = (props) => {
                 <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                   <ClipboardList size={16} /> Tất cả dự án
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 800 }}>{leads.length}</div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{totalLeadCount}</div>
                 <div style={{ fontSize: 12, opacity: 0.9 }}>khách hàng</div>
               </div>
             )}
             {availableProjects.map(p => {
-              const count = projectLeadCounts[p.id] || 0;
+              const count = projectLeadCountsMap[p.id] || 0;
               return (
                 <div key={p.id} onClick={() => setSelectedProject(String(p.id))}
                   style={{ background: "#fff", borderRadius: 12, padding: 20, cursor: "pointer", border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", transition: "transform .15s, box-shadow .15s, border-color .15s" }}
