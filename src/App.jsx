@@ -6495,6 +6495,9 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
   const summaryRows = [
     { label: "Nhu cầu", value: lead.product || "-" },
     { label: "Thời gian nhận lead", value: lead.createdAt || "-" },
+    ...(lead.phone2 ? [{ label: "SĐT phụ 1", value: lead.phone2 }] : []),
+    ...(lead.phone3 ? [{ label: "SĐT phụ 2", value: lead.phone3 }] : []),
+    ...(lead.adminNote ? [{ label: "Ghi chú Admin", value: lead.adminNote }] : []),
     { label: "Link FB khách", value: lead.customerFbUrl || "Chưa có link", isLink: !!lead.customerFbUrl },
   ];
   return (
@@ -6544,6 +6547,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [savingManager, setSavingManager] = useState(false);
   const [editFbUrl, setEditFbUrl] = useState(lead.customerFbUrl || "");
   const [savingFbUrl, setSavingFbUrl] = useState(false);
+  const [editPhone2, setEditPhone2] = useState(lead.phone2 || "");
+  const [editPhone3, setEditPhone3] = useState(lead.phone3 || "");
+  const [editAdminNote, setEditAdminNote] = useState(lead.adminNote || "");
+  const [savingContactExtra, setSavingContactExtra] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
   const [adPreview, setAdPreview] = useState(null);
@@ -6565,7 +6572,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   useEffect(() => {
     setEditFbUrl(lead.customerFbUrl || "");
-  }, [lead.id, lead.customerFbUrl]);
+    setEditPhone2(lead.phone2 || "");
+    setEditPhone3(lead.phone3 || "");
+    setEditAdminNote(lead.adminNote || "");
+  }, [lead.id, lead.customerFbUrl, lead.phone2, lead.phone3, lead.adminNote]);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;
@@ -6743,6 +6753,39 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     }
   };
 
+  const handleSaveContactExtra = async () => {
+    if (savingContactExtra) return;
+    setSavingContactExtra(true);
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          phone2: editPhone2.trim(),
+          phone3: editPhone3.trim(),
+          adminNote: editAdminNote.trim(),
+          phone: lead.phone,
+          name: lead.name,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        showToast(data.error || "Lưu thông tin liên hệ thất bại", "error");
+        return;
+      }
+      applyApiData(data);
+      showToast("Đã lưu SĐT bổ sung & ghi chú", "success");
+    } catch (e) {
+      showToast("Lỗi kết nối: " + e.message, "error");
+    } finally {
+      setSavingContactExtra(false);
+    }
+  };
+
+  const telHref = (value) => {
+    const digits = String(value || "").replace(/[^\d+]/g, "");
+    return digits ? `tel:${digits}` : null;
+  };
+
   const handleAssignSale = async () => {
     if (!editSale) return;
     setSavingSale(true);
@@ -6839,6 +6882,93 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         )}
       </div>
+
+      {/* SĐT bổ sung + Ghi chú Admin (admin/manager sửa, sale xem) */}
+      {(isAdmin || lead.phone2 || lead.phone3 || lead.adminNote) && (
+        <div style={{
+          background: isAdmin ? "#f8fafc" : "#fffbeb",
+          border: `1px solid ${isAdmin ? "#e2e8f0" : "#fde68a"}`,
+          borderRadius: 8,
+          padding: mobilePanelPadding,
+          marginBottom: isMobile ? 10 : 12,
+          fontSize: isMobile ? 12 : 13,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            <b style={{ fontSize: 12, color: isAdmin ? "#0f3d1e" : "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+              <Smartphone size={14} /> SĐT bổ sung & Ghi chú Admin
+            </b>
+            {!isAdmin && <span style={{ fontSize: 10, color: "#b45309", fontWeight: 700 }}>Sale đọc</span>}
+          </div>
+
+          {isAdmin ? (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>SĐT phụ 1</label>
+                  <input
+                    value={editPhone2}
+                    onChange={(e) => setEditPhone2(e.target.value)}
+                    placeholder="VD: 0901234567"
+                    inputMode="tel"
+                    style={{ width: "100%", padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minHeight: mobileControlHeight, background: "#fff", boxSizing: "border-box" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>SĐT phụ 2</label>
+                  <input
+                    value={editPhone3}
+                    onChange={(e) => setEditPhone3(e.target.value)}
+                    placeholder="Tùy chọn — thêm số thứ 3"
+                    inputMode="tel"
+                    style={{ width: "100%", padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minHeight: mobileControlHeight, background: "#fff", boxSizing: "border-box" }}
+                  />
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ display: "block", fontSize: 11, color: "#64748b", fontWeight: 700, marginBottom: 4 }}>Ghi chú Admin (Sale sẽ thấy)</label>
+                <textarea
+                  value={editAdminNote}
+                  onChange={(e) => setEditAdminNote(e.target.value)}
+                  placeholder="Ghi chú nội bộ: nguồn số mới, lưu ý khi gọi khách..."
+                  rows={isMobile ? 3 : 2}
+                  style={{ width: "100%", padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, background: "#fff", resize: "vertical", boxSizing: "border-box", lineHeight: 1.45 }}
+                />
+              </div>
+              <button onClick={handleSaveContactExtra} disabled={savingContactExtra}
+                style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
+                {savingContactExtra ? "Đang lưu..." : <><Save size={14} /> Lưu SĐT & ghi chú</>}
+              </button>
+            </>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {lead.phone2 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700, minWidth: 72 }}>SĐT phụ 1</span>
+                  <b style={{ fontSize: 13 }}>{lead.phone2}</b>
+                  {telHref(lead.phone2) && (
+                    <a href={telHref(lead.phone2)} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
+                  )}
+                </div>
+              )}
+              {lead.phone3 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700, minWidth: 72 }}>SĐT phụ 2</span>
+                  <b style={{ fontSize: 13 }}>{lead.phone3}</b>
+                  {telHref(lead.phone3) && (
+                    <a href={telHref(lead.phone3)} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
+                  )}
+                </div>
+              )}
+              {lead.adminNote && (
+                <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 10, color: "#b45309", fontWeight: 800, marginBottom: 4, textTransform: "uppercase" }}>Ghi chú Admin</div>
+                  <div style={{ fontSize: 12, color: "#78350f", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{lead.adminNote}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Registration history - show when customer registered multiple times (admin/manager only) */}
       {isAdmin && registrations.length > 1 && (

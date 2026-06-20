@@ -369,7 +369,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 29; // Bump this when adding new DDL/migrations
+const DB_VERSION = 30; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -810,6 +810,12 @@ async function initDb() {
     console.log("[DB] v29 migration: adding device_id to native_push_tokens...");
     try { await run(db, "ALTER TABLE native_push_tokens ADD COLUMN device_id TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_native_push_user_device ON native_push_tokens(user_id, device_id)"); } catch (_) {}
+  }
+  if (dbVersion < 30) {
+    console.log("[DB] v30 migration: adding phone2, phone3, admin_note to leads...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN phone2 TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN phone3 TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN admin_note TEXT DEFAULT ''"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -1548,7 +1554,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
-    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked, customer_fb_url FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked, customer_fb_url, phone2, phone3, admin_note FROM leads WHERE project_id = ?",
     [projectId]
   );
   
@@ -1704,6 +1710,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let dealValue = 0;
     let isLockedVal = 0;
     let customerFbUrl = l.customerFbUrl || "";
+    let phone2 = "";
+    let phone3 = "";
+    let adminNote = "";
 
     // Manual-assign project: new leads (no prev DB record) must NOT be auto-assigned from sheet
     if (isManualAssign && !prev && saleName) {
@@ -1730,6 +1739,9 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.deal_value) dealValue = prev.deal_value;
       if (prev.is_locked) isLockedVal = prev.is_locked;
       if (prev.customer_fb_url) customerFbUrl = prev.customer_fb_url;
+      if (prev.phone2) phone2 = prev.phone2;
+      if (prev.phone3) phone3 = prev.phone3;
+      if (prev.admin_note) adminNote = prev.admin_note;
       // Debug: log manager restoration for leads with specific managers
       if (prev.manager_name && prev.manager_name !== "Trần Văn Quyết") {
         console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${lAdsId && adsIdMap.has(lAdsId) ? 'adsId' : pnKey && phoneNameMap.has(pnKey) ? 'phoneName' : np && phoneMap.has(np) ? 'phone' : 'name'})`);
@@ -1799,6 +1811,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           name = ?, phone = ?, ads_id = ?, campaign = ?, campaign_id = NULL,
           adset_name = ?, ad_name = ?, form_name = ?, product = ?,
           raw_status = ?, status = ?, created_at = ?, inbox_url = ?, customer_fb_url = ?,
+          phone2 = ?, phone3 = ?, admin_note = ?,
           is_hot = ?, sale_id = ?, sale_name = ?, manager_name = ?, source = ?, budget = ?,
           sync_at = ?, notes = ?, deal_value = ?, is_locked = ?
           WHERE id = ?`,
@@ -1806,6 +1819,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           l.name, l.phone, lAdsId || "", l.campaign,
           l.adsetName || "-", l.adName || "-", l.formName || "-", l.product,
           rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
+          phone2, phone3, adminNote,
           isHot, saleId, saleName, managerName, l.source, l.budget,
           l.syncAt, notes, dealValue, isLockedVal, prev.id,
         ],
@@ -1816,12 +1830,15 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         sql: `INSERT INTO leads(
           project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
           product, raw_status, status,
-          created_at, inbox_url, customer_fb_url, is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          created_at, inbox_url, customer_fb_url, phone2, phone3, admin_note,
+          is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
           l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl, isHot, saleId, saleName, managerName,
+          l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
+          phone2, phone3, adminNote,
+          isHot, saleId, saleName, managerName,
           l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
         ],
       });
@@ -2108,6 +2125,9 @@ async function readData(db) {
       createdAt: l.created_at,
       inboxUrl: l.inbox_url,
       customerFbUrl: l.customer_fb_url || "",
+      phone2: l.phone2 || "",
+      phone3: l.phone3 || "",
+      adminNote: l.admin_note || "",
       isHot: Boolean(l.is_hot),
       isLocked: Boolean(l.is_locked),
       saleId: l.sale_id,
@@ -6053,7 +6073,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
 
-    const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl } = req.body;
+    const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl, phone2, phone3, adminNote } = req.body;
     const normalizedStatus = status !== undefined ? normalizeStatus(status) : undefined;
     if (req.user.role === "sale" && status !== undefined) {
       const saleStatusText = String(status || "").trim();
@@ -6094,6 +6114,15 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       }
       if (req.user.role === "admin" && customerFbUrl !== undefined) {
         sets.push("customer_fb_url = ?"); params.push(String(customerFbUrl || "").trim());
+      }
+      if ((req.user.role === "admin" || req.user.role === "manager") && phone2 !== undefined) {
+        sets.push("phone2 = ?"); params.push(String(phone2 || "").trim());
+      }
+      if ((req.user.role === "admin" || req.user.role === "manager") && phone3 !== undefined) {
+        sets.push("phone3 = ?"); params.push(String(phone3 || "").trim());
+      }
+      if ((req.user.role === "admin" || req.user.role === "manager") && adminNote !== undefined) {
+        sets.push("admin_note = ?"); params.push(String(adminNote || "").trim());
       }
       if (isHot !== undefined) { sets.push("is_hot = ?"); params.push(isHot ? 1 : 0); }
     }
@@ -6246,7 +6275,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     // For manager-only changes, return targeted update (avoids race with sync)
-    if (managerName !== undefined && saleName === undefined && status === undefined && notes === undefined && isHot === undefined) {
+    if (managerName !== undefined && saleName === undefined && status === undefined && notes === undefined && isHot === undefined
+        && phone2 === undefined && phone3 === undefined && adminNote === undefined && customerFbUrl === undefined) {
       const updated = await get(db, "SELECT id, phone, manager_name, project_id FROM leads WHERE id = ?", [actualLeadId]);
       console.log(`[PUT /api/leads/${actualLeadId}] Verify after update: manager_name="${updated?.manager_name}" (expected="${managerName}")`);
       // Verify the write actually happened
