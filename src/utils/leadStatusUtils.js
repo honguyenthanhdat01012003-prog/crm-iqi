@@ -105,7 +105,12 @@ export function getLeadReportStatus(lead) {
 }
 
 export function getLeadTabStatus(lead, isSale) {
-  if (isSale) return normalizeLeadStatusKey(lead?.status || "new");
+  if (isSale) {
+    const fbMap = lead?.saleFeedbackStatus || {};
+    const own = Object.values(fbMap)[0];
+    if (own?.status) return own.status;
+    return "new";
+  }
   const currentKey = normalizeLeadStatusKey(lead?.status || "new");
   if (["booked", "closed", "booking_other"].includes(currentKey)) return currentKey;
   return getLeadReportStatus(lead);

@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-deal-counts";
+const BUILD_VERSION = "2026-06-20-sale-own-status";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2504,7 +2504,7 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   }
 
   const tab = filters.statusTab || filters.statusFilter;
-  if (tab && tab !== "all" && user.role === "sale") {
+  if (tab && tab !== "all" && user.role !== "sale") {
     parts.push("status = ?");
     params.push(tab);
   }
@@ -2548,16 +2548,32 @@ async function queryLeadsTabCounts(db, user, filters = {}) {
   if (user.role === "sale") {
     const f = { ...filters, statusTab: "all", statusFilter: "all" };
     const { where, params } = await buildLeadsSqlFilters(db, user, f);
-    const rows = await all(db, `SELECT status, COUNT(*) as c FROM leads ${where} GROUP BY status`, params);
+    const leadRows = await all(db, `SELECT id FROM leads ${where}`, params);
+    if (!leadRows.length) return { all: 0 };
+    const feedbackMap = await loadFeedbackSummariesForLeads(db, leadRows.map((r) => r.id));
+    const saleKey = normalizePersonNameServer(user.displayName || "");
     const counts = { all: 0 };
-    for (const r of rows) {
-      const k = normalizeStatus(r.status) || "new";
-      counts[k] = (counts[k] || 0) + r.c;
-      counts.all += r.c;
+    for (const row of leadRows) {
+      const myFb = (feedbackMap[row.id]?.saleFeedbackStatus || {})[saleKey];
+      const tabStatus = myFb?.status || "new";
+      counts.all += 1;
+      counts[tabStatus] = (counts[tabStatus] || 0) + 1;
     }
     return counts;
   }
-  const { counts } = await computeLeadTabIndex(db, user, filters);
+  if (user.role === "admin" || user.role === "manager") {
+    const { counts } = await computeLeadTabIndex(db, user, filters);
+    return counts;
+  }
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const rows = await all(db, `SELECT status, COUNT(*) as c FROM leads ${where} GROUP BY status`, params);
+  const counts = { all: 0 };
+  for (const r of rows) {
+    const k = normalizeStatus(r.status) || "new";
+    counts[k] = (counts[k] || 0) + r.c;
+    counts.all += r.c;
+  }
   return counts;
 }
 
@@ -2625,8 +2641,26 @@ async function queryLeadsPage(db, user, filters, page, limit) {
   const sortDir = filters.sortDir || "desc";
   const statusTab = filters.statusTab || "all";
 
+  // Sale: status tab = feedback của chính sale đó, không phải leads.status chung
+  if (user.role === "sale") {
+    const baseFilters = { ...filters, statusTab: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
+    const leadRows = await all(db, `SELECT * FROM leads ${where}`, params);
+    if (!leadRows.length) return { leads: [], leadsTotal: 0, phoneRegistrations: {} };
+    const full = await finishLeadsPage(db, leadRows, leadRows.length, null, user);
+    let scoped = full.leads;
+    if (statusTab !== "all") scoped = scoped.filter((l) => l.status === statusTab);
+    scoped = sortLeadObjectsList(scoped, sortKey, sortDir);
+    const offset = (page - 1) * limit;
+    return {
+      leads: scoped.slice(offset, offset + limit),
+      leadsTotal: scoped.length,
+      phoneRegistrations: full.phoneRegistrations,
+    };
+  }
+
   // Admin/manager tab filter uses feedback history (first updater), not raw leads.status
-  if (user.role !== "sale" && statusTab && statusTab !== "all") {
+  if (statusTab && statusTab !== "all") {
     const { indexed } = await computeLeadTabIndex(db, user, filters);
     const matched = indexed.filter((r) => r.tabStatus === statusTab);
     const sorted = sortIndexedLeads(matched, sortKey, sortDir);
@@ -2639,10 +2673,11 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const leadRows = await all(db, `SELECT * FROM leads WHERE id IN (${ph})`, pageSlice.map((r) => r.id));
     const rowMap = Object.fromEntries(leadRows.map((r) => [r.id, r]));
     const orderedRows = pageSlice.map((r) => rowMap[r.id]).filter(Boolean);
-    return finishLeadsPage(db, orderedRows, sorted.length);
+    return finishLeadsPage(db, orderedRows, sorted.length, null, user);
   }
 
-  const { where, params } = await buildLeadsSqlFilters(db, user, filters);
+  const saleSafeFilters = user.role === "sale" ? { ...filters, statusTab: "all" } : filters;
+  const { where, params } = await buildLeadsSqlFilters(db, user, saleSafeFilters);
   const offset = (page - 1) * limit;
   const sortCol = {
     name: "name",
@@ -2662,10 +2697,10 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
   ]);
 
-  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows);
+  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
 }
 
-async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null) {
+async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null, user = null) {
   const projectRows = projectRowsCached || await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
   const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
@@ -2676,7 +2711,7 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
     buildPhoneRegMapForPage(db, leadRows, projectMap),
   ]);
 
-  const leads = leadRows.map((l) => {
+  let leads = leadRows.map((l) => {
     const fb = feedbackMap[l.id] || {};
     const historyCountMap = { [l.id]: fb.historyCount || 0 };
     return mapLeadFromRow(
@@ -2689,6 +2724,10 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
       fb.saleFeedbackStatus || {}
     );
   });
+
+  if (user?.role === "sale") {
+    leads = leads.map((l) => applySaleLeadView(l, user.displayName));
+  }
 
   return {
     leads,
@@ -6847,11 +6886,58 @@ function matchSaleName(leadSaleName, userDisplayName) {
   return dnWords.every(w => sn.includes(w));
 }
 
+function applySaleLeadView(lead, displayName) {
+  const saleKey = normalizePersonNameServer(displayName);
+  const fbMap = lead.saleFeedbackStatus || {};
+  const myFb = fbMap[saleKey];
+
+  const myHistory = (lead.feedbackHistorySummary || []).filter((h) => {
+    if (!h || h.action === "Chia lead" || !h.status) return false;
+    return matchSaleName(h.saleName || h.source || "", displayName);
+  });
+
+  const status = myFb?.status || "new";
+  const rawStatus = myFb?.rawStatus || myFb?.status || "";
+
+  return {
+    ...lead,
+    status,
+    rawStatus: rawStatus || status,
+    feedbackHistorySummary: myHistory,
+    saleFeedbackStatus: myFb ? { [saleKey]: myFb } : {},
+    historyCount: myHistory.length,
+  };
+}
+
+function sortLeadObjectsList(leads, sortKey, sortDir) {
+  const dir = sortDir === "asc" ? 1 : -1;
+  const col = {
+    name: "name",
+    phone: "phone",
+    product: "product",
+    status: "status",
+    saleName: "saleName",
+    managerName: "managerName",
+    createdAt: "createdAt",
+    id: "id",
+  }[sortKey] || "id";
+  return [...leads].sort((a, b) => {
+    if (col === "id") return (Number(a.id) - Number(b.id)) * dir;
+    const va = String(a[col] ?? "").toLowerCase();
+    const vb = String(b[col] ?? "").toLowerCase();
+    if (va < vb) return -dir;
+    if (va > vb) return dir;
+    return Number(a.id) - Number(b.id);
+  });
+}
+
 function filterLeadsForSale(data, displayName) {
-  data.leads = data.leads.filter((l) =>
-    matchSaleName(l.saleName, displayName) ||
-    (l.pastSaleNames && l.pastSaleNames.some((n) => matchSaleName(n, displayName)))
-  );
+  data.leads = data.leads
+    .filter((l) =>
+      matchSaleName(l.saleName, displayName) ||
+      (l.pastSaleNames && l.pastSaleNames.some((n) => matchSaleName(n, displayName)))
+    )
+    .map((l) => applySaleLeadView(l, displayName));
   return data;
 }
 
@@ -6938,7 +7024,12 @@ app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
     const leadId = Number(req.params.id);
     const lead = await get(db, "SELECT id FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
-    const history = await fetchLeadHistoryFormatted(db, leadId);
+    let history = await fetchLeadHistoryFormatted(db, leadId);
+    if (req.user.role === "sale") {
+      history = history.filter((h) =>
+        h.action === "Chia lead" || matchSaleName(h.saleName, req.user.displayName)
+      );
+    }
     res.json({ history });
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not load history" });
