@@ -6344,6 +6344,8 @@ const LeadsPage = (props) => {
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
               />
+            )}
+          </LeadDetailDrawer>
         </>
       )}
 
