@@ -53,6 +53,56 @@ const TELEGRAM_WEBHOOK_SECRET = crypto.createHash("sha256").update("tg-webhook-"
 // Escape Telegram Markdown V1 special chars in user-provided content (_*`[)
 const escMd = (s) => String(s || "").replace(/[_*`[\]\\]/g, "\\$&");
 
+async function sendTelegramMessage(botToken, chatId, text, extra = {}) {
+  if (!botToken || !chatId) return { ok: false, error: "Thiếu bot token hoặc chat_id" };
+  const stripMd = (s) => String(s || "").replace(/[_*`\[\]()~>#+=|{}.!\\-]/g, "");
+  const doSend = async (txt, useMd) => {
+    const payload = { chat_id: chatId, text: txt, ...extra };
+    if (useMd) payload.parse_mode = "Markdown";
+    const r = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return r.json();
+  };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      let data = await doSend(text, true);
+      if (data.ok) return { ok: true, data };
+      console.warn(`[Telegram] Markdown failed chat=${chatId}: ${data.description}`);
+      data = await doSend(stripMd(text), false);
+      if (data.ok) return { ok: true, data, plain: true };
+      const errMsg = data.description || "unknown";
+      if (/chat not found|bot was blocked|user is deactivated/i.test(errMsg)) {
+        return { ok: false, error: errMsg, hint: "Quản lý chưa bấm /start bot hoặc đã chặn bot. Kiểm tra Telegram ID trong CRM." };
+      }
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      else return { ok: false, error: errMsg };
+    } catch (e) {
+      if (attempt >= 2) return { ok: false, error: e.message };
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
+  }
+  return { ok: false, error: "max retries" };
+}
+
+function normalizePersonNameServer(value = "") {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function findManagerByName(managers, managerName) {
+  const key = normalizePersonNameServer(managerName);
+  if (!key) return null;
+  return managers.find((m) => normalizePersonNameServer(m.display_name) === key) || null;
+}
+
 // Global Socket.IO instance — set up when server starts
 let io = null;
 
@@ -2314,9 +2364,9 @@ async function syncProject(db, projectId) {
             // Group new leads by their ACTUAL assigned manager_name (from DB)
             const mgrLeadMap = new Map();
             for (const lead of newLeads) {
-              const mgr = managers.find(m => m.display_name === lead.manager_name);
+              const mgr = findManagerByName(managers, lead.manager_name);
               if (!mgr) {
-                console.warn(`[syncProject] ⚠️ Lead "${lead.name}" manager_name="${lead.manager_name}" not matched to any manager`);
+                console.warn(`[syncProject] ⚠️ Lead "${lead.name}" manager_name="${lead.manager_name || ""}" không khớp quản lý dự án`);
                 continue;
               }
               if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
@@ -2333,8 +2383,9 @@ async function syncProject(db, projectId) {
                 requireInteraction: true,
               }).catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
 
-              if (!mgr.telegram_id) {
-                console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" has NO telegram_id, skip notify`);
+              const tgChatId = String(mgr.telegram_id || "").trim();
+              if (!tgChatId) {
+                console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" chưa có Telegram ID — PWA vẫn báo nhưng Telegram bỏ qua. Vào Quản lý tài khoản → thêm Telegram ID (bấm /start bot để lấy ID).`);
                 continue;
               }
               const leadLines = mgrNewLeads.map((l, i) => {
@@ -2350,20 +2401,11 @@ async function syncProject(db, projectId) {
                 `----------------------------------------------`,
                 `⚡ Vui lòng vào CRM chia lead cho Sale ngay!`,
               ].join("\n");
-              try {
-                const tgRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ chat_id: mgr.telegram_id, text: msg, parse_mode: "Markdown" }),
-                });
-                const tgData = await tgRes.json();
-                if (tgData.ok) {
-                  console.log(`[syncProject] ✅ Telegram sent to ${mgr.display_name} (chat_id=${mgr.telegram_id}): ${mgrNewLeads.length} leads`);
-                } else {
-                  console.error(`[syncProject] ❌ Telegram API error for ${mgr.display_name}: ${JSON.stringify(tgData)}`);
-                }
-              } catch (tErr) {
-                console.error(`[sync] Telegram notify manager ${mgr.display_name} failed:`, tErr.message);
+              const tgResult = await sendTelegramMessage(activeBot.token, tgChatId, msg);
+              if (tgResult.ok) {
+                console.log(`[syncProject] ✅ Telegram sent to ${mgr.display_name} (chat_id=${tgChatId}): ${mgrNewLeads.length} leads${tgResult.plain ? " [plain]" : ""}`);
+              } else {
+                console.error(`[syncProject] ❌ Telegram failed for ${mgr.display_name} (chat_id=${tgChatId}): ${tgResult.error}${tgResult.hint ? ` — ${tgResult.hint}` : ""}`);
               }
             }
           }
@@ -3199,6 +3241,116 @@ app.post("/api/telegram-bots/auto-assign", requireAuth, requireAdminOnly, async 
     const allBots = await all(db, "SELECT * FROM telegram_bots ORDER BY id");
     res.json({ msg: `Đã gắn ${assigned}/${bots.length} bot vào dự án`, assigned, bots: allBots.map(mapBot) });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get("/api/telegram/notify-diagnostics", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const bots = await all(db, "SELECT id, name, is_active, project_id, token FROM telegram_bots ORDER BY id");
+    const projects = await all(db, "SELECT id, name FROM projects ORDER BY id");
+    const managers = await all(db,
+      `SELECT u.id, u.display_name, u.role, u.telegram_id, GROUP_CONCAT(up.project_id) AS project_ids
+       FROM users u
+       LEFT JOIN user_projects up ON up.user_id = u.id
+       WHERE u.role IN ('manager', 'admin')
+       GROUP BY u.id
+       ORDER BY u.display_name`);
+
+    const botRows = bots.map((b) => {
+      let projectIds = [];
+      try {
+        const parsed = JSON.parse(b.project_id || "null");
+        projectIds = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
+      } catch { projectIds = b.project_id ? [Number(b.project_id)].filter(Boolean) : []; }
+      return {
+        id: b.id,
+        name: b.name,
+        isActive: !!b.is_active,
+        hasToken: !!String(b.token || "").trim(),
+        projectIds,
+        projectNames: projectIds.map((pid) => projects.find((p) => p.id === pid)?.name).filter(Boolean),
+      };
+    });
+
+    const managerRows = managers.map((m) => {
+      const pids = String(m.project_ids || "").split(",").map(Number).filter(Boolean);
+      return {
+        id: m.id,
+        displayName: m.display_name,
+        role: m.role,
+        telegramId: String(m.telegram_id || "").trim(),
+        hasTelegramId: !!String(m.telegram_id || "").trim(),
+        projectIds: pids,
+        projectNames: pids.map((pid) => projects.find((p) => p.id === pid)?.name).filter(Boolean),
+        issues: [
+          !String(m.telegram_id || "").trim() ? "Chưa có Telegram ID (bảo quản lý bấm /start bot rồi thêm ID vào CRM)" : null,
+          pids.length === 0 ? "Chưa gán dự án trong Quản lý tài khoản" : null,
+        ].filter(Boolean),
+      };
+    });
+
+    const activeBots = botRows.filter((b) => b.isActive && b.hasToken);
+    res.json({
+      ok: activeBots.length > 0,
+      summary: {
+        activeBots: activeBots.length,
+        managersTotal: managerRows.length,
+        managersWithTelegram: managerRows.filter((m) => m.hasTelegramId).length,
+        managersMissingTelegram: managerRows.filter((m) => !m.hasTelegramId).map((m) => m.displayName),
+      },
+      notes: [
+        "Telegram chỉ gửi khi CRM đồng bộ Google Sheet và phát hiện lead MỚI (SĐT chưa có trong DB).",
+        "PWA/socket vẫn có thể báo ngay khi mở app — không đồng nghĩa Telegram đã gửi.",
+        "Quản lý phải bấm /start bot trước khi nhận tin nhắn.",
+      ],
+      bots: botRows,
+      managers: managerRows,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/telegram/test-manager-notify", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const userId = Number(req.body?.userId || 0);
+    const projectId = Number(req.body?.projectId || 0);
+    if (!userId) return res.status(400).json({ error: "Thiếu userId quản lý" });
+
+    const mgr = await get(db, "SELECT id, display_name, role, telegram_id FROM users WHERE id = ? AND role IN ('manager', 'admin')", [userId]);
+    if (!mgr) return res.status(404).json({ error: "Không tìm thấy tài khoản quản lý/admin" });
+
+    const tgChatId = String(mgr.telegram_id || "").trim();
+    if (!tgChatId) {
+      return res.status(400).json({
+        error: "Quản lý chưa có Telegram ID",
+        hint: "Bảo quản lý mở bot CRM trên Telegram, gõ /start, copy ID vào Quản lý tài khoản.",
+      });
+    }
+
+    const pid = projectId || Number((await get(db, "SELECT project_id FROM user_projects WHERE user_id = ? LIMIT 1", [userId]))?.project_id || 0);
+    const activeBot = pid ? await getBotForProject(pid) : await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+    if (!activeBot?.token) {
+      return res.status(400).json({ error: "Không có Telegram bot active cho dự án này. Kiểm tra Quản lý tài khoản → Telegram Bot." });
+    }
+
+    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const msg = [
+      "🧪 *TEST THÔNG BÁO LEAD MỚI*",
+      `👤 Quản lý: *${escMd(mgr.display_name)}*`,
+      `🕒 ${now}`,
+      "",
+      "Nếu bạn nhận được tin nhắn này, cấu hình Telegram đã OK.",
+      "Lead thật chỉ báo khi CRM sync Sheet và có SĐT mới.",
+    ].join("\n");
+
+    const tgResult = await sendTelegramMessage(activeBot.token, tgChatId, msg);
+    if (!tgResult.ok) {
+      return res.status(502).json({ ok: false, error: tgResult.error, hint: tgResult.hint || "Kiểm tra bot token và quản lý đã /start bot chưa" });
+    }
+    res.json({ ok: true, message: `Đã gửi test Telegram tới ${mgr.display_name} (${tgChatId})` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 /* ---------- Get users who chatted with a specific bot ---------- */
@@ -6717,7 +6869,35 @@ async function handleTelegramWebhook(req, res) {
       const chatId = String(message.from?.id || "");
       const feedbackText = message.text.trim();
 
-      // Ignore bot commands
+      // Handle /start — link Telegram ID for managers
+      if (feedbackText === "/start" || feedbackText.startsWith("/start@") || feedbackText.startsWith("/start ")) {
+        const fullName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ").trim();
+        let linked = false;
+        if (fullName) {
+          const candidates = await all(db,
+            "SELECT id, display_name, telegram_id FROM users WHERE role IN ('manager', 'admin') AND display_name = ?",
+            [fullName]);
+          const empty = candidates.find((u) => !String(u.telegram_id || "").trim());
+          if (empty) {
+            await run(db, "UPDATE users SET telegram_id = ? WHERE id = ?", [chatId, empty.id]);
+            await sendTg(chatId, `✅ Đã liên kết tài khoản CRM: *${escMd(empty.display_name)}*\n\nBạn sẽ nhận thông báo lead mới qua Telegram khi có lead sync từ Google Sheet.`);
+            linked = true;
+          }
+        }
+        if (!linked) {
+          await sendTg(chatId, [
+            "👋 *CRM IQI Bot*",
+            "",
+            `🆔 Telegram ID của bạn: \`${chatId}\``,
+            "",
+            "Admin cần thêm ID này vào mục *Telegram ID* trong Quản lý tài khoản.",
+            "Sau đó bạn sẽ nhận thông báo khi có lead mới (khi CRM đồng bộ từ Sheet).",
+          ].join("\n"));
+        }
+        return res.json({ ok: true });
+      }
+
+      // Ignore other bot commands
       if (feedbackText.startsWith("/")) return res.json({ ok: true });
 
       const pending = await get(db, "SELECT lead_id, status, phone FROM telegram_pending WHERE telegram_id = ?", [chatId]);
