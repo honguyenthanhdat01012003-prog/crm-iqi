@@ -94,3 +94,8 @@ export function getLeadReportStatus(lead) {
   if (hasLowInterest) return "low_interest";
   return getFirstUpdaterInfo(lead).status || "new";
 }
+
+export function getLeadTabStatus(lead, isSale) {
+  if (isSale) return normalizeLeadStatusKey(lead?.status || "new");
+  return getLeadReportStatus(lead);
+}

@@ -30,8 +30,8 @@ import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoa
 import {
   STATUS_LABEL_TO_KEY,
   getLeadReportStatus,
+  getLeadTabStatus,
   labelToStatusKey,
-  normalizeLeadStatusKey as resolveLeadStatusKey,
 } from "./utils/leadStatusUtils.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -2919,6 +2919,31 @@ function DashboardPage({ stats, cost, saleRanking }) {
   );
 }
 
+function buildLeadTabs(isSale) {
+  const tabStatus = (lead) => getLeadTabStatus(lead, isSale);
+  return [
+    { key: "all", label: "Tất cả", Icon: ClipboardList, filter: () => true },
+    { key: "new", label: "Chưa feedback", Icon: BadgePlus, filter: (l) => tabStatus(l) === "new" },
+    { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => tabStatus(l) === "interested" },
+    { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => tabStatus(l) === "low_interest" },
+    { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => tabStatus(l) === "other_project" },
+    { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => tabStatus(l) === "appointment" },
+    { key: "booked", label: "Booking/Cọc", Icon: CheckCircle, filter: (l) => tabStatus(l) === "booked" },
+    { key: "booking_other", label: "Booking sản khác", Icon: CheckCircle, filter: (l) => tabStatus(l) === "booking_other" },
+    { key: "closed", label: "Chốt", Icon: Trophy, filter: (l) => tabStatus(l) === "closed" },
+    { key: "not_interested", label: "Không quan tâm", Icon: ThumbsDown, filter: (l) => tabStatus(l) === "not_interested" },
+    { key: "spam", label: "Phá/rác", Icon: Ban, filter: (l) => tabStatus(l) === "spam" },
+    { key: "sale", label: "Sale", Icon: Users, filter: (l) => tabStatus(l) === "sale" },
+    { key: "weak_finance", label: "Tài chính yếu", Icon: Banknote, filter: (l) => tabStatus(l) === "weak_finance" },
+    { key: "unreachable", label: "Chưa liên lạc được", Icon: PhoneOff, filter: (l) => tabStatus(l) === "unreachable" },
+    { key: "callback", label: "Liên lạc lại sau", Icon: PhoneIncoming, filter: (l) => tabStatus(l) === "callback" },
+    { key: "wrong_phone", label: "Thuê bao", Icon: XCircle, filter: (l) => tabStatus(l) === "wrong_phone" },
+    { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => tabStatus(l) === "wrong_number" },
+    { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => tabStatus(l) === "hung_up" },
+    { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => tabStatus(l) === "has_sale" },
+  ];
+}
+
 const LeadsPage = (props) => {
   const {
     leads,
@@ -3257,34 +3282,7 @@ const LeadsPage = (props) => {
     return STATUS_LABEL_TO_KEY[latestStatus] || STATUS_LABEL_TO_KEY[String(latestStatus).trim()] || latestStatus || "new";
   }, []);
 
-  const getTabStatus = useCallback((lead) => {
-    if (isSale) return resolveLeadStatusKey(lead?.status || "new");
-    return getLeadReportStatus(lead);
-  }, [isSale]);
-
-  // Bitrix-style lead categories. Admin/manager use report status so dashboard, export and tabs match.
-  // Sale users use their own current status, matching the table status column below.
-  const LEAD_TABS = useMemo(() => [
-    { key: "all", label: "Tất cả", Icon: ClipboardList, filter: () => true },
-    { key: "new", label: "Chưa feedback", Icon: BadgePlus, filter: (l) => getTabStatus(l) === "new" },
-    { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => getTabStatus(l) === "interested" },
-    { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => getTabStatus(l) === "low_interest" },
-    { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => getTabStatus(l) === "other_project" },
-    { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => getTabStatus(l) === "appointment" },
-    { key: "booked", label: "Booking/Cọc", Icon: CheckCircle, filter: (l) => getTabStatus(l) === "booked" },
-    { key: "booking_other", label: "Booking sản khác", Icon: CheckCircle, filter: (l) => getTabStatus(l) === "booking_other" },
-    { key: "closed", label: "Chốt", Icon: Trophy, filter: (l) => getTabStatus(l) === "closed" },
-    { key: "not_interested", label: "Không quan tâm", Icon: ThumbsDown, filter: (l) => getTabStatus(l) === "not_interested" },
-    { key: "spam", label: "Phá/rác", Icon: Ban, filter: (l) => getTabStatus(l) === "spam" },
-    { key: "sale", label: "Sale", Icon: Users, filter: (l) => getTabStatus(l) === "sale" },
-    { key: "weak_finance", label: "Tài chính yếu", Icon: Banknote, filter: (l) => getTabStatus(l) === "weak_finance" },
-    { key: "unreachable", label: "Chưa liên lạc được", Icon: PhoneOff, filter: (l) => getTabStatus(l) === "unreachable" },
-    { key: "callback", label: "Liên lạc lại sau", Icon: PhoneIncoming, filter: (l) => getTabStatus(l) === "callback" },
-    { key: "wrong_phone", label: "Thuê bao", Icon: XCircle, filter: (l) => getTabStatus(l) === "wrong_phone" },
-    { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => getTabStatus(l) === "wrong_number" },
-    { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => getTabStatus(l) === "hung_up" },
-    { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => getTabStatus(l) === "has_sale" },
-  ], [getTabStatus]);
+  const LEAD_TABS = useMemo(() => buildLeadTabs(isSale), [isSale]);
 
   // Unique product values for filter
   const uniqueProducts = useMemo(() => {
