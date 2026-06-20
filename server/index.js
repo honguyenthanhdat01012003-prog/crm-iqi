@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-fast-load";
+const BUILD_VERSION = "2026-06-20-paginated";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -420,7 +420,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 30; // Bump this when adding new DDL/migrations
+const DB_VERSION = 31; // Bump this when adding new DDL/migrations
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -686,6 +686,13 @@ async function initDb() {
       created_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (chat_id, user_id))`,
     `CREATE INDEX IF NOT EXISTS idx_lead_history_lead_seq ON lead_history(lead_id, seq)`,
+    // v31: leads list performance indexes
+    `CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_project_status ON leads(project_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_sale_name ON leads(sale_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_manager ON leads(manager_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at)`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -877,6 +884,20 @@ async function initDb() {
     try { await run(db, "ALTER TABLE leads ADD COLUMN phone2 TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE leads ADD COLUMN phone3 TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE leads ADD COLUMN admin_note TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 31) {
+    console.log("[DB] v31 migration: leads list performance indexes...");
+    const idx31 = [
+      "CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)",
+      "CREATE INDEX IF NOT EXISTS idx_leads_project_status ON leads(project_id, status)",
+      "CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone)",
+      "CREATE INDEX IF NOT EXISTS idx_leads_sale_name ON leads(sale_name)",
+      "CREATE INDEX IF NOT EXISTS idx_leads_manager ON leads(manager_name)",
+      "CREATE INDEX IF NOT EXISTS idx_leads_created ON leads(created_at)",
+    ];
+    for (const sql of idx31) {
+      try { await run(db, sql); } catch (_) {}
+    }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2180,23 +2201,332 @@ async function fetchLeadHistoryFormatted(db, leadId) {
   return sortSaleHistoryEntries(entries);
 }
 
-async function readData(db) {
-  const t0 = Date.now();
-  const [leads, historyRows, campaigns, projectRows] = await Promise.all([
-    all(db, "SELECT * FROM leads ORDER BY id ASC"),
-    all(db, "SELECT * FROM lead_history ORDER BY lead_id, seq"),
-    all(db, "SELECT * FROM campaigns ORDER BY id ASC"),
+async function fetchLeadHistoryFormatted(db, leadId) {
+  const rows = await all(db, "SELECT * FROM lead_history WHERE lead_id = ? ORDER BY lead_id, seq", [leadId]);
+  const entries = rows.map(formatHistoryRow);
+  return sortSaleHistoryEntries(entries);
+}
+
+let bootstrapCache = { at: 0, data: null };
+const BOOTSTRAP_CACHE_MS = 45_000;
+
+function invalidateBootstrapCache() {
+  bootstrapCache = { at: 0, data: null };
+}
+
+async function loadLeadAuxData(db) {
+  const [historyCounts, dupPhoneRows] = await Promise.all([
+    all(db, "SELECT lead_id, COUNT(*) as c FROM lead_history GROUP BY lead_id"),
+    all(db, "SELECT phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) != '' GROUP BY phone HAVING COUNT(*) > 1"),
+  ]);
+  const historyCountMap = Object.fromEntries(historyCounts.map((r) => [r.lead_id, r.c]));
+  const dupPhones = new Set(dupPhoneRows.map((r) => r.phone));
+  return { historyCountMap, dupPhones };
+}
+
+async function loadPastSaleNamesForLeads(db, leadIds) {
+  if (!leadIds.length) return {};
+  const ph = leadIds.map(() => "?").join(",");
+  const rows = await all(
+    db,
+    `SELECT DISTINCT lead_id, sale_name FROM lead_history
+     WHERE lead_id IN (${ph}) AND sale_name IS NOT NULL AND TRIM(sale_name) != ''
+     AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', '')`,
+    leadIds
+  );
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.lead_id]) map[r.lead_id] = [];
+    if (!map[r.lead_id].includes(r.sale_name)) map[r.lead_id].push(r.sale_name);
+  }
+  return map;
+}
+
+function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = []) {
+  const mktXaoMeta = getMktXaoMeta(l);
+  const phone = (l.phone || "").replace(/[^0-9+]/g, "");
+  const allRegs = phone ? (phoneRegMap[phone] || []) : [];
+  const regIndex = allRegs.findIndex((r) => r.leadId === l.id);
+  const displayStatus = normalizeStatus(l.status || "new");
+  const displayRawStatus = l.raw_status || "";
+  return {
+    id: l.id,
+    projectId: l.project_id,
+    projectIsLegacy: Boolean(projectLegacyMap[l.project_id]),
+    name: l.name,
+    phone: l.phone,
+    campaign: l.campaign,
+    campaignId: l.campaign_id,
+    adsId: l.ads_id || "",
+    adsetName: l.adset_name || "-",
+    adName: l.ad_name || "-",
+    formName: l.form_name || "-",
+    product: l.product,
+    rawStatus: displayRawStatus,
+    status: displayStatus,
+    createdAt: l.created_at,
+    inboxUrl: l.inbox_url,
+    customerFbUrl: l.customer_fb_url || "",
+    phone2: l.phone2 || "",
+    phone3: l.phone3 || "",
+    adminNote: l.admin_note || "",
+    isHot: Boolean(l.is_hot),
+    isLocked: Boolean(l.is_locked),
+    saleId: l.sale_id,
+    saleName: l.sale_name || "",
+    managerName: l.manager_name || "",
+    source: l.source,
+    isMktXao: mktXaoMeta.isMktXao,
+    sourceProjectName: mktXaoMeta.sourceProjectName,
+    sourceLeadId: mktXaoMeta.sourceLeadId,
+    budget: l.budget,
+    syncAt: l.sync_at,
+    notes: l.notes,
+    dealValue: l.deal_value || 0,
+    regCount: allRegs.length,
+    regIndex: regIndex >= 0 ? regIndex + 1 : 1,
+    historyCount: historyCountMap[l.id] || 0,
+    pastSaleNames,
+    feedbackHistorySummary: [],
+    saleFeedbackStatus: {},
+  };
+}
+
+function buildPhoneRegistrationsFromMap(phoneRegMap) {
+  const phoneRegistrations = {};
+  for (const [phone, regs] of Object.entries(phoneRegMap)) {
+    if (regs.length > 1) phoneRegistrations[phone] = regs;
+  }
+  return phoneRegistrations;
+}
+
+async function buildLeadsSqlFilters(db, user, filters = {}) {
+  const parts = [];
+  const params = [];
+
+  if (user.role === "manager") {
+    const pids = await getUserProjectIds(user.userId);
+    if (!pids.length) return { where: "WHERE 1=0", params: [] };
+    parts.push(`project_id IN (${pids.map(() => "?").join(",")})`);
+    params.push(...pids);
+  } else if (user.role === "sale") {
+    const dn = user.displayName || "";
+    parts.push(`(
+      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+      OR EXISTS (
+        SELECT 1 FROM lead_history h
+        WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+      )
+    )`);
+    params.push(dn, dn);
+  }
+
+  if (filters.projectId && filters.projectId !== "all") {
+    parts.push("project_id = ?");
+    params.push(Number(filters.projectId));
+  }
+
+  const tab = filters.statusTab || filters.statusFilter;
+  if (tab && tab !== "all") {
+    parts.push("status = ?");
+    params.push(tab);
+  }
+
+  if (filters.search && String(filters.search).trim()) {
+    const q = `%${String(filters.search).trim()}%`;
+    parts.push("(name LIKE ? OR phone LIKE ? OR campaign LIKE ? OR sale_name LIKE ? OR product LIKE ?)");
+    params.push(q, q, q, q, q);
+  }
+
+  if (filters.managerFilter && filters.managerFilter !== "all") {
+    parts.push("manager_name = ?");
+    params.push(filters.managerFilter);
+  }
+
+  if (filters.saleFilter && filters.saleFilter !== "all") {
+    const sf = filters.saleFilter;
+    parts.push(`(
+      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+      OR EXISTS (
+        SELECT 1 FROM lead_history h
+        WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+      )
+    )`);
+    params.push(sf, sf);
+  }
+
+  if (filters.products) {
+    const list = String(filters.products).split(",").map((s) => s.trim()).filter(Boolean);
+    if (list.length) {
+      parts.push(`product IN (${list.map(() => "?").join(",")})`);
+      params.push(...list);
+    }
+  }
+
+  const where = parts.length ? `WHERE ${parts.join(" AND ")}` : "";
+  return { where, params };
+}
+
+async function queryLeadsTabCounts(db, user, filters = {}) {
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const rows = await all(db, `SELECT status, COUNT(*) as c FROM leads ${where} GROUP BY status`, params);
+  const counts = { all: 0 };
+  for (const r of rows) {
+    const k = normalizeStatus(r.status) || "new";
+    counts[k] = (counts[k] || 0) + r.c;
+    counts.all += r.c;
+  }
+  return counts;
+}
+
+async function querySaleRankingSummary(db, user, filters = {}) {
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const rows = await all(
+    db,
+    `SELECT COALESCE(NULLIF(TRIM(sale_name), ''), 'Chưa chia') as sale_name, status,
+            COUNT(*) as c, SUM(COALESCE(deal_value, 0)) as dv
+     FROM leads ${where} GROUP BY sale_name, status`,
+    params
+  );
+  const map = {};
+  for (const r of rows) {
+    const name = r.sale_name || "Chưa chia";
+    if (!map[name]) map[name] = { name, total: 0, totalDealValue: 0, closedDealCount: 0 };
+    const st = normalizeStatus(r.status) || "new";
+    map[name].total += r.c;
+    map[name][st] = (map[name][st] || 0) + r.c;
+    if (st === "closed") {
+      map[name].totalDealValue += Number(r.dv) || 0;
+      map[name].closedDealCount += r.c;
+    }
+  }
+  return Object.values(map).sort((a, b) => b.total - a.total);
+}
+
+async function queryLeadsPage(db, user, filters, page, limit) {
+  const { where, params } = await buildLeadsSqlFilters(db, user, filters);
+  const offset = (page - 1) * limit;
+  const sortKey = filters.sortKey || "id";
+  const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
+  const sortCol = {
+    name: "name",
+    phone: "phone",
+    product: "product",
+    status: "status",
+    saleName: "sale_name",
+    managerName: "manager_name",
+    createdAt: "created_at",
+    id: "id",
+  }[sortKey] || "id";
+
+  const [countRow, leadRows, projectRows, aux] = await Promise.all([
+    get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
+    all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`, [...params, limit, offset]),
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
+    loadLeadAuxData(db),
   ]);
 
-  const historyMap = {};
-  for (const h of historyRows) {
-    if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    historyMap[h.lead_id].push(formatHistoryRow(h));
+  const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
+  const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
+
+  let phoneRegMap = {};
+  if (aux.dupPhones.size) {
+    const phones = [...aux.dupPhones];
+    const ph = phones.map(() => "?").join(",");
+    const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph})`, phones);
+    phoneRegMap = buildPhoneRegMap(dupLeads, projectMap);
   }
-  for (const lid in historyMap) {
-    sortSaleHistoryEntries(historyMap[lid]);
+
+  const leadIds = leadRows.map((l) => l.id);
+  const pastSaleMap = await loadPastSaleNamesForLeads(db, leadIds);
+  const leads = leadRows.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || []));
+
+  return {
+    leads,
+    leadsTotal: countRow?.c || 0,
+    phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
+  };
+}
+
+async function getBootstrapPayload(db, user) {
+  const now = Date.now();
+  const cacheKey = `${user.role}:${user.userId || user.displayName}`;
+  if (bootstrapCache.data && bootstrapCache.key === cacheKey && now - bootstrapCache.at < BOOTSTRAP_CACHE_MS) {
+    return bootstrapCache.data;
   }
+
+  const [campaigns, projectRows, config] = await Promise.all([
+    all(db, "SELECT * FROM campaigns ORDER BY id ASC"),
+    all(db, "SELECT * FROM projects ORDER BY id ASC"),
+    getConfig(db),
+  ]);
+
+  let projects = projectRows;
+  let filteredCampaigns = campaigns;
+  if (user.role === "manager") {
+    const pids = await getUserProjectIds(user.userId);
+    projects = projectRows.filter((p) => pids.includes(p.id));
+    filteredCampaigns = campaigns.filter((c) => pids.includes(c.project_id));
+  }
+
+  const payload = {
+    leadUrl: config.leadUrl,
+    costUrl: config.costUrl,
+    projectName: config.projectName,
+    lastSync: config.lastSync,
+    campaigns: filteredCampaigns.map((c) => ({
+      id: c.id,
+      name: c.name,
+      projectId: c.project_id,
+      channel: c.channel,
+      budget: c.budget,
+      spent: c.spent,
+    })),
+    projects: projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      leadUrl: p.lead_url || "",
+      costUrl: p.cost_url || "",
+      costData: JSON.parse(p.cost_data || "{}"),
+      fbCode: p.fb_code || "",
+      fbPerson: p.fb_person || "",
+      dailyReportEnabled: Boolean(p.daily_report_enabled),
+      isLegacy: Boolean(p.is_legacy),
+    })),
+  };
+
+  bootstrapCache = { at: now, key: cacheKey, data: payload };
+  return payload;
+}
+
+function parseLeadsQuery(req) {
+  return {
+    page: Math.max(1, parseInt(req.query.page, 10) || 1),
+    limit: Math.min(100, Math.max(15, parseInt(req.query.limit, 10) || 50)),
+    projectId: req.query.projectId || "all",
+    search: req.query.search || "",
+    statusTab: req.query.statusTab || "all",
+    statusFilter: req.query.statusFilter || "all",
+    managerFilter: req.query.managerFilter || "all",
+    saleFilter: req.query.saleFilter || "all",
+    products: req.query.products || "",
+    sortKey: req.query.sortKey || "id",
+    sortDir: req.query.sortDir || "desc",
+    all: req.query.all === "1",
+  };
+}
+
+async function readData(db) {
+  const t0 = Date.now();
+  const [leads, campaigns, projectRows, aux] = await Promise.all([
+    all(db, "SELECT * FROM leads ORDER BY id ASC"),
+    all(db, "SELECT * FROM campaigns ORDER BY id ASC"),
+    all(db, "SELECT * FROM projects ORDER BY id ASC"),
+    loadLeadAuxData(db),
+  ]);
+
   const projectMap = {};
   const projectLegacyMap = {};
   for (const p of projectRows) {
@@ -2204,97 +2534,20 @@ async function readData(db) {
     projectLegacyMap[p.id] = Boolean(p.is_legacy);
   }
 
-  const phoneRegMap = buildPhoneRegMap(leads, projectMap);
-  const phoneRegistrations = {};
-  for (const [phone, regs] of Object.entries(phoneRegMap)) {
-    if (regs.length > 1) phoneRegistrations[phone] = regs;
+  let phoneRegMap = {};
+  if (aux.dupPhones.size) {
+    const phones = [...aux.dupPhones];
+    const ph = phones.map(() => "?").join(",");
+    const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph})`, phones);
+    phoneRegMap = buildPhoneRegMap(dupLeads, projectMap);
   }
 
+  const leadIds = leads.map((l) => l.id);
+  const pastSaleMap = await loadPastSaleNamesForLeads(db, leadIds);
+
   const result = {
-    phoneRegistrations,
-    leads: leads.map((l) => {
-      const mktXaoMeta = getMktXaoMeta(l);
-      const phone = (l.phone || "").replace(/[^0-9+]/g, "");
-      const allRegs = phone ? (phoneRegMap[phone] || []) : [];
-      const regIndex = allRegs.findIndex(r => r.leadId === l.id);
-      const saleHistory = historyMap[l.id] || [];
-      let displayStatus = l.status;
-      let displayRawStatus = l.raw_status;
-      const currentSaleName = l.sale_name || "";
-      let latestStatusHistory = null;
-      if (saleHistory.length) {
-        for (let i = saleHistory.length - 1; i >= 0; i--) {
-          const h = saleHistory[i];
-          if (h.action === "Chia lead") {
-            if (h.source !== "sheet") break;
-            continue;
-          }
-          if (!h.status) continue;
-          latestStatusHistory = h;
-          break;
-        }
-      }
-      const latestStatusSource = String(latestStatusHistory?.source || "").toLowerCase();
-      if (latestStatusHistory && (latestStatusSource === "admin" || latestStatusSource === "manager")) {
-        displayStatus = normalizeStatus(latestStatusHistory.status);
-        displayRawStatus = latestStatusHistory.status;
-      } else if (currentSaleName && currentSaleName !== "Chưa chia" && saleHistory.length) {
-        for (let i = saleHistory.length - 1; i >= 0; i--) {
-          const h = saleHistory[i];
-          if (!matchSaleName(h.saleName, currentSaleName)) continue;
-          if (h.action === "Chia lead") {
-            if (h.source !== "sheet") {
-              displayStatus = "new";
-              displayRawStatus = "";
-            }
-            break;
-          }
-          if (h.status) {
-            displayStatus = normalizeStatus(h.status);
-            displayRawStatus = h.status;
-            break;
-          }
-        }
-      }
-      return {
-      id: l.id,
-      projectId: l.project_id,
-      projectIsLegacy: Boolean(projectLegacyMap[l.project_id]),
-      name: l.name,
-      phone: l.phone,
-      campaign: l.campaign,
-      campaignId: l.campaign_id,
-      adsId: l.ads_id || "",
-      adsetName: l.adset_name || "-",
-      adName: l.ad_name || "-",
-      formName: l.form_name || "-",
-      product: l.product,
-      rawStatus: displayRawStatus,
-      status: displayStatus,
-      createdAt: l.created_at,
-      inboxUrl: l.inbox_url,
-      customerFbUrl: l.customer_fb_url || "",
-      phone2: l.phone2 || "",
-      phone3: l.phone3 || "",
-      adminNote: l.admin_note || "",
-      isHot: Boolean(l.is_hot),
-      isLocked: Boolean(l.is_locked),
-      saleId: l.sale_id,
-      saleName: l.sale_name || "",
-      managerName: l.manager_name || "",
-      saleHistory,
-      source: l.source,
-      isMktXao: mktXaoMeta.isMktXao,
-      sourceProjectName: mktXaoMeta.sourceProjectName,
-      sourceLeadId: mktXaoMeta.sourceLeadId,
-      budget: l.budget,
-      syncAt: l.sync_at,
-      notes: l.notes,
-      dealValue: l.deal_value || 0,
-      regCount: allRegs.length,
-      regIndex: regIndex >= 0 ? regIndex + 1 : 1,
-      };
-    }),
+    phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
+    leads: leads.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || [])),
     campaigns: campaigns.map((c) => ({
       id: c.id,
       name: c.name,
@@ -2317,7 +2570,7 @@ async function readData(db) {
   };
   const ms = Date.now() - t0;
   if (ms > 1500) {
-    console.log(`[readData] ${ms}ms — ${leads.length} leads, ${historyRows.length} history rows`);
+    console.log(`[readData] ${ms}ms — ${leads.length} leads (lite, no full history)`);
   }
   return result;
 }
@@ -3868,55 +4121,96 @@ app.get("/api/config", requireAuth, async (_req, res) => {
 app.get("/api/data", requireAuth, async (req, res) => {
   try {
     const t0 = Date.now();
-    // Chờ sync tối đa 3s (tránh block load lâu khi auto-sync đang chạy)
     if (syncInProgress) {
       const waitStart = Date.now();
       while (syncInProgress && Date.now() - waitStart < 3000) await new Promise(r => setTimeout(r, 100));
     }
-    const config = await getConfig(db);
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    // Include active schedules for admin
-    let schedules = [];
-    if (req.user.role === "admin" || req.user.role === "manager") {
-      const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-      schedules = rows.map(formatSchedule);
+
+    const q = parseLeadsQuery(req);
+    const filters = {
+      projectId: q.projectId,
+      search: q.search,
+      statusTab: q.statusTab,
+      statusFilter: q.statusFilter,
+      managerFilter: q.managerFilter,
+      saleFilter: q.saleFilter,
+      products: q.products,
+      sortKey: q.sortKey,
+      sortDir: q.sortDir,
+    };
+
+    // Legacy: admin shuffle tools request full lead list
+    if (q.all && (req.user.role === "admin" || req.user.role === "manager")) {
+      const data = await readData(db);
+      await filterDataForRole(data, req.user);
+      const bootstrap = await getBootstrapPayload(db, req.user);
+      const tabCounts = await queryLeadsTabCounts(db, req.user, filters);
+      const saleRanking = await querySaleRankingSummary(db, req.user, filters);
+      const payload = await buildDataPayloadExtras(db, req.user, { ...bootstrap, ...data, tabCounts, saleRanking, leadsTotal: data.leads.length, leadsPage: 1, leadsLimit: data.leads.length, paginated: false });
+      return res.json(payload);
     }
-    // Include hash so client can track changes
-    if (!lastSyncHash) {
-      try {
-        const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
-        const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
-        const lastSync2 = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
-        const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync2}`;
-        lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
-      } catch {}
-    }
-    // Include per-project auto-rotate status
-    const autoRotateRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%'");
-    const autoRotateProjects = {};
-    for (const r of autoRotateRows) {
-      const pid = r.key.replace('auto_rotate_project_', '');
-      autoRotateProjects[pid] = r.value === "1";
-    }
-    // Include per-project sprint-rotate status
-    const sprintRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'sprint_rotate_project_%'");
-    const sprintRotateProjects = {};
-    for (const r of sprintRows) {
-      const pid = r.key.replace('sprint_rotate_project_', '');
-      sprintRotateProjects[pid] = r.value === "1";
-    }
-    const payload = { ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects };
+
+    const [bootstrap, pageData, tabCounts, saleRanking] = await Promise.all([
+      getBootstrapPayload(db, req.user),
+      queryLeadsPage(db, req.user, filters, q.page, q.limit),
+      queryLeadsTabCounts(db, req.user, filters),
+      querySaleRankingSummary(db, req.user, filters),
+    ]);
+
+    const data = {
+      ...bootstrap,
+      leads: pageData.leads,
+      leadsTotal: pageData.leadsTotal,
+      leadsPage: q.page,
+      leadsLimit: q.limit,
+      paginated: true,
+      tabCounts,
+      saleRanking,
+      phoneRegistrations: pageData.phoneRegistrations,
+    };
+    stripLeadsForClient(data);
+    const payload = await buildDataPayloadExtras(db, req.user, data);
     res.json(payload);
+
     const totalMs = Date.now() - t0;
-    if (totalMs > 2000) {
+    if (totalMs > 800) {
       const mb = (Buffer.byteLength(JSON.stringify(payload)) / 1024 / 1024).toFixed(2);
-      console.log(`[GET /api/data] ${totalMs}ms — ${data.leads?.length || 0} leads, ~${mb}MB (user=${req.user?.displayName})`);
+      console.log(`[GET /api/data] ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} leads, ~${mb}MB (user=${req.user?.displayName})`);
     }
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
 });
+
+async function buildDataPayloadExtras(db, user, data) {
+  let schedules = [];
+  if (user.role === "admin" || user.role === "manager") {
+    const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+    schedules = rows.map(formatSchedule);
+  }
+  if (!lastSyncHash) {
+    try {
+      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+      const lastSync2 = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
+      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync2}`;
+      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    } catch {}
+  }
+  const autoRotateRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%'");
+  const autoRotateProjects = {};
+  for (const r of autoRotateRows) {
+    const pid = r.key.replace("auto_rotate_project_", "");
+    autoRotateProjects[pid] = r.value === "1";
+  }
+  const sprintRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'sprint_rotate_project_%'");
+  const sprintRotateProjects = {};
+  for (const r of sprintRows) {
+    const pid = r.key.replace("sprint_rotate_project_", "");
+    sprintRotateProjects[pid] = r.value === "1";
+  }
+  return { ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects };
+}
 
 // Global sync hash — updated after each sync
 let lastSyncHash = "";
@@ -3937,6 +4231,7 @@ function emitLeadNotification(userId, payload = {}) {
 // Helper: notify all connected clients that data changed
 function emitDataChanged(reason) {
   dataVersion += 1;
+  invalidateBootstrapCache();
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
@@ -6244,48 +6539,10 @@ function matchSaleName(leadSaleName, userDisplayName) {
 }
 
 function filterLeadsForSale(data, displayName) {
-  data.leads = data.leads.filter(l =>
+  data.leads = data.leads.filter((l) =>
     matchSaleName(l.saleName, displayName) ||
-    (l.saleHistory && l.saleHistory.some(h => matchSaleName(h.saleName, displayName)))
+    (l.pastSaleNames && l.pastSaleNames.some((n) => matchSaleName(n, displayName)))
   );
-  // Override status: show the sale's own latest feedback status instead of global
-  // If this sale has never given feedback on a lead assigned to them → show "Chưa feedback" (new)
-  for (const l of data.leads) {
-    let foundOwnStatus = false;
-    let lastSaleUpdate = null;
-    if (l.saleHistory && l.saleHistory.length) {
-      // Walk from newest to oldest and stop at this sale's latest assignment boundary.
-      // Feedback before that boundary belongs to a previous ownership cycle.
-      for (let i = l.saleHistory.length - 1; i >= 0; i--) {
-        const h = l.saleHistory[i];
-        if (h.action === "Chia lead" && matchSaleName(h.saleName, displayName)) break;
-        if (h.action === "Chia lead") continue;
-        if (matchSaleName(h.saleName, displayName)) {
-          if (!lastSaleUpdate) {
-            lastSaleUpdate = { date: h.date, status: h.status ? normalizeStatus(h.status) : null, feedback: h.feedback, action: h.action, source: h.source };
-          }
-          if (h.status && !foundOwnStatus) {
-            l.status = normalizeStatus(h.status);
-            l.rawStatus = h.status;
-            foundOwnStatus = true;
-          }
-          if (foundOwnStatus && lastSaleUpdate) break;
-        }
-      }
-    }
-    l.lastSaleUpdate = lastSaleUpdate;
-    // Only force "new" if lead was assigned to this sale via CRM (has a non-sheet "Chia lead" entry)
-    // Leads only assigned via Google Sheets keep their existing status
-    if (!foundOwnStatus && matchSaleName(l.saleName, displayName)) {
-      const hasCrmAssignment = l.saleHistory && l.saleHistory.some(h =>
-        h.action === "Chia lead" && h.source !== "sheet" && matchSaleName(h.saleName, displayName)
-      );
-      if (hasCrmAssignment) {
-        l.status = "new";
-        l.rawStatus = "";
-      }
-    }
-  }
   return data;
 }
 

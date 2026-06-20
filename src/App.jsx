@@ -684,6 +684,18 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [syncCountdown, setSyncCountdown] = useState(0);
   const [syncHash, setSyncHash] = useState("");
   const [phoneRegistrations, setPhoneRegistrations] = useState({});
+  const [leadsTotal, setLeadsTotal] = useState(0);
+  const [serverTabCounts, setServerTabCounts] = useState({ all: 0 });
+  const [serverSaleRanking, setServerSaleRanking] = useState([]);
+  const [leadsFetching, setLeadsFetching] = useState(false);
+  const leadsQueryRef = useRef({
+    page: 1,
+    limit: 15,
+    statusTab: "all",
+    sortKey: "id",
+    sortDir: "desc",
+    products: "",
+  });
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
@@ -1041,6 +1053,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.phoneRegistrations && typeof data.phoneRegistrations === "object") {
       setPhoneRegistrations(data.phoneRegistrations);
     }
+    if (data.leadsTotal != null) setLeadsTotal(Number(data.leadsTotal) || 0);
+    if (data.tabCounts && typeof data.tabCounts === "object") setServerTabCounts(data.tabCounts);
+    if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
   // Mark notifications as seen
@@ -1060,49 +1075,80 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const buildDataUrl = useCallback(() => {
+    const q = leadsQueryRef.current;
+    const p = new URLSearchParams();
+    p.set("page", String(q.page));
+    p.set("limit", String(q.limit));
+    if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
+    if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
+    if (searchText.trim()) p.set("search", searchText.trim());
+    if (statusFilter && statusFilter !== "all") p.set("statusFilter", statusFilter);
+    if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
+    if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
+    if (q.products) p.set("products", q.products);
+    if (q.sortKey) p.set("sortKey", q.sortKey);
+    if (q.sortDir) p.set("sortDir", q.sortDir);
+    return `${API}/data?${p}`;
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
-    const loadData = async (attempt = 0) => {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000);
-        const r = await fetch(`${API}/data`, {
-          headers: authHeaders(),
-          signal: controller.signal,
+  const fetchCrmData = useCallback(async (attempt = 0) => {
+    setLeadsFetching(true);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      const r = await fetch(buildDataUrl(), {
+        headers: authHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      markInitialDataLoaded();
+      const data = await r.json();
+      if (data.leads) {
+        setSeenLeadKeys((prev) => {
+          if (prev.size === 0) {
+            const keys = new Set(data.leads.map(leadKey).filter(Boolean));
+            localStorage.setItem("crm_seen_keys", JSON.stringify([...keys]));
+            return keys;
+          }
+          return prev;
         });
-        clearTimeout(timeout);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        markInitialDataLoaded();
-        const data = await r.json();
-        if (cancelled) return;
-        if (data.leads) {
-          setSeenLeadKeys(prev => {
-            if (prev.size === 0) {
-              const keys = new Set(data.leads.map(leadKey).filter(Boolean));
-              localStorage.setItem("crm_seen_keys", JSON.stringify([...keys]));
-              return keys;
-            }
-            return prev;
-          });
-        }
-        applyApiData(data, { suppressNotifications: true });
-        if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-      } catch {
-        if (cancelled) return;
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
-          return loadData(attempt + 1);
-        }
-        markBootFailed();
-      } finally {
-        if (!cancelled) setDataLoadAttempted(true);
       }
-    };
+      applyApiData(data, { suppressNotifications: true });
+      if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+      return data;
+    } catch {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+        return fetchCrmData(attempt + 1);
+      }
+      markBootFailed();
+      return null;
+    } finally {
+      setLeadsFetching(false);
+      setDataLoadAttempted(true);
+    }
+  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markBootFailed]);
 
-    loadData();
-    return () => { cancelled = true; };
-  }, [applyApiData, markInitialDataLoaded, markBootFailed]);
+  const updateLeadsQuery = useCallback((patch = {}) => {
+    leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
+    return fetchCrmData();
+  }, [fetchCrmData]);
+
+  const crmInitialLoadRef = useRef(false);
+  useEffect(() => {
+    if (!crmInitialLoadRef.current) {
+      crmInitialLoadRef.current = true;
+      fetchCrmData();
+      return;
+    }
+    const t = setTimeout(() => {
+      leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
+      fetchCrmData();
+    }, 350);
+    return () => clearTimeout(t);
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -1129,7 +1175,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       triggerLeadAlerts({ soundKind, pushItem: leadFromPushPayload(payload) });
     });
     socket.on("data-changed", () => {
-      apiFetch(`${API}/data`)
+      fetch(buildDataUrl(), { headers: authHeaders() })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then((data) => {
           markApiOk();
@@ -1140,7 +1186,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, buildDataUrl, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -1160,7 +1206,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
-            return apiFetch(`${API}/data`)
+            return fetch(buildDataUrl(), { headers: authHeaders() })
               .then(r => {
                 if (!r.ok) {
                   markConnectivityFailure();
@@ -1186,7 +1232,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure]);
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, buildDataUrl]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
@@ -1368,37 +1414,14 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const activeCost = (!selectedProject || selectedProject === "all") ? totalProjectCost : projectCostMap[selectedProject] || {};
 
-  // --- Stats ---
+  // --- Stats (server aggregates — không cần load toàn bộ leads) ---
   const stats = useMemo(() => {
     const statusCounts = {};
-    Object.keys(STATUS_LABELS).forEach((s) => (statusCounts[s] = 0));
-    filteredLeads.forEach((l) => {
-      const key = getLeadReportStatus(l);
-      statusCounts[key] = (statusCounts[key] || 0) + 1;
-    });
-    return { total: filteredLeads.length, ...statusCounts };
-  }, [filteredLeads]);
+    Object.keys(STATUS_LABELS).forEach((s) => { statusCounts[s] = serverTabCounts[s] || 0; });
+    return { total: serverTabCounts.all || 0, ...statusCounts };
+  }, [serverTabCounts]);
 
-  // --- Sale ranking ---
-  const saleRanking = useMemo(() => {
-    const map = {};
-    const statusKeys = Object.keys(STATUS_LABELS);
-    filteredLeads.forEach((l) => {
-      const sale = l.saleName || "Chưa chia";
-      if (!map[sale]) {
-        map[sale] = { name: sale, total: 0, totalDealValue: 0, closedDealCount: 0 };
-        statusKeys.forEach(k => map[sale][k] = 0);
-      }
-      map[sale].total++;
-      const st = getLeadReportStatus(l);
-      if (map[sale][st] !== undefined) map[sale][st]++;
-      if (st === "closed" && l.dealValue) {
-        map[sale].totalDealValue += Number(l.dealValue) || 0;
-        map[sale].closedDealCount++;
-      }
-    });
-    return Object.values(map).sort((a, b) => b.total - a.total);
-  }, [filteredLeads]);
+  const saleRanking = serverSaleRanking;
 
   // --- Campaigns list ---
   const filteredCampaigns = useMemo(() => {
@@ -1837,12 +1860,15 @@ function CRMApp({ user, updateUser, onLogout }) {
 
         <div className={`crm-content${isMobile ? " crm-content--mobile" : ""}`}>
         {page === "dashboard" && (
-          <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={filteredLeads} />
+          <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={leads} />
         )}
         {page === "leads" && (
           <LeadsPage
-            leads={filteredLeads}
-            allLeads={leads}
+            leads={leads}
+            leadsTotal={leadsTotal}
+            serverTabCounts={serverTabCounts}
+            onLeadsQueryChange={updateLeadsQuery}
+            leadsFetching={leadsFetching}
             searchText={searchText}
             setSearchText={setSearchText}
             statusFilter={statusFilter}
@@ -1869,7 +1895,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             setAutoRotateProjects={setAutoRotateProjects}
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
-            isDataLoading={!initialDataLoaded}
+            isDataLoading={!initialDataLoaded || leadsFetching}
             phoneRegistrations={phoneRegistrations}
           />
         )}
@@ -1886,7 +1912,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           />
         )}
         {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} isAdminOnly={isAdminOnly} />}
-        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={filteredLeads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
+        {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={leads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
 
@@ -2955,7 +2981,10 @@ function buildLeadTabs(isSale) {
 const LeadsPage = (props) => {
   const {
     leads,
-    allLeads,
+    leadsTotal = 0,
+    serverTabCounts = { all: 0 },
+    onLeadsQueryChange,
+    leadsFetching = false,
     searchText,
     setSearchText,
     statusFilter,
@@ -2987,7 +3016,13 @@ const LeadsPage = (props) => {
   } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
-  const allLeadList = useMemo(() => (Array.isArray(allLeads) ? allLeads : (Array.isArray(leads) ? leads : [])), [allLeads, leads]);
+  const [shufflePoolLeads, setShufflePoolLeads] = useState(null);
+  const [shufflePoolLoading, setShufflePoolLoading] = useState(false);
+  const leadsQuerySigRef = useRef("");
+  const allLeadList = useMemo(() => {
+    if (shufflePoolLeads?.length) return shufflePoolLeads;
+    return Array.isArray(leads) ? leads : [];
+  }, [shufflePoolLeads, leads]);
   const [expandedId, setExpandedId] = useState(null);
   const expandedPhoneRef = React.useRef(null);
 
@@ -3288,34 +3323,10 @@ const LeadsPage = (props) => {
     return [...set].sort((a, b) => a.localeCompare(b, "vi"));
   }, [leads]);
 
-  // Apply product filter & sort on top of leads from CRMApp
-  const processedLeads = useMemo(() => {
-    let list = Array.isArray(leads) ? [...leads] : [];
-    if (productFilter.length > 0) {
-      list = list.filter((l) => productFilter.includes(l.product || "-"));
-    }
-    if (sortConfig.key && sortConfig.direction) {
-      const dir = sortConfig.direction === "asc" ? 1 : -1;
-      list.sort((a, b) => {
-        let va = "", vb = "";
-        if (sortConfig.key === "name") { va = a.name || ""; vb = b.name || ""; }
-        else if (sortConfig.key === "phone") { va = a.phone || ""; vb = b.phone || ""; }
-        else if (sortConfig.key === "product") { va = a.product || ""; vb = b.product || ""; }
-        else if (sortConfig.key === "status") { va = a.status || ""; vb = b.status || ""; }
-        else if (sortConfig.key === "saleName") { va = a.saleName || ""; vb = b.saleName || ""; }
-        else if (sortConfig.key === "managerName") { va = a.managerName || ""; vb = b.managerName || ""; }
-        else if (sortConfig.key === "createdAt") { va = a.createdAt || ""; vb = b.createdAt || ""; }
-        return va.localeCompare(vb, "vi") * dir;
-      });
-    }
-    return list;
-  }, [leads, productFilter, sortConfig]);
+  // Product/sort handled server-side via onLeadsQueryChange
+  const processedLeads = useMemo(() => (Array.isArray(leads) ? [...leads] : []), [leads]);
 
-  const tabCounts = useMemo(() => {
-    const counts = {};
-    LEAD_TABS.forEach((t) => { counts[t.key] = processedLeads.filter(t.filter).length; });
-    return counts;
-  }, [processedLeads, LEAD_TABS]);
+  const tabCounts = serverTabCounts;
 
   const mobilePrimaryTabs = useMemo(() => {
     return LEAD_TABS.filter((t) => t.key === "all" || (tabCounts[t.key] || 0) > 0);
@@ -3345,16 +3356,15 @@ const LeadsPage = (props) => {
     if (sameDay) return d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
   };
-  const tabFiltered = useMemo(() => {
-    const tab = LEAD_TABS.find((t) => t.key === activeTab);
-    const filtered = tab ? processedLeads.filter(tab.filter) : [...processedLeads];
-    return filtered.sort((a, b) => parseDate(b.createdAt) - parseDate(a.createdAt));
-  }, [processedLeads, activeTab, LEAD_TABS]);
 
-  const selectedProjectUpdatedPct = leads.length ? (((leads.length - (tabCounts.new || 0)) / leads.length) * 100).toFixed(1) : "0.0";
+  const tabFiltered = processedLeads;
+  const paginatedLeads = processedLeads;
 
-  // Always-valid page: clamp currentPage to data range so rendering never shows empty
-  const totalPages = Math.max(1, Math.ceil(tabFiltered.length / pageSize));
+  const selectedProjectUpdatedPct = (tabCounts.all || leadsTotal)
+    ? ((((tabCounts.all || leadsTotal) - (tabCounts.new || 0)) / (tabCounts.all || leadsTotal)) * 100).toFixed(1)
+    : "0.0";
+
+  const totalPages = Math.max(1, Math.ceil((leadsTotal || 0) / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
   const mobileDetailLead = useMemo(
     () => (mobileDetailId ? tabFiltered.find((l) => l.id === mobileDetailId) || leads.find((l) => l.id === mobileDetailId) : null),
@@ -3364,15 +3374,44 @@ const LeadsPage = (props) => {
     () => (expandedId ? tabFiltered.find((l) => l.id === expandedId) || leads.find((l) => l.id === expandedId) : null),
     [expandedId, tabFiltered, leads]
   );
-  const paginatedLeads = useMemo(
-    () => tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize),
-    [tabFiltered, safePage, pageSize]
-  );
 
-  // Auto-clamp currentPage state when filtered data shrinks (e.g. search, filter change)
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [tabFiltered.length, pageSize, currentPage, totalPages]);
+  }, [leadsTotal, pageSize, currentPage, totalPages]);
+
+  useEffect(() => {
+    if (!onLeadsQueryChange) return;
+    const sig = JSON.stringify({
+      activeTab,
+      currentPage,
+      pageSize,
+      productFilter,
+      sortConfig,
+    });
+    if (sig === leadsQuerySigRef.current) return;
+    leadsQuerySigRef.current = sig;
+    onLeadsQueryChange({
+      statusTab: activeTab,
+      page: currentPage,
+      limit: pageSize,
+      products: productFilter.length ? productFilter.join(",") : "",
+      sortKey: sortConfig.key || "id",
+      sortDir: sortConfig.direction || "desc",
+    });
+  }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange]);
+
+  useEffect(() => {
+    if (!shuffleOpen || !shuffleProject || !isAdminOnly) return;
+    let cancelled = false;
+    setShufflePoolLoading(true);
+    const projectParam = shuffleProject ? `&projectId=${shuffleProject}` : "";
+    apiFetch(`${API}/data?all=1${projectParam}`)
+      .then((r) => (r.ok ? r.json() : { leads: [] }))
+      .then((d) => { if (!cancelled) setShufflePoolLeads(d.leads || []); })
+      .catch(() => { if (!cancelled) setShufflePoolLeads([]); })
+      .finally(() => { if (!cancelled) setShufflePoolLoading(false); });
+    return () => { cancelled = true; };
+  }, [shuffleOpen, shuffleProject, isAdminOnly]);
 
   // Navigate to highlighted lead from notification click
   useEffect(() => {
@@ -6101,7 +6140,7 @@ const LeadsPage = (props) => {
       </div>
 
       <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <span>Hiển thị {Math.min(safePage * pageSize, tabFiltered.length) - (safePage - 1) * pageSize} / {tabFiltered.length} khách hàng</span>
+        <span>Hiển thị {paginatedLeads.length} / {leadsTotal || 0} khách hàng</span>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {/* Auto-rotate toggle per project */}
           {isAdmin && selectedProject && (() => {
