@@ -2464,13 +2464,52 @@ app.use("/api/", apiLimiter);
 
 // --- Serve static build ---
 const distPath = path.join(__dirname, "..", "dist");
+
+function verifyDistBundle() {
+  if (!fs.existsSync(distPath)) {
+    return { ok: false, error: "dist/ folder missing — run npm run build" };
+  }
+  const indexPath = path.join(distPath, "index.html");
+  if (!fs.existsSync(indexPath)) {
+    return { ok: false, error: "dist/index.html missing" };
+  }
+  const html = fs.readFileSync(indexPath, "utf8");
+  const jsMatch = html.match(/assets\/(index-[^"]+\.js)/);
+  const cssMatch = html.match(/assets\/(index-[^"]+\.css)/);
+  if (!jsMatch) {
+    return { ok: false, error: "dist/index.html has no main JS bundle reference" };
+  }
+  const jsFile = jsMatch[1];
+  const jsPath = path.join(distPath, "assets", jsFile);
+  if (!fs.existsSync(jsPath)) {
+    return {
+      ok: false,
+      error: `dist/index.html → ${jsFile} but file missing (white screen). Run: bash scripts/vps-update.sh`,
+      jsBundle: jsFile,
+    };
+  }
+  const cssFile = cssMatch?.[1] || null;
+  if (cssFile && !fs.existsSync(path.join(distPath, "assets", cssFile))) {
+    return { ok: false, error: `dist/index.html → ${cssFile} but file missing`, cssBundle: cssFile, jsBundle: jsFile };
+  }
+  return { ok: true, jsBundle: jsFile, cssBundle: cssFile };
+}
+
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
 }
 
 // Version endpoint — no auth required, used to verify deployment
 app.get("/api/version", (req, res) => {
-  res.json({ version: BUILD_VERSION, uptime: process.uptime(), pid: process.pid });
+  const dist = verifyDistBundle();
+  res.json({
+    version: BUILD_VERSION,
+    uptime: process.uptime(),
+    pid: process.pid,
+    distOk: dist.ok,
+    jsBundle: dist.jsBundle || null,
+    distError: dist.ok ? null : dist.error,
+  });
 });
 
 // Debug endpoint — check manager distribution in DB (no auth for easy testing)
@@ -10788,6 +10827,12 @@ if (!process.env.VERCEL) {
 
   server.listen(PORT, () => {
     console.log(`CRM API running at http://localhost:${PORT} [BUILD ${BUILD_VERSION}]`);
+    const distCheck = verifyDistBundle();
+    if (distCheck.ok) {
+      console.log(`[dist] OK — ${distCheck.jsBundle}${distCheck.cssBundle ? ` + ${distCheck.cssBundle}` : ""}`);
+    } else {
+      console.error(`[dist] ⚠️ WHITE SCREEN RISK: ${distCheck.error}`);
+    }
 
     // Auto-register Telegram webhooks on startup (ensures secret always matches after restart)
     setTimeout(async () => {

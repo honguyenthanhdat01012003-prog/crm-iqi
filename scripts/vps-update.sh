@@ -5,7 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "==> Reset dist conflicts"
-git checkout -- dist/index.html 2>/dev/null || true
+git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
+rm -f dist/assets/index-*.js dist/assets/index-*.css dist/assets/web-*.js 2>/dev/null || true
 rm -f scripts/clean-backups.sh scripts/start-server.sh scripts/stop-server.sh
 
 echo "==> Pull latest code"
