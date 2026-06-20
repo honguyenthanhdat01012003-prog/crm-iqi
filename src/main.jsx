@@ -5,10 +5,13 @@ import "./index.css";
 import "./styles/enterprise.css";
 import { registerServiceWorker } from "./registerServiceWorker.js";
 
-ReactDOM.createRoot(document.getElementById("root")).render(
+registerServiceWorker();
+
+const rootEl = document.getElementById("root");
+ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
 );
 
-registerServiceWorker();
+document.getElementById("boot-splash")?.remove();

@@ -590,6 +590,24 @@ function AnnouncementMarquee({ announcements }) {
   );
 }
 
+function BootLoadingScreen({ message = "Đang tải dữ liệu CRM..." }) {
+  return (
+    <div style={{
+      minHeight: "100dvh", display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", gap: 16,
+      background: "linear-gradient(160deg, #f8fafc 0%, #eef6f0 100%)",
+      fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    }}>
+      <img src="/logo-iqi.svg" alt="LUX IQI CRM" width={72} height={72} />
+      <div className="boot-spinner" style={{
+        width: 28, height: 28, border: "3px solid rgba(15,61,30,0.15)",
+        borderTopColor: "#0f3d1e", borderRadius: "50%",
+      }} />
+      <p style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#64748b" }}>{message}</p>
+    </div>
+  );
+}
+
 function CRMApp({ user, updateUser, onLogout }) {
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isAdminOnly = user.role === "admin";
@@ -1063,7 +1081,13 @@ function CRMApp({ user, updateUser, onLogout }) {
 
     const loadData = async (attempt = 0) => {
       try {
-        const r = await apiFetch(`${API}/data`);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 120000);
+        const r = await fetch(`${API}/data`, {
+          headers: authHeaders(),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
         if (cancelled) return;
@@ -1455,6 +1479,10 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   if (bootFailed && dataLoadAttempted) {
     return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
+  }
+
+  if (!initialDataLoaded && !bootFailed) {
+    return <BootLoadingScreen message="Đang tải dữ liệu khách hàng..." />;
   }
 
   return (

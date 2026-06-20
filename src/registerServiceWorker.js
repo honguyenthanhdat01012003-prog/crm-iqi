@@ -4,15 +4,51 @@ function isCapacitorNative() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
 }
 
+function wireServiceWorkerUpdates(reg) {
+  if (!reg) return;
+  reg.update().catch(() => {});
+
+  if (reg.waiting) {
+    reg.waiting.postMessage({ type: "SKIP_WAITING" });
+  }
+
+  reg.addEventListener("updatefound", () => {
+    const installing = reg.installing;
+    if (!installing) return;
+    installing.addEventListener("statechange", () => {
+      if (installing.state === "installed" && navigator.serviceWorker.controller) {
+        installing.postMessage({ type: "SKIP_WAITING" });
+      }
+    });
+  });
+}
+
 export function registerServiceWorker() {
   if (isCapacitorNative()) return;
   if (!("serviceWorker" in navigator) || !import.meta.env.PROD) return;
 
-  window.addEventListener("load", () => {
-    serviceWorkerRegistrationPromise = navigator.serviceWorker.register("/sw.js").catch((err) => {
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
+  serviceWorkerRegistrationPromise = navigator.serviceWorker
+    .register("/sw.js", { updateViaCache: "none" })
+    .then((reg) => {
+      wireServiceWorkerUpdates(reg);
+      return reg;
+    })
+    .catch((err) => {
       console.warn("[PWA] Service worker registration failed:", err);
       return null;
     });
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && serviceWorkerRegistrationPromise) {
+      serviceWorkerRegistrationPromise.then(wireServiceWorkerUpdates).catch(() => {});
+    }
   });
 }
 

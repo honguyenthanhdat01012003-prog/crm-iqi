@@ -1,5 +1,5 @@
-const CACHE_NAME = "lux-iqi-crm-pwa-v2";
-const APP_SHELL = ["/", "/logo-iqi.svg", "/site.webmanifest"];
+const CACHE_NAME = "lux-iqi-crm-pwa-v3";
+const OFFLINE_ASSETS = ["/logo-iqi.svg", "/site.webmanifest"];
 const RECENT_PUSH_TTL = 10 * 60 * 1000;
 const recentPushKeys = new Map();
 
@@ -30,7 +30,7 @@ function isRecentDuplicatePush(key) {
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(APP_SHELL))
+      .then((cache) => cache.addAll(OFFLINE_ASSETS))
       .then(() => self.skipWaiting())
   );
 });
@@ -43,6 +43,41 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+async function networkFirst(request, { cacheNav = false } = {}) {
+  try {
+    const response = await fetch(request);
+    if (response?.ok && cacheNav && request.mode === "navigate") {
+      const cache = await caches.open(CACHE_NAME);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    if (request.mode === "navigate") {
+      return new Response(
+        `<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>CRM offline</title></head><body style="font-family:Inter,sans-serif;text-align:center;padding:48px 24px;background:#f8fafc;color:#1f2937"><img src="/logo-iqi.svg" width="64" height="64" alt=""/><h1 style="margin:16px 0 8px;font-size:18px">Không có mạng</h1><p style="color:#64748b;font-size:14px">CRM cần kết nối internet. Vuốt xuống để tải lại.</p></body></html>`,
+        { headers: { "Content-Type": "text/html; charset=utf-8" } }
+      );
+    }
+    throw err;
+  }
+}
+
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+  const networkPromise = fetch(request).then((response) => {
+    if (response?.ok) cache.put(request, response.clone());
+    return response;
+  }).catch(() => null);
+  return cached || networkPromise || fetch(request);
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   if (request.method !== "GET") return;
@@ -51,34 +86,20 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api") || url.pathname.startsWith("/socket.io")) return;
 
-  if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("/", copy));
-          return response;
-        })
-        .catch(() => caches.match("/") || caches.match("/index.html"))
-    );
+  // HTML + JS/CSS bundle: luôn ưu tiên mạng (tránh white screen sau deploy)
+  if (
+    request.mode === "navigate" ||
+    url.pathname.startsWith("/assets/") ||
+    url.pathname.endsWith(".html") ||
+    url.pathname === "/sw.js"
+  ) {
+    event.respondWith(networkFirst(request, { cacheNav: true }));
     return;
   }
 
-  const staticDestinations = new Set(["script", "style", "image", "font", "manifest"]);
-  if (!staticDestinations.has(request.destination)) return;
-
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request).then((response) => {
-        if (response && response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      });
-    })
-  );
+  if (OFFLINE_ASSETS.some((p) => url.pathname === p)) {
+    event.respondWith(staleWhileRevalidate(request));
+  }
 });
 
 self.addEventListener("push", (event) => {

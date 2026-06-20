@@ -75,6 +75,10 @@ select:focus, input:focus, button:focus {
   to { transform: rotate(360deg); }
 }
 
+.boot-spinner {
+  animation: spin 0.8s linear infinite;
+}
+
 @keyframes pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.2); opacity: 0.7; }
