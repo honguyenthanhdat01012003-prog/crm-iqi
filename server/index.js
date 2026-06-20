@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tg-group-only";
+const BUILD_VERSION = "2026-06-10-tg-ai-pending";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -489,6 +489,10 @@ async function initDb() {
     `CREATE TABLE IF NOT EXISTS telegram_pending (
       telegram_id TEXT PRIMARY KEY, lead_id INTEGER NOT NULL, status TEXT DEFAULT '',
       message_id INTEGER, created_at TEXT DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS telegram_ai_pending (
+      chat_id TEXT NOT NULL, user_id TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'hoi',
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id, user_id))`,
     `CREATE TABLE IF NOT EXISTS telegram_chat_users (
       id INTEGER PRIMARY KEY AUTOINCREMENT, bot_id INTEGER NOT NULL,
       telegram_id TEXT NOT NULL, first_name TEXT DEFAULT '', last_name TEXT DEFAULT '',
@@ -6961,7 +6965,11 @@ async function handleTelegramWebhook(req, res) {
       }
 
       const replyChatId = String(message.chat?.id || message.from?.id || "");
-      pruneTelegramAiPending();
+      const userTelegramId = String(message.from?.id || "");
+      const chatType = message.chat?.type || "private";
+      const isGroup = chatType === "group" || chatType === "supergroup";
+
+      await pruneTelegramAiPendingDb(db);
       const cmdMatch = feedbackText.match(/^\/(\w+)(@\w+)?(?:\s|$)/);
       if (cmdMatch) {
         const cmd = `/${cmdMatch[1].toLowerCase()}`;
@@ -6989,23 +6997,26 @@ async function handleTelegramWebhook(req, res) {
             await sendTg(replyChatId, TELEGRAM_GROUP_CMD_DENY[access.reason] || TELEGRAM_GROUP_CMD_DENY.wrong_group);
             return res.json({ ok: true });
           }
-          await handleTelegramAiCommand(db, bot, feedbackText, replyChatId, sendTg);
+          await handleTelegramAiCommand(db, bot, feedbackText, replyChatId, sendTg, userTelegramId);
           return res.json({ ok: true });
         }
       }
 
-      // Free-text follow-up after /hoi or /timduan (no command prefix)
-      const aiPending = telegramAiPending.get(replyChatId);
-      const leadPendingRow = await get(db, "SELECT 1 as ok FROM telegram_pending WHERE telegram_id = ?", [chatId]);
-      if (aiPending && !feedbackText.startsWith("/") && !leadPendingRow) {
-        const access = await canUseTelegramGroupBotCommands(
-          db, bot, message.chat, replyChatId, message.from?.id);
-        if (access.ok) {
-          telegramAiPending.delete(replyChatId);
-          await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
-          return res.json({ ok: true });
+      // Tin nhắn tiếp theo sau /hoi hoặc /timduan (chỉ trong nhóm)
+      if (isGroup && !feedbackText.startsWith("/")) {
+        const aiPending = await getTelegramAiPending(db, replyChatId, userTelegramId);
+        if (aiPending) {
+          const access = await canUseTelegramGroupBotCommands(
+            db, bot, message.chat, replyChatId, userTelegramId);
+          if (access.ok) {
+            await clearTelegramAiPending(db, replyChatId, userTelegramId);
+            await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
+            return res.json({ ok: true });
+          }
+          await clearTelegramAiPending(db, replyChatId, userTelegramId);
         }
-        telegramAiPending.delete(replyChatId);
+        // Text thường trong nhóm — không coi là feedback lead (lead feedback chỉ chat riêng)
+        return res.json({ ok: true });
       }
 
       // Ignore other bot commands
@@ -11564,8 +11575,30 @@ async function processDailySaleReminder(db, now, options = {}) {
 }
 
 /* ===== Telegram AI (Perplexity — nhập text) ===== */
-const telegramAiPending = new Map(); // chatId -> { mode: 'hoi'|'timduan', at: number }
-const TELEGRAM_AI_PENDING_TTL_MS = 10 * 60 * 1000;
+const TELEGRAM_AI_PENDING_TTL_MINUTES = 10;
+
+async function setTelegramAiPending(db, chatId, userId, mode) {
+  await run(db,
+    "INSERT OR REPLACE INTO telegram_ai_pending(chat_id, user_id, mode, created_at) VALUES(?, ?, ?, datetime('now'))",
+    [String(chatId), String(userId), mode]);
+}
+
+async function getTelegramAiPending(db, chatId, userId) {
+  const row = await get(db,
+    "SELECT mode FROM telegram_ai_pending WHERE chat_id = ? AND user_id = ?",
+    [String(chatId), String(userId)]);
+  return row?.mode ? { mode: row.mode } : null;
+}
+
+async function clearTelegramAiPending(db, chatId, userId) {
+  await run(db, "DELETE FROM telegram_ai_pending WHERE chat_id = ? AND user_id = ?",
+    [String(chatId), String(userId)]);
+}
+
+async function pruneTelegramAiPendingDb(db) {
+  await run(db,
+    `DELETE FROM telegram_ai_pending WHERE created_at < datetime('now', '-${TELEGRAM_AI_PENDING_TTL_MINUTES} minutes')`);
+}
 
 async function getPerplexityApiKeyFromDb(db) {
   const row = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
@@ -11728,7 +11761,7 @@ async function runTelegramAiQuery(db, userInput, mode, replyChatId, sendTg) {
   }
 }
 
-async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg) {
+async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg, userTelegramId) {
   const cmdMatch = text.match(/^\/(\w+)(@\w+)?(?:\s+([\s\S]*))?$/);
   const cmd = cmdMatch ? `/${cmdMatch[1].toLowerCase()}` : "";
   const args = (cmdMatch?.[3] || "").trim();
@@ -11761,7 +11794,7 @@ async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg) {
   const mode = cmd === "/hoi" ? "hoi" : "timduan";
 
   if (!args) {
-    telegramAiPending.set(replyChatId, { mode, at: Date.now() });
+    await setTelegramAiPending(db, replyChatId, userTelegramId, mode);
     const hint = mode === "hoi"
       ? [
           "💬 *HỎI AI BĐS*",
@@ -11788,13 +11821,6 @@ async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg) {
   }
 
   await runTelegramAiQuery(db, args, mode, replyChatId, sendTg);
-}
-
-function pruneTelegramAiPending() {
-  const now = Date.now();
-  for (const [chatId, p] of telegramAiPending) {
-    if (now - p.at > TELEGRAM_AI_PENDING_TTL_MS) telegramAiPending.delete(chatId);
-  }
 }
 
 /* ===== Telegram Report Menu + Analytics ===== */
