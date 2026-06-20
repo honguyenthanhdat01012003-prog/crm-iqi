@@ -6330,6 +6330,7 @@ const LeadsPage = (props) => {
                 saleNames={getProjectSaleNames(drawerLead.projectId)}
                 managerNames={allManagerNames}
                 isMobile={false}
+                inDrawer
                 allUsers={allUsers}
               />
             )}
@@ -6439,7 +6440,7 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
   );
 };
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, allUsers = [] }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [] }) {
   const isSale = user.role === "sale";
   const history = lead.saleHistory || [];
   const registrations = lead.registrations || [];
@@ -6749,10 +6750,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const mobileControlPadding = isMobile ? "8px 10px" : "6px 8px";
   const mobileButtonPadding = isMobile ? "9px 12px" : "6px 12px";
   const mobilePanelPadding = isMobile ? 10 : 12;
+  const layoutCompact = isMobile || inDrawer;
 
   return (
-    <div style={{ padding: isMobile ? "10px" : "16px 24px" }}>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: isMobile ? 7 : 16, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
+    <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: layoutCompact ? 8 : 16, marginBottom: layoutCompact ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b style={detailValueStyle}>{lead.phone || "-"}</b></div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b style={detailValueStyle}>{projectName}</b></div>
@@ -6918,7 +6920,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       )}
 
       {/* === 2-COLUMN LAYOUT: Tương tác (left) | Chat (right) === */}
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 10 : 16, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr" : "1fr 1fr", gap: layoutCompact ? 10 : 16, alignItems: "start" }}>
       {/* --- LEFT COLUMN: Tương tác --- */}
       <div>
 
@@ -6956,7 +6958,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <input value={editFbUrl} onChange={(e) => setEditFbUrl(e.target.value)}
               placeholder="Dán link Facebook/Messenger của khách..."
-              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: "1 1 260px", minHeight: mobileControlHeight, background: "#fff" }} />
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: layoutCompact ? "1 1 100%" : "1 1 260px", minWidth: 0, minHeight: mobileControlHeight, background: "#fff" }} />
             <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
               style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
               {savingFbUrl ? "Đang lưu..." : <><Save size={14} /> Lưu link</>}
@@ -7460,7 +7462,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div>Tính năng Chat Messenger chỉ dành cho Admin</div>
         </div>
       ) : (
-      <div style={{ border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden", position: isMobile ? "static" : "sticky", top: 16 }}>
+      <div style={{ border: "1px solid #dbeafe", borderRadius: 10, overflow: "hidden", position: layoutCompact ? "static" : "sticky", top: 16 }}>
         <div onClick={() => setMessengerOpen(!messengerOpen)}
           style={{ padding: "10px 14px", background: "linear-gradient(135deg, #eff6ff, #dbeafe)", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <span style={{ fontWeight: 700, fontSize: 13, color: "#1e40af", display: "flex", alignItems: "center", gap: 6 }}>
