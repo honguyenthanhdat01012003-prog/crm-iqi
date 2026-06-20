@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-smooth-tabs";
+const BUILD_VERSION = "2026-06-20-deal-counts";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -1087,6 +1087,8 @@ function getHistoryUpdaterName(h = {}) {
   return h.sale_name || h.saleName || h.source || "";
 }
 
+const TERMINAL_DEAL_STATUSES = new Set(["booked", "closed", "booking_other"]);
+
 function getFirstUpdaterReportStatus(lead = {}, history = []) {
   let firstUpdater = "";
   let latestStatus = "";
@@ -1106,6 +1108,9 @@ function getFirstUpdaterReportStatus(lead = {}, history = []) {
 }
 
 function getLeadReportStatusFromHistory(lead = {}, history = []) {
+  const currentKey = normalizeStatus(lead.status || "new");
+  if (TERMINAL_DEAL_STATUSES.has(currentKey)) return currentKey;
+
   let hasInterested = false;
   let hasLowInterest = false;
   for (const h of history) {
@@ -1118,6 +1123,12 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
   if (hasInterested) return "interested";
   if (hasLowInterest) return "low_interest";
   return getFirstUpdaterReportStatus(lead, history);
+}
+
+function getAdminLeadTabStatus(lead = {}, history = []) {
+  const currentKey = normalizeStatus(lead?.status || "new");
+  if (TERMINAL_DEAL_STATUSES.has(currentKey)) return currentKey;
+  return getLeadReportStatusFromHistory(lead, history);
 }
 
 function extractSaleBlocks(rawHeaders) {
@@ -2367,7 +2378,7 @@ async function computeLeadTabIndex(db, user, filters = {}) {
     for (const lead of leadRows) {
       const tabStatus = user.role === "sale"
         ? normalizeStatus(lead.status)
-        : getFirstUpdaterReportStatus(lead, historyMap[lead.id] || []);
+        : getAdminLeadTabStatus(lead, historyMap[lead.id] || []);
       counts.all += 1;
       counts[tabStatus] = (counts[tabStatus] || 0) + 1;
       indexed.push({ ...lead, tabStatus });

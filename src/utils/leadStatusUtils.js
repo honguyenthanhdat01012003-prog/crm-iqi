@@ -86,6 +86,9 @@ export function getFirstUpdaterInfo(lead) {
 }
 
 export function getLeadReportStatus(lead) {
+  const currentKey = normalizeLeadStatusKey(lead?.status || "new");
+  if (["booked", "closed", "booking_other"].includes(currentKey)) return currentKey;
+
   const history = getLeadHistoryEntries(lead);
   let hasInterested = false;
   let hasLowInterest = false;
@@ -103,5 +106,7 @@ export function getLeadReportStatus(lead) {
 
 export function getLeadTabStatus(lead, isSale) {
   if (isSale) return normalizeLeadStatusKey(lead?.status || "new");
-  return getFirstUpdaterInfo(lead).status || normalizeLeadStatusKey(lead?.status || "new");
+  const currentKey = normalizeLeadStatusKey(lead?.status || "new");
+  if (["booked", "closed", "booking_other"].includes(currentKey)) return currentKey;
+  return getLeadReportStatus(lead);
 }
