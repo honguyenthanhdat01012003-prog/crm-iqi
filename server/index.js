@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tg-ai-pending";
+const BUILD_VERSION = "2026-06-10-tg-ai-fix2";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -679,6 +679,11 @@ async function initDb() {
     `CREATE INDEX IF NOT EXISTS idx_arl_source_date ON auto_rotate_log(source, rotated_at)`,
     // v21: hot_lead flag on user_projects
     "ALTER TABLE user_projects ADD COLUMN hot_lead INTEGER DEFAULT 0",
+    // v22: telegram AI pending (follow-up /hoi in group)
+    `CREATE TABLE IF NOT EXISTS telegram_ai_pending (
+      chat_id TEXT NOT NULL, user_id TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'hoi',
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id, user_id))`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -6817,6 +6822,8 @@ async function handleTelegramWebhook(req, res) {
       console.warn(`[telegram-webhook] No active bot found!`);
       return res.json({ ok: true });
     }
+    const freshBot = await get(db, "SELECT group_chat_id FROM telegram_bots WHERE id = ?", [bot.id]);
+    if (freshBot) bot.group_chat_id = freshBot.group_chat_id;
     const botToken = bot.token;
     const botId = bot.id;
 
@@ -6969,19 +6976,19 @@ async function handleTelegramWebhook(req, res) {
       const chatType = message.chat?.type || "private";
       const isGroup = chatType === "group" || chatType === "supergroup";
 
-      await pruneTelegramAiPendingDb(db);
-      const cmdMatch = feedbackText.match(/^\/(\w+)(@\w+)?(?:\s|$)/);
+      const cmdMatch = feedbackText.match(/^\/([a-zA-Z0-9_]+)(?:@\S*)?(?:\s|$)/);
       if (cmdMatch) {
         const cmd = `/${cmdMatch[1].toLowerCase()}`;
         const reportCmds = ["/baocao", "/baocaongay", "/baocaocham", "/menu"];
         if (reportCmds.includes(cmd)) {
           const access = await canUseTelegramGroupBotCommands(
-            db, bot, message.chat, replyChatId, message.from?.id);
+            db, bot, message.chat, replyChatId, userTelegramId);
           if (!access.ok) {
             await sendTg(replyChatId, TELEGRAM_GROUP_CMD_DENY[access.reason] || TELEGRAM_GROUP_CMD_DENY.wrong_group);
             return res.json({ ok: true });
           }
-          if ((cmd === "/baocao" && !feedbackText.replace(/^\/\w+(@\w+)?/, "").trim()) || cmd === "/menu") {
+          const cmdTail = feedbackText.replace(/^\/[a-zA-Z0-9_]+(?:@\S*)?\s*/, "").trim();
+          if ((cmd === "/baocao" && !cmdTail) || cmd === "/menu") {
             await sendTelegramReportMenu(db, bot, replyChatId, sendTg);
             return res.json({ ok: true });
           }
@@ -6992,7 +6999,7 @@ async function handleTelegramWebhook(req, res) {
         const aiCmds = ["/hoi", "/timduan", "/duan", "/diemtin"];
         if (aiCmds.includes(cmd)) {
           const access = await canUseTelegramGroupBotCommands(
-            db, bot, message.chat, replyChatId, message.from?.id);
+            db, bot, message.chat, replyChatId, userTelegramId);
           if (!access.ok) {
             await sendTg(replyChatId, TELEGRAM_GROUP_CMD_DENY[access.reason] || TELEGRAM_GROUP_CMD_DENY.wrong_group);
             return res.json({ ok: true });
@@ -7004,16 +7011,21 @@ async function handleTelegramWebhook(req, res) {
 
       // Tin nhắn tiếp theo sau /hoi hoặc /timduan (chỉ trong nhóm)
       if (isGroup && !feedbackText.startsWith("/")) {
-        const aiPending = await getTelegramAiPending(db, replyChatId, userTelegramId);
-        if (aiPending) {
-          const access = await canUseTelegramGroupBotCommands(
-            db, bot, message.chat, replyChatId, userTelegramId);
-          if (access.ok) {
+        try {
+          await pruneTelegramAiPendingDb(db);
+          const aiPending = await getTelegramAiPending(db, replyChatId, userTelegramId);
+          if (aiPending) {
+            const access = await canUseTelegramGroupBotCommands(
+              db, bot, message.chat, replyChatId, userTelegramId);
+            if (access.ok) {
+              await clearTelegramAiPending(db, replyChatId, userTelegramId);
+              await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
+              return res.json({ ok: true });
+            }
             await clearTelegramAiPending(db, replyChatId, userTelegramId);
-            await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
-            return res.json({ ok: true });
           }
-          await clearTelegramAiPending(db, replyChatId, userTelegramId);
+        } catch (aiErr) {
+          console.error("[telegram-webhook] AI pending error:", aiErr.message);
         }
         // Text thường trong nhóm — không coi là feedback lead (lead feedback chỉ chat riêng)
         return res.json({ ok: true });
@@ -7104,7 +7116,7 @@ async function handleTelegramWebhook(req, res) {
 
     res.json({ ok: true });
   } catch (err) {
-    console.error("[Telegram Webhook] Error:", err.message);
+    console.error("[Telegram Webhook] Error:", err.message, err.stack);
     res.json({ ok: true });
   }
 }
@@ -11577,13 +11589,22 @@ async function processDailySaleReminder(db, now, options = {}) {
 /* ===== Telegram AI (Perplexity — nhập text) ===== */
 const TELEGRAM_AI_PENDING_TTL_MINUTES = 10;
 
+async function ensureTelegramAiPendingTable(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS telegram_ai_pending (
+    chat_id TEXT NOT NULL, user_id TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'hoi',
+    created_at TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (chat_id, user_id))`);
+}
+
 async function setTelegramAiPending(db, chatId, userId, mode) {
+  await ensureTelegramAiPendingTable(db);
   await run(db,
     "INSERT OR REPLACE INTO telegram_ai_pending(chat_id, user_id, mode, created_at) VALUES(?, ?, ?, datetime('now'))",
     [String(chatId), String(userId), mode]);
 }
 
 async function getTelegramAiPending(db, chatId, userId) {
+  await ensureTelegramAiPendingTable(db);
   const row = await get(db,
     "SELECT mode FROM telegram_ai_pending WHERE chat_id = ? AND user_id = ?",
     [String(chatId), String(userId)]);
@@ -11591,11 +11612,13 @@ async function getTelegramAiPending(db, chatId, userId) {
 }
 
 async function clearTelegramAiPending(db, chatId, userId) {
+  await ensureTelegramAiPendingTable(db);
   await run(db, "DELETE FROM telegram_ai_pending WHERE chat_id = ? AND user_id = ?",
     [String(chatId), String(userId)]);
 }
 
 async function pruneTelegramAiPendingDb(db) {
+  await ensureTelegramAiPendingTable(db);
   await run(db,
     `DELETE FROM telegram_ai_pending WHERE created_at < datetime('now', '-${TELEGRAM_AI_PENDING_TTL_MINUTES} minutes')`);
 }
@@ -11762,9 +11785,9 @@ async function runTelegramAiQuery(db, userInput, mode, replyChatId, sendTg) {
 }
 
 async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg, userTelegramId) {
-  const cmdMatch = text.match(/^\/(\w+)(@\w+)?(?:\s+([\s\S]*))?$/);
+  const cmdMatch = text.match(/^\/([a-zA-Z0-9_]+)(?:@\S*)?(?:\s+([\s\S]*))?$/i);
   const cmd = cmdMatch ? `/${cmdMatch[1].toLowerCase()}` : "";
-  const args = (cmdMatch?.[3] || "").trim();
+  const args = (cmdMatch?.[2] || "").trim();
 
   if (cmd === "/diemtin") {
     const forceFresh = /^(moi|mới|fresh)$/i.test(args);
@@ -11794,7 +11817,13 @@ async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg, userT
   const mode = cmd === "/hoi" ? "hoi" : "timduan";
 
   if (!args) {
-    await setTelegramAiPending(db, replyChatId, userTelegramId, mode);
+    try {
+      await setTelegramAiPending(db, replyChatId, userTelegramId, mode);
+    } catch (e) {
+      console.error("[telegram-ai] set pending failed:", e.message);
+      await sendTg(replyChatId, "⚠️ Lỗi lưu trạng thái — thử gõ luôn: `/hoi câu hỏi của bạn`");
+      return;
+    }
     const hint = mode === "hoi"
       ? [
           "💬 *HỎI AI BĐS*",
@@ -11825,11 +11854,14 @@ async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg, userT
 
 /* ===== Telegram Report Menu + Analytics ===== */
 const JUNK_LEAD_STATUSES = new Set(["spam", "wrong_number", "wrong_phone", "blocked", "not_interested", "sale"]);
-const telegramReportBusy = new Map(); // chatId -> boolean
+const telegramReportBusy = new Map(); // chatId -> startedAt ms
+const TELEGRAM_REPORT_BUSY_TTL_MS = 5 * 60 * 1000;
 
 function tryAcquireTelegramReport(chatId) {
-  if (telegramReportBusy.get(chatId)) return false;
-  telegramReportBusy.set(chatId, true);
+  const key = String(chatId);
+  const started = telegramReportBusy.get(key);
+  if (started && Date.now() - started < TELEGRAM_REPORT_BUSY_TTL_MS) return false;
+  telegramReportBusy.set(key, Date.now());
   return true;
 }
 
