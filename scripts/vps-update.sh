@@ -11,16 +11,30 @@ rm -f scripts/clean-backups.sh scripts/start-server.sh scripts/stop-server.sh
 echo "==> Pull latest code"
 git pull origin main
 
-echo "==> Verify fix commit + leadStatusUtils"
+echo "==> Verify commit"
 git log -1 --oneline
-test -f src/utils/leadStatusUtils.js
 
 echo "==> Build frontend"
 npm run build
 
-echo "==> Deploy bundle"
-JS="$(grep -o 'index-[^"]*\.js' dist/index.html | head -1)"
-echo "Bundle: dist/assets/$JS"
-grep -q 'getLeadTabStatus\|normalizeLeadStatusKey' "dist/assets/$JS" || echo "WARN: status utils may be tree-shaken (minified) — check git log instead"
+echo "==> Verify dist bundle integrity"
+JS="$(grep -oE 'assets/index-[^"]+\.js' dist/index.html | head -1 | sed 's|^assets/||')"
+CSS="$(grep -oE 'assets/index-[^"]+\.css' dist/index.html | head -1 | sed 's|^assets/||')"
+if [ -z "$JS" ]; then
+  echo "ERROR: Cannot find main JS bundle in dist/index.html"
+  exit 1
+fi
+if [ ! -f "dist/assets/$JS" ]; then
+  echo "ERROR: dist/index.html references dist/assets/$JS but file is missing!"
+  echo "Run: npm run build"
+  exit 1
+fi
+if [ -n "$CSS" ] && [ ! -f "dist/assets/$CSS" ]; then
+  echo "ERROR: dist/index.html references dist/assets/$CSS but file is missing!"
+  exit 1
+fi
+
+echo "OK: dist/assets/$JS ($(du -h "dist/assets/$JS" | cut -f1))"
+echo "OK: dist/index.html points to $JS"
 
 echo "Done. Restart Node app in aaPanel, then hard-refresh browser (Ctrl+F5)."

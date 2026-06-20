@@ -10707,9 +10707,9 @@ app.delete("/api/daily-news/:id", requireAuth, requireAdminOnly, async (req, res
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// --- SPA fallback: serve index.html for non-API routes ---
+// --- SPA fallback: serve index.html for non-API routes (never for missing /assets/*) ---
 if (fs.existsSync(distPath)) {
-  app.get(/^(?!\/api).*/, (_req, res) => {
+  app.get(/^(?!\/api)(?!\/assets\/).*/, (_req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
   });
 }
