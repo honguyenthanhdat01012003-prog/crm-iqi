@@ -6834,11 +6834,28 @@ async function handleTelegramWebhook(req, res) {
         body: JSON.stringify({ callback_query_id: cbId, text }),
       });
 
-    // Handle status button click
+    // Handle status button click + report menu callbacks
     if (callback_query) {
       const cbData = callback_query.data || "";
-      const chatId = String(callback_query.from?.id || "");
       const parts = cbData.split(":");
+      const replyChatId = String(callback_query.message?.chat?.id || callback_query.from?.id || "");
+      const chatType = callback_query.message?.chat?.type || "private";
+      const isGroup = chatType === "group" || chatType === "supergroup";
+      const userId = String(callback_query.from?.id || "");
+
+      if (parts[0] === "rpt") {
+        const allowed = isGroup
+          ? String(bot.group_chat_id || "") === replyChatId
+          : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [userId]));
+        if (!allowed) {
+          await answerCb(callback_query.id, "Không có quyền");
+          return res.json({ ok: true });
+        }
+        await handleTelegramReportCallback(db, bot, callback_query, sendTg, answerCb);
+        return res.json({ ok: true });
+      }
+
+      const chatId = userId;
 
       if (parts[0] === "st" && parts.length === 3) {
         const leadId = Number(parts[1]);
@@ -6893,7 +6910,7 @@ async function handleTelegramWebhook(req, res) {
             "Admin cần thêm ID này vào mục *Telegram ID* trong Quản lý tài khoản.",
             "Sau đó bạn sẽ nhận thông báo khi có lead mới (khi CRM đồng bộ từ Sheet).",
             "",
-            "📊 Báo cáo nhóm: gõ `/baocao` để xem các lệnh (vd. `/baocaongay`).",
+            "📊 Báo cáo nhóm: gõ `/baocao` hoặc `/menu` để mở menu nút bấm.",
           ].join("\n"));
         }
         return res.json({ ok: true });
@@ -6903,7 +6920,7 @@ async function handleTelegramWebhook(req, res) {
       const cmdMatch = feedbackText.match(/^\/(\w+)(@\w+)?(?:\s|$)/);
       if (cmdMatch) {
         const cmd = `/${cmdMatch[1].toLowerCase()}`;
-        const reportCmds = ["/baocao", "/baocaongay", "/baocaocham"];
+        const reportCmds = ["/baocao", "/baocaongay", "/baocaocham", "/menu"];
         if (reportCmds.includes(cmd)) {
           const chatType = message.chat?.type || "private";
           const isGroup = chatType === "group" || chatType === "supergroup";
@@ -6912,6 +6929,10 @@ async function handleTelegramWebhook(req, res) {
             : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
           if (!allowed) {
             await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh báo cáo.");
+            return res.json({ ok: true });
+          }
+          if ((cmd === "/baocao" && !feedbackText.replace(/^\/\w+(@\w+)?/, "").trim()) || cmd === "/menu") {
+            await sendTelegramReportMenu(db, bot, replyChatId, sendTg);
             return res.json({ ok: true });
           }
           await handleTelegramReportCommand(db, bot, feedbackText, replyChatId, sendTg);
@@ -10972,19 +10993,7 @@ async function handleTelegramReportCommand(db, bot, text, replyChatId, sendTg) {
   if (!parsed) return;
 
   if (parsed.mode === "help") {
-    await sendTg(replyChatId, [
-      "📊 *LỆNH BÁO CÁO TELEGRAM*",
-      "",
-      "`/baocaongay` — Báo cáo lead quản lý nhận *hôm qua*",
-      "`/baocaongay Tên dự án` — Báo cáo hôm qua theo dự án",
-      "`/baocao 15/06/2025` — Báo cáo một ngày cụ thể",
-      "`/baocao 01/06/2025-15/06/2025` — Báo cáo theo khoảng ngày",
-      "`/baocao 01/06/2025-15/06/2025 Tên dự án` — Khoảng ngày + lọc dự án",
-      "`/baocaocham` — Tổng hợp sale chưa cập nhật (>2 ngày)",
-      "",
-      "ℹ️ Báo cáo nhóm *không tự gửi* khi restart server.",
-      "Chỉ gửi khi bạn gõ lệnh trong nhóm đã cấu hình.",
-    ].join("\n"));
+    await sendTelegramReportMenu(db, bot, replyChatId, sendTg);
     return;
   }
 
@@ -11465,6 +11474,492 @@ async function processDailySaleReminder(db, now, options = {}) {
         console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, e.message);
       }
     }
+  }
+}
+
+/* ===== Telegram Report Menu + Analytics ===== */
+const JUNK_LEAD_STATUSES = new Set(["spam", "wrong_number", "wrong_phone", "blocked", "not_interested", "sale"]);
+
+async function getReportProjectsForBot(db, bot) {
+  const botPids = new Set(getBotProjectIds(bot));
+  const rows = await all(db,
+    "SELECT id, name FROM projects WHERE (is_legacy = 0 OR is_legacy IS NULL) ORDER BY name ASC");
+  if (botPids.size === 0) return rows;
+  return rows.filter(p => botPids.has(Number(p.id)));
+}
+
+function telegramMainMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "📅 Lead QL hôm qua", callback_data: "rpt:run:mgr:0:1" },
+        { text: "⏳ Sale chưa cập nhật", callback_data: "rpt:pick:cham" },
+      ],
+      [
+        { text: "🔔 Nhắc sale báo cáo", callback_data: "rpt:pick:rem" },
+        { text: "⚡ Tốc độ phản hồi", callback_data: "rpt:pick:spd" },
+      ],
+      [
+        { text: "📣 Nguồn lead", callback_data: "rpt:pick:src" },
+        { text: "✅ Chất lượng lead", callback_data: "rpt:pick:qual" },
+      ],
+      [
+        { text: "🕐 Giờ vàng", callback_data: "rpt:pick:peak" },
+        { text: "ℹ️ Lệnh text", callback_data: "rpt:help" },
+      ],
+      [
+        { text: "🚫 Hành trình web (chưa có)", callback_data: "rpt:na:journey" },
+        { text: "🚫 Tỷ lệ chuyển đổi LP", callback_data: "rpt:na:conv" },
+      ],
+    ],
+  };
+}
+
+function telegramProjectPickerKeyboard(projects, runType, days = 7) {
+  const rows = [];
+  if (runType !== "rem") {
+    rows.push([{ text: "📋 Tất cả dự án", callback_data: `rpt:run:${runType}:0:${days}` }]);
+  }
+  const chunk = projects.slice(0, 12);
+  for (let i = 0; i < chunk.length; i += 2) {
+    const row = chunk.slice(i, i + 2).map(p => ({
+      text: p.name.length > 18 ? p.name.slice(0, 16) + "…" : p.name,
+      callback_data: `rpt:run:${runType}:${p.id}:${days}`,
+    }));
+    rows.push(row);
+  }
+  if (projects.length > 12) {
+    rows.push([{ text: `… và ${projects.length - 12} dự án khác (gõ lệnh text)`, callback_data: "rpt:help" }]);
+  }
+  rows.push([{ text: "◀️ Menu báo cáo", callback_data: "rpt:menu" }]);
+  return { inline_keyboard: rows };
+}
+
+async function sendTelegramReportMenu(db, bot, chatId, sendTg) {
+  const projects = await getReportProjectsForBot(db, bot);
+  await sendTg(chatId, [
+    "📊 *MENU BÁO CÁO CRM*",
+    "",
+    "Chọn loại báo cáo bên dưới.",
+    "Các mục cần dự án sẽ hiện danh sách dự án tiếp theo.",
+    "",
+    `🏢 Bot đang gắn *${projects.length}* dự án.`,
+    "",
+    "💡 Gõ `/baocaongay` hoặc `/baocao 15/06/2025` nếu muốn nhập ngày bằng text.",
+  ].join("\n"), { reply_markup: telegramMainMenuKeyboard() });
+}
+
+function getReportDaysWindow(daysBack) {
+  const end = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+  end.setHours(12, 0, 0, 0);
+  const start = new Date(end);
+  start.setDate(start.getDate() - (Math.max(1, daysBack) - 1));
+  return eachDayBetween(start, end);
+}
+
+function leadMatchesDayWindow(lead, days) {
+  const dt = parseLeadDate(lead.created_at) || parseLeadDate(lead.sync_at);
+  if (!dt) return false;
+  const d0 = new Date(dt);
+  d0.setHours(12, 0, 0, 0);
+  return days.some(d => d.getTime() === d0.getTime());
+}
+
+async function fetchLeadsForProjects(db, projectIds, days) {
+  if (!projectIds.length) return [];
+  const placeholders = projectIds.map(() => "?").join(",");
+  const rows = await all(db,
+    `SELECT id, name, phone, status, project_id, campaign, adset_name, ad_name, source, form_name, product,
+            created_at, sync_at, sale_name, manager_name
+     FROM leads WHERE project_id IN (${placeholders})`,
+    projectIds);
+  if (!days?.length) return rows;
+  return rows.filter(l => leadMatchesDayWindow(l, days));
+}
+
+async function getFirstContactDate(db, leadId) {
+  const row = await get(db,
+    `SELECT contact_date FROM lead_history
+     WHERE lead_id = ? AND action != 'Chia lead'
+     ORDER BY seq ASC LIMIT 1`,
+    [leadId]);
+  return row?.contact_date ? parseLeadDate(row.contact_date) : null;
+}
+
+function formatDurationMinutes(mins) {
+  if (mins == null || !Number.isFinite(mins)) return "—";
+  if (mins < 60) return `${Math.round(mins)} phút`;
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  return m ? `${h}g ${m}p` : `${h}g`;
+}
+
+async function buildSpeedToLeadReport(db, projectIds, projectMap, days) {
+  const leads = await fetchLeadsForProjects(db, projectIds, days);
+  const samples = [];
+  for (const l of leads) {
+    const received = parseLeadDate(l.created_at) || parseLeadDate(l.sync_at);
+    if (!received) continue;
+    const first = await getFirstContactDate(db, l.id);
+    if (!first) continue;
+    const mins = (first.getTime() - received.getTime()) / 60000;
+    if (mins < 0 || mins > 60 * 24 * 30) continue;
+    samples.push({ mins, name: l.name, sale: l.sale_name });
+  }
+  if (!samples.length) {
+    return "⚡ *TỐC ĐỘ PHẢN HỒI*\n\nChưa có lead nào có lịch sử liên hệ đầu tiên trong khoảng thời gian này.\n\nℹ️ CRM tính từ `ngày nhận lead` → lần cập nhật/gọi đầu tiên trên hệ thống (không có timestamp submit form web).";
+  }
+  const sorted = samples.map(s => s.mins).sort((a, b) => a - b);
+  const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const within15 = sorted.filter(m => m <= 15).length;
+  const within60 = sorted.filter(m => m <= 60).length;
+  const over120 = sorted.filter(m => m > 120).length;
+  const slowest = [...samples].sort((a, b) => b.mins - a.mins).slice(0, 5);
+  const projLabel = projectIds.length === 1 ? projectMap[projectIds[0]] || "Dự án" : `${projectIds.length} dự án`;
+  const dayLabel = days.length === 1 ? vnDateLabel(days[0]) : `${vnDateLabel(days[0])} → ${vnDateLabel(days[days.length - 1])}`;
+  return [
+    "⚡ *BÁO CÁO TỐC ĐỘ PHẢN HỒI*",
+    `📋 ${escMd(projLabel)} | ${dayLabel}`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    `📞 Lead có liên hệ đầu tiên: *${samples.length}/${leads.length}*`,
+    `⏱ Trung bình: *${formatDurationMinutes(avg)}*`,
+    `⏱ Trung vị: *${formatDurationMinutes(median)}*`,
+    `✅ ≤15 phút (SLA gợi ý): *${within15}* (${Math.round(within15 / samples.length * 100)}%)`,
+    `✅ ≤60 phút: *${within60}* (${Math.round(within60 / samples.length * 100)}%)`,
+    `⚠️ >2 giờ: *${over120}* (${Math.round(over120 / samples.length * 100)}%)`,
+    "",
+    "*Chậm nhất:*",
+    ...slowest.map((s, i) => `${i + 1}. ${escMd(s.name)} — ${formatDurationMinutes(s.mins)}${s.sale ? ` (${escMd(s.sale)})` : ""}`),
+    "",
+    "ℹ️ Chưa có thời điểm bấm Submit form web — chỉ đo theo dữ liệu CRM/Sheet.",
+  ].join("\n");
+}
+
+async function buildLeadSourceReport(db, projectIds, projectMap, days) {
+  const leads = await fetchLeadsForProjects(db, projectIds, days);
+  if (!leads.length) return "📣 *NGUỒN LEAD*\n\nKhông có lead trong khoảng thời gian đã chọn.";
+  const countBy = (keyFn) => {
+    const m = new Map();
+    for (const l of leads) {
+      const k = keyFn(l) || "Không rõ";
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  };
+  const top = (entries, n = 8) => entries.slice(0, n).map(([k, v], i) => `${i + 1}. ${escMd(k)}: *${v}*`).join("\n");
+  const projLabel = projectIds.length === 1 ? projectMap[projectIds[0]] : `${projectIds.length} dự án`;
+  const dayLabel = days.length === 1 ? vnDateLabel(days[0]) : `${vnDateLabel(days[0])} → ${vnDateLabel(days[days.length - 1])}`;
+  return [
+    "📣 *BÁO CÁO NGUỒN LEAD*",
+    `📋 ${escMd(projLabel)} | ${dayLabel}`,
+    `📥 Tổng lead: *${leads.length}*`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    "*Chiến dịch (campaign):*",
+    top(countBy(l => (l.campaign || "").trim() || null)),
+    "",
+    "*Nhóm QC (adset):*",
+    top(countBy(l => (l.adset_name || "").trim() !== "-" ? l.adset_name : null)),
+    "",
+    "*Content (ad):*",
+    top(countBy(l => (l.ad_name || "").trim() !== "-" ? l.ad_name : null)),
+    "",
+    "*Nguồn (source / platform):*",
+    top(countBy(l => (l.source || "").trim() || guessChannel(l.campaign))),
+    "",
+    "*Form:*",
+    top(countBy(l => (l.form_name || "").trim() !== "-" ? l.form_name : null)),
+    "",
+    "ℹ️ CRM lấy từ Sheet/Facebook Ads — chưa có UTM Source/Medium riêng.",
+  ].join("\n");
+}
+
+async function buildQualificationReport(db, projectIds, projectMap, days) {
+  const leads = await fetchLeadsForProjects(db, projectIds, days);
+  if (!leads.length) return "✅ *CHẤT LƯỢNG LEAD*\n\nKhông có lead trong khoảng thời gian đã chọn.";
+  let junk = 0;
+  const byStatus = new Map();
+  for (const l of leads) {
+    const st = l.status || "new";
+    byStatus.set(st, (byStatus.get(st) || 0) + 1);
+    if (JUNK_LEAD_STATUSES.has(st)) junk++;
+  }
+  const quality = leads.length - junk;
+  const statusLines = [...byStatus.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([k, v]) => `• ${escMd(STATUS_LABELS_VI[k] || k)}: *${v}* (${Math.round(v / leads.length * 100)}%)`)
+    .join("\n");
+  const projLabel = projectIds.length === 1 ? projectMap[projectIds[0]] : `${projectIds.length} dự án`;
+  const dayLabel = days.length === 1 ? vnDateLabel(days[0]) : `${vnDateLabel(days[0])} → ${vnDateLabel(days[days.length - 1])}`;
+  return [
+    "✅ *BÁO CÁO CHẤT LƯỢNG LEAD*",
+    `📋 ${escMd(projLabel)} | ${dayLabel}`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    `📥 Tổng: *${leads.length}*`,
+    `🗑 Lead rác (spam/sai số/không QT/...): *${junk}* (${Math.round(junk / leads.length * 100)}%)`,
+    `💎 Lead còn lại: *${quality}* (${Math.round(quality / leads.length * 100)}%)`,
+    "",
+    "*Theo trạng thái CRM:*",
+    statusLines,
+    "",
+    "ℹ️ Phân loại rác dựa trên trạng thái sale cập nhật trên CRM.",
+  ].join("\n");
+}
+
+async function buildPeakHoursReport(db, projectIds, projectMap, days) {
+  const leads = await fetchLeadsForProjects(db, projectIds, days);
+  if (!leads.length) return "🕐 *GIỜ VÀNG*\n\nKhông có lead trong khoảng thời gian đã chọn.";
+  const hourBuckets = Array.from({ length: 24 }, () => 0);
+  const dowBuckets = Array.from({ length: 7 }, () => 0);
+  const dowNames = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+  for (const l of leads) {
+    const dt = parseLeadDate(l.created_at) || parseLeadDate(l.sync_at);
+    if (!dt) continue;
+    hourBuckets[dt.getHours()]++;
+    dowBuckets[dt.getDay()]++;
+  }
+  const topHours = hourBuckets
+    .map((c, h) => ({ h, c }))
+    .filter(x => x.c > 0)
+    .sort((a, b) => b.c - a.c)
+    .slice(0, 8);
+  const maxH = Math.max(...topHours.map(x => x.c), 1);
+  const hourLines = topHours.map(({ h, c }) => {
+    const bar = "▓".repeat(Math.max(1, Math.round(c / maxH * 6)));
+    return `${String(h).padStart(2, "0")}:00–${String(h).padStart(2, "0")}:59 ${bar} *${c}*`;
+  }).join("\n");
+  const dowLines = dowBuckets.map((c, i) => `${dowNames[i]}: *${c}*`).join(" | ");
+  const projLabel = projectIds.length === 1 ? projectMap[projectIds[0]] : `${projectIds.length} dự án`;
+  const dayLabel = days.length === 1 ? vnDateLabel(days[0]) : `${vnDateLabel(days[0])} → ${vnDateLabel(days[days.length - 1])}`;
+  return [
+    "🕐 *BÁO CÁO GIỜ VÀNG NHẬN LEAD*",
+    `📋 ${escMd(projLabel)} | ${dayLabel}`,
+    `📥 Tổng lead: *${leads.length}*`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    "*Top khung giờ (theo ngày nhận):*",
+    hourLines,
+    "",
+    "*Theo ngày trong tuần:*",
+    dowLines,
+    "",
+    "ℹ️ Dựa trên `ngày nhận lead` trên CRM, không phải analytics web realtime.",
+  ].join("\n");
+}
+
+async function runSaleRemindForProject(db, bot, projectId, groupChatId, sendTg) {
+  const project = await get(db, "SELECT id, name FROM projects WHERE id = ?", [projectId]);
+  if (!project) return "⚠️ Không tìm thấy dự án.";
+  const sales = await all(db, "SELECT id, display_name, telegram_id FROM users WHERE role = 'sale'");
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+  const nowMs = now.getTime();
+  let botToken = bot.token;
+  const lines = [];
+  let totalPending = 0;
+  let dmed = 0;
+
+  for (const sale of sales) {
+    const displayName = sale.display_name;
+    const leads = await all(db,
+      `SELECT l.id, l.name, l.phone, l.status FROM leads l
+       WHERE l.project_id = ? AND (l.sale_name = ? OR l.sale_name = ?)
+         AND l.status NOT IN ('booked','booking_other','closed','not_interested','spam','wrong_number','blocked','lost','cancelled_deposit')`,
+      [projectId, displayName, displayName.toLowerCase()]);
+    if (!leads.length) continue;
+
+    const pendingLeads = [];
+    for (const lead of leads) {
+      const lastUpdate = await get(db,
+        `SELECT contact_date FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' ORDER BY seq DESC LIMIT 1`,
+        [lead.id, displayName]);
+      let daysSince = null;
+      if (!lastUpdate) {
+        const chia = await get(db,
+          `SELECT contact_date FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1`,
+          [lead.id, displayName]);
+        if (chia) {
+          const d = parseLeadDate(chia.contact_date);
+          if (d) daysSince = Math.floor((nowMs - d.getTime()) / 86400000);
+        }
+      } else {
+        const d = parseLeadDate(lastUpdate.contact_date);
+        if (d) daysSince = Math.floor((nowMs - d.getTime()) / 86400000);
+      }
+      if (daysSince !== null && daysSince >= 2) {
+        pendingLeads.push({ name: lead.name, days: daysSince });
+      }
+    }
+    if (!pendingLeads.length) {
+      lines.push(`✅ ${escMd(displayName)}: đã cập nhật đủ`);
+      continue;
+    }
+    totalPending += pendingLeads.length;
+    lines.push(`⚠️ *${escMd(displayName)}*: ${pendingLeads.length} KH chưa CN (>2 ngày)`);
+    pendingLeads.slice(0, 5).forEach((p, i) => lines.push(`   ${i + 1}. ${escMd(p.name)} (${p.days} ngày)`));
+
+    if (sale.telegram_id && botToken) {
+      const msg = [
+        `⏰ *NHẮC CẬP NHẬT — ${escMd(project.name)}*`,
+        ``,
+        `Bạn có *${pendingLeads.length} khách* chưa cập nhật >2 ngày.`,
+        ...pendingLeads.slice(0, 10).map((p, i) => `${i + 1}. ${escMd(p.name)} (${p.days} ngày)`),
+        ``,
+        `🔗 https://crm-iqi.id.vn`,
+      ].join("\n");
+      try {
+        await sendTelegramMessage(botToken, sale.telegram_id, msg);
+        dmed++;
+      } catch (_) {}
+    }
+  }
+
+  const groupMsg = [
+    `🔔 *NHẮC SALE BÁO CÁO*`,
+    `🏢 Dự án: *${escMd(project.name)}*`,
+    "━━━━━━━━━━━━━━━━━━━━",
+    ...lines,
+    "",
+    totalPending > 0
+      ? `📣 Tổng *${totalPending}* khách cần cập nhật. Đã gửi DM cho *${dmed}* sale có Telegram.`
+      : "🎉 Tất cả sale đã cập nhật đủ!",
+  ].join("\n");
+  await sendTg(groupChatId, groupMsg);
+  return null;
+}
+
+const REPORT_PICK_LABELS = {
+  cham: "⏳ Sale chưa cập nhật",
+  rem: "🔔 Nhắc sale báo cáo",
+  spd: "⚡ Tốc độ phản hồi (7 ngày)",
+  src: "📣 Nguồn lead (7 ngày)",
+  qual: "✅ Chất lượng lead (7 ngày)",
+  peak: "🕐 Giờ vàng (7 ngày)",
+};
+
+async function handleTelegramReportCallback(db, bot, callback_query, sendTg, answerCb) {
+  const cbData = callback_query.data || "";
+  const parts = cbData.split(":");
+  const replyChatId = String(callback_query.message?.chat?.id || callback_query.from?.id || "");
+  await answerCb(callback_query.id, "Đang xử lý...");
+
+  if (parts[1] === "menu") {
+    await sendTelegramReportMenu(db, bot, replyChatId, sendTg);
+    return;
+  }
+
+  if (parts[1] === "help") {
+    await sendTg(replyChatId, [
+      "📊 *LỆNH TEXT*",
+      "",
+      "`/baocao` hoặc `/menu` — Menu nút bấm",
+      "`/baocaongay` — Lead QL nhận hôm qua",
+      "`/baocaongay Tên dự án` — Lọc dự án",
+      "`/baocao 15/06/2025` — Một ngày",
+      "`/baocao 01/06/2025-15/06/2025` — Khoảng ngày",
+      "`/baocaocham` — Sale chưa cập nhật (tất cả dự án bật báo cáo)",
+    ].join("\n"), { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+    return;
+  }
+
+  if (parts[1] === "na") {
+    const msg = parts[2] === "journey"
+      ? "🚫 *Hành trình web (Pageviews)*\n\nCRM chưa lưu URL/trang khách xem trước khi điền form.\nCần tích hợp Google Analytics / pixel web để làm báo cáo này."
+      : "🚫 *Tỷ lệ chuyển đổi Landing Page*\n\nCần dữ liệu lượt truy cập web (sessions/pageviews).\nCRM hiện chỉ có số lead từ Sheet — không tính được % chuyển đổi.";
+    await sendTg(replyChatId, msg, { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+    return;
+  }
+
+  if (parts[1] === "pick") {
+    const runType = parts[2];
+    const projects = await getReportProjectsForBot(db, bot);
+    if (!projects.length) {
+      await sendTg(replyChatId, "⚠️ Không có dự án nào gắn với bot này.");
+      return;
+    }
+    const label = REPORT_PICK_LABELS[runType] || "Báo cáo";
+    await sendTg(replyChatId, `${label}\n\n👇 Chọn dự án:`, {
+      reply_markup: telegramProjectPickerKeyboard(projects, runType, 7),
+    });
+    return;
+  }
+
+  if (parts[1] === "run") {
+    const runType = parts[2];
+    const pid = Number(parts[3] || 0);
+    const daysBack = Number(parts[4] || 7);
+    const projects = await getReportProjectsForBot(db, bot);
+    const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
+    let projectIds = pid > 0 ? [pid] : projects.map(p => p.id);
+    if (pid > 0 && !projectMap[pid]) {
+      await sendTg(replyChatId, "⚠️ Dự án không thuộc bot này.");
+      return;
+    }
+
+    await sendTg(replyChatId, "⏳ Đang tạo báo cáo...");
+
+    if (runType === "mgr") {
+      const y = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+      y.setDate(y.getDate() - 1);
+      y.setHours(12, 0, 0, 0);
+      await processDailySaleReminder(db, new Date(), {
+        sendSaleReminders: false,
+        sendGroupReports: true,
+        reportDays: [y],
+        projectIdsFilter: pid > 0 ? new Set([pid]) : null,
+        botIdFilter: bot.id,
+        replyChatId,
+        includePendingSummary: false,
+        includeManagerReport: true,
+      });
+      await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+      return;
+    }
+
+    if (runType === "cham") {
+      await processDailySaleReminder(db, new Date(), {
+        sendSaleReminders: false,
+        sendGroupReports: true,
+        projectIdsFilter: pid > 0 ? new Set([pid]) : null,
+        botIdFilter: bot.id,
+        replyChatId,
+        includePendingSummary: true,
+        includeManagerReport: false,
+      });
+      await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+      return;
+    }
+
+    if (runType === "rem") {
+      await runSaleRemindForProject(db, bot, pid, replyChatId, sendTg);
+      await sendTg(replyChatId, "✅ Đã nhắc.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+      return;
+    }
+
+    const days = getReportDaysWindow(daysBack);
+    let text = "";
+    if (runType === "spd") text = await buildSpeedToLeadReport(db, projectIds, projectMap, days);
+    else if (runType === "src") text = await buildLeadSourceReport(db, projectIds, projectMap, days);
+    else if (runType === "qual") text = await buildQualificationReport(db, projectIds, projectMap, days);
+    else if (runType === "peak") text = await buildPeakHoursReport(db, projectIds, projectMap, days);
+    else {
+      await sendTg(replyChatId, "⚠️ Loại báo cáo không hợp lệ.");
+      return;
+    }
+
+    const chunks = [];
+    if (text.length <= 3900) chunks.push(text);
+    else {
+      let cur = "";
+      for (const line of text.split("\n")) {
+        if ((cur + "\n" + line).length > 3800) { chunks.push(cur); cur = line; }
+        else cur = cur ? `${cur}\n${line}` : line;
+      }
+      if (cur) chunks.push(cur);
+    }
+    for (const chunk of chunks) {
+      await sendTg(replyChatId, chunk);
+    }
+    await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
   }
 }
 
