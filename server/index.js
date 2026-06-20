@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-project-counts";
+const BUILD_VERSION = "2026-06-20-smooth-tabs";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2218,6 +2218,7 @@ function invalidateLeadAuxCache() {
 
 function invalidateProjectCountsCache() {
   projectCountsCache = { at: 0, key: "", data: null };
+  invalidateLeadTabIndexCache();
 }
 
 function safeJsonParse(raw, fallback = {}) {
@@ -2270,6 +2271,125 @@ async function loadLeadAuxData(db) {
   return { historyCountMap, dupPhones };
 }
 
+async function loadHistoryForLeads(db, leadIds) {
+  if (!leadIds.length) return {};
+  const map = {};
+  const BATCH = 400;
+  for (let i = 0; i < leadIds.length; i += BATCH) {
+    const batch = leadIds.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    const rows = await all(db, `SELECT * FROM lead_history WHERE lead_id IN (${ph}) ORDER BY lead_id, seq`, batch);
+    for (const r of rows) {
+      if (!map[r.lead_id]) map[r.lead_id] = [];
+      map[r.lead_id].push(r);
+    }
+  }
+  return map;
+}
+
+async function loadFeedbackSummariesForLeads(db, leadIds) {
+  if (!leadIds.length) return {};
+  const historyMap = await loadHistoryForLeads(db, leadIds);
+  const out = {};
+  for (const id of leadIds) {
+    const raw = historyMap[id] || [];
+    const entries = sortSaleHistoryEntries(raw.map(formatHistoryRow));
+    out[id] = buildLeadHistorySummary(entries);
+  }
+  return out;
+}
+
+let leadTabIndexCache = { at: 0, key: "", data: null };
+let leadTabIndexInflight = null;
+let leadTabIndexInflightKey = "";
+const LEAD_TAB_INDEX_CACHE_MS = 45_000;
+
+function leadTabIndexCacheKey(user, filters = {}) {
+  return [
+    user.role,
+    user.userId || user.displayName,
+    filters.projectId || "all",
+    filters.search || "",
+    filters.managerFilter || "all",
+    filters.saleFilter || "all",
+    filters.products || "",
+  ].join("|");
+}
+
+function sortIndexedLeads(rows, sortKey, sortDir) {
+  const colMap = {
+    name: "name",
+    phone: "phone",
+    product: "product",
+    status: "tabStatus",
+    saleName: "sale_name",
+    managerName: "manager_name",
+    createdAt: "created_at",
+    id: "id",
+  };
+  const col = colMap[sortKey] || "id";
+  const dir = sortDir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    let va = a[col];
+    let vb = b[col];
+    if (col === "id") return (Number(va) - Number(vb)) * dir;
+    va = String(va ?? "").toLowerCase();
+    vb = String(vb ?? "").toLowerCase();
+    if (va < vb) return -dir;
+    if (va > vb) return dir;
+    return Number(a.id) - Number(b.id);
+  });
+}
+
+async function computeLeadTabIndex(db, user, filters = {}) {
+  const cacheKey = leadTabIndexCacheKey(user, filters);
+  const now = Date.now();
+  if (leadTabIndexCache.key === cacheKey && leadTabIndexCache.data && now - leadTabIndexCache.at < LEAD_TAB_INDEX_CACHE_MS) {
+    return leadTabIndexCache.data;
+  }
+  if (leadTabIndexInflight && leadTabIndexInflightKey === cacheKey) {
+    return leadTabIndexInflight;
+  }
+
+  leadTabIndexInflightKey = cacheKey;
+  leadTabIndexInflight = (async () => {
+    const f = { ...filters, statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, f);
+    const leadRows = await all(
+      db,
+      `SELECT id, status, created_at, name, phone, product, sale_name, manager_name FROM leads ${where}`,
+      params
+    );
+    const historyMap = await loadHistoryForLeads(db, leadRows.map((r) => r.id));
+
+    const counts = { all: 0 };
+    const indexed = [];
+    for (const lead of leadRows) {
+      const tabStatus = user.role === "sale"
+        ? normalizeStatus(lead.status)
+        : getFirstUpdaterReportStatus(lead, historyMap[lead.id] || []);
+      counts.all += 1;
+      counts[tabStatus] = (counts[tabStatus] || 0) + 1;
+      indexed.push({ ...lead, tabStatus });
+    }
+
+    const data = { counts, indexed };
+    leadTabIndexCache = { at: Date.now(), key: cacheKey, data };
+    return data;
+  })();
+
+  try {
+    return await leadTabIndexInflight;
+  } finally {
+    leadTabIndexInflight = null;
+    leadTabIndexInflightKey = "";
+  }
+}
+
+function invalidateLeadTabIndexCache() {
+  leadTabIndexCache = { at: 0, key: "", data: null };
+}
+
 async function loadPastSaleNamesForLeads(db, leadIds) {
   if (!leadIds.length) return {};
   const ph = leadIds.map(() => "?").join(",");
@@ -2288,7 +2408,7 @@ async function loadPastSaleNamesForLeads(db, leadIds) {
   return map;
 }
 
-function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = []) {
+function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = [], feedbackHistorySummary = [], saleFeedbackStatus = {}) {
   const mktXaoMeta = getMktXaoMeta(l);
   const phone = (l.phone || "").replace(/[^0-9+]/g, "");
   const allRegs = phone ? (phoneRegMap[phone] || []) : [];
@@ -2331,10 +2451,10 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     dealValue: l.deal_value || 0,
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
-    historyCount: historyCountMap[l.id] || 0,
+    historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
     pastSaleNames,
-    feedbackHistorySummary: [],
-    saleFeedbackStatus: {},
+    feedbackHistorySummary,
+    saleFeedbackStatus,
   };
 }
 
@@ -2373,7 +2493,7 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   }
 
   const tab = filters.statusTab || filters.statusFilter;
-  if (tab && tab !== "all") {
+  if (tab && tab !== "all" && user.role === "sale") {
     parts.push("status = ?");
     params.push(tab);
   }
@@ -2414,15 +2534,19 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
 }
 
 async function queryLeadsTabCounts(db, user, filters = {}) {
-  const f = { ...filters, statusTab: "all", statusFilter: "all" };
-  const { where, params } = await buildLeadsSqlFilters(db, user, f);
-  const rows = await all(db, `SELECT status, COUNT(*) as c FROM leads ${where} GROUP BY status`, params);
-  const counts = { all: 0 };
-  for (const r of rows) {
-    const k = normalizeStatus(r.status) || "new";
-    counts[k] = (counts[k] || 0) + r.c;
-    counts.all += r.c;
+  if (user.role === "sale") {
+    const f = { ...filters, statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, f);
+    const rows = await all(db, `SELECT status, COUNT(*) as c FROM leads ${where} GROUP BY status`, params);
+    const counts = { all: 0 };
+    for (const r of rows) {
+      const k = normalizeStatus(r.status) || "new";
+      counts[k] = (counts[k] || 0) + r.c;
+      counts.all += r.c;
+    }
+    return counts;
   }
+  const { counts } = await computeLeadTabIndex(db, user, filters);
   return counts;
 }
 
@@ -2486,10 +2610,29 @@ async function queryProjectLeadCounts(db, user) {
 }
 
 async function queryLeadsPage(db, user, filters, page, limit) {
+  const sortKey = filters.sortKey || "id";
+  const sortDir = filters.sortDir || "desc";
+  const statusTab = filters.statusTab || "all";
+
+  // Admin/manager tab filter uses feedback history (first updater), not raw leads.status
+  if (user.role !== "sale" && statusTab && statusTab !== "all") {
+    const { indexed } = await computeLeadTabIndex(db, user, filters);
+    const matched = indexed.filter((r) => r.tabStatus === statusTab);
+    const sorted = sortIndexedLeads(matched, sortKey, sortDir);
+    const offset = (page - 1) * limit;
+    const pageSlice = sorted.slice(offset, offset + limit);
+    if (!pageSlice.length) {
+      return { leads: [], leadsTotal: sorted.length, phoneRegistrations: {} };
+    }
+    const ph = pageSlice.map(() => "?").join(",");
+    const leadRows = await all(db, `SELECT * FROM leads WHERE id IN (${ph})`, pageSlice.map((r) => r.id));
+    const rowMap = Object.fromEntries(leadRows.map((r) => [r.id, r]));
+    const orderedRows = pageSlice.map((r) => rowMap[r.id]).filter(Boolean);
+    return finishLeadsPage(db, orderedRows, sorted.length);
+  }
+
   const { where, params } = await buildLeadsSqlFilters(db, user, filters);
   const offset = (page - 1) * limit;
-  const sortKey = filters.sortKey || "id";
-  const sortDir = filters.sortDir === "asc" ? "ASC" : "DESC";
   const sortCol = {
     name: "name",
     phone: "phone",
@@ -2500,28 +2643,45 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     createdAt: "created_at",
     id: "id",
   }[sortKey] || "id";
+  const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
 
   const [countRow, leadRows, projectRows] = await Promise.all([
     get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
-    all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`, [...params, limit, offset]),
+    all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
   ]);
 
+  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows);
+}
+
+async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null) {
+  const projectRows = projectRowsCached || await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
   const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
   const leadIds = leadRows.map((l) => l.id);
 
-  const [historyCountMap, pastSaleMap, phoneRegMap] = await Promise.all([
-    getHistoryCountsForLeadIds(db, leadIds),
-    loadPastSaleNamesForLeads(db, leadIds),
+  const [feedbackMap, phoneRegMap] = await Promise.all([
+    loadFeedbackSummariesForLeads(db, leadIds),
     buildPhoneRegMapForPage(db, leadRows, projectMap),
   ]);
 
-  const leads = leadRows.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleMap[l.id] || []));
+  const leads = leadRows.map((l) => {
+    const fb = feedbackMap[l.id] || {};
+    const historyCountMap = { [l.id]: fb.historyCount || 0 };
+    return mapLeadFromRow(
+      l,
+      projectLegacyMap,
+      phoneRegMap,
+      historyCountMap,
+      fb.pastSaleNames || [],
+      fb.feedbackHistorySummary || [],
+      fb.saleFeedbackStatus || {}
+    );
+  });
 
   return {
     leads,
-    leadsTotal: countRow?.c || 0,
+    leadsTotal,
     phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
   };
 }
@@ -2591,6 +2751,7 @@ function parseLeadsQuery(req) {
     sortKey: req.query.sortKey || "id",
     sortDir: req.query.sortDir || "desc",
     all: req.query.all === "1",
+    lite: req.query.lite === "1",
   };
 }
 
@@ -4226,6 +4387,37 @@ app.get("/api/data", requireAuth, async (req, res) => {
       return res.json(payload);
     }
 
+    const isLite = q.lite;
+
+    if (isLite) {
+      const [pageData, tabCounts] = await Promise.all([
+        queryLeadsPage(db, req.user, filters, q.page, q.limit),
+        queryLeadsTabCounts(db, req.user, filters).catch((e) => {
+          console.warn("[GET /api/data] tabCounts failed:", e.message);
+          return { all: 0 };
+        }),
+      ]);
+      const data = {
+        leads: pageData.leads,
+        leadsTotal: pageData.leadsTotal,
+        leadsPage: q.page,
+        leadsLimit: q.limit,
+        paginated: true,
+        tabCounts,
+        phoneRegistrations: pageData.phoneRegistrations,
+        hash: String(dataVersion),
+        version: dataVersion,
+        noChange: false,
+      };
+      stripLeadsForClient(data);
+      res.json(data);
+      const totalMs = Date.now() - t0;
+      if (totalMs > 500) {
+        console.log(`[GET /api/data] lite ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} (user=${req.user?.displayName})`);
+      }
+      return;
+    }
+
     const [bootstrap, pageData, tabCounts, projectLeadCounts] = await Promise.all([
       getBootstrapPayload(db, req.user).catch((e) => {
         console.warn("[GET /api/data] bootstrap failed:", e.message);
@@ -4337,6 +4529,7 @@ function emitDataChanged(reason) {
   invalidateBootstrapCache();
   invalidateLeadAuxCache();
   invalidateProjectCountsCache();
+  invalidateLeadTabIndexCache();
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }

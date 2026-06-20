@@ -1096,11 +1096,12 @@ function CRMApp({ user, updateUser, onLogout }) {
   const bootDoneRef = useRef(false);
   const bootRetryTimerRef = useRef(null);
 
-  const buildDataUrl = useCallback(() => {
+  const buildDataUrl = useCallback(({ lite = false } = {}) => {
     const q = leadsQueryRef.current;
     const p = new URLSearchParams();
     p.set("page", String(q.page));
     p.set("limit", String(q.limit));
+    if (lite) p.set("lite", "1");
     if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
     if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
     if (searchText.trim()) p.set("search", searchText.trim());
@@ -1120,7 +1121,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 90000);
-      const r = await fetch(buildDataUrl(), {
+      const r = await fetch(buildDataUrl({ lite: !isBoot }), {
         headers: authHeaders(),
         signal: controller.signal,
       });
@@ -1241,11 +1242,11 @@ function CRMApp({ user, updateUser, onLogout }) {
       triggerLeadAlerts({ soundKind, pushItem: leadFromPushPayload(payload) });
     });
     socket.on("data-changed", () => {
-      fetch(buildDataUrl(), { headers: authHeaders() })
+      fetch(buildDataUrl({ lite: true }), { headers: authHeaders() })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then((data) => {
           markApiOk();
-          applyApiData(data);
+          applyApiData(data, { suppressNotifications: true });
           if (Array.isArray(data.leads)) leadsRef.current = data.leads;
         })
         .catch(() => markConnectivityFailure());
@@ -1273,7 +1274,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
-            return fetch(buildDataUrl(), { headers: authHeaders() })
+            return fetch(buildDataUrl({ lite: true }), { headers: authHeaders() })
               .then(r => {
                 if (!r.ok) {
                   markConnectivityFailure();
@@ -1283,7 +1284,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               })
               .then((data) => {
                 markApiOk();
-                applyApiData(data);
+                applyApiData(data, { suppressNotifications: true });
                 if (Array.isArray(data.leads)) leadsRef.current = data.leads;
               })
               .catch(() => markConnectivityFailure());
@@ -2003,7 +2004,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             setAutoRotateProjects={setAutoRotateProjects}
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
-            isDataLoading={!initialDataLoaded || leadsFetching}
+            isDataLoading={!initialDataLoaded}
+            leadsRefreshing={leadsFetching && initialDataLoaded}
             phoneRegistrations={phoneRegistrations}
           />
         )}
@@ -3122,6 +3124,7 @@ const LeadsPage = (props) => {
     sprintRotateProjects,
     setSprintRotateProjects,
     isDataLoading = false,
+    leadsRefreshing = false,
     phoneRegistrations = {},
   } = props;
   const isAdminOnly = user.role === "admin";
@@ -6364,6 +6367,26 @@ const LeadsPage = (props) => {
       </div>
 
       {/* Lead cards - card layout for all on mobile, data grid + drawer for admin desktop */}
+      <div style={{ position: "relative", minHeight: isDataLoading ? 200 : 0 }}>
+        <style>{`@keyframes crmLeadSpin { to { transform: rotate(360deg); } }`}</style>
+        {leadsRefreshing && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none",
+            background: "rgba(255,255,255,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 12,
+          }}>
+            <div style={{
+              background: "#fff", border: "1px solid #e2e8f0", borderRadius: 999, padding: "6px 14px",
+              fontSize: 12, fontWeight: 700, color: "#64748b", boxShadow: "0 2px 8px rgba(0,0,0,.06)",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <span style={{
+                width: 14, height: 14, border: "2px solid #e2e8f0", borderTopColor: "#e88a2e",
+                borderRadius: "50%", display: "inline-block", animation: "crmLeadSpin .8s linear infinite",
+              }} />
+              Đang tải...
+            </div>
+          </div>
+        )}
       {isDataLoading ? (
         isAdmin && !isMobile ? <LeadGridSkeleton rows={pageSize} /> : <LeadCardsSkeleton count={5} />
       ) : (!isAdmin || isMobile) ? (
@@ -6512,6 +6535,7 @@ const LeadsPage = (props) => {
           </LeadDetailDrawer>
         </>
       )}
+      </div>
 
       {isMobile && mobileDetailLead && (
         <div
