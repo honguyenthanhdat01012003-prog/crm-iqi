@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tg-ai";
+const BUILD_VERSION = "2026-06-10-tg-group-only";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -6886,11 +6886,13 @@ async function handleTelegramWebhook(req, res) {
       const userId = String(callback_query.from?.id || "");
 
       if (parts[0] === "rpt") {
-        const allowed = isGroup
-          ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
-          : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [userId]));
-        if (!allowed) {
-          await answerCb(callback_query.id, "Không có quyền");
+        const access = await canUseTelegramGroupBotCommands(
+          db, bot, callback_query.message?.chat, replyChatId, userId);
+        if (!access.ok) {
+          await answerCb(callback_query.id, access.reason === "private" ? "Chỉ dùng trong nhóm" : "Không có quyền");
+          if (access.reason === "private") {
+            await sendTg(userId, TELEGRAM_GROUP_CMD_DENY.private);
+          }
           return res.json({ ok: true });
         }
         await handleTelegramReportCallback(db, bot, callback_query, sendTg, answerCb);
@@ -6952,9 +6954,7 @@ async function handleTelegramWebhook(req, res) {
             "Admin cần thêm ID này vào mục *Telegram ID* trong Quản lý tài khoản.",
             "Sau đó bạn sẽ nhận thông báo khi có lead mới (khi CRM đồng bộ từ Sheet).",
             "",
-            "📊 Báo cáo nhóm: gõ `/baocao` hoặc `/menu` để mở menu nút bấm.",
-            "",
-            "🤖 AI BĐS: `/hoi`, `/timduan`, `/diemtin` (admin/QL hoặc nhóm đã cấu hình).",
+            "📊 Báo cáo & AI (`/menu`, `/hoi`, …): *chỉ dùng trong nhóm Telegram* đã gắn bot.",
           ].join("\n"));
         }
         return res.json({ ok: true });
@@ -6967,13 +6967,10 @@ async function handleTelegramWebhook(req, res) {
         const cmd = `/${cmdMatch[1].toLowerCase()}`;
         const reportCmds = ["/baocao", "/baocaongay", "/baocaocham", "/menu"];
         if (reportCmds.includes(cmd)) {
-          const chatType = message.chat?.type || "private";
-          const isGroup = chatType === "group" || chatType === "supergroup";
-          const allowed = isGroup
-            ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
-            : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
-          if (!allowed) {
-            await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh báo cáo.");
+          const access = await canUseTelegramGroupBotCommands(
+            db, bot, message.chat, replyChatId, message.from?.id);
+          if (!access.ok) {
+            await sendTg(replyChatId, TELEGRAM_GROUP_CMD_DENY[access.reason] || TELEGRAM_GROUP_CMD_DENY.wrong_group);
             return res.json({ ok: true });
           }
           if ((cmd === "/baocao" && !feedbackText.replace(/^\/\w+(@\w+)?/, "").trim()) || cmd === "/menu") {
@@ -6986,13 +6983,10 @@ async function handleTelegramWebhook(req, res) {
 
         const aiCmds = ["/hoi", "/timduan", "/duan", "/diemtin"];
         if (aiCmds.includes(cmd)) {
-          const chatType = message.chat?.type || "private";
-          const isGroup = chatType === "group" || chatType === "supergroup";
-          const allowed = isGroup
-            ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
-            : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
-          if (!allowed) {
-            await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh AI.");
+          const access = await canUseTelegramGroupBotCommands(
+            db, bot, message.chat, replyChatId, message.from?.id);
+          if (!access.ok) {
+            await sendTg(replyChatId, TELEGRAM_GROUP_CMD_DENY[access.reason] || TELEGRAM_GROUP_CMD_DENY.wrong_group);
             return res.json({ ok: true });
           }
           await handleTelegramAiCommand(db, bot, feedbackText, replyChatId, sendTg);
@@ -7004,12 +6998,9 @@ async function handleTelegramWebhook(req, res) {
       const aiPending = telegramAiPending.get(replyChatId);
       const leadPendingRow = await get(db, "SELECT 1 as ok FROM telegram_pending WHERE telegram_id = ?", [chatId]);
       if (aiPending && !feedbackText.startsWith("/") && !leadPendingRow) {
-        const chatType = message.chat?.type || "private";
-        const isGroup = chatType === "group" || chatType === "supergroup";
-        const allowed = isGroup
-          ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
-          : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
-        if (allowed) {
+        const access = await canUseTelegramGroupBotCommands(
+          db, bot, message.chat, replyChatId, message.from?.id);
+        if (access.ok) {
           telegramAiPending.delete(replyChatId);
           await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
           return res.json({ ok: true });
@@ -11876,7 +11867,7 @@ function telegramProjectPickerKeyboard(projects, runType, days = 7) {
 }
 
 async function ensureTelegramGroupAccess(db, bot, replyChatId, isGroup) {
-  if (!isGroup) return true;
+  if (!isGroup) return false;
   const configured = String(bot.group_chat_id || "").trim();
   if (!configured) {
     await run(db, "UPDATE telegram_bots SET group_chat_id = ? WHERE id = ?", [replyChatId, bot.id]);
@@ -11887,23 +11878,62 @@ async function ensureTelegramGroupAccess(db, bot, replyChatId, isGroup) {
   return configured === replyChatId;
 }
 
+const TELEGRAM_GROUP_CMD_DENY = {
+  private: "⚠️ Lệnh báo cáo/AI chỉ dùng trong *nhóm Telegram* đã gắn bot.\n\nChat cá nhân vẫn nhận thông báo lead và cập nhật feedback.",
+  wrong_group: "⚠️ Bot chỉ chấp nhận lệnh trong nhóm đã cấu hình cho bot này.",
+  not_staff: "⚠️ Chỉ admin/quản lý hoặc thành viên trong nhóm mới dùng được lệnh này.",
+};
+
+/** Báo cáo/AI: chỉ trong nhóm đã cấu hình; thành viên nhóm (admin/QL/sale/nội bộ). */
+async function canUseTelegramGroupBotCommands(db, bot, chat, replyChatId, userTelegramId) {
+  const chatType = chat?.type || "private";
+  const isGroup = chatType === "group" || chatType === "supergroup";
+  if (!isGroup) return { ok: false, reason: "private" };
+
+  const groupOk = await ensureTelegramGroupAccess(db, bot, String(replyChatId || chat?.id || ""), true);
+  if (!groupOk) return { ok: false, reason: "wrong_group" };
+
+  if (!String(userTelegramId || "").trim()) return { ok: false, reason: "not_staff" };
+
+  return { ok: true };
+}
+
+const TELEGRAM_GROUP_BOT_COMMANDS = [
+  { command: "menu", description: "Mở menu báo cáo (nút bấm)" },
+  { command: "baocao", description: "Menu báo cáo CRM" },
+  { command: "baocaongay", description: "Báo cáo lead QL hôm qua" },
+  { command: "baocaocham", description: "Sale chưa cập nhật >2 ngày" },
+  { command: "hoi", description: "Hỏi AI BĐS (nhập câu hỏi)" },
+  { command: "timduan", description: "Tra cứu dự án BĐS" },
+  { command: "duan", description: "Tra cứu dự án (giống /timduan)" },
+  { command: "diemtin", description: "Điểm tin thị trường hôm nay" },
+];
+
+async function telegramBotApi(botToken, method, body = {}) {
+  const r = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json();
+  if (!data.ok) throw new Error(data.description || `${method} failed`);
+  return data;
+}
+
+/** Lệnh slash chỉ hiện trong nhóm; chat cá nhân không hiện menu lệnh. */
 async function registerTelegramBotCommands(botToken) {
   try {
-    await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        commands: [
-          { command: "menu", description: "Mở menu báo cáo (nút bấm)" },
-          { command: "baocao", description: "Menu báo cáo CRM" },
-          { command: "baocaongay", description: "Báo cáo lead QL hôm qua" },
-          { command: "baocaocham", description: "Sale chưa cập nhật >2 ngày" },
-          { command: "hoi", description: "Hỏi AI BĐS (nhập câu hỏi)" },
-          { command: "timduan", description: "Tra cứu dự án BĐS" },
-          { command: "diemtin", description: "Điểm tin thị trường hôm nay" },
-        ],
-      }),
+    await telegramBotApi(botToken, "setMyCommands", {
+      commands: TELEGRAM_GROUP_BOT_COMMANDS,
+      scope: { type: "all_group_chats" },
     });
+    await telegramBotApi(botToken, "deleteMyCommands", {
+      scope: { type: "all_private_chats" },
+    });
+    await telegramBotApi(botToken, "deleteMyCommands", {
+      scope: { type: "default" },
+    });
+    console.log("[telegram] Bot commands: group only (", TELEGRAM_GROUP_BOT_COMMANDS.length, "commands)");
   } catch (e) {
     console.warn("[telegram] setMyCommands failed:", e.message);
   }
