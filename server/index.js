@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-show-leads";
+const BUILD_VERSION = "2026-06-20-stable-boot";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -4157,13 +4157,18 @@ app.get("/api/data", requireAuth, async (req, res) => {
       return res.json(payload);
     }
 
-    const [bootstrap, pageData, tabCounts, saleRanking, projectLeadCounts] = await Promise.all([
+    const [bootstrap, pageData, tabCounts, projectLeadCounts] = await Promise.all([
       getBootstrapPayload(db, req.user),
       queryLeadsPage(db, req.user, filters, q.page, q.limit),
       queryLeadsTabCounts(db, req.user, filters),
-      querySaleRankingSummary(db, req.user, filters),
       queryProjectLeadCounts(db, req.user),
     ]);
+    let saleRanking = [];
+    try {
+      saleRanking = await querySaleRankingSummary(db, req.user, filters);
+    } catch (e) {
+      console.warn("[GET /api/data] saleRanking skipped:", e.message);
+    }
 
     const data = {
       ...bootstrap,
@@ -4187,6 +4192,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
       console.log(`[GET /api/data] ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} leads, ~${mb}MB (user=${req.user?.displayName})`);
     }
   } catch (err) {
+    console.error("[GET /api/data]", err?.message || err, err?.stack);
     res.status(500).json({ error: err.message || "Could not read data" });
   }
 });

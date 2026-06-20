@@ -46,6 +46,10 @@ export function useServerConnection() {
     setServerDown(true);
   }, []);
 
+  const clearBootFailed = useCallback(() => {
+    setBootFailed(false);
+  }, []);
+
   /** Socket connect = server sống; chỉ dùng để gỡ banner, không dùng disconnect để bật. */
   const markSocketConnected = useCallback(() => {
     markApiOk();
@@ -75,6 +79,7 @@ export function useServerConnection() {
     markApiOk,
     markInitialDataLoaded,
     markBootFailed,
+    clearBootFailed,
     markConnectivityFailure,
     markSocketConnected,
     markSocketDisconnected,

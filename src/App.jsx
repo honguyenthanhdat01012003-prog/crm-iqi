@@ -617,6 +617,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     markApiOk,
     markInitialDataLoaded,
     markBootFailed,
+    clearBootFailed,
     markConnectivityFailure,
     markSocketConnected,
     markSocketDisconnected,
@@ -642,6 +643,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     try {
       const saved = localStorage.getItem("crm_selected_project");
       if (saved) return saved;
+      const u = JSON.parse(localStorage.getItem("crm_user") || "null");
+      if (u?.role === "admin" || u?.role === "manager") return "all";
     } catch {}
     return null;
   });
@@ -650,11 +653,6 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (selectedProject) localStorage.setItem("crm_selected_project", selectedProject);
     } catch {}
   }, [selectedProject]);
-  useEffect(() => {
-    if (selectedProject === null && (user.role === "admin" || user.role === "manager")) {
-      setSelectedProject("all");
-    }
-  }, [user.role, selectedProject]);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -1094,6 +1092,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [notifications]);
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
+  const fetchSeqRef = useRef(0);
+  const bootDoneRef = useRef(false);
 
   const buildDataUrl = useCallback(() => {
     const q = leadsQueryRef.current;
@@ -1112,19 +1112,28 @@ function CRMApp({ user, updateUser, onLogout }) {
     return `${API}/data?${p}`;
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
-  const fetchCrmData = useCallback(async (attempt = 0) => {
+  const fetchCrmData = useCallback(async ({ isBoot = false } = {}) => {
+    const seq = ++fetchSeqRef.current;
     setLeadsFetching(true);
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120000);
+      const timeout = setTimeout(() => controller.abort(), 90000);
       const r = await fetch(buildDataUrl(), {
         headers: authHeaders(),
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      if (r.status === 401) {
+        localStorage.removeItem("crm_token");
+        localStorage.removeItem("crm_user");
+        window.location.reload();
+        return null;
+      }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      markInitialDataLoaded();
       const data = await r.json();
+      if (seq !== fetchSeqRef.current) return data;
+      markInitialDataLoaded();
+      bootDoneRef.current = true;
       if (data.leads) {
         setSeenLeadKeys((prev) => {
           if (prev.size === 0) {
@@ -1137,36 +1146,46 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
       applyApiData(data, { suppressNotifications: true });
       if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+      markApiOk();
       return data;
-    } catch {
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
-        return fetchCrmData(attempt + 1);
-      }
-      markBootFailed();
+    } catch (err) {
+      console.warn("[CRM] load data failed:", err?.message || err);
+      if (isBoot && !bootDoneRef.current) return null;
       return null;
     } finally {
-      setLeadsFetching(false);
-      setDataLoadAttempted(true);
+      if (seq === fetchSeqRef.current) setLeadsFetching(false);
+      if (isBoot) setDataLoadAttempted(true);
     }
-  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markBootFailed]);
+  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk]);
+
+  const runBootLoad = useCallback(async () => {
+    clearBootFailed();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const data = await fetchCrmData({ isBoot: true });
+      if (data) return;
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+    }
+    markBootFailed();
+  }, [fetchCrmData, markBootFailed, clearBootFailed]);
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
-    return fetchCrmData();
+    return fetchCrmData({ isBoot: false });
   }, [fetchCrmData]);
 
-  const crmInitialLoadRef = useRef(false);
+  const bootStartedRef = useRef(false);
   useEffect(() => {
-    if (!crmInitialLoadRef.current) {
-      crmInitialLoadRef.current = true;
-      fetchCrmData();
-      return;
-    }
+    if (bootStartedRef.current) return;
+    bootStartedRef.current = true;
+    runBootLoad();
+  }, [runBootLoad]);
+
+  useEffect(() => {
+    if (!bootDoneRef.current) return;
     const t = setTimeout(() => {
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
-      fetchCrmData();
-    }, 350);
+      fetchCrmData({ isBoot: false });
+    }, 400);
     return () => clearTimeout(t);
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData]);
 
@@ -1496,7 +1515,17 @@ function CRMApp({ user, updateUser, onLogout }) {
   };
 
   if (bootFailed && dataLoadAttempted) {
-    return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
+    return (
+      <MaintenancePage
+        message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau."
+        onRetry={() => {
+          clearBootFailed();
+          bootDoneRef.current = false;
+          setDataLoadAttempted(false);
+          runBootLoad();
+        }}
+      />
+    );
   }
 
   return (
@@ -3400,6 +3429,7 @@ const LeadsPage = (props) => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [leadsTotal, pageSize, currentPage, totalPages]);
 
+  const leadsQueryBootRef = useRef(false);
   useEffect(() => {
     if (!onLeadsQueryChange) return;
     const sig = JSON.stringify({
@@ -3409,6 +3439,11 @@ const LeadsPage = (props) => {
       productFilter,
       sortConfig,
     });
+    if (!leadsQueryBootRef.current) {
+      leadsQueryBootRef.current = true;
+      leadsQuerySigRef.current = sig;
+      return;
+    }
     if (sig === leadsQuerySigRef.current) return;
     leadsQuerySigRef.current = sig;
     onLeadsQueryChange({

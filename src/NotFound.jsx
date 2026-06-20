@@ -1,6 +1,6 @@
 import React from "react";
 
-export function MaintenancePage({ message }) {
+export function MaintenancePage({ message, onRetry }) {
   return (
     <div style={{
       minHeight: "100vh",
@@ -82,7 +82,7 @@ export function MaintenancePage({ message }) {
         </div>
 
         <button
-          onClick={() => window.location.reload()}
+          onClick={() => (onRetry ? onRetry() : window.location.reload())}
           style={{
             background: "linear-gradient(135deg, #e88a2e, #d97706)",
             color: "#fff", border: "none", borderRadius: 12,
