@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-paginated";
+const BUILD_VERSION = "2026-06-20-fix-dup-fn";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2193,12 +2193,6 @@ function stripLeadsForClient(data) {
     delete l.saleHistory;
   }
   return data;
-}
-
-async function fetchLeadHistoryFormatted(db, leadId) {
-  const rows = await all(db, "SELECT * FROM lead_history WHERE lead_id = ? ORDER BY lead_id, seq", [leadId]);
-  const entries = rows.map(formatHistoryRow);
-  return sortSaleHistoryEntries(entries);
 }
 
 async function fetchLeadHistoryFormatted(db, leadId) {
