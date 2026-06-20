@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-03-20-v1";
+const BUILD_VERSION = "2026-06-10-tele-menu";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2509,6 +2509,7 @@ app.get("/api/version", (req, res) => {
     distOk: dist.ok,
     jsBundle: dist.jsBundle || null,
     distError: dist.ok ? null : dist.error,
+    telegramMenuButtons: true,
   });
 });
 
@@ -6884,7 +6885,7 @@ async function handleTelegramWebhook(req, res) {
 
       if (parts[0] === "rpt") {
         const allowed = isGroup
-          ? String(bot.group_chat_id || "") === replyChatId
+          ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
           : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [userId]));
         if (!allowed) {
           await answerCb(callback_query.id, "Không có quyền");
@@ -6964,7 +6965,7 @@ async function handleTelegramWebhook(req, res) {
           const chatType = message.chat?.type || "private";
           const isGroup = chatType === "group" || chatType === "supergroup";
           const allowed = isGroup
-            ? String(bot.group_chat_id || "") === replyChatId
+            ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
             : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
           if (!allowed) {
             await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh báo cáo.");
@@ -10849,6 +10850,7 @@ if (!process.env.VERCEL) {
           });
           const data = await r.json();
           console.log(`[telegram-webhook/auto] Bot "${bot.name}" → ${webhookUrl}: ${data.ok ? "OK" : data.description}`);
+          await registerTelegramBotCommands(bot.token);
         }
       } catch (e) {
         console.error("[telegram-webhook/auto] Error:", e.message);
@@ -11072,7 +11074,9 @@ async function handleTelegramReportCommand(db, bot, text, replyChatId, sendTg) {
     includePendingSummary: parsed.mode === "pending",
     includeManagerReport: parsed.mode === "manager",
   });
-  await sendTg(replyChatId, "✅ Đã gửi báo cáo.");
+  await sendTg(replyChatId, "✅ Đã gửi báo cáo.", {
+    reply_markup: { inline_keyboard: [[{ text: "📊 Mở menu báo cáo", callback_data: "rpt:menu" }]] },
+  });
 }
 
 function mergeManagerReports(target, source) {
@@ -11578,6 +11582,37 @@ function telegramProjectPickerKeyboard(projects, runType, days = 7) {
   }
   rows.push([{ text: "◀️ Menu báo cáo", callback_data: "rpt:menu" }]);
   return { inline_keyboard: rows };
+}
+
+async function ensureTelegramGroupAccess(db, bot, replyChatId, isGroup) {
+  if (!isGroup) return true;
+  const configured = String(bot.group_chat_id || "").trim();
+  if (!configured) {
+    await run(db, "UPDATE telegram_bots SET group_chat_id = ? WHERE id = ?", [replyChatId, bot.id]);
+    bot.group_chat_id = replyChatId;
+    console.log(`[telegram] Auto-saved group_chat_id=${replyChatId} for bot "${bot.name || bot.id}"`);
+    return true;
+  }
+  return configured === replyChatId;
+}
+
+async function registerTelegramBotCommands(botToken) {
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        commands: [
+          { command: "menu", description: "Mở menu báo cáo (nút bấm)" },
+          { command: "baocao", description: "Menu báo cáo CRM" },
+          { command: "baocaongay", description: "Báo cáo lead QL hôm qua" },
+          { command: "baocaocham", description: "Sale chưa cập nhật >2 ngày" },
+        ],
+      }),
+    });
+  } catch (e) {
+    console.warn("[telegram] setMyCommands failed:", e.message);
+  }
 }
 
 async function sendTelegramReportMenu(db, bot, chatId, sendTg) {
