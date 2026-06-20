@@ -6762,10 +6762,10 @@ async function handleTelegramWebhook(req, res) {
     // Determine which bot this webhook is for
     let bot;
     if (req.params.botId) {
-      bot = await get(db, "SELECT id, token FROM telegram_bots WHERE id = ? AND is_active = 1", [Number(req.params.botId)]);
+      bot = await get(db, "SELECT id, token, project_id, group_chat_id FROM telegram_bots WHERE id = ? AND is_active = 1", [Number(req.params.botId)]);
     }
     if (!bot) {
-      bot = await get(db, "SELECT id, token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
+      bot = await get(db, "SELECT id, token, project_id, group_chat_id FROM telegram_bots WHERE is_active = 1 LIMIT 1");
     }
     if (!bot) {
       console.warn(`[telegram-webhook] No active bot found!`);
@@ -6892,9 +6892,31 @@ async function handleTelegramWebhook(req, res) {
             "",
             "Admin cần thêm ID này vào mục *Telegram ID* trong Quản lý tài khoản.",
             "Sau đó bạn sẽ nhận thông báo khi có lead mới (khi CRM đồng bộ từ Sheet).",
+            "",
+            "📊 Báo cáo nhóm: gõ `/baocao` để xem các lệnh (vd. `/baocaongay`).",
           ].join("\n"));
         }
         return res.json({ ok: true });
+      }
+
+      const replyChatId = String(message.chat?.id || message.from?.id || "");
+      const cmdMatch = feedbackText.match(/^\/(\w+)(@\w+)?(?:\s|$)/);
+      if (cmdMatch) {
+        const cmd = `/${cmdMatch[1].toLowerCase()}`;
+        const reportCmds = ["/baocao", "/baocaongay", "/baocaocham"];
+        if (reportCmds.includes(cmd)) {
+          const chatType = message.chat?.type || "private";
+          const isGroup = chatType === "group" || chatType === "supergroup";
+          const allowed = isGroup
+            ? String(bot.group_chat_id || "") === replyChatId
+            : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
+          if (!allowed) {
+            await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh báo cáo.");
+            return res.json({ ok: true });
+          }
+          await handleTelegramReportCommand(db, bot, feedbackText, replyChatId, sendTg);
+          return res.json({ ok: true });
+        }
       }
 
       // Ignore other bot commands
@@ -10836,8 +10858,7 @@ if (!process.env.VERCEL) {
   }, 10 * 60 * 1000); // Check every 10 minutes
   console.log("[daily-news] Auto-fetch enabled, checks every 10 min");
 
-  // Daily sale reminder + group report (check every 10 min, run once per day at configured time)
-  let lastDailyReminderDate = "";
+  // Daily sale reminder (check every 10 min, run once per day at configured time — không gửi báo cáo nhóm tự động)
   const runDailyReminderIfDue = async () => {
     if (!db) return;
     try {
@@ -10846,23 +10867,301 @@ if (!process.env.VERCEL) {
       const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
       const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
       const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      const lastRunRow = await get(db, "SELECT value FROM settings WHERE key = 'daily_reminder_last_date'");
+      const lastDailyReminderDate = lastRunRow?.value || "";
 
       if (todayStr !== lastDailyReminderDate && currentTime >= targetTime) {
-        lastDailyReminderDate = todayStr;
-        console.log("[daily-reminder] Running daily sale reminder & group report...");
-        await processDailySaleReminder(db, now);
+        await run(db,
+          "INSERT INTO settings(key, value) VALUES('daily_reminder_last_date', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+          [todayStr]);
+        console.log("[daily-reminder] Running daily sale reminder (no auto group report)...");
+        await processDailySaleReminder(db, now, { sendSaleReminders: true, sendGroupReports: false });
       }
     } catch (e) {
       console.error("[daily-reminder] Error:", e.message);
     }
   };
-  setTimeout(runDailyReminderIfDue, 3000);
   setInterval(runDailyReminderIfDue, 10 * 60 * 1000);
-  console.log("[daily-reminder] Enabled, checks every 10 min");
+  console.log("[daily-reminder] Enabled (sale reminders only; group report via /baocaongay)");
+}
+
+function parseVnDateInput(str) {
+  const m = String(str || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), 12, 0, 0, 0);
+  if (d.getFullYear() !== Number(m[3]) || d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[1])) return null;
+  return d;
+}
+
+function vnDateLabel(d) {
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+}
+
+function eachDayBetween(start, end) {
+  const days = [];
+  const cur = new Date(start);
+  cur.setHours(12, 0, 0, 0);
+  const endD = new Date(end);
+  endD.setHours(12, 0, 0, 0);
+  if (cur > endD) return days;
+  while (cur <= endD) {
+    days.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return days;
+}
+
+function getBotProjectIds(bot) {
+  if (!bot?.project_id) return [];
+  try {
+    const parsed = JSON.parse(bot.project_id);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Boolean) : [Number(parsed)].filter(Boolean);
+  } catch {
+    return [Number(bot.project_id)].filter(Boolean);
+  }
+}
+
+function parseTelegramReportCommand(text) {
+  const trimmed = String(text || "").trim();
+  const parts = trimmed.split(/\s+/);
+  const cmd = (parts[0] || "").split("@")[0].toLowerCase();
+  const tail = trimmed.slice(parts[0].length).trim();
+
+  if (cmd === "/baocaocham") return { mode: "pending" };
+
+  if (cmd === "/baocao" && !tail) return { mode: "help" };
+
+  const vnNow = () => new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+
+  if (cmd === "/baocaongay") {
+    const y = vnNow();
+    y.setDate(y.getDate() - 1);
+    y.setHours(12, 0, 0, 0);
+    return { mode: "manager", days: [y], projectNameFilter: tail || null };
+  }
+
+  if (cmd === "/baocao") {
+    let rest = tail;
+    let days = [];
+    const rangeMatch = rest.match(/^(\d{1,2}\/\d{1,2}\/\d{4})\s*-\s*(\d{1,2}\/\d{1,2}\/\d{4})(?:\s+(.*))?$/);
+    if (rangeMatch) {
+      const s = parseVnDateInput(rangeMatch[1]);
+      const e = parseVnDateInput(rangeMatch[2]);
+      if (!s || !e) return { mode: "error", message: "Ngày không hợp lệ. Dùng DD/MM/YYYY-DD/MM/YYYY" };
+      days = eachDayBetween(s, e);
+      rest = (rangeMatch[3] || "").trim();
+    } else {
+      const singleMatch = rest.match(/^(\d{1,2}\/\d{1,2}\/\d{4})(?:\s+(.*))?$/);
+      if (singleMatch) {
+        const d = parseVnDateInput(singleMatch[1]);
+        if (!d) return { mode: "error", message: "Ngày không hợp lệ. Dùng DD/MM/YYYY" };
+        days = [d];
+        rest = (singleMatch[2] || "").trim();
+      }
+    }
+    if (!days.length) return { mode: "help" };
+    if (days.length > 31) return { mode: "error", message: "Chọn tối đa 31 ngày mỗi lần báo cáo." };
+    return { mode: "manager", days, projectNameFilter: rest || null };
+  }
+
+  return null;
+}
+
+async function handleTelegramReportCommand(db, bot, text, replyChatId, sendTg) {
+  const parsed = parseTelegramReportCommand(text);
+  if (!parsed) return;
+
+  if (parsed.mode === "help") {
+    await sendTg(replyChatId, [
+      "📊 *LỆNH BÁO CÁO TELEGRAM*",
+      "",
+      "`/baocaongay` — Báo cáo lead quản lý nhận *hôm qua*",
+      "`/baocaongay Tên dự án` — Báo cáo hôm qua theo dự án",
+      "`/baocao 15/06/2025` — Báo cáo một ngày cụ thể",
+      "`/baocao 01/06/2025-15/06/2025` — Báo cáo theo khoảng ngày",
+      "`/baocao 01/06/2025-15/06/2025 Tên dự án` — Khoảng ngày + lọc dự án",
+      "`/baocaocham` — Tổng hợp sale chưa cập nhật (>2 ngày)",
+      "",
+      "ℹ️ Báo cáo nhóm *không tự gửi* khi restart server.",
+      "Chỉ gửi khi bạn gõ lệnh trong nhóm đã cấu hình.",
+    ].join("\n"));
+    return;
+  }
+
+  if (parsed.mode === "error") {
+    await sendTg(replyChatId, `⚠️ ${parsed.message}`);
+    return;
+  }
+
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+  let projectIdsFilter = null;
+  if (parsed.projectNameFilter) {
+    const needle = parsed.projectNameFilter.toLowerCase();
+    const matched = await all(db,
+      "SELECT id, name FROM projects WHERE daily_report_enabled = 1 AND (is_legacy = 0 OR is_legacy IS NULL) AND LOWER(name) LIKE ?",
+      [`%${needle}%`]);
+    if (!matched.length) {
+      await sendTg(replyChatId, `⚠️ Không tìm thấy dự án bật báo cáo khớp: *${escMd(parsed.projectNameFilter)}*`);
+      return;
+    }
+    projectIdsFilter = new Set(matched.map(p => Number(p.id)));
+  }
+
+  await sendTg(replyChatId, "⏳ Đang tạo báo cáo, vui lòng đợi...");
+  await processDailySaleReminder(db, now, {
+    sendSaleReminders: false,
+    sendGroupReports: true,
+    reportDays: parsed.days,
+    projectIdsFilter,
+    botIdFilter: bot.id,
+    replyChatId,
+    includePendingSummary: parsed.mode === "pending",
+    includeManagerReport: parsed.mode === "manager",
+  });
+  await sendTg(replyChatId, "✅ Đã gửi báo cáo.");
+}
+
+function mergeManagerReports(target, source) {
+  for (const [pid, mr] of Object.entries(source || {})) {
+    if (!target[pid]) {
+      target[pid] = {
+        ...mr,
+        saleNames: new Set(mr.saleNames || []),
+        managers: { ...mr.managers },
+        oldManagers: { ...(mr.oldManagers || {}) },
+      };
+      continue;
+    }
+    const t = target[pid];
+    t.totalReceived += mr.totalReceived || 0;
+    t.managerAssigned += mr.managerAssigned || 0;
+    t.oldAssigned += mr.oldAssigned || 0;
+    for (const s of (mr.saleNames || [])) t.saleNames.add(s);
+    for (const [mgr, leads] of Object.entries(mr.managers || {})) {
+      if (!t.managers[mgr]) t.managers[mgr] = [];
+      t.managers[mgr].push(...leads);
+    }
+    for (const [mgr, leads] of Object.entries(mr.oldManagers || {})) {
+      if (!t.oldManagers[mgr]) t.oldManagers[mgr] = [];
+      t.oldManagers[mgr].push(...leads);
+    }
+  }
+}
+
+async function buildManagerReportsForDay(db, reportDate, reportProjectMap) {
+  const managerReports = {};
+  const reportDateLabel = vnDateLabel(reportDate);
+  const d = reportDate.getDate();
+  const m = reportDate.getMonth() + 1;
+  const y = reportDate.getFullYear();
+  const dateNeedles = [...new Set([
+    `${d}/${m}/${y}`,
+    `${String(d).padStart(2, "0")}/${m}/${y}`,
+    `${d}/${String(m).padStart(2, "0")}/${y}`,
+    `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`,
+  ])];
+  const createdWhereLike = dateNeedles.map(() => "l.created_at LIKE ?").join(" OR ");
+  const syncWhereLike = dateNeedles.map(() => "l.sync_at LIKE ?").join(" OR ");
+  const receivedLeads = await all(db,
+    `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at
+     FROM leads l
+     WHERE l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
+       AND ((${createdWhereLike}) OR (${syncWhereLike}))
+     ORDER BY l.project_id, l.manager_name, l.id ASC`,
+    [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
+  );
+  const leadIds = receivedLeads.map(l => l.id);
+  const assignmentMap = new Map();
+  if (leadIds.length > 0) {
+    for (let i = 0; i < leadIds.length; i += 500) {
+      const batch = leadIds.slice(i, i + 500);
+      const placeholders = batch.map(() => "?").join(",");
+      const assignments = await all(db,
+        `SELECT lead_id, sale_name, contact_date, seq
+         FROM lead_history
+         WHERE action = 'Chia lead'
+           AND lead_id IN (${placeholders})
+           AND (${dateNeedles.map(() => "contact_date LIKE ?").join(" OR ")})
+         ORDER BY lead_id ASC, seq DESC`,
+        [...batch, ...dateNeedles.map(s => `%${s}%`)]
+      );
+      for (const a of assignments) {
+        if (!assignmentMap.has(a.lead_id)) assignmentMap.set(a.lead_id, a);
+      }
+    }
+  }
+  for (const l of receivedLeads) {
+    const pid = l.project_id;
+    if (!reportProjectMap[pid]) continue;
+    const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
+    if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
+    managerReports[pid].totalReceived++;
+    if ((l.manager_name || "").trim()) managerReports[pid].managerAssigned++;
+    if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
+    const assignment = assignmentMap.get(l.id);
+    const receiveText = l.created_at || l.sync_at || "";
+    const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+    const assignTimeMatch = (assignment?.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+    const saleName = (assignment?.sale_name || "").trim() || null;
+    if (saleName) managerReports[pid].saleNames.add(saleName);
+    managerReports[pid].managers[mgr].push({
+      name: l.name || "N/A",
+      receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
+      assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
+      saleName,
+      dayLabel: reportDateLabel,
+    });
+  }
+
+  const assignWhereLike = dateNeedles.map(() => "lh.contact_date LIKE ?").join(" OR ");
+  const oldAssignments = await all(db,
+    `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at,
+            lh.sale_name, lh.contact_date
+     FROM lead_history lh
+     JOIN leads l ON l.id = lh.lead_id
+     WHERE lh.action = 'Chia lead'
+       AND l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
+       AND (${assignWhereLike})
+       AND NOT ((${createdWhereLike}) OR (${syncWhereLike}))
+     ORDER BY l.project_id, l.manager_name, lh.seq ASC`,
+    [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
+  );
+  for (const l of oldAssignments) {
+    const pid = l.project_id;
+    if (!reportProjectMap[pid]) continue;
+    const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
+    if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
+    managerReports[pid].oldAssigned++;
+    if (!managerReports[pid].oldManagers[mgr]) managerReports[pid].oldManagers[mgr] = [];
+    const receiveText = l.created_at || l.sync_at || "";
+    const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+    const assignTimeMatch = (l.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
+    const saleName = (l.sale_name || "").trim() || null;
+    if (saleName) managerReports[pid].saleNames.add(saleName);
+    managerReports[pid].oldManagers[mgr].push({
+      name: l.name || "N/A",
+      receivedAt: receiveText,
+      receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
+      assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
+      saleName,
+      dayLabel: reportDateLabel,
+    });
+  }
+  return managerReports;
 }
 
 /* ===== Daily Sale Reminder + Group Report ===== */
-async function processDailySaleReminder(db, now) {
+async function processDailySaleReminder(db, now, options = {}) {
+  const {
+    sendSaleReminders = true,
+    sendGroupReports = false,
+    reportDays = null,
+    projectIdsFilter = null,
+    botIdFilter = null,
+    replyChatId = null,
+    includePendingSummary = true,
+    includeManagerReport = true,
+  } = options;
   const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
   const nowMs = now.getTime();
   const nowStr = now.toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -10881,7 +11180,8 @@ async function processDailySaleReminder(db, now) {
   }
 
   // Get all active bots
-  const bots = await all(db, "SELECT id, name, token, project_id, group_chat_id FROM telegram_bots WHERE is_active = 1");
+  let bots = await all(db, "SELECT id, name, token, project_id, group_chat_id FROM telegram_bots WHERE is_active = 1");
+  if (botIdFilter) bots = bots.filter(b => b.id === botIdFilter);
 
   // Collect report data per project
   const projectReports = {}; // projectId -> { projectName, sales: { saleName: { total, pending, updated } } }
@@ -10938,7 +11238,7 @@ async function processDailySaleReminder(db, now) {
     }
 
     // Send individual Telegram reminder to this sale
-    if (!sale.telegram_id) continue;
+    if (!sendSaleReminders || !sale.telegram_id) continue;
 
     // Find a bot that covers this sale's projects
     let botToken = null;
@@ -10985,130 +11285,45 @@ async function processDailySaleReminder(db, now) {
     }
   }
 
-  // --- Manager report: yesterday's received leads grouped by project -> manager ---
-  const managerReports = {}; // pid -> { projectName, totalReceived, managerAssigned, oldAssigned, saleCount, managers, oldManagers }
-  const reportDate = new Date(now);
-  reportDate.setDate(reportDate.getDate() - 1);
-  const reportDateLabel = `${String(reportDate.getDate()).padStart(2, "0")}/${String(reportDate.getMonth() + 1).padStart(2, "0")}/${reportDate.getFullYear()}`;
-  try {
-    const d = reportDate.getDate();
-    const m = reportDate.getMonth() + 1;
-    const y = reportDate.getFullYear();
-    const dateNeedles = [...new Set([
-      `${d}/${m}/${y}`,
-      `${String(d).padStart(2, "0")}/${m}/${y}`,
-      `${d}/${String(m).padStart(2, "0")}/${y}`,
-      `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`,
-    ])];
-    const createdWhereLike = dateNeedles.map(() => "l.created_at LIKE ?").join(" OR ");
-    const syncWhereLike = dateNeedles.map(() => "l.sync_at LIKE ?").join(" OR ");
-    const receivedLeads = await all(db,
-      `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at
-       FROM leads l
-       WHERE l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
-         AND ((${createdWhereLike}) OR (${syncWhereLike}))
-       ORDER BY l.project_id, l.manager_name, l.id ASC`,
-      [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
-    );
-    const leadIds = receivedLeads.map(l => l.id);
-    const assignmentMap = new Map();
-    if (leadIds.length > 0) {
-      for (let i = 0; i < leadIds.length; i += 500) {
-        const batch = leadIds.slice(i, i + 500);
-        const placeholders = batch.map(() => "?").join(",");
-        const assignments = await all(db,
-          `SELECT lead_id, sale_name, contact_date, seq
-           FROM lead_history
-           WHERE action = 'Chia lead'
-             AND lead_id IN (${placeholders})
-             AND (${dateNeedles.map(() => "contact_date LIKE ?").join(" OR ")})
-           ORDER BY lead_id ASC, seq DESC`,
-          [...batch, ...dateNeedles.map(s => `%${s}%`)]
-        );
-        for (const a of assignments) {
-          if (!assignmentMap.has(a.lead_id)) assignmentMap.set(a.lead_id, a);
-        }
-      }
-    }
-    for (const l of receivedLeads) {
-      const pid = l.project_id;
-      if (!reportProjectMap[pid]) continue;
-      const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
-      if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
-      managerReports[pid].totalReceived++;
-      if ((l.manager_name || "").trim()) managerReports[pid].managerAssigned++;
-      if (!managerReports[pid].managers[mgr]) managerReports[pid].managers[mgr] = [];
-      const assignment = assignmentMap.get(l.id);
-      const receiveText = l.created_at || l.sync_at || "";
-      const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-      const assignTimeMatch = (assignment?.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-      const saleName = (assignment?.sale_name || "").trim() || null;
-      if (saleName) managerReports[pid].saleNames.add(saleName);
-      managerReports[pid].managers[mgr].push({
-        name: l.name || "N/A",
-        receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
-        assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
-        saleName,
-      });
-    }
+  // --- Manager report: build for requested day(s) ---
+  const managerReports = {};
+  const daysForReport = (reportDays && reportDays.length)
+    ? reportDays
+    : (() => { const y = new Date(now); y.setDate(y.getDate() - 1); y.setHours(12, 0, 0, 0); return [y]; })();
+  const reportRangeLabel = daysForReport.length === 1
+    ? vnDateLabel(daysForReport[0])
+    : `${vnDateLabel(daysForReport[0])} → ${vnDateLabel(daysForReport[daysForReport.length - 1])}`;
 
-    const assignWhereLike = dateNeedles.map(() => "lh.contact_date LIKE ?").join(" OR ");
-    const oldAssignments = await all(db,
-      `SELECT l.id, l.name, l.manager_name, l.project_id, l.created_at, l.sync_at,
-              lh.sale_name, lh.contact_date
-       FROM lead_history lh
-       JOIN leads l ON l.id = lh.lead_id
-       WHERE lh.action = 'Chia lead'
-         AND l.project_id IN (SELECT id FROM projects WHERE daily_report_enabled = 1)
-         AND (${assignWhereLike})
-         AND NOT ((${createdWhereLike}) OR (${syncWhereLike}))
-       ORDER BY l.project_id, l.manager_name, lh.seq ASC`,
-      [...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`), ...dateNeedles.map(s => `%${s}%`)]
-    );
-    for (const l of oldAssignments) {
-      const pid = l.project_id;
-      if (!reportProjectMap[pid]) continue;
-      const mgr = (l.manager_name || "").trim() || "Chưa có quản lí";
-      if (!managerReports[pid]) managerReports[pid] = { projectName: reportProjectMap[pid], totalReceived: 0, managerAssigned: 0, oldAssigned: 0, saleNames: new Set(), managers: {}, oldManagers: {} };
-      managerReports[pid].oldAssigned++;
-      if (!managerReports[pid].oldManagers[mgr]) managerReports[pid].oldManagers[mgr] = [];
-      const receiveText = l.created_at || l.sync_at || "";
-      const receiveTimeMatch = receiveText.match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-      const assignTimeMatch = (l.contact_date || "").match(/(\d{1,2}:\d{2})(?::\d{2})?/);
-      const saleName = (l.sale_name || "").trim() || null;
-      if (saleName) managerReports[pid].saleNames.add(saleName);
-      managerReports[pid].oldManagers[mgr].push({
-        name: l.name || "N/A",
-        receivedAt: receiveText,
-        receivedTime: receiveTimeMatch ? receiveTimeMatch[1] : "",
-        assignTime: assignTimeMatch ? assignTimeMatch[1] : "",
-        saleName,
-      });
+  if (includeManagerReport) {
+    try {
+      for (const day of daysForReport) {
+        mergeManagerReports(managerReports, await buildManagerReportsForDay(db, day, reportProjectMap));
+      }
+    } catch (mgrErr) {
+      console.error("[daily-reminder] Manager report query error:", mgrErr.message);
     }
-  } catch (mgrErr) {
-    console.error("[daily-reminder] Manager report query error:", mgrErr.message);
   }
+
+  if (!sendGroupReports) return;
 
   // Send group report to each bot's group_chat_id
   for (const bot of bots) {
-    if (!bot.token || !bot.group_chat_id) continue;
+    if (!bot.token) continue;
+    const targetChatId = replyChatId || bot.group_chat_id;
+    if (!targetChatId) continue;
 
     // Find which projects this bot covers
-    let botProjectIds = [];
-    if (bot.project_id) {
-      try {
-        const parsed = JSON.parse(bot.project_id);
-        botProjectIds = Array.isArray(parsed) ? parsed : [Number(parsed)].filter(Boolean);
-      } catch { botProjectIds = [Number(bot.project_id)].filter(Boolean); }
-    }
-
-    // Build report for this bot's projects
-    const relevantProjects = botProjectIds.length > 0
+    const botProjectIds = getBotProjectIds(bot);
+    let relevantProjects = botProjectIds.length > 0
       ? botProjectIds.filter(pid => reportProjectIds.has(pid))
       : [...reportProjectIds];
+    if (projectIdsFilter) {
+      relevantProjects = relevantProjects.filter(pid => projectIdsFilter.has(pid));
+    }
 
     if (relevantProjects.length === 0) continue;
 
+    if (includePendingSummary) {
     let totalLeads = 0, totalPending = 0, totalUpdated = 0;
     const saleLines = [];
 
@@ -11144,12 +11359,15 @@ async function processDailySaleReminder(db, now) {
     try {
       await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: bot.group_chat_id, text: groupMsg, parse_mode: "Markdown" }),
+        body: JSON.stringify({ chat_id: targetChatId, text: groupMsg, parse_mode: "Markdown" }),
       });
-      console.log(`[daily-reminder] Group report sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
+      console.log(`[daily-reminder] Group pending summary sent to chat ${targetChatId} (bot: ${bot.name})`);
     } catch (e) {
       console.error(`[daily-reminder] Group report failed for ${bot.name}:`, e.message);
     }
+    }
+
+    if (!includeManagerReport) continue;
 
     // --- Send manager received-lead report as one or more full-detail messages ---
     let totalReceived = 0;
@@ -11167,7 +11385,7 @@ async function processDailySaleReminder(db, now) {
     const mgrHeader = [
       `📊 *BÁO CÁO TỔNG HỢP LEAD QUẢN LÍ NHẬN*`,
       `🕒 Gửi lúc: ${nowStr}`,
-      `📅 Dữ liệu ngày: *${reportDateLabel}*`,
+      `📅 Dữ liệu ngày: *${reportRangeLabel}*`,
       `━━━━━━━━━━━━━━━━━━━━`,
       `📥 Tổng lead ngày đó: *${totalReceived}*`,
       `👨‍💼 Lead đã được chia quản lí: *${totalManagerAssigned}*`,
@@ -11186,13 +11404,13 @@ async function processDailySaleReminder(db, now) {
 
     const detailLines = [];
     if (totalReceived === 0) {
-      detailLines.push(`Không có lead nhận trong ngày ${reportDateLabel} cho các dự án đang bật báo cáo.`);
+      detailLines.push(`Không có lead nhận trong khoảng ${reportRangeLabel} cho các dự án đang bật báo cáo.`);
     }
     for (const pid of relevantProjects) {
       const mr = managerReports[pid];
       detailLines.push(``, `🏢 *${escMd(mr?.projectName || reportProjectMap[pid] || projectMap[pid] || "-")}*`);
       if (!mr || (Object.keys(mr.managers).length === 0 && Object.keys(mr.oldManagers || {}).length === 0)) {
-        detailLines.push(`Không có lead nhận/chia trong ngày ${reportDateLabel}.`);
+        detailLines.push(`Không có lead nhận/chia trong khoảng ${reportRangeLabel}.`);
         continue;
       }
       for (const [mgrName, mgrLeads] of Object.entries(mr.managers)) {
@@ -11205,7 +11423,7 @@ async function processDailySaleReminder(db, now) {
         }
       }
       if (Object.keys(mr.oldManagers || {}).length > 0) {
-        detailLines.push(``, `Lead cũ được chia trong ngày ${reportDateLabel}:`);
+        detailLines.push(``, `Lead cũ được chia trong khoảng ${reportRangeLabel}:`);
         for (const [mgrName, mgrLeads] of Object.entries(mr.oldManagers)) {
           detailLines.push(`-> Quản lí *${escMd(mgrName)}*: ${mgrLeads.length} lead cũ`);
           for (let i = 0; i < mgrLeads.length; i++) {
@@ -11224,7 +11442,7 @@ async function processDailySaleReminder(db, now) {
       const next = `${current}\n${line}`;
       if (next.length > 3500 && current.length > 0) {
         chunks.push(current);
-        current = `📊 *BÁO CÁO TỔNG HỢP LEAD QUẢN LÍ NHẬN* (tiếp)\n📅 ${reportDateLabel}\n${line}`;
+        current = `📊 *BÁO CÁO TỔNG HỢP LEAD QUẢN LÍ NHẬN* (tiếp)\n📅 ${reportRangeLabel}\n${line}`;
       } else {
         current = next;
       }
@@ -11235,13 +11453,13 @@ async function processDailySaleReminder(db, now) {
       try {
         const mgrRes = await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: bot.group_chat_id, text: chunks[i], parse_mode: "Markdown" }),
+          body: JSON.stringify({ chat_id: targetChatId, text: chunks[i], parse_mode: "Markdown" }),
         });
         const mgrJson = await mgrRes.json().catch(() => ({}));
         if (!mgrJson.ok) {
           console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, mgrJson.description || mgrRes.statusText);
         } else {
-          console.log(`[daily-reminder] Manager report chunk ${i + 1}/${chunks.length} sent to chat ${bot.group_chat_id} (bot: ${bot.name})`);
+          console.log(`[daily-reminder] Manager report chunk ${i + 1}/${chunks.length} sent to chat ${targetChatId} (bot: ${bot.name})`);
         }
       } catch (e) {
         console.error(`[daily-reminder] Manager report failed for ${bot.name}:`, e.message);

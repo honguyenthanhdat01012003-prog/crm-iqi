@@ -536,37 +536,18 @@
 }
 
 .crm-data-grid-actions-col {
-  width: 120px;
-  min-width: 120px;
+  width: 112px;
+  min-width: 112px;
   text-align: right;
   position: sticky;
   right: 0;
   z-index: 1;
-  box-shadow: -6px 0 10px rgba(15, 23, 42, 0.05);
+  background-color: inherit;
 }
 
 .crm-data-grid thead th.crm-data-grid-actions-col {
   z-index: 3;
-}
-
-.crm-data-grid-row .crm-data-grid-actions-col {
-  background: #fff;
-}
-
-.crm-data-grid-row--alt .crm-data-grid-actions-col {
-  background: #fafbfc;
-}
-
-.crm-data-grid-row:hover .crm-data-grid-actions-col {
-  background: #f0f7f2;
-}
-
-.crm-data-grid-row--selected .crm-data-grid-actions-col {
-  background: #ecfdf3;
-}
-
-.crm-data-grid-row--locked .crm-data-grid-actions-col {
-  background: #fff7f7;
+  background: #f1f3f5;
 }
 
 .crm-row-actions {
