@@ -1,6 +1,7 @@
 import React from "react";
 import { Lock, MessageSquare, Phone, UserPlus } from "lucide-react";
 import { StatusBadge, NewLeadBadge, TempBadge } from "../ui/StatusBadge.jsx";
+import { telHref, zaloHref } from "../../utils/phoneLinks.js";
 
 export function LeadDataGrid({
   leads,
@@ -48,6 +49,7 @@ export function LeadDataGrid({
               const locked = lead.status === "booked" || lead.status === "booking_other" || lead.isLocked;
               const temp = !isSale ? getLeadTemp(lead.createdAt) : null;
               const phone = String(lead.phone || "").replace(/[^\d+]/g, "");
+              const zaloLink = zaloHref(lead.phone);
 
               return (
                 <tr
@@ -89,6 +91,11 @@ export function LeadDataGrid({
                       {phone && (
                         <a href={`tel:${phone}`} className="crm-row-action-btn" title="Gọi">
                           <Phone size={14} />
+                        </a>
+                      )}
+                      {zaloLink && (
+                        <a href={zaloLink} target="_blank" rel="noopener noreferrer" className="crm-row-action-btn crm-row-action-btn--zalo" title="Nhắn Zalo">
+                          <span className="crm-zalo-mark">Z</span>
                         </a>
                       )}
                       {lead.customerFbUrl && (

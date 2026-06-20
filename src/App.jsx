@@ -33,6 +33,7 @@ import {
   getLeadTabStatus,
   labelToStatusKey,
 } from "./utils/leadStatusUtils.js";
+import { telHref, zaloHref } from "./utils/phoneLinks.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -2554,8 +2555,12 @@ function ChatSidebar({ currentUser }) {
           }
         }}
         style={{
-          position: "fixed", top: "50%", right: sidebarOpen ? sidebarWidth : 0,
-          transform: "translateY(-50%)", zIndex: 1001,
+          position: "fixed",
+          ...(isMobile
+            ? { top: "auto", bottom: "calc(58px + env(safe-area-inset-bottom, 0px))", transform: "none" }
+            : { top: "50%", transform: "translateY(-50%)" }),
+          right: sidebarOpen ? sidebarWidth : 0,
+          zIndex: 1001,
           width: 28, height: 64, border: "none", cursor: "pointer",
           background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)",
           color: "#fff", fontSize: 14, borderRadius: "8px 0 0 8px",
@@ -3905,6 +3910,23 @@ const LeadsPage = (props) => {
     } finally {
       setScheduleDetailLoading(false);
     }
+  };
+
+  const openRotateHistory = async () => {
+    setRotateHistOpen(true);
+    setRotateHistLoading(true);
+    setRotateHistDay(null);
+    setRotateHistTab("auto");
+    try {
+      const projectParam = selectedProject && selectedProject !== "all" ? `&projectId=${selectedProject}` : "";
+      const r = await apiFetch(`${API}/auto-rotate/history?source=auto${projectParam}`);
+      const data = await r.json();
+      setRotateHistData(data.history || []);
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+      setRotateHistData([]);
+    }
+    setRotateHistLoading(false);
   };
 
   return (
@@ -6349,16 +6371,17 @@ const LeadsPage = (props) => {
         )}
       </div>
 
-      <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-        <span>Hiển thị {paginatedLeads.length} / {leadsTotal || 0} khách hàng</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          {/* Auto-rotate toggle per project */}
+      <div className={isMobile ? "crm-leads-toolbar crm-leads-toolbar--mobile" : "crm-leads-toolbar"}>
+        <span className="crm-leads-toolbar-count">Hiển thị {paginatedLeads.length} / {leadsTotal || 0} khách hàng</span>
+        <div className="crm-leads-toolbar-actions">
           {isAdmin && selectedProject && (() => {
             const isOn = autoRotateProjects[selectedProject] || false;
             return (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 12, color: isOn ? "#16a34a" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>Tự động xáo lead:</span>
+              <div className="crm-leads-toolbar-toggle">
+                <span className={`crm-leads-toolbar-toggle-label${isOn ? " crm-leads-toolbar-toggle-label--on" : ""}`}>Tự động xáo lead</span>
                 <div
+                  role="switch"
+                  aria-checked={isOn}
                   onClick={async (e) => {
                     e.stopPropagation();
                     try {
@@ -6369,31 +6392,21 @@ const LeadsPage = (props) => {
                       showToast(data.enabled ? "Đã BẬT tự động xáo lead (🔥24h / thường 2 ngày)" : "Đã TẮT tự động xáo lead cho dự án này", data.enabled ? "success" : "info");
                     } catch (err) { showToast("Lỗi: " + err.message, "error"); }
                   }}
-                  style={{
-                    width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-                    background: isOn ? "#16a34a" : "#d1d5db",
-                    position: "relative", transition: "background 0.25s",
-                    boxShadow: isOn ? "0 0 6px rgba(22,163,74,0.3)" : "none",
-                    flexShrink: 0,
-                  }}
+                  className={`crm-switch${isOn ? " crm-switch--on crm-switch--green" : ""}`}
                 >
-                  <div style={{
-                    width: 18, height: 18, borderRadius: 9, background: "#fff",
-                    position: "absolute", top: 2, left: isOn ? 20 : 2,
-                    transition: "left 0.25s",
-                    boxShadow: "0 1px 3px rgba(0,0,0,.2)",
-                  }} />
+                  <div className="crm-switch-thumb" />
                 </div>
               </div>
             );
           })()}
-          {/* Sprint rotate toggle per project */}
           {isAdmin && selectedProject && (() => {
             const isSprintOn = sprintRotateProjects[selectedProject] || false;
             return (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 12, color: isSprintOn ? "#ea580c" : "#9ca3af", fontWeight: 600, whiteSpace: "nowrap" }}>⚡ Nước rút:</span>
+              <div className="crm-leads-toolbar-toggle">
+                <span className={`crm-leads-toolbar-toggle-label${isSprintOn ? " crm-leads-toolbar-toggle-label--sprint" : ""}`}>⚡ Nước rút</span>
                 <div
+                  role="switch"
+                  aria-checked={isSprintOn}
                   onClick={async (e) => {
                     e.stopPropagation();
                     try {
@@ -6404,53 +6417,32 @@ const LeadsPage = (props) => {
                       showToast(data.enabled ? "Đã BẬT xáo nước rút (12h, tính từ lúc chia lead)" : "Đã TẮT xáo nước rút cho dự án này", data.enabled ? "success" : "info");
                     } catch (err) { showToast("Lỗi: " + err.message, "error"); }
                   }}
-                  style={{
-                    width: 40, height: 22, borderRadius: 11, cursor: "pointer",
-                    background: isSprintOn ? "#ea580c" : "#d1d5db",
-                    position: "relative", transition: "background 0.25s",
-                    boxShadow: isSprintOn ? "0 0 6px rgba(234,88,12,0.3)" : "none",
-                    flexShrink: 0,
-                  }}
+                  className={`crm-switch${isSprintOn ? " crm-switch--on crm-switch--orange" : ""}`}
                 >
-                  <div style={{
-                    width: 18, height: 18, borderRadius: 9, background: "#fff",
-                    position: "absolute", top: 2, left: isSprintOn ? 20 : 2,
-                    transition: "left 0.25s",
-                    boxShadow: "0 1px 3px rgba(0,0,0,.2)",
-                  }} />
+                  <div className="crm-switch-thumb" />
                 </div>
               </div>
             );
           })()}
           {isAdmin && selectedProject && (autoRotateProjects[selectedProject] || sprintRotateProjects[selectedProject]) && (
-            <button onClick={async () => {
-              setRotateHistOpen(true); setRotateHistLoading(true); setRotateHistDay(null); setRotateHistTab("auto");
-              try {
-                const projectParam = selectedProject && selectedProject !== "all" ? `&projectId=${selectedProject}` : "";
-                const r = await apiFetch(`${API}/auto-rotate/history?source=auto${projectParam}`);
-                const data = await r.json();
-                setRotateHistData(data.history || []);
-              } catch (e) { showToast("Lỗi: " + e.message, "error"); setRotateHistData([]); }
-              setRotateHistLoading(false);
-            }}
-              style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 8, padding: "3px 10px", fontSize: 11, color: "#6b7280", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }}>
-              <Clock size={12} /> Lịch sử xáo
+            <button type="button" className="crm-leads-toolbar-btn" onClick={openRotateHistory}>
+              <Clock size={14} /> Lịch sử xáo
             </button>
           )}
           {isAdmin && selectedProject && selectedProject !== "all" && (
-            <button onClick={() => { setLeadReportOpen(true); setLeadReportData(null); }}
-              style={{ background: "none", border: "1px solid #8b5cf6", borderRadius: 8, padding: "3px 10px", fontSize: 11, color: "#8b5cf6", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", fontWeight: 600 }}>
-              <BarChart3 size={12} /> Xuất thống kê
+            <button type="button" className="crm-leads-toolbar-btn crm-leads-toolbar-btn--purple" onClick={() => { setLeadReportOpen(true); setLeadReportData(null); }}>
+              <BarChart3 size={14} /> Xuất thống kê
             </button>
           )}
-          <span style={{ fontSize: 12 }}>Số dòng:</span>
-          <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-            style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }}>
-            <option value={5}>5</option>
-            <option value={15}>15</option>
-            <option value={25}>25</option>
-            <option value={50}>50</option>
-          </select>
+          <label className="crm-leads-toolbar-pagesize">
+            <span>Số dòng</span>
+            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}>
+              <option value={5}>5</option>
+              <option value={15}>15</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+            </select>
+          </label>
         </div>
       </div>
 
@@ -6563,8 +6555,13 @@ const LeadsPage = (props) => {
                       isAdmin={isAdmin}
                       onCall={(e) => {
                         e.stopPropagation();
-                        const phone = String(l.phone || "").replace(/[^\d+]/g, "");
-                        if (phone) window.location.href = `tel:${phone}`;
+                        const href = telHref(l.phone);
+                        if (href) window.location.href = href;
+                      }}
+                      onZalo={(e) => {
+                        e.stopPropagation();
+                        const href = zaloHref(l.phone);
+                        if (href) window.open(href, "_blank", "noopener,noreferrer");
                       }}
                       onToggleDetail={(e) => {
                         e.stopPropagation();
@@ -6688,7 +6685,7 @@ const LeadsPage = (props) => {
   );
 }
 
-function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
+function MobileLeadSummary({ lead, isAdmin, onCall, onZalo, onToggleDetail }) {
   const summaryRows = [
     { label: "Nhu cầu", value: lead.product || "-" },
     { label: "Thời gian nhận lead", value: lead.createdAt || "-" },
@@ -6711,16 +6708,21 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
           </div>
         ))}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "1fr 1fr 1.2fr" : "1fr 1.2fr", gap: 8 }}>
-        <button onClick={onCall} style={{ minHeight: 36, border: "1px solid #c5d9c8", borderRadius: 9, background: "#fff", color: "#0f3d1e", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={onCall} style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #c5d9c8", borderRadius: 9, background: "#fff", color: "#0f3d1e", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
           <Phone size={14} /> Gọi
         </button>
+        {zaloHref(lead.phone) && (
+          <button onClick={onZalo} style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #93c5fd", borderRadius: 9, background: "#eff6ff", color: "#0068ff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+            <MessageSquare size={14} /> Zalo
+          </button>
+        )}
         {isAdmin && (
-          <button disabled style={{ minHeight: 36, border: "1px solid #e2e8f0", borderRadius: 9, background: "#f8fafc", color: "#94a3b8", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "not-allowed" }} title="Chưa nối Page Facebook">
+          <button disabled style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #e2e8f0", borderRadius: 9, background: "#f8fafc", color: "#94a3b8", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "not-allowed" }} title="Chưa nối Page Facebook">
             <MessageSquare size={14} /> Chat
           </button>
         )}
-        <button onClick={onToggleDetail} style={{ minHeight: 36, border: "1px solid #0f3d1e", borderRadius: 9, background: "#0f3d1e", color: "#fff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
+        <button onClick={onToggleDetail} style={{ flex: "1.2 1 96px", minHeight: 36, border: "1px solid #0f3d1e", borderRadius: 9, background: "#0f3d1e", color: "#fff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
           <Eye size={14} /> Xem chi tiết
         </button>
       </div>
@@ -7074,7 +7076,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
       <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: layoutCompact ? 8 : 16, marginBottom: layoutCompact ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
-        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br /><b style={detailValueStyle}>{lead.phone || "-"}</b></div>
+        <div style={detailCellStyle}>
+          <span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br />
+          <b style={detailValueStyle}>{lead.phone || "-"}</b>
+          {lead.phone && (
+            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+              {telHref(lead.phone) && (
+                <a href={telHref(lead.phone)} onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
+              )}
+              {zaloHref(lead.phone) && (
+                <a href={zaloHref(lead.phone)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#0068ff", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe" }}>Zalo</a>
+              )}
+            </div>
+          )}
+        </div>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Dự án</span><br /><b style={detailValueStyle}>{projectName}</b></div>
         {isAdmin && lead.isMktXao && lead.sourceProjectName && (
           <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Nguồn data</span><br /><b style={detailValueStyle}>{lead.sourceProjectName}</b></div>
@@ -7176,6 +7191,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   {telHref(lead.phone2) && (
                     <a href={telHref(lead.phone2)} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
                   )}
+                  {zaloHref(lead.phone2) && (
+                    <a href={zaloHref(lead.phone2)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#0068ff", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe" }}>Zalo</a>
+                  )}
                 </div>
               )}
               {lead.phone3 && (
@@ -7184,6 +7202,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   <b style={{ fontSize: 13 }}>{lead.phone3}</b>
                   {telHref(lead.phone3) && (
                     <a href={telHref(lead.phone3)} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
+                  )}
+                  {zaloHref(lead.phone3) && (
+                    <a href={zaloHref(lead.phone3)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#0068ff", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe" }}>Zalo</a>
                   )}
                 </div>
               )}
