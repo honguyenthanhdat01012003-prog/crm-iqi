@@ -681,6 +681,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [announceDraft, setAnnounceDraft] = useState("");
   const [syncCountdown, setSyncCountdown] = useState(0);
   const [syncHash, setSyncHash] = useState("");
+  const [phoneRegistrations, setPhoneRegistrations] = useState({});
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
@@ -1035,6 +1036,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
     if (data.lastSync) setLastSync(data.lastSync);
+    if (data.phoneRegistrations && typeof data.phoneRegistrations === "object") {
+      setPhoneRegistrations(data.phoneRegistrations);
+    }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
   // Mark notifications as seen
@@ -1867,6 +1871,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
             isDataLoading={!initialDataLoaded}
+            phoneRegistrations={phoneRegistrations}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -2979,6 +2984,7 @@ const LeadsPage = (props) => {
     sprintRotateProjects,
     setSprintRotateProjects,
     isDataLoading = false,
+    phoneRegistrations = {},
   } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
@@ -6294,7 +6300,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} />
                   </div>
                 )}
               </div>
@@ -6336,9 +6342,8 @@ const LeadsPage = (props) => {
                 isMobile={false}
                 inDrawer
                 allUsers={allUsers}
+                phoneRegistrations={phoneRegistrations}
               />
-            )}
-          </LeadDetailDrawer>
         </>
       )}
 
@@ -6373,6 +6378,7 @@ const LeadsPage = (props) => {
                 managerNames={allManagerNames}
                 isMobile={isMobile}
                 allUsers={allUsers}
+                phoneRegistrations={phoneRegistrations}
               />
             </div>
           </div>
@@ -6444,10 +6450,10 @@ function MobileLeadSummary({ lead, isAdmin, onCall, onToggleDetail }) {
   );
 };
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [] }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {} }) {
   const isSale = user.role === "sale";
   const history = lead.saleHistory || [];
-  const registrations = lead.registrations || [];
+  const [registrations, setRegistrations] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
   const [histFeedback, setHistFeedback] = useState("");
@@ -6489,6 +6495,24 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     setEditPhone3(lead.phone3 || "");
     setEditAdminNote(lead.adminNote || "");
   }, [lead.id, lead.customerFbUrl, lead.phone2, lead.phone3, lead.adminNote]);
+
+  useEffect(() => {
+    if (!isAdmin || (lead.regCount || 0) <= 1) {
+      setRegistrations([]);
+      return;
+    }
+    const phone = (lead.phone || "").replace(/[^0-9+]/g, "");
+    if (phone && phoneRegistrations[phone]?.length) {
+      setRegistrations(phoneRegistrations[phone]);
+      return;
+    }
+    let cancelled = false;
+    apiFetch(`${API}/leads/${lead.id}/registrations`)
+      .then(r => (r.ok ? r.json() : { registrations: [] }))
+      .then(d => { if (!cancelled) setRegistrations(d.registrations || []); })
+      .catch(() => { if (!cancelled) setRegistrations([]); });
+    return () => { cancelled = true; };
+  }, [lead.id, lead.phone, lead.regCount, phoneRegistrations, isAdmin]);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;

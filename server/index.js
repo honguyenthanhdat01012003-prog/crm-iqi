@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tg-ai-fix2";
+const BUILD_VERSION = "2026-06-10-load-perf";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -684,6 +684,7 @@ async function initDb() {
       chat_id TEXT NOT NULL, user_id TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'hoi',
       created_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (chat_id, user_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_lead_history_lead_seq ON lead_history(lead_id, seq)`,
   ];
   for (const sql of migrations) {
     try { await run(db, sql); } catch (_) { /* column already exists */ }
@@ -2053,55 +2054,9 @@ function getMktXaoMeta(lead = {}) {
   };
 }
 
-async function readData(db) {
-  const leads = await all(db, "SELECT * FROM leads ORDER BY id ASC");
-
-  const historyRows = await all(db, "SELECT * FROM lead_history ORDER BY lead_id, seq");
-  const historyMap = {};
-  for (const h of historyRows) {
-    if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
-    // Backfill source for old records without source
-    let source = h.source || "";
-    if (!source) {
-      const act = (h.action || "").toLowerCase();
-      const fb = (h.feedback || "").toLowerCase();
-      if (act.includes("telegram")) source = "telegram";
-      else if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) source = "schedule";
-      else if (fb.includes("admin") || fb.includes("xáo lead")) source = "admin";
-      else if (act.includes("cập nhật")) source = "admin";
-      else source = "sheet";
-    }
-    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source, seq: h.seq ?? 0 });
-  }
-  // Sort each lead's history by date (oldest first) so last entry = newest
-  for (const lid in historyMap) {
-    historyMap[lid].sort((a, b) => {
-      const da = parseLeadDate(a.date);
-      const db2 = parseLeadDate(b.date);
-      if (da && db2) {
-        const diff = da - db2;
-        return diff || ((a.seq ?? 0) - (b.seq ?? 0));
-      }
-      if (da) return 1;
-      if (db2) return -1;
-      return 0;
-    });
-  }
-  const campaigns = await all(db, "SELECT * FROM campaigns ORDER BY id ASC");
-  const projectRows = await all(db, "SELECT * FROM projects ORDER BY id ASC");
-  const projectMap = {};
-  const projectLegacyMap = {};
-  for (const p of projectRows) {
-    projectMap[p.id] = p.name;
-    projectLegacyMap[p.id] = Boolean(p.is_legacy);
-  }
-
-  // Build phone-based registration map for re-registration detection
+function buildPhoneRegMap(leads, projectMap) {
   const phoneRegMap = {};
   for (const l of leads) {
-    // Data Xao/MKT Cu copies are storage copies, not new customer registrations.
-    // Counting them here creates artificial "Dang ky lan 2/3/..." every time the
-    // same lead is copied into a storage project.
     if (getMktXaoMeta(l).isMktXao) continue;
     const phone = (l.phone || "").replace(/[^0-9+]/g, "");
     if (!phone) continue;
@@ -2117,12 +2072,64 @@ async function readData(db) {
       createdAt: l.created_at || "",
     });
   }
-  // Sort each phone's registrations by date
   for (const phone in phoneRegMap) {
     phoneRegMap[phone].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
   }
+  return phoneRegMap;
+}
 
-  return {
+async function readData(db) {
+  const t0 = Date.now();
+  const [leads, historyRows, campaigns, projectRows] = await Promise.all([
+    all(db, "SELECT * FROM leads ORDER BY id ASC"),
+    all(db, "SELECT * FROM lead_history ORDER BY lead_id, seq"),
+    all(db, "SELECT * FROM campaigns ORDER BY id ASC"),
+    all(db, "SELECT * FROM projects ORDER BY id ASC"),
+  ]);
+
+  const historyMap = {};
+  for (const h of historyRows) {
+    if (!historyMap[h.lead_id]) historyMap[h.lead_id] = [];
+    let source = h.source || "";
+    if (!source) {
+      const act = (h.action || "").toLowerCase();
+      const fb = (h.feedback || "").toLowerCase();
+      if (act.includes("telegram")) source = "telegram";
+      else if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) source = "schedule";
+      else if (fb.includes("admin") || fb.includes("xáo lead")) source = "admin";
+      else if (act.includes("cập nhật")) source = "admin";
+      else source = "sheet";
+    }
+    historyMap[h.lead_id].push({ id: h.id, saleName: h.sale_name, action: h.action, date: h.contact_date, status: h.status, feedback: h.feedback, source, seq: h.seq ?? 0 });
+  }
+  for (const lid in historyMap) {
+    historyMap[lid].sort((a, b) => {
+      const da = parseLeadDate(a.date);
+      const db2 = parseLeadDate(b.date);
+      if (da && db2) {
+        const diff = da - db2;
+        return diff || ((a.seq ?? 0) - (b.seq ?? 0));
+      }
+      if (da) return 1;
+      if (db2) return -1;
+      return 0;
+    });
+  }
+  const projectMap = {};
+  const projectLegacyMap = {};
+  for (const p of projectRows) {
+    projectMap[p.id] = p.name;
+    projectLegacyMap[p.id] = Boolean(p.is_legacy);
+  }
+
+  const phoneRegMap = buildPhoneRegMap(leads, projectMap);
+  const phoneRegistrations = {};
+  for (const [phone, regs] of Object.entries(phoneRegMap)) {
+    if (regs.length > 1) phoneRegistrations[phone] = regs;
+  }
+
+  const result = {
+    phoneRegistrations,
     leads: leads.map((l) => {
       const mktXaoMeta = getMktXaoMeta(l);
       const phone = (l.phone || "").replace(/[^0-9+]/g, "");
@@ -2204,7 +2211,6 @@ async function readData(db) {
       dealValue: l.deal_value || 0,
       regCount: allRegs.length,
       regIndex: regIndex >= 0 ? regIndex + 1 : 1,
-      registrations: allRegs,
       };
     }),
     campaigns: campaigns.map((c) => ({
@@ -2227,6 +2233,11 @@ async function readData(db) {
       isLegacy: Boolean(p.is_legacy),
     })),
   };
+  const ms = Date.now() - t0;
+  if (ms > 1500) {
+    console.log(`[readData] ${ms}ms — ${leads.length} leads, ${historyRows.length} history rows`);
+  }
+  return result;
 }
 
 async function syncProject(db, projectId) {
@@ -3741,13 +3752,12 @@ app.get("/api/config", requireAuth, async (_req, res) => {
 
 app.get("/api/data", requireAuth, async (req, res) => {
   try {
-    // Wait for any running sync to finish to avoid reading inconsistent data
+    const t0 = Date.now();
+    // Chờ sync tối đa 3s (tránh block load lâu khi auto-sync đang chạy)
     if (syncInProgress) {
-      const t0 = Date.now();
-      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
+      const waitStart = Date.now();
+      while (syncInProgress && Date.now() - waitStart < 3000) await new Promise(r => setTimeout(r, 100));
     }
-    // Auto-process pending distribution schedules
-    try { await processSchedules(db); } catch (e) { console.error("[schedule] process error:", e.message); }
     const config = await getConfig(db);
     const data = await readData(db);
     await filterDataForRole(data, req.user);
@@ -3782,6 +3792,8 @@ app.get("/api/data", requireAuth, async (req, res) => {
       sprintRotateProjects[pid] = r.value === "1";
     }
     res.json({ ...config, ...data, schedules, hash: lastSyncHash, autoRotateProjects, sprintRotateProjects });
+    const totalMs = Date.now() - t0;
+    if (totalMs > 2000) console.log(`[GET /api/data] ${totalMs}ms — ${data.leads?.length || 0} leads (user=${req.user?.displayName})`);
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read data" });
   }
@@ -4417,7 +4429,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     // Compute hash from lead count + last lead id + lastSync
-    const hashSrc = `${data.leads.length}|${data.leads[data.leads.length - 1]?.id || 0}|${lastSync}|${data.leads.reduce((s, l) => s + (l.status || ""), "")}`;
+    const hashSrc = `${data.leads.length}|${data.leads[data.leads.length - 1]?.id || 0}|${lastSync}`;
     const hash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
     lastSyncHash = hash;
     // If client already has this hash, return minimal response
@@ -6228,6 +6240,26 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
   } catch (err) {
     console.error(`[POST manager] ERROR:`, err);
     res.status(500).json({ error: err.message || "Manager update failed" });
+  }
+});
+
+app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    const lead = await get(db, "SELECT id, phone FROM leads WHERE id = ?", [leadId]);
+    if (!lead?.phone) return res.json({ registrations: [] });
+    const [rows, projectRows] = await Promise.all([
+      all(db,
+        "SELECT id, name, phone, project_id, campaign, adset_name, ad_name, created_at, notes, source, ads_id FROM leads WHERE phone = ?",
+        [lead.phone]),
+      all(db, "SELECT id, name FROM projects"),
+    ]);
+    const projectMap = Object.fromEntries(projectRows.map(p => [p.id, p.name]));
+    const phoneRegMap = buildPhoneRegMap(rows, projectMap);
+    const targetPhone = (lead.phone || "").replace(/[^0-9+]/g, "");
+    res.json({ registrations: phoneRegMap[targetPhone] || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -10928,6 +10960,13 @@ if (!process.env.VERCEL) {
   setTimeout(() => runAutoSync("auto-sync-boot"), 15000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
   console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 15s`);
+
+  // Lịch chia lead — chạy nền, không block GET /api/data
+  setInterval(async () => {
+    if (!db) return;
+    try { await processSchedules(db); } catch (e) { console.error("[schedule/bg] error:", e.message); }
+  }, 60 * 1000);
+  console.log("[schedule] Background processor enabled (60s)");
 
   // Auto-backup every 8 hours (no backup on every restart — caused disk full)
   const BACKUP_INTERVAL = 8 * 60 * 60 * 1000;
