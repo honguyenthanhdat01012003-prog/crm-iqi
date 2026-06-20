@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tab-qual";
+const BUILD_VERSION = "2026-06-10-tg-ai";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2511,6 +2511,7 @@ app.get("/api/version", (req, res) => {
     jsBundle: dist.jsBundle || null,
     distError: dist.ok ? null : dist.error,
     telegramMenuButtons: true,
+    telegramPerplexity: true,
   });
 });
 
@@ -6952,12 +6953,15 @@ async function handleTelegramWebhook(req, res) {
             "Sau đó bạn sẽ nhận thông báo khi có lead mới (khi CRM đồng bộ từ Sheet).",
             "",
             "📊 Báo cáo nhóm: gõ `/baocao` hoặc `/menu` để mở menu nút bấm.",
+            "",
+            "🤖 AI BĐS: `/hoi`, `/timduan`, `/diemtin` (admin/QL hoặc nhóm đã cấu hình).",
           ].join("\n"));
         }
         return res.json({ ok: true });
       }
 
       const replyChatId = String(message.chat?.id || message.from?.id || "");
+      pruneTelegramAiPending();
       const cmdMatch = feedbackText.match(/^\/(\w+)(@\w+)?(?:\s|$)/);
       if (cmdMatch) {
         const cmd = `/${cmdMatch[1].toLowerCase()}`;
@@ -6979,6 +6983,38 @@ async function handleTelegramWebhook(req, res) {
           await handleTelegramReportCommand(db, bot, feedbackText, replyChatId, sendTg);
           return res.json({ ok: true });
         }
+
+        const aiCmds = ["/hoi", "/timduan", "/duan", "/diemtin"];
+        if (aiCmds.includes(cmd)) {
+          const chatType = message.chat?.type || "private";
+          const isGroup = chatType === "group" || chatType === "supergroup";
+          const allowed = isGroup
+            ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
+            : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
+          if (!allowed) {
+            await sendTg(replyChatId, "⚠️ Chỉ admin/quản lý hoặc nhóm Telegram đã cấu hình mới dùng được lệnh AI.");
+            return res.json({ ok: true });
+          }
+          await handleTelegramAiCommand(db, bot, feedbackText, replyChatId, sendTg);
+          return res.json({ ok: true });
+        }
+      }
+
+      // Free-text follow-up after /hoi or /timduan (no command prefix)
+      const aiPending = telegramAiPending.get(replyChatId);
+      const leadPendingRow = await get(db, "SELECT 1 as ok FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+      if (aiPending && !feedbackText.startsWith("/") && !leadPendingRow) {
+        const chatType = message.chat?.type || "private";
+        const isGroup = chatType === "group" || chatType === "supergroup";
+        const allowed = isGroup
+          ? await ensureTelegramGroupAccess(db, bot, replyChatId, true)
+          : !!(await get(db, "SELECT id FROM users WHERE telegram_id = ? AND role IN ('admin', 'manager')", [String(message.from?.id || "")]));
+        if (allowed) {
+          telegramAiPending.delete(replyChatId);
+          await runTelegramAiQuery(db, feedbackText, aiPending.mode, replyChatId, sendTg);
+          return res.json({ ok: true });
+        }
+        telegramAiPending.delete(replyChatId);
       }
 
       // Ignore other bot commands
@@ -11536,6 +11572,240 @@ async function processDailySaleReminder(db, now, options = {}) {
   }
 }
 
+/* ===== Telegram AI (Perplexity — nhập text) ===== */
+const telegramAiPending = new Map(); // chatId -> { mode: 'hoi'|'timduan', at: number }
+const TELEGRAM_AI_PENDING_TTL_MS = 10 * 60 * 1000;
+
+async function getPerplexityApiKeyFromDb(db) {
+  const row = await get(db, "SELECT value FROM settings WHERE key = 'perplexity_api_key'");
+  const fromDb = String(row?.value || "").trim();
+  if (fromDb) return fromDb;
+  return String(PERPLEXITY_API_KEY || "").trim() || null;
+}
+
+async function callPerplexityTelegramAI(db, userPrompt, maxTokens = 1200) {
+  const apiKey = await getPerplexityApiKeyFromDb(db);
+  if (!apiKey) return { error: "Chưa cấu hình API key Perplexity. Vào CRM → Cài đặt → Perplexity AI." };
+  try {
+    const res = await fetch("https://api.perplexity.ai/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "sonar",
+        messages: [
+          {
+            role: "system",
+            content: "Bạn là cố vấn BĐS Việt Nam cho đội sale. Tìm thông tin thực tế trên internet. Trả lời tiếng Việt, súc tích, thực chiến. Dùng *in đậm* cho tiêu đề (Telegram Markdown). Không JSON. Không bịa số liệu — nếu không chắc thì nói rõ.",
+          },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.3,
+      }),
+      signal: AbortSignal.timeout(45000),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error("[telegram-ai] Perplexity error:", res.status, errText.slice(0, 200));
+      return { error: `Perplexity lỗi (${res.status}). Thử lại sau.` };
+    }
+    const data = await res.json();
+    const text = (data?.choices?.[0]?.message?.content || "").trim();
+    if (!text) return { error: "AI không trả lời. Thử lại." };
+    return { text: text.replace(/```[\s\S]*?```/g, "").trim() };
+  } catch (err) {
+    console.error("[telegram-ai] Error:", err.message);
+    return { error: err.name === "TimeoutError" || err.name === "AbortError" ? "Hết thời gian chờ — thử câu ngắn hơn." : `Lỗi: ${err.message}` };
+  }
+}
+
+function buildTelegramAiPrompt(mode, userInput) {
+  const q = userInput.trim();
+  if (mode === "timduan") {
+    return `Tra cứu thông tin công khai mới nhất về dự án / chủ đầu tư BĐS: "${q}" tại Việt Nam.
+
+Trả lời theo các mục (bullet •):
+• *Vị trí & chủ đầu tư*
+• *Sản phẩm & mức giá* (chỉ ghi nếu có nguồn)
+• *Chính sách bán / tiến độ*
+• *Tin nóng gần đây*
+• *Gợi ý cho sale* (1-2 câu thực chiến)
+
+Ghi nguồn ngắn gọn cuối mỗi mục nếu có.`;
+  }
+  return `Câu hỏi từ đội sale BĐS:\n"${q}"\n\nTrả lời ngắn gọn, có bullet nếu cần.`;
+}
+
+function splitTelegramChunks(text, maxLen = 3800) {
+  if (text.length <= maxLen + 100) return [text];
+  const chunks = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    if ((cur + "\n" + line).length > maxLen) {
+      if (cur) chunks.push(cur);
+      cur = line.length > maxLen ? line.slice(0, maxLen) : line;
+    } else {
+      cur = cur ? `${cur}\n${line}` : line;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+async function sendTelegramLongText(sendTg, chatId, text, extra = {}) {
+  const chunks = splitTelegramChunks(text);
+  for (let i = 0; i < chunks.length; i++) {
+    await sendTg(chatId, chunks[i], i === chunks.length - 1 ? extra : {});
+  }
+}
+
+function parseDailyNewsRow(row) {
+  const parseJSON = (s, fb) => { try { return JSON.parse(s); } catch { return fb; } };
+  return {
+    headline: row.title,
+    market_pulse: row.marketing_lesson || "",
+    market_sentiment: row.market_sentiment,
+    news_items: parseJSON(row.news_summary, []),
+    tomorrow_forecast: row.editorial_comment || "",
+    action_brief: parseJSON(row.action_items, []),
+    sources: parseJSON(row.source_links, []),
+  };
+}
+
+async function getCachedDailyNewsToday(db) {
+  const row = await get(db,
+    `SELECT * FROM daily_news WHERE date(created_at, 'localtime') = date('now', 'localtime') ORDER BY created_at DESC LIMIT 1`);
+  return row ? parseDailyNewsRow(row) : null;
+}
+
+function formatDailyNewsForTelegram(data) {
+  if (data.error) return `⚠️ ${data.error}`;
+  const verdictIcon = (v) => (v === "thơm" ? "🟢" : v === "độc" ? "🔴" : "🟡");
+  const lines = [
+    `📰 *${escMd(data.headline || "Điểm tin BĐS")}*`,
+    "",
+  ];
+  if (data.market_pulse) lines.push(`📊 ${data.market_pulse}`);
+  if (typeof data.market_sentiment === "number") lines.push(`Thị trường: *${data.market_sentiment}/100*`);
+  lines.push("", "*TIN NÓNG:*");
+  for (const item of (data.news_items || []).slice(0, 6)) {
+    lines.push("");
+    lines.push(`${verdictIcon(item.verdict)} *${escMd(item.title || "—")}* (${escMd(item.source_name || "")})`);
+    if (item.verdict_reason) lines.push(`→ ${item.verdict_reason}`);
+    if (item.insight) lines.push(item.insight.length > 350 ? `${item.insight.slice(0, 347)}…` : item.insight);
+    if (item.source_url) lines.push(`🔗 ${item.source_url}`);
+  }
+  if (data.tomorrow_forecast) {
+    lines.push("", "*Dự báo:*", data.tomorrow_forecast);
+  }
+  if (Array.isArray(data.action_brief) && data.action_brief.length) {
+    lines.push("", "*Việc cần làm:*");
+    data.action_brief.slice(0, 5).forEach((a, i) => lines.push(`${i + 1}. ${a}`));
+  }
+  return lines.join("\n");
+}
+
+async function runTelegramAiQuery(db, userInput, mode, replyChatId, sendTg) {
+  const query = String(userInput || "").trim();
+  if (!query || query.length < 2) {
+    await sendTg(replyChatId, "⚠️ Câu hỏi quá ngắn. Ví dụ: `/hoi lãi suất mua nhà VCB tháng này`");
+    return;
+  }
+  if (query.length > 500) {
+    await sendTg(replyChatId, "⚠️ Câu hỏi tối đa 500 ký tự. Rút gọn rồi thử lại.");
+    return;
+  }
+  if (!tryAcquireTelegramReport(replyChatId)) {
+    await sendTg(replyChatId, "⏳ Đang xử lý yêu cầu khác — vui lòng đợi xong rồi thử lại.");
+    return;
+  }
+  try {
+    await sendTg(replyChatId, "🔍 Đang tra cứu (Perplexity AI)...");
+    const prompt = buildTelegramAiPrompt(mode, query);
+    const result = await callPerplexityTelegramAI(db, prompt, mode === "timduan" ? 1400 : 1200);
+    if (result.error) {
+      await sendTg(replyChatId, `⚠️ ${result.error}`);
+      return;
+    }
+    const header = mode === "timduan" ? `🏢 *${escMd(query)}*\n\n` : "💬 *Trả lời:*\n\n";
+    await sendTelegramLongText(sendTg, replyChatId, header + result.text);
+  } finally {
+    releaseTelegramReport(replyChatId);
+  }
+}
+
+async function handleTelegramAiCommand(db, bot, text, replyChatId, sendTg) {
+  const cmdMatch = text.match(/^\/(\w+)(@\w+)?(?:\s+([\s\S]*))?$/);
+  const cmd = cmdMatch ? `/${cmdMatch[1].toLowerCase()}` : "";
+  const args = (cmdMatch?.[3] || "").trim();
+
+  if (cmd === "/diemtin") {
+    const forceFresh = /^(moi|mới|fresh)$/i.test(args);
+    if (!tryAcquireTelegramReport(replyChatId)) {
+      await sendTg(replyChatId, "⏳ Đang xử lý yêu cầu khác — vui lòng đợi.");
+      return;
+    }
+    try {
+      let data = !forceFresh ? await getCachedDailyNewsToday(db) : null;
+      if (data) {
+        await sendTg(replyChatId, "📰 *Điểm tin hôm nay* (đã lưu sẵn trên CRM)\n_Gõ `/diemtin moi` để lấy bản mới._");
+      } else {
+        await sendTg(replyChatId, "📰 Đang lấy điểm tin BĐS (có thể mất 1-2 phút)...");
+        data = await fetchDailyRealEstateNews();
+      }
+      if (data?.error) {
+        await sendTg(replyChatId, `⚠️ ${data.error}`);
+        return;
+      }
+      await sendTelegramLongText(sendTg, replyChatId, formatDailyNewsForTelegram(data));
+    } finally {
+      releaseTelegramReport(replyChatId);
+    }
+    return;
+  }
+
+  const mode = cmd === "/hoi" ? "hoi" : "timduan";
+
+  if (!args) {
+    telegramAiPending.set(replyChatId, { mode, at: Date.now() });
+    const hint = mode === "hoi"
+      ? [
+          "💬 *HỎI AI BĐS*",
+          "",
+          "Nhập câu hỏi trong *tin nhắn tiếp theo* (không cần lệnh).",
+          "",
+          "Ví dụ:",
+          "• Lãi suất cho vay mua nhà các ngân hàng lớn tháng này",
+          "• So sánh giá căn hộ Quận 9 và Thuận An",
+          "",
+          "Hoặc gõ luôn: `/hoi câu hỏi của bạn`",
+        ].join("\n")
+      : [
+          "🏢 *TRA CỨU DỰ ÁN*",
+          "",
+          "Nhập *tên dự án* trong tin nhắn tiếp theo.",
+          "",
+          "Ví dụ: Blanca City, Ecopark, Masteri Centre Point",
+          "",
+          "Hoặc gõ luôn: `/timduan Blanca City`",
+        ].join("\n");
+    await sendTg(replyChatId, hint);
+    return;
+  }
+
+  await runTelegramAiQuery(db, args, mode, replyChatId, sendTg);
+}
+
+function pruneTelegramAiPending() {
+  const now = Date.now();
+  for (const [chatId, p] of telegramAiPending) {
+    if (now - p.at > TELEGRAM_AI_PENDING_TTL_MS) telegramAiPending.delete(chatId);
+  }
+}
+
 /* ===== Telegram Report Menu + Analytics ===== */
 const JUNK_LEAD_STATUSES = new Set(["spam", "wrong_number", "wrong_phone", "blocked", "not_interested", "sale"]);
 const telegramReportBusy = new Map(); // chatId -> boolean
@@ -11628,6 +11898,9 @@ async function registerTelegramBotCommands(botToken) {
           { command: "baocao", description: "Menu báo cáo CRM" },
           { command: "baocaongay", description: "Báo cáo lead QL hôm qua" },
           { command: "baocaocham", description: "Sale chưa cập nhật >2 ngày" },
+          { command: "hoi", description: "Hỏi AI BĐS (nhập câu hỏi)" },
+          { command: "timduan", description: "Tra cứu dự án BĐS" },
+          { command: "diemtin", description: "Điểm tin thị trường hôm nay" },
         ],
       }),
     });
@@ -11647,6 +11920,11 @@ async function sendTelegramReportMenu(db, bot, chatId, sendTg) {
     `🏢 Bot đang gắn *${projects.length}* dự án.`,
     "",
     "💡 Gõ `/baocaongay` hoặc `/baocao 15/06/2025` nếu muốn nhập ngày bằng text.",
+    "",
+    "🤖 *AI thị trường (nhập text):*",
+    "`/hoi câu hỏi` — hỏi AI BĐS",
+    "`/timduan tên dự án` — tra cứu dự án",
+    "`/diemtin` — điểm tin hôm nay",
   ].join("\n"), { reply_markup: telegramMainMenuKeyboard() });
 }
 
@@ -11981,6 +12259,13 @@ async function handleTelegramReportCallback(db, bot, callback_query, sendTg, ans
       "`/baocao 15/06/2025` — Một ngày",
       "`/baocao 01/06/2025-15/06/2025` — Khoảng ngày",
       "`/baocaocham` — Sale chưa cập nhật (tất cả dự án bật báo cáo)",
+      "",
+      "🤖 *AI thị trường (nhập text):*",
+      "`/hoi câu hỏi` — Hỏi AI (hoặc `/hoi` rồi nhập tin tiếp theo)",
+      "`/timduan Tên dự án` — Tra cứu dự án",
+      "`/duan` — Giống `/timduan`",
+      "`/diemtin` — Điểm tin hôm nay (cache CRM)",
+      "`/diemtin moi` — Lấy điểm tin mới (tốn API)",
     ].join("\n"), { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
     return;
   }
