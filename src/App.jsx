@@ -2927,6 +2927,7 @@ function buildLeadTabs(isSale) {
     { key: "interested", label: "Quan tâm", Icon: Star, filter: (l) => tabStatus(l) === "interested" },
     { key: "low_interest", label: "QT hời hợt", Icon: Sparkles, filter: (l) => tabStatus(l) === "low_interest" },
     { key: "other_project", label: "QT DA khác", Icon: ArrowLeftRight, filter: (l) => tabStatus(l) === "other_project" },
+    { key: "consulting", label: "Đang tư vấn", Icon: MessageSquare, filter: (l) => tabStatus(l) === "consulting" },
     { key: "appointment", label: "Hẹn xem", Icon: CalendarCheck, filter: (l) => tabStatus(l) === "appointment" },
     { key: "booked", label: "Booking/Cọc", Icon: CheckCircle, filter: (l) => tabStatus(l) === "booked" },
     { key: "booking_other", label: "Booking sản khác", Icon: CheckCircle, filter: (l) => tabStatus(l) === "booking_other" },
@@ -2941,6 +2942,9 @@ function buildLeadTabs(isSale) {
     { key: "wrong_number", label: "Sai số", Icon: XCircle, filter: (l) => tabStatus(l) === "wrong_number" },
     { key: "hung_up", label: "Tắt máy ngang", Icon: PhoneOff, filter: (l) => tabStatus(l) === "hung_up" },
     { key: "has_sale", label: "Có sale khác", Icon: Users, filter: (l) => tabStatus(l) === "has_sale" },
+    { key: "called", label: "Đã gọi", Icon: Phone, filter: (l) => tabStatus(l) === "called" },
+    { key: "blocked", label: "Chặn", Icon: ShieldOff, filter: (l) => tabStatus(l) === "blocked" },
+    { key: "lost", label: "Mất", Icon: Skull, filter: (l) => tabStatus(l) === "lost" },
   ];
 }
 

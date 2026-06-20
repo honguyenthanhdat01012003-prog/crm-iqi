@@ -37,7 +37,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tele-menu";
+const BUILD_VERSION = "2026-06-10-tab-qual";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -1035,6 +1035,7 @@ function normalizeStatus(raw = "") {
   if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested") || v === "kqt") return "not_interested";
   if (v.includes("quan tam hoi hot") || v.includes("hoi hot") || v === "qthh") return "low_interest";
   if (v.includes("quan tam du an khac") || v.includes("du an khac") || v === "qtdak") return "other_project";
+  if (v.includes("dang tu van") || v === "consulting" || v === "dtv") return "consulting";
   if (v.includes("dang co sale") || v.includes("sale khac cham") || v.includes("co sale")) return "has_sale";
   if (v === "sale" || (v.includes("sale") && !v.includes("khac") && !v.includes("cham"))) return "sale";
   if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested") || v === "qt") return "interested";
@@ -11049,6 +11050,11 @@ async function handleTelegramReportCommand(db, bot, text, replyChatId, sendTg) {
     return;
   }
 
+  if (!tryAcquireTelegramReport(replyChatId)) {
+    await sendTg(replyChatId, "⏳ Đang tạo báo cáo khác — vui lòng đợi xong rồi thử lại.");
+    return;
+  }
+
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
   let projectIdsFilter = null;
   if (parsed.projectNameFilter) {
@@ -11063,20 +11069,24 @@ async function handleTelegramReportCommand(db, bot, text, replyChatId, sendTg) {
     projectIdsFilter = new Set(matched.map(p => Number(p.id)));
   }
 
-  await sendTg(replyChatId, "⏳ Đang tạo báo cáo, vui lòng đợi...");
-  await processDailySaleReminder(db, now, {
-    sendSaleReminders: false,
-    sendGroupReports: true,
-    reportDays: parsed.days,
-    projectIdsFilter,
-    botIdFilter: bot.id,
-    replyChatId,
-    includePendingSummary: parsed.mode === "pending",
-    includeManagerReport: parsed.mode === "manager",
-  });
-  await sendTg(replyChatId, "✅ Đã gửi báo cáo.", {
-    reply_markup: { inline_keyboard: [[{ text: "📊 Mở menu báo cáo", callback_data: "rpt:menu" }]] },
-  });
+  try {
+    await sendTg(replyChatId, "⏳ Đang tạo báo cáo, vui lòng đợi...");
+    await processDailySaleReminder(db, now, {
+      sendSaleReminders: false,
+      sendGroupReports: true,
+      reportDays: parsed.days,
+      projectIdsFilter,
+      botIdFilter: bot.id,
+      replyChatId,
+      includePendingSummary: parsed.mode === "pending",
+      includeManagerReport: parsed.mode === "manager",
+    });
+    await sendTg(replyChatId, "✅ Đã gửi báo cáo.", {
+      reply_markup: { inline_keyboard: [[{ text: "📊 Mở menu báo cáo", callback_data: "rpt:menu" }]] },
+    });
+  } finally {
+    releaseTelegramReport(replyChatId);
+  }
 }
 
 function mergeManagerReports(target, source) {
@@ -11528,6 +11538,17 @@ async function processDailySaleReminder(db, now, options = {}) {
 
 /* ===== Telegram Report Menu + Analytics ===== */
 const JUNK_LEAD_STATUSES = new Set(["spam", "wrong_number", "wrong_phone", "blocked", "not_interested", "sale"]);
+const telegramReportBusy = new Map(); // chatId -> boolean
+
+function tryAcquireTelegramReport(chatId) {
+  if (telegramReportBusy.get(chatId)) return false;
+  telegramReportBusy.set(chatId, true);
+  return true;
+}
+
+function releaseTelegramReport(chatId) {
+  telegramReportBusy.delete(chatId);
+}
 
 async function getReportProjectsForBot(db, bot) {
   const botPids = new Set(getBotProjectIds(bot));
@@ -11754,20 +11775,43 @@ async function buildLeadSourceReport(db, projectIds, projectMap, days) {
   ].join("\n");
 }
 
+async function getFirstReportStatusMap(db, leadIds) {
+  const statusMap = new Map();
+  if (!leadIds.length) return statusMap;
+  for (let i = 0; i < leadIds.length; i += 200) {
+    const batch = leadIds.slice(i, i + 200);
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = await all(db,
+      `SELECT lead_id, status, source, sale_name, action, seq FROM lead_history
+       WHERE lead_id IN (${placeholders})
+       ORDER BY lead_id ASC, seq ASC`,
+      batch);
+    for (const h of rows) {
+      if (statusMap.has(h.lead_id)) continue;
+      if (h.action === "Chia lead" || !h.status) continue;
+      const src = String(h.source || "").toLowerCase();
+      const saleName = h.sale_name || "";
+      if (!["sale", "telegram", "admin", "manager"].includes(src) && !( !src && saleName)) continue;
+      statusMap.set(h.lead_id, normalizeStatus(h.status));
+    }
+  }
+  return statusMap;
+}
+
 async function buildQualificationReport(db, projectIds, projectMap, days) {
   const leads = await fetchLeadsForProjects(db, projectIds, days);
   if (!leads.length) return "✅ *CHẤT LƯỢNG LEAD*\n\nKhông có lead trong khoảng thời gian đã chọn.";
+  const firstStatusMap = await getFirstReportStatusMap(db, leads.map(l => l.id));
   let junk = 0;
   const byStatus = new Map();
   for (const l of leads) {
-    const st = l.status || "new";
+    const st = firstStatusMap.get(l.id) || normalizeStatus(l.status || "new");
     byStatus.set(st, (byStatus.get(st) || 0) + 1);
     if (JUNK_LEAD_STATUSES.has(st)) junk++;
   }
   const quality = leads.length - junk;
   const statusLines = [...byStatus.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
     .map(([k, v]) => `• ${escMd(STATUS_LABELS_VI[k] || k)}: *${v}* (${Math.round(v / leads.length * 100)}%)`)
     .join("\n");
   const projLabel = projectIds.length === 1 ? projectMap[projectIds[0]] : `${projectIds.length} dự án`;
@@ -11780,10 +11824,10 @@ async function buildQualificationReport(db, projectIds, projectMap, days) {
     `🗑 Lead rác (spam/sai số/không QT/...): *${junk}* (${Math.round(junk / leads.length * 100)}%)`,
     `💎 Lead còn lại: *${quality}* (${Math.round(quality / leads.length * 100)}%)`,
     "",
-    "*Theo trạng thái CRM:*",
+    "*Theo lần cập nhật đầu tiên (sale/QL/admin):*",
     statusLines,
     "",
-    "ℹ️ Phân loại rác dựa trên trạng thái sale cập nhật trên CRM.",
+    "ℹ️ Lấy trạng thái từ lần feedback đầu tiên trên CRM, không phải trạng thái hiện tại.",
   ].join("\n");
 }
 
@@ -11964,6 +12008,11 @@ async function handleTelegramReportCallback(db, bot, callback_query, sendTg, ans
   }
 
   if (parts[1] === "run") {
+    if (!tryAcquireTelegramReport(replyChatId)) {
+      await answerCb(callback_query.id, "⏳ Đang tạo báo cáo khác — vui lòng đợi");
+      return;
+    }
+
     const runType = parts[2];
     const pid = Number(parts[3] || 0);
     const daysBack = Number(parts[4] || 7);
@@ -11971,75 +12020,80 @@ async function handleTelegramReportCallback(db, bot, callback_query, sendTg, ans
     const projectMap = Object.fromEntries(projects.map(p => [p.id, p.name]));
     let projectIds = pid > 0 ? [pid] : projects.map(p => p.id);
     if (pid > 0 && !projectMap[pid]) {
+      releaseTelegramReport(replyChatId);
       await sendTg(replyChatId, "⚠️ Dự án không thuộc bot này.");
       return;
     }
 
-    await sendTg(replyChatId, "⏳ Đang tạo báo cáo...");
+    try {
+      await sendTg(replyChatId, "⏳ Đang tạo báo cáo — *chỉ chạy 1 báo cáo/lúc*, vui lòng không bấm thêm.");
 
-    if (runType === "mgr") {
-      const y = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
-      y.setDate(y.getDate() - 1);
-      y.setHours(12, 0, 0, 0);
-      await processDailySaleReminder(db, new Date(), {
-        sendSaleReminders: false,
-        sendGroupReports: true,
-        reportDays: [y],
-        projectIdsFilter: pid > 0 ? new Set([pid]) : null,
-        botIdFilter: bot.id,
-        replyChatId,
-        includePendingSummary: false,
-        includeManagerReport: true,
-      });
-      await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
-      return;
-    }
-
-    if (runType === "cham") {
-      await processDailySaleReminder(db, new Date(), {
-        sendSaleReminders: false,
-        sendGroupReports: true,
-        projectIdsFilter: pid > 0 ? new Set([pid]) : null,
-        botIdFilter: bot.id,
-        replyChatId,
-        includePendingSummary: true,
-        includeManagerReport: false,
-      });
-      await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
-      return;
-    }
-
-    if (runType === "rem") {
-      await runSaleRemindForProject(db, bot, pid, replyChatId, sendTg);
-      await sendTg(replyChatId, "✅ Đã nhắc.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
-      return;
-    }
-
-    const days = getReportDaysWindow(daysBack);
-    let text = "";
-    if (runType === "spd") text = await buildSpeedToLeadReport(db, projectIds, projectMap, days);
-    else if (runType === "src") text = await buildLeadSourceReport(db, projectIds, projectMap, days);
-    else if (runType === "qual") text = await buildQualificationReport(db, projectIds, projectMap, days);
-    else if (runType === "peak") text = await buildPeakHoursReport(db, projectIds, projectMap, days);
-    else {
-      await sendTg(replyChatId, "⚠️ Loại báo cáo không hợp lệ.");
-      return;
-    }
-
-    const chunks = [];
-    if (text.length <= 3900) chunks.push(text);
-    else {
-      let cur = "";
-      for (const line of text.split("\n")) {
-        if ((cur + "\n" + line).length > 3800) { chunks.push(cur); cur = line; }
-        else cur = cur ? `${cur}\n${line}` : line;
+      if (runType === "mgr") {
+        const y = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Ho_Chi_Minh" }));
+        y.setDate(y.getDate() - 1);
+        y.setHours(12, 0, 0, 0);
+        await processDailySaleReminder(db, new Date(), {
+          sendSaleReminders: false,
+          sendGroupReports: true,
+          reportDays: [y],
+          projectIdsFilter: pid > 0 ? new Set([pid]) : null,
+          botIdFilter: bot.id,
+          replyChatId,
+          includePendingSummary: false,
+          includeManagerReport: true,
+        });
+        await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+        return;
       }
-      if (cur) chunks.push(cur);
+
+      if (runType === "cham") {
+        await processDailySaleReminder(db, new Date(), {
+          sendSaleReminders: false,
+          sendGroupReports: true,
+          projectIdsFilter: pid > 0 ? new Set([pid]) : null,
+          botIdFilter: bot.id,
+          replyChatId,
+          includePendingSummary: true,
+          includeManagerReport: false,
+        });
+        await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+        return;
+      }
+
+      if (runType === "rem") {
+        await runSaleRemindForProject(db, bot, pid, replyChatId, sendTg);
+        await sendTg(replyChatId, "✅ Đã nhắc.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+        return;
+      }
+
+      const days = getReportDaysWindow(daysBack);
+      let text = "";
+      if (runType === "spd") text = await buildSpeedToLeadReport(db, projectIds, projectMap, days);
+      else if (runType === "src") text = await buildLeadSourceReport(db, projectIds, projectMap, days);
+      else if (runType === "qual") text = await buildQualificationReport(db, projectIds, projectMap, days);
+      else if (runType === "peak") text = await buildPeakHoursReport(db, projectIds, projectMap, days);
+      else {
+        await sendTg(replyChatId, "⚠️ Loại báo cáo không hợp lệ.");
+        return;
+      }
+
+      const chunks = [];
+      if (text.length <= 3900) chunks.push(text);
+      else {
+        let cur = "";
+        for (const line of text.split("\n")) {
+          if ((cur + "\n" + line).length > 3800) { chunks.push(cur); cur = line; }
+          else cur = cur ? `${cur}\n${line}` : line;
+        }
+        if (cur) chunks.push(cur);
+      }
+      for (const chunk of chunks) {
+        await sendTg(replyChatId, chunk);
+      }
+      await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
+    } finally {
+      releaseTelegramReport(replyChatId);
     }
-    for (const chunk of chunks) {
-      await sendTg(replyChatId, chunk);
-    }
-    await sendTg(replyChatId, "✅ Xong.", { reply_markup: { inline_keyboard: [[{ text: "◀️ Menu", callback_data: "rpt:menu" }]] } });
   }
 }
 

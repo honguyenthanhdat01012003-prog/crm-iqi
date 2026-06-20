@@ -39,6 +39,7 @@ export function normalizeLeadStatusKey(status) {
   if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested") || v === "kqt") return "not_interested";
   if (v.includes("quan tam hoi hot") || v.includes("hoi hot") || v === "qthh") return "low_interest";
   if (v.includes("quan tam du an khac") || v.includes("du an khac") || v === "qtdak") return "other_project";
+  if (v.includes("dang tu van") || v === "consulting" || v === "dtv") return "consulting";
   if (v.includes("dang co sale") || v.includes("sale khac cham") || v.includes("co sale")) return "has_sale";
   if (v === "sale" || (v.includes("sale") && !v.includes("khac") && !v.includes("cham"))) return "sale";
   if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested") || v === "qt") return "interested";
@@ -97,5 +98,5 @@ export function getLeadReportStatus(lead) {
 
 export function getLeadTabStatus(lead, isSale) {
   if (isSale) return normalizeLeadStatusKey(lead?.status || "new");
-  return getLeadReportStatus(lead);
+  return getFirstUpdaterInfo(lead).status || normalizeLeadStatusKey(lead?.status || "new");
 }
