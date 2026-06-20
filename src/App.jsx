@@ -14,7 +14,6 @@ import {
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper,
   Briefcase, AlertTriangle, ArrowUp, ArrowDown
 } from "lucide-react";
-import { MaintenancePage } from "./NotFound";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
@@ -613,10 +612,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   const {
     serverDown,
     initialDataLoaded,
-    bootFailed,
     markApiOk,
     markInitialDataLoaded,
-    markBootFailed,
     clearBootFailed,
     markConnectivityFailure,
     markSocketConnected,
@@ -1094,6 +1091,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
   const fetchSeqRef = useRef(0);
   const bootDoneRef = useRef(false);
+  const bootRetryTimerRef = useRef(null);
 
   const buildDataUrl = useCallback(() => {
     const q = leadsQueryRef.current;
@@ -1113,7 +1111,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
   const fetchCrmData = useCallback(async ({ isBoot = false } = {}) => {
-    const seq = ++fetchSeqRef.current;
+    const seq = isBoot ? 0 : ++fetchSeqRef.current;
+    if (!isBoot) fetchSeqRef.current = seq;
     setLeadsFetching(true);
     try {
       const controller = new AbortController();
@@ -1131,9 +1130,13 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      if (seq !== fetchSeqRef.current) return data;
+      if (!isBoot && seq !== fetchSeqRef.current) return data;
       markInitialDataLoaded();
       bootDoneRef.current = true;
+      if (bootRetryTimerRef.current) {
+        clearTimeout(bootRetryTimerRef.current);
+        bootRetryTimerRef.current = null;
+      }
       if (data.leads) {
         setSeenLeadKeys((prev) => {
           if (prev.size === 0) {
@@ -1150,23 +1153,21 @@ function CRMApp({ user, updateUser, onLogout }) {
       return data;
     } catch (err) {
       console.warn("[CRM] load data failed:", err?.message || err);
-      if (isBoot && !bootDoneRef.current) return null;
       return null;
     } finally {
-      if (seq === fetchSeqRef.current) setLeadsFetching(false);
+      if (isBoot || seq === fetchSeqRef.current) setLeadsFetching(false);
       if (isBoot) setDataLoadAttempted(true);
     }
   }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk]);
 
   const runBootLoad = useCallback(async () => {
+    if (bootDoneRef.current) return;
     clearBootFailed();
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const data = await fetchCrmData({ isBoot: true });
-      if (data) return;
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
-    }
-    markBootFailed();
-  }, [fetchCrmData, markBootFailed, clearBootFailed]);
+    const data = await fetchCrmData({ isBoot: true });
+    if (data || bootDoneRef.current) return;
+    if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
+    bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 3000);
+  }, [fetchCrmData, clearBootFailed]);
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
@@ -1178,6 +1179,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (bootStartedRef.current) return;
     bootStartedRef.current = true;
     runBootLoad();
+    return () => {
+      if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
+    };
   }, [runBootLoad]);
 
   useEffect(() => {
@@ -1514,22 +1518,51 @@ function CRMApp({ user, updateUser, onLogout }) {
     setSidebarOpen(false);
   };
 
-  if (bootFailed && dataLoadAttempted) {
-    return (
-      <MaintenancePage
-        message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau."
-        onRetry={() => {
-          clearBootFailed();
-          bootDoneRef.current = false;
-          setDataLoadAttempted(false);
-          runBootLoad();
-        }}
-      />
-    );
-  }
 
   return (
     <div className="crm-app-shell">
+      {!initialDataLoaded && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 9999,
+          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+          background: "linear-gradient(160deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)",
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: 18, marginBottom: 20,
+            background: "linear-gradient(135deg, #e88a2e, #d97706)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            boxShadow: "0 8px 32px rgba(232,138,46,0.4)",
+          }}>
+            <span style={{ color: "#fff", fontSize: 24, fontWeight: 800 }}>IQI</span>
+          </div>
+          <div style={{
+            width: 40, height: 40, border: "3px solid rgba(232,138,46,0.2)",
+            borderTop: "3px solid #e88a2e", borderRadius: "50%",
+            animation: "spin 1s linear infinite", marginBottom: 16,
+          }} />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          <p style={{ color: "#fff", fontWeight: 700, fontSize: 16, margin: "0 0 8px" }}>Đang tải dữ liệu CRM...</p>
+          <p style={{ color: "rgba(255,255,255,0.55)", fontSize: 13, margin: 0, textAlign: "center", maxWidth: 320, lineHeight: 1.5 }}>
+            {dataLoadAttempted
+              ? "Server đang khởi động hoặc mạng chậm. Hệ thống tự thử lại — vui lòng đợi..."
+              : "Vui lòng đợi trong giây lát"}
+          </p>
+          {dataLoadAttempted && (
+            <button
+              type="button"
+              onClick={() => runBootLoad()}
+              style={{
+                marginTop: 24, background: "linear-gradient(135deg, #e88a2e, #d97706)",
+                color: "#fff", border: "none", borderRadius: 12, padding: "12px 28px",
+                fontSize: 14, fontWeight: 700, cursor: "pointer",
+              }}
+            >
+              Thử lại ngay
+            </button>
+          )}
+        </div>
+      )}
       {/* Server down warning banner */}
       {serverDown && initialDataLoaded && (
         <div className="crm-server-banner">

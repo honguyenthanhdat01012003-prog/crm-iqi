@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-stable-boot";
+const BUILD_VERSION = "2026-06-20-fast-boot";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2201,20 +2201,66 @@ async function fetchLeadHistoryFormatted(db, leadId) {
   return sortSaleHistoryEntries(entries);
 }
 
-let bootstrapCache = { at: 0, data: null };
+let bootstrapCache = { at: 0, data: null, key: "" };
 const BOOTSTRAP_CACHE_MS = 45_000;
+let leadAuxCache = { at: 0, historyCountMap: null, dupPhones: null };
+const LEAD_AUX_CACHE_MS = 120_000;
 
 function invalidateBootstrapCache() {
-  bootstrapCache = { at: 0, data: null };
+  bootstrapCache = { at: 0, data: null, key: "" };
+}
+
+function invalidateLeadAuxCache() {
+  leadAuxCache = { at: 0, historyCountMap: null, dupPhones: null };
+}
+
+function safeJsonParse(raw, fallback = {}) {
+  try {
+    return JSON.parse(raw || "{}");
+  } catch {
+    return fallback;
+  }
+}
+
+async function getHistoryCountsForLeadIds(db, leadIds) {
+  if (!leadIds.length) return {};
+  const ph = leadIds.map(() => "?").join(",");
+  const rows = await all(
+    db,
+    `SELECT lead_id, COUNT(*) as c FROM lead_history WHERE lead_id IN (${ph}) GROUP BY lead_id`,
+    leadIds
+  );
+  return Object.fromEntries(rows.map((r) => [r.lead_id, r.c]));
+}
+
+async function buildPhoneRegMapForPage(db, leadRows, projectMap) {
+  const phones = [...new Set(leadRows.map((l) => l.phone).filter((p) => p && String(p).trim()))];
+  if (!phones.length) return {};
+  const ph = phones.map(() => "?").join(",");
+  const dupRows = await all(
+    db,
+    `SELECT phone FROM leads WHERE phone IN (${ph}) GROUP BY phone HAVING COUNT(*) > 1`,
+    phones
+  );
+  if (!dupRows.length) return {};
+  const dupPhones = dupRows.map((r) => r.phone);
+  const ph2 = dupPhones.map(() => "?").join(",");
+  const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph2})`, dupPhones);
+  return buildPhoneRegMap(dupLeads, projectMap);
 }
 
 async function loadLeadAuxData(db) {
+  const now = Date.now();
+  if (leadAuxCache.historyCountMap && now - leadAuxCache.at < LEAD_AUX_CACHE_MS) {
+    return { historyCountMap: leadAuxCache.historyCountMap, dupPhones: leadAuxCache.dupPhones };
+  }
   const [historyCounts, dupPhoneRows] = await Promise.all([
     all(db, "SELECT lead_id, COUNT(*) as c FROM lead_history GROUP BY lead_id"),
     all(db, "SELECT phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) != '' GROUP BY phone HAVING COUNT(*) > 1"),
   ]);
   const historyCountMap = Object.fromEntries(historyCounts.map((r) => [r.lead_id, r.c]));
   const dupPhones = new Set(dupPhoneRows.map((r) => r.phone));
+  leadAuxCache = { at: now, historyCountMap, dupPhones };
   return { historyCountMap, dupPhones };
 }
 
@@ -2428,27 +2474,23 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     id: "id",
   }[sortKey] || "id";
 
-  const [countRow, leadRows, projectRows, aux] = await Promise.all([
+  const [countRow, leadRows, projectRows] = await Promise.all([
     get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
     all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDir} LIMIT ? OFFSET ?`, [...params, limit, offset]),
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
-    loadLeadAuxData(db),
   ]);
 
   const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
   const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
-
-  let phoneRegMap = {};
-  if (aux.dupPhones.size) {
-    const phones = [...aux.dupPhones];
-    const ph = phones.map(() => "?").join(",");
-    const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph})`, phones);
-    phoneRegMap = buildPhoneRegMap(dupLeads, projectMap);
-  }
-
   const leadIds = leadRows.map((l) => l.id);
-  const pastSaleMap = await loadPastSaleNamesForLeads(db, leadIds);
-  const leads = leadRows.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || []));
+
+  const [historyCountMap, pastSaleMap, phoneRegMap] = await Promise.all([
+    getHistoryCountsForLeadIds(db, leadIds),
+    loadPastSaleNamesForLeads(db, leadIds),
+    buildPhoneRegMapForPage(db, leadRows, projectMap),
+  ]);
+
+  const leads = leadRows.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleMap[l.id] || []));
 
   return {
     leads,
@@ -2496,7 +2538,7 @@ async function getBootstrapPayload(db, user) {
       name: p.name,
       leadUrl: p.lead_url || "",
       costUrl: p.cost_url || "",
-      costData: JSON.parse(p.cost_data || "{}"),
+      costData: safeJsonParse(p.cost_data),
       fbCode: p.fb_code || "",
       fbPerson: p.fb_person || "",
       dailyReportEnabled: Boolean(p.daily_report_enabled),
@@ -2568,7 +2610,7 @@ async function readData(db) {
       name: p.name,
       leadUrl: p.lead_url || "",
       costUrl: p.cost_url || "",
-      costData: JSON.parse(p.cost_data || "{}"),
+      costData: safeJsonParse(p.cost_data),
       fbCode: p.fb_code || "",
       fbPerson: p.fb_person || "",
       dailyReportEnabled: Boolean(p.daily_report_enabled),
@@ -4158,10 +4200,19 @@ app.get("/api/data", requireAuth, async (req, res) => {
     }
 
     const [bootstrap, pageData, tabCounts, projectLeadCounts] = await Promise.all([
-      getBootstrapPayload(db, req.user),
+      getBootstrapPayload(db, req.user).catch((e) => {
+        console.warn("[GET /api/data] bootstrap failed:", e.message);
+        return { leadUrl: "", costUrl: "", projectName: "", lastSync: "", campaigns: [], projects: [] };
+      }),
       queryLeadsPage(db, req.user, filters, q.page, q.limit),
-      queryLeadsTabCounts(db, req.user, filters),
-      queryProjectLeadCounts(db, req.user),
+      queryLeadsTabCounts(db, req.user, filters).catch((e) => {
+        console.warn("[GET /api/data] tabCounts failed:", e.message);
+        return { all: 0 };
+      }),
+      queryProjectLeadCounts(db, req.user).catch((e) => {
+        console.warn("[GET /api/data] projectLeadCounts failed:", e.message);
+        return { byProject: {}, all: 0 };
+      }),
     ]);
     let saleRanking = [];
     try {
@@ -4247,6 +4298,7 @@ function emitLeadNotification(userId, payload = {}) {
 function emitDataChanged(reason) {
   dataVersion += 1;
   invalidateBootstrapCache();
+  invalidateLeadAuxCache();
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
