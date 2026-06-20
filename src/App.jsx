@@ -27,6 +27,12 @@ import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
 import { StatusBadge, NewLeadBadge } from "./components/ui/StatusBadge.jsx";
 import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
+import {
+  STATUS_LABEL_TO_KEY,
+  getLeadReportStatus,
+  labelToStatusKey,
+  normalizeLeadStatusKey as resolveLeadStatusKey,
+} from "./utils/leadStatusUtils.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -224,96 +230,6 @@ const STATUS_COLORS = {
   has_sale: "#0284c7",
   lost: "#dc2626",
 };
-
-// Reverse lookup: label → key for status normalization on frontend
-const STATUS_LABEL_TO_KEY = {};
-Object.entries(STATUS_LABELS).forEach(([k, v]) => {
-  STATUS_LABEL_TO_KEY[v] = k;
-  STATUS_LABEL_TO_KEY[v.toLowerCase()] = k;
-  STATUS_LABEL_TO_KEY[k] = k;
-});
-
-function foldStatusText(value = "") {
-  return String(value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/đ/g, "d")
-    .replace(/Đ/g, "D")
-    .toLowerCase()
-    .trim();
-}
-
-function normalizeLeadStatusKey(status) {
-  const raw = String(status || "").trim();
-  if (!raw) return "new";
-  const direct = STATUS_LABEL_TO_KEY[raw] || STATUS_LABEL_TO_KEY[raw.toLowerCase()];
-  if (direct) return direct;
-  const v = foldStatusText(raw);
-  if (!v || v === "created" || v === "duplicate" || v.includes("chua xu ly")) return "new";
-  if (v.includes("chot") || v.includes("mua") || v.includes("closed")) return "closed";
-  if (v.includes("booking san khac") || v.includes("book san khac") || v.includes("booking sp khac")) return "booking_other";
-  if (v.includes("giu cho") || v.includes("coc") || v.includes("book")) return "booked";
-  if (v.includes("hen") || v.includes("di xem") || v.includes("xem nha") || v.includes("hen gap") || v.includes("hen xem") || v.includes("xem du an")) return "appointment";
-  if (v.includes("pha") || v.includes("rac") || v.includes("spam")) return "spam";
-  if (v.includes("tai chinh yeu") || v.includes("tai chinh") || v === "tcy") return "weak_finance";
-  if (v.includes("thue bao")) return "wrong_phone";
-  if (v.includes("sai so") || v.includes("sai")) return "wrong_number";
-  if (v.includes("tat may ngang") || v.includes("tat may")) return "hung_up";
-  if (v.includes("chua lien lac") || v.includes("khong lien lac") || v.includes("khong nghe") || v.includes("unreachable") || v === "kll") return "unreachable";
-  if (v.includes("lien lac lai") || v.includes("goi lai")) return "callback";
-  if (v.includes("chan kb") || v.includes("chan zalo") || (v.includes("chan") && !v.includes("chien"))) return "blocked";
-  if (v.includes("khong quan") || v.includes("tu choi") || v.includes("not_interested") || v === "kqt") return "not_interested";
-  if (v.includes("quan tam hoi hot") || v.includes("hoi hot") || v === "qthh") return "low_interest";
-  if (v.includes("quan tam du an khac") || v.includes("du an khac") || v === "qtdak") return "other_project";
-  if (v.includes("dang co sale") || v.includes("sale khac cham") || v.includes("co sale")) return "has_sale";
-  if (v === "sale" || (v.includes("sale") && !v.includes("khac") && !v.includes("cham"))) return "sale";
-  if (v.includes("quan tam") || v.includes("tu van") || v.includes("interested") || v === "qt") return "interested";
-  if (v.includes("goi") || v.includes("lien he") || v.includes("called") || v.includes("zalo") || v.includes("nhan") || v.includes("da lien")) return "called";
-  if (v.includes("mat") || v.includes("lost") || v.includes("huy")) return "lost";
-  return "new";
-}
-
-function isFeedbackStatusHistoryItem(h) {
-  if (!h || h.action === "Chia lead" || !h.status) return false;
-  const src = String(h.source || "").toLowerCase();
-  const validSources = new Set(["sale", "telegram", "admin", "manager"]);
-  return validSources.has(src) || (!src && h.saleName);
-}
-
-function getFirstUpdaterInfo(lead) {
-  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
-  let firstUpdater = "";
-  let latestStatus = "";
-  for (const h of history) {
-    if (!isFeedbackStatusHistoryItem(h)) continue;
-    firstUpdater = h.saleName || h.source || "";
-    latestStatus = h.status;
-    break;
-  }
-  if (!firstUpdater) return { updater: "", status: normalizeLeadStatusKey(lead?.status || "new") };
-  for (const h of history) {
-    const updater = h?.saleName || h?.source || "";
-    if (!isFeedbackStatusHistoryItem(h) || updater !== firstUpdater) continue;
-    latestStatus = h.status;
-  }
-  return { updater: firstUpdater, status: normalizeLeadStatusKey(latestStatus || lead?.status || "new") };
-}
-
-function getLeadReportStatus(lead) {
-  const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
-  let hasInterested = false;
-  let hasLowInterest = false;
-  for (const h of history) {
-    if (!isFeedbackStatusHistoryItem(h)) continue;
-    const key = normalizeLeadStatusKey(h.status);
-    if (key === "appointment") return "appointment";
-    if (key === "interested") hasInterested = true;
-    if (key === "low_interest") hasLowInterest = true;
-  }
-  if (hasInterested) return "interested";
-  if (hasLowInterest) return "low_interest";
-  return getFirstUpdaterInfo(lead).status || "new";
-}
 
 function formatVND(n) {
   if (!n && n !== 0) return "0 ₫";
@@ -3342,7 +3258,7 @@ const LeadsPage = (props) => {
   }, []);
 
   const getTabStatus = useCallback((lead) => {
-    if (isSale) return normalizeLeadStatusKey(lead?.status || "new");
+    if (isSale) return resolveLeadStatusKey(lead?.status || "new");
     return getLeadReportStatus(lead);
   }, [isSale]);
 
@@ -3544,12 +3460,6 @@ const LeadsPage = (props) => {
     }
   }, [shuffleProject, allLeadList]);
 
-  const normalizeShuffleStatusKey = useCallback((status) => {
-    const raw = String(status || "").trim();
-    if (!raw) return "new";
-    return STATUS_LABEL_TO_KEY[raw] || STATUS_LABEL_TO_KEY[raw.toLowerCase()] || raw;
-  }, []);
-
   const getFeedbackHistoryEntries = useCallback((lead) => {
     const history = Array.isArray(lead?.saleHistory) ? lead.saleHistory : [];
     const validSources = new Set(["sale", "telegram", "admin", "manager"]);
@@ -3563,31 +3473,31 @@ const LeadsPage = (props) => {
   const leadMatchesShuffleStatus = useCallback((lead, status) => {
     if (!status || status === "all") return true;
     if (status === "unassigned") return !lead.saleName || lead.saleName === "Chưa chia";
-    const target = normalizeShuffleStatusKey(status);
+    const target = labelToStatusKey(status);
     const historyEntries = getFeedbackHistoryEntries(lead);
-    if (historyEntries.some((h) => normalizeShuffleStatusKey(h.status) === target)) return true;
-    return normalizeShuffleStatusKey(lead.status) === target;
-  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey]);
+    if (historyEntries.some((h) => labelToStatusKey(h.status) === target)) return true;
+    return labelToStatusKey(lead.status) === target;
+  }, [getFeedbackHistoryEntries]);
 
   const getShuffleLeadStatus = useCallback((lead) => {
     if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") return shuffleStatus;
     const entries = getFeedbackHistoryEntries(lead);
     const last = entries[entries.length - 1];
-    return normalizeShuffleStatusKey(last?.status || lead?.status);
-  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey, shuffleStatus]);
+    return labelToStatusKey(last?.status || lead?.status);
+  }, [getFeedbackHistoryEntries, shuffleStatus]);
 
   const getShuffleLeadOwner = useCallback((lead) => {
     if (shuffleStatus && shuffleStatus !== "all" && shuffleStatus !== "unassigned") {
-      const target = normalizeShuffleStatusKey(shuffleStatus);
+      const target = labelToStatusKey(shuffleStatus);
       const entries = getFeedbackHistoryEntries(lead);
       for (let i = entries.length - 1; i >= 0; i -= 1) {
-        if (normalizeShuffleStatusKey(entries[i].status) === target) {
+        if (labelToStatusKey(entries[i].status) === target) {
           return entries[i].saleName || entries[i].source || lead.saleName || "Chưa chia";
         }
       }
     }
     return lead.saleName || "Chưa chia";
-  }, [getFeedbackHistoryEntries, normalizeShuffleStatusKey, shuffleStatus]);
+  }, [getFeedbackHistoryEntries, shuffleStatus]);
 
   // Get leads filtered for chia lead panel
   const shuffleFilteredLeads = useMemo(() => {
