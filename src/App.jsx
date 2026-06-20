@@ -23,6 +23,10 @@ import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, r
 import { NativeNotificationPermissionPrompt } from "./NativeNotificationPermissionPrompt.jsx";
 import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNotify.js";
 import { useServerConnection } from "./useServerConnection.js";
+import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
+import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
+import { StatusBadge, NewLeadBadge } from "./components/ui/StatusBadge.jsx";
+import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
@@ -691,12 +695,14 @@ function CRMApp({ user, updateUser, onLogout }) {
   const {
     serverDown,
     initialDataLoaded,
+    bootFailed,
     markApiOk,
     markInitialDataLoaded,
-    markApiFailure,
+    markBootFailed,
+    markConnectivityFailure,
     markSocketConnected,
     markSocketDisconnected,
-  } = useServerConnection(API);
+  } = useServerConnection();
 
   // Refresh user data (projectIds etc.) from server on mount
   useEffect(() => {
@@ -1133,11 +1139,15 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
 
   useEffect(() => {
-    apiFetch(`${API}/data`)
-      .then((r) => r.json())
-      .then((data) => {
+    let cancelled = false;
+
+    const loadData = async (attempt = 0) => {
+      try {
+        const r = await apiFetch(`${API}/data`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        if (cancelled) return;
         markInitialDataLoaded();
-        // First load: mark all current leads as seen so they don't trigger notifications
         if (data.leads) {
           setSeenLeadKeys(prev => {
             if (prev.size === 0) {
@@ -1150,10 +1160,21 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
         applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-      })
-      .catch(() => markApiFailure())
-      .finally(() => setDataLoadAttempted(true));
-  }, [applyApiData, markInitialDataLoaded, markApiFailure]);
+      } catch {
+        if (cancelled) return;
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)));
+          return loadData(attempt + 1);
+        }
+        markBootFailed();
+      } finally {
+        if (!cancelled) setDataLoadAttempted(true);
+      }
+    };
+
+    loadData();
+    return () => { cancelled = true; };
+  }, [applyApiData, markInitialDataLoaded, markBootFailed]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -1187,46 +1208,70 @@ function CRMApp({ user, updateUser, onLogout }) {
           applyApiData(data);
           if (Array.isArray(data.leads)) leadsRef.current = data.leads;
         })
-        .catch(() => {});
+        .catch(() => markConnectivityFailure());
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected]);
+  }, [applyApiData, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = isCapacitorNativeApp() ? 10000 : 20000;
-    const pollIv = setInterval(() => {
+    const poll = () => {
+      if (document.hidden) return;
       const hash = syncHash || "";
       apiFetch(`${API}/data/poll?hash=${encodeURIComponent(hash)}`)
-        .then(r => r.ok ? r.json() : null)
+        .then((r) => {
+          if (!r.ok) {
+            markConnectivityFailure();
+            return null;
+          }
+          return r.json();
+        })
         .then((d) => {
           if (!d) return;
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
             return apiFetch(`${API}/data`)
-              .then(r => r.ok ? r.json() : Promise.reject())
+              .then(r => {
+                if (!r.ok) {
+                  markConnectivityFailure();
+                  return Promise.reject();
+                }
+                return r.json();
+              })
               .then((data) => {
                 markApiOk();
                 applyApiData(data);
                 if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-              });
+              })
+              .catch(() => markConnectivityFailure());
           }
         })
-        .catch(() => {});
-    }, pollMs);
-    return () => clearInterval(pollIv);
-  }, [syncHash, applyApiData, markApiOk]);
+        .catch(() => markConnectivityFailure());
+    };
+    poll();
+    const pollIv = setInterval(poll, pollMs);
+    const onVisible = () => { if (!document.hidden) poll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(pollIv);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
-    const beat = () => apiFetch(`${API}/heartbeat`, { method: "POST" })
-      .then((r) => { if (r.ok) markApiOk(); })
-      .catch(() => {});
+    const beat = () => {
+      if (document.hidden) return;
+      apiFetch(`${API}/heartbeat`, { method: "POST" })
+        .then((r) => { if (r.ok) markApiOk(); else markConnectivityFailure(); })
+        .catch(() => markConnectivityFailure());
+    };
     beat();
     const iv = setInterval(beat, 60000);
     return () => clearInterval(iv);
-  }, [markApiOk]);
+  }, [markApiOk, markConnectivityFailure]);
 
   const handleSync = async () => {
     setSyncing(true);
@@ -1488,58 +1533,44 @@ function CRMApp({ user, updateUser, onLogout }) {
     setSidebarOpen(false);
   };
 
-  if (serverDown && !initialDataLoaded && dataLoadAttempted) {
+  if (bootFailed && dataLoadAttempted) {
     return <MaintenancePage message="Không thể kết nối đến máy chủ CRM. Server có thể đang bảo trì hoặc database đang tắt. Vui lòng thử lại sau." />;
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", background: "#f0f2f5", WebkitTextSizeAdjust: "100%", overflowX: "hidden" }}>
+    <div className="crm-app-shell">
       {/* Server down warning banner */}
-      {serverDown && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 9999, background: "linear-gradient(135deg, #dc2626, #b91c1c)", color: "#fff", textAlign: "center", padding: "8px 16px", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 2px 12px rgba(220,38,38,.3)" }}>
+      {serverDown && initialDataLoaded && (
+        <div className="crm-server-banner">
           <AlertCircle size={16} /> Mất kết nối máy chủ — Dữ liệu có thể không được cập nhật
         </div>
       )}
       {/* Mobile overlay backdrop */}
       {isMobile && sidebarOpen && (
-        <div onClick={() => setSidebarOpen(false)} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 998,
-          animation: "fadeIn .2s ease",
-        }} />
+        <div className="crm-overlay-backdrop" onClick={() => setSidebarOpen(false)} />
       )}
 
       {/* Sidebar */}
       <aside
-        style={{
-          width: isMobile ? 280 : (sidebarOpen ? 230 : 60),
-          background: "linear-gradient(180deg, #1a3c20 0%, #0f2d15 50%, #0a1f0e 100%)",
-          color: "#fff",
-          transition: isMobile ? "transform .25s ease" : "width .2s ease",
-          overflow: "hidden",
-          display: "flex",
-          flexDirection: "column",
-          flexShrink: 0,
-          position: "fixed", top: 0, left: 0, bottom: 0, zIndex: 999,
-          ...(isMobile ? {
-            transform: sidebarOpen ? "translateX(0)" : "translateX(-100%)",
-            boxShadow: sidebarOpen ? "4px 0 24px rgba(0,0,0,.35)" : "none",
-          } : {}),
-        }}
+        className={[
+          "crm-sidebar",
+          !isMobile && !sidebarOpen ? "crm-sidebar--collapsed" : "",
+          isMobile ? "crm-sidebar--mobile" : "",
+          isMobile && sidebarOpen ? "crm-sidebar--mobile-open" : "",
+        ].filter(Boolean).join(" ")}
+        style={isMobile ? undefined : { width: sidebarOpen ? 240 : 64 }}
       >
-        <div
-          style={{ padding: "12px 12px", cursor: "pointer", fontWeight: 700, fontSize: 18, whiteSpace: "nowrap", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <img src="/logo-iqi.svg" alt="LUX IQI" style={{ width: 32, height: 32, objectFit: "contain" }} />
-            {(isMobile || sidebarOpen) && <span style={{ fontSize: 16, letterSpacing: 1 }}>LUX IQI</span>}
+        <div className="crm-sidebar-brand" onClick={() => setSidebarOpen(!sidebarOpen)}>
+          <div className="crm-sidebar-brand-inner">
+            <img src="/logo-iqi.svg" alt="LUX IQI" />
+            {(isMobile || sidebarOpen) && <span>LUX IQI</span>}
           </div>
-          {isMobile && sidebarOpen && <span style={{ padding: 4, display: "flex", alignItems: "center" }}><X size={20} /></span>}
+          {isMobile && sidebarOpen && <X size={20} />}
         </div>
 
         {/* Project selector removed from sidebar - now in leads filter area */}
 
-        <nav style={{ flex: 1, overflowY: "auto" }}>
+        <nav className="crm-sidebar-nav">
           {visibleNav.map((n) => {
             if (n.children) {
               const isOpen = openSubmenu === n.key;
@@ -1554,23 +1585,13 @@ function CRMApp({ user, updateUser, onLogout }) {
                   <div
                     onClick={() => {
                       if (isCollapsed) {
-                        // On collapsed click, open sidebar
                         setSidebarOpen(true);
                         setOpenSubmenu(n.key);
                       } else {
                         setOpenSubmenu(isOpen ? null : n.key);
                       }
                     }}
-                    style={{
-                      padding: isMobile ? "14px 16px" : "12px 16px",
-                      cursor: "pointer",
-                      background: isChildActive ? "rgba(255,255,255,.08)" : "transparent",
-                      borderLeft: isChildActive ? "3px solid #e88a2e" : "3px solid transparent",
-                      whiteSpace: "nowrap",
-                      fontSize: isMobile ? 15 : 14,
-                      transition: "background .15s",
-                      display: "flex", justifyContent: "space-between", alignItems: "center",
-                    }}
+                    className={`crm-nav-item crm-nav-item--submenu-header${isChildActive ? " crm-nav-item--active" : ""}`}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       {React.createElement(n.icon, { size: 18 })}
@@ -1615,16 +1636,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                     <div
                       key={c.key}
                       onClick={() => { setPage(c.key); if (isMobile) setSidebarOpen(false); }}
-                      style={{
-                        padding: isMobile ? "10px 16px 10px 36px" : "8px 16px 8px 36px",
-                        cursor: "pointer",
-                        background: page === c.key ? "rgba(255,255,255,.15)" : "transparent",
-                        borderLeft: page === c.key ? "3px solid #e88a2e" : "3px solid transparent",
-                        whiteSpace: "nowrap",
-                        fontSize: isMobile ? 13 : 12,
-                        transition: "background .15s",
-                        opacity: 0.9,
-                      }}
+                      className={`crm-nav-item crm-nav-item--child${page === c.key ? " crm-nav-item--active" : ""}`}
                     >
                       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {c.icon && React.createElement(c.icon, { size: 14 })}
@@ -1640,16 +1652,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                 key={n.key}
                 onClick={() => { setPage(n.key); if (isMobile) setSidebarOpen(false); }}
                 title={!isMobile && !sidebarOpen ? n.label : undefined}
-                style={{
-                  padding: isMobile ? "14px 16px" : "12px 16px",
-                  cursor: "pointer",
-                  background: page === n.key ? "rgba(255,255,255,.12)" : "transparent",
-                  borderLeft: page === n.key ? "3px solid #e88a2e" : "3px solid transparent",
-                  whiteSpace: "nowrap",
-                  fontSize: isMobile ? 15 : 14,
-                  transition: "background .15s",
-                  position: "relative",
-                }}
+                className={`crm-nav-item${page === n.key ? " crm-nav-item--active" : ""}`}
               >
                 <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   {React.createElement(n.icon, { size: 18 })}
@@ -1661,57 +1664,60 @@ function CRMApp({ user, updateUser, onLogout }) {
         </nav>
 
         {(isMobile || sidebarOpen) && (
-          <div style={{ padding: "12px", borderTop: "1px solid rgba(255,255,255,.1)" }}>
-            <div style={{ fontSize: 13, marginBottom: 6, opacity: 0.9 }}>
-              {user.displayName} <span style={{
-                fontSize: 10, padding: "1px 6px", borderRadius: 8,
-                background: user.role === "admin" ? "#e88a2e" : user.role === "manager" ? "#3b82f6" : "#7ab648", color: "#fff",
-              }}>{user.role === "admin" ? "Admin" : user.role === "manager" ? "Quản lý" : "Sale"}</span>
+          <div className="crm-sidebar-footer">
+            <div className="crm-sidebar-user">
+              {user.displayName}{" "}
+              <span className={`crm-role-pill crm-role-pill--${user.role === "admin" ? "admin" : user.role === "manager" ? "manager" : "sale"}`}>
+                {user.role === "admin" ? "Admin" : user.role === "manager" ? "Quản lý" : "Sale"}
+              </span>
             </div>
-            <button
-              onClick={onLogout}
-              style={{
-                width: "100%", padding: "8px", background: "rgba(255,255,255,.1)",
-                border: "1px solid rgba(255,255,255,.2)", borderRadius: 6,
-                color: "#fff", cursor: "pointer", fontSize: 13,
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><LogOut size={16} /> Đăng xuất</span>
+            <button type="button" className="crm-sidebar-logout" onClick={onLogout}>
+              <LogOut size={16} /> Đăng xuất
             </button>
-            <div style={{ fontSize: 10, opacity: 0.5, marginTop: 6 }}>
-              {lastSync ? `Sync: ${new Date(lastSync).toLocaleString("vi-VN")}` : "Chưa sync"}
+            <div className="crm-sidebar-sync">
+              {lastSync ? `Last sync: ${new Date(lastSync).toLocaleString("vi-VN")}` : "Chưa sync"}
             </div>
           </div>
         )}
       </aside>
 
       {/* Main */}
-      <main style={{ flex: 1, overflow: "auto", overflowX: "hidden", minWidth: 0, maxWidth: "100vw", background: "#f8fafb", display: "flex", flexDirection: "column", marginLeft: isMobile ? 0 : (sidebarOpen ? 230 : 60), transition: "margin-left .2s ease" }}>
+      <main
+        className={[
+          "crm-main",
+          isMobile ? "crm-main--mobile" : sidebarOpen ? "crm-main--sidebar-open" : "crm-main--sidebar-collapsed",
+        ].filter(Boolean).join(" ")}
+        style={isMobile ? undefined : { marginLeft: sidebarOpen ? 240 : 64 }}
+      >
         {/* Top bar - sticky */}
-        <div style={{
-          position: "sticky", top: 0, zIndex: 100, background: "#f8fafb",
-          padding: isMobile ? "8px 12px" : "16px 28px",
-          borderBottom: "1px solid #e5e7eb",
-          display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
-          backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <div className={`crm-header${isMobile ? " crm-header--mobile" : ""}`}>
+          <div className="crm-header-left">
             {isMobile && (
-              <button onClick={() => setSidebarOpen(true)} style={{
-                background: "#1a3c20", color: "#fff", border: "none", borderRadius: 8,
-                width: 38, height: 38, fontSize: 18, cursor: "pointer", flexShrink: 0,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                }}
-              >
+              <button type="button" className="crm-menu-btn" onClick={() => setSidebarOpen(true)}>
                 <Menu size={20} />
               </button>
             )}
-            <h2 style={{ margin: 0, color: "#1a3c20", fontSize: isMobile ? 16 : 22, fontWeight: 800, letterSpacing: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 8 }}>
-              {(() => { const nav = visibleNav.find((n) => n.key === page) || (visibleNav.find(n => n.children)?.children || []).find(c => c.key === page); return nav ? <><span style={{ display: "flex", alignItems: "center" }}>{nav.icon && React.createElement(nav.icon, { size: 20 })}</span> {nav.label}</> : "Dashboard"; })()}
+            <h2 className="crm-header-title">
+              {(() => {
+                const nav = visibleNav.find((n) => n.key === page) || (visibleNav.find(n => n.children)?.children || []).find(c => c.key === page);
+                return nav ? <><span style={{ display: "flex", alignItems: "center" }}>{nav.icon && React.createElement(nav.icon, { size: 20 })}</span> {nav.label}</> : "Dashboard";
+              })()}
             </h2>
           </div>
+          {page === "leads" && !isMobile && (
+            <div className="crm-header-search">
+              <Search size={16} />
+              <input
+                type="search"
+                value={searchText}
+                onChange={(e) => setSearchText(e.target.value)}
+                placeholder="Tìm khách hàng, SĐT, dự án..."
+                aria-label="Tìm kiếm khách hàng"
+              />
+            </div>
+          )}
           {(isAdmin || pushSupported) && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="crm-header-actions">
               {/* Notification bell + countdown */}
               <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center" }}>
                 <button onClick={() => setShowNotif(!showNotif)} style={{
@@ -1894,12 +1900,23 @@ function CRMApp({ user, updateUser, onLogout }) {
               </button>
             </div>
           )}
+          {!isMobile && (
+            <button
+              type="button"
+              className="crm-header-profile"
+              onClick={() => setPage("profile")}
+              title="Hồ sơ cá nhân"
+            >
+              <span className="crm-header-profile-avatar">{String(user.displayName || user.username || "U").charAt(0).toUpperCase()}</span>
+              <span className="crm-header-profile-name">{user.displayName || user.username}</span>
+            </button>
+          )}
         </div>
 
         {/* Scrolling announcement marquee - one at a time */}
         {announcements.length > 0 && <AnnouncementMarquee announcements={announcements} />}
 
-        <div style={{ flex: 1, padding: isMobile ? 12 : 28, paddingTop: isMobile ? 10 : 20, paddingBottom: isMobile ? "calc(96px + env(safe-area-inset-bottom))" : undefined }}>
+        <div className={`crm-content${isMobile ? " crm-content--mobile" : ""}`}>
         {page === "dashboard" && (
           <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={filteredLeads} />
         )}
@@ -1933,6 +1950,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             setAutoRotateProjects={setAutoRotateProjects}
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
+            isDataLoading={!initialDataLoaded}
           />
         )}
         {page === "projects" && isAdmin && (
@@ -1965,81 +1983,29 @@ function CRMApp({ user, updateUser, onLogout }) {
 
       {isMobile && (
         <>
-        <div style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: "calc(84px + env(safe-area-inset-bottom))",
-          background: "#fff",
-          zIndex: 949,
-          boxShadow: "0 -10px 26px rgba(15,23,42,.08)",
-        }} />
-        <nav style={{
-          position: "fixed",
-          left: 12,
-          right: 12,
-          bottom: "calc(8px + env(safe-area-inset-bottom))",
-          height: 58,
-          background: "#fff",
-          border: "1px solid #e2e8f0",
-          borderRadius: 20,
-          boxShadow: "0 10px 28px rgba(15,23,42,.15)",
-          zIndex: 951,
-          display: "grid",
-          gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))`,
-          alignItems: "center",
-          padding: "4px 5px",
-        }}>
+        <div className="crm-bottom-nav-spacer" />
+        <nav
+          className="crm-bottom-nav"
+          style={{ gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))` }}
+        >
           {mobileBottomTabs.map((tab) => {
             const active = tab.key === "notifications" ? showNotif : page === tab.key;
             const Icon = tab.icon;
             return (
               <button
                 key={tab.key}
+                type="button"
                 onClick={() => handleMobileBottomTab(tab)}
-                style={{
-                  position: "relative",
-                  border: "none",
-                  background: "transparent",
-                  color: active ? "#0f3d1e" : "#64748b",
-                  cursor: "pointer",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 3,
-                  minWidth: 0,
-                  height: 50,
-                  padding: 0,
-                  overflow: "hidden",
-                  fontSize: 9,
-                  lineHeight: 1.1,
-                  fontWeight: active ? 850 : 700,
-                }}
+                className={`crm-bottom-nav-item${active ? " crm-bottom-nav-item--active" : ""}`}
               >
                 <span style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center" }}>
                   <Icon size={18} strokeWidth={active ? 2.5 : 2} />
                   {tab.key === "notifications" && notifications.length > 0 && (
-                    <span style={{
-                      position: "absolute",
-                      top: -8,
-                      right: -10,
-                      minWidth: 16,
-                      height: 16,
-                      padding: "0 4px",
-                      borderRadius: 999,
-                      background: "#ef4444",
-                      color: "#fff",
-                      fontSize: 9,
-                      fontWeight: 900,
-                      lineHeight: "16px",
-                      boxShadow: "0 2px 6px rgba(239,68,68,.35)",
-                    }}>{notifications.length}</span>
+                    <span className="crm-bottom-nav-badge">{notifications.length}</span>
                   )}
                 </span>
                 <span style={{ display: "block", width: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" }}>{tab.label}</span>
-                {active && <span style={{ position: "absolute", bottom: 1, width: 18, height: 3, borderRadius: 999, background: "#0f3d1e" }} />}
+                {active && <span className="crm-bottom-nav-indicator" />}
               </button>
             );
           })}
@@ -3067,6 +3033,7 @@ const LeadsPage = (props) => {
     setAutoRotateProjects,
     sprintRotateProjects,
     setSprintRotateProjects,
+    isDataLoading = false,
   } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
@@ -3481,6 +3448,14 @@ const LeadsPage = (props) => {
   const mobileDetailLead = useMemo(
     () => (mobileDetailId ? tabFiltered.find((l) => l.id === mobileDetailId) || leads.find((l) => l.id === mobileDetailId) : null),
     [mobileDetailId, tabFiltered, leads]
+  );
+  const drawerLead = useMemo(
+    () => (expandedId ? tabFiltered.find((l) => l.id === expandedId) || leads.find((l) => l.id === expandedId) : null),
+    [expandedId, tabFiltered, leads]
+  );
+  const paginatedLeads = useMemo(
+    () => tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [tabFiltered, safePage, pageSize]
   );
 
   // Auto-clamp currentPage state when filtered data shrinks (e.g. search, filter change)
@@ -6306,29 +6281,35 @@ const LeadsPage = (props) => {
         </div>
       </div>
 
-      {/* Lead cards - card layout for all on mobile, table for admin desktop */}
-      {(!isAdmin || isMobile) ? (
-        <div style={isMobile ? { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" } : { display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Lead cards - card layout for all on mobile, data grid + drawer for admin desktop */}
+      {isDataLoading ? (
+        isAdmin && !isMobile ? <LeadGridSkeleton rows={pageSize} /> : <LeadCardsSkeleton count={5} />
+      ) : (!isAdmin || isMobile) ? (
+        <div className={isMobile ? "crm-lead-cards-mobile-shell" : "crm-lead-cards-stack"}>
           {isMobile && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 34px", gap: 8, padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 9, fontWeight: 900, textTransform: "uppercase", alignItems: "center" }}>
+            <div className="crm-lead-cards-mobile-header">
               <span>Khách hàng</span>
               <span>Trạng thái</span>
               <span style={{ textAlign: "right" }}>Giờ</span>
             </div>
           )}
-          {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).map((l) => {
+          {paginatedLeads.map((l) => {
             const isOpen = expandedId === l.id;
             const histCount = (l.saleHistory || []).length;
             const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
             return (
-              <div key={l.id} id={`lead-${l.id}`} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : { background: isLocked ? "#fef2f2" : "#fff", borderRadius: 10, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: isOpen ? "2px solid #e88a2e" : isLocked ? "1px solid #fca5a5" : "1px solid #e5e7eb", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : undefined }}>
+              <div key={l.id} id={`lead-${l.id}`} className={[
+                isMobile ? "" : "crm-lead-card",
+                !isMobile && isOpen ? "crm-lead-card--open" : "",
+                isLocked ? "crm-lead-card--locked" : "",
+              ].filter(Boolean).join(" ")} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : undefined}>
                 {isMobile ? (
                   <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
                     style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
                     <span style={{ minWidth: 0 }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
-                        {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 5px", borderRadius: 7, fontSize: 8, fontWeight: 900, flexShrink: 0 }}>NEW</span>}
+                        {isRecentLead(l) && <NewLeadBadge />}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
                       <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -6336,9 +6317,7 @@ const LeadsPage = (props) => {
                       </span>
                     </span>
                     <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "inline-flex", maxWidth: "100%", padding: "3px 7px", borderRadius: 999, fontSize: 9, fontWeight: 900, background: (STATUS_COLORS[l.status] || "#6b7280") + "18", color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {STATUS_LABELS[l.status] || l.status}
-                      </span>
+                      <StatusBadge status={l.status} size="sm" />
                     </span>
                     <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
                       {formatMobileLeadTime(l.createdAt)}
@@ -6351,16 +6330,10 @@ const LeadsPage = (props) => {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
-                      {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>NEW</span>}
-                      {isAdmin && l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>ĐK lần {l.regIndex}</span>}
+                      {isRecentLead(l) && <NewLeadBadge />}
+                      {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
-                      <span style={{
-                        padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                        background: (STATUS_COLORS[l.status] || "#6b7280") + "18",
-                        color: STATUS_COLORS[l.status] || "#6b7280",
-                      }}>
-                        {STATUS_LABELS[l.status] || l.status}
-                      </span>
+                      <StatusBadge status={l.status} size="sm" />
                       {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
                       {l.isLocked && <Lock size={12} color="#dc2626" title="Lead đã khóa" />}
                     </div>
@@ -6416,75 +6389,44 @@ const LeadsPage = (props) => {
             );
           })}
           {tabFiltered.length === 0 && (
-            <div style={{ textAlign: "center", color: "#9ca3af", padding: 32, fontSize: 14 }}>Không có khách hàng nào trong danh sách này</div>
+            <div className="crm-empty-state">Không có khách hàng nào trong danh sách này</div>
           )}
         </div>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 12, overflow: "auto", boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>#</th>
-                <th style={thStyle}>Tên</th>
-                <th style={thStyle}>SĐT</th>
-                <th style={thStyle}>Nhu cầu KH</th>
-                <th style={thStyle}>Trạng thái</th>
-                <th style={thStyle}>Người quản lý</th>
-                <th style={thStyle}>Sale hiện tại</th>
-                <th style={thStyle}>Dự án</th>
-                {!isSale && <th style={thStyle}>Ngày nhận lead</th>}
-                {!isSale && <th style={thStyle}>Trạng thái</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {tabFiltered.slice((safePage - 1) * pageSize, safePage * pageSize).flatMap((l, i) => {
-                const isOpen = expandedId === l.id;
-                const globalIdx = (safePage - 1) * pageSize + i;
-                const isLocked = l.status === "booked" || l.status === "booking_other" || l.isLocked;
-                const rows = [
-                  <tr key={l.id} id={`lead-${l.id}`} onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
-                    style={{ background: isLocked ? "#fef2f2" : isOpen ? "#f0faf1" : globalIdx % 2 ? "#f9fafb" : "#fff", cursor: "pointer", transition: "background .15s", borderLeft: isLocked ? "3px solid #dc2626" : "none" }}>
-                    <td style={tdStyle}>{globalIdx + 1} {isLocked && <Lock size={11} style={{ display: "inline", verticalAlign: "middle", color: "#dc2626" }} />}</td>
-                    <td style={{ ...tdStyle, fontWeight: 600 }}>{isOpen ? <ChevronDown size={12} style={{ display: "inline", verticalAlign: "middle" }} /> : <ChevronRight size={12} style={{ display: "inline", verticalAlign: "middle" }} />} {isRecentLead(l) && <span style={{ background: "#10b981", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>NEW</span>}{isAdmin && l.regCount > 1 && <span style={{ background: "#f59e0b", color: "#fff", padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 700, marginRight: 4 }}>ĐK lần {l.regIndex}</span>}{l.name}</td>
-                    <td style={tdStyle}>{l.phone || "-"}</td>
-                    <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.product || "-"}</td>
-                    <td style={tdStyle}>
-                      <span style={{
-                        padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-                        background: (STATUS_COLORS[l.status] || "#6b7280") + "18",
-                        color: STATUS_COLORS[l.status] || "#6b7280", whiteSpace: "nowrap",
-                      }}>{STATUS_LABELS[l.status] || l.status}</span>
-                    </td>
-                    <td style={{ ...tdStyle, fontSize: 12, color: "#4b5563" }}>{l.managerName || "-"}</td>
-                    <td style={tdStyle}>{l.saleName || "Chưa chia"}</td>
-                    <td style={{ ...tdStyle, fontSize: 11 }}>{getLeadProjectName(l)}</td>
-                    {!isSale && <td style={{ ...tdStyle, fontSize: 11, whiteSpace: "nowrap" }}>{l.createdAt || "-"}</td>}
-                    {!isSale && <td style={tdStyle}>
-                      {(() => { const t = getLeadTemp(l.createdAt); return (
-                        <span style={{ background: t.bg, color: t.color, padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>{t.label}</span>
-                      ); })()}
-                    </td>}
-                  </tr>,
-                ];
-                if (isOpen) {
-                  rows.push(
-                    <tr key={`${l.id}-detail`}>
-                      <td colSpan={isSale ? 8 : 10} style={{ padding: 0, background: "#f8fafc", borderBottom: "2px solid #e88a2e" }}>
-                        <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={false} allUsers={allUsers} />
-                      </td>
-                    </tr>
-                  );
-                }
-                return rows;
-              })}
-              {tabFiltered.length === 0 && (
-                <tr>
-                  <td colSpan={10} style={{ ...tdStyle, textAlign: "center", color: "#9ca3af" }}>Không có khách hàng nào</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <LeadDataGrid
+            leads={paginatedLeads}
+            selectedId={expandedId}
+            onSelectLead={setExpandedIdStable}
+            isAdmin={isAdmin}
+            isSale={isSale}
+            isRecentLead={isRecentLead}
+            getLeadProjectName={getLeadProjectName}
+            getLeadTemp={getLeadTemp}
+            startIndex={(safePage - 1) * pageSize}
+            emptyMessage="Không có khách hàng nào"
+          />
+          <LeadDetailDrawer
+            open={!!drawerLead}
+            lead={drawerLead}
+            onClose={() => setExpandedIdStable(null)}
+            subtitle={drawerLead ? `${drawerLead.phone || "-"} · ${getLeadProjectName(drawerLead)}` : ""}
+          >
+            {drawerLead && (
+              <LeadDetail
+                lead={drawerLead}
+                projectName={getLeadProjectName(drawerLead)}
+                isAdmin={isAdmin}
+                user={user}
+                applyApiData={applyApiData}
+                saleNames={getProjectSaleNames(drawerLead.projectId)}
+                managerNames={allManagerNames}
+                isMobile={false}
+                allUsers={allUsers}
+              />
+            )}
+          </LeadDetailDrawer>
+        </>
       )}
 
       {isMobile && mobileDetailLead && (

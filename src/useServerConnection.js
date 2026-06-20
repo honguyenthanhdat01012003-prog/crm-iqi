@@ -1,97 +1,81 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const VERSION_TIMEOUT_MS = 15000;
-const HEALTH_INTERVAL_MS = 30000;
-const FAILURES_BEFORE_DOWN = 2;
-/** No banner if any API call succeeded within this window. */
-const RECENT_API_OK_MS = 45000;
+/** Số lần poll/heartbeat fail liên tiếp trước khi hiện banner (~50–100 giây). */
+const FAILURES_BEFORE_BANNER = 5;
+/** Có API OK trong khoảng này → không bao giờ hiện banner. */
+const RECENT_OK_MS = 120000;
 
 /**
- * Tracks server reachability without flashing false alarms on a single slow /version.
- * Banner/maintenance only after consecutive health failures AND no recent successful API traffic.
+ * Chỉ theo dõi kết nối qua API thực tế (poll, heartbeat, /data).
+ * KHÔNG dùng /api/version hay socket disconnect để bật banner — tránh báo giả trên mobile/PWA.
  */
-export function useServerConnection(apiBase) {
+export function useServerConnection() {
   const [serverDown, setServerDown] = useState(false);
   const [initialDataLoaded, setInitialDataLoaded] = useState(false);
+  const [bootFailed, setBootFailed] = useState(false);
 
   const failStreakRef = useRef(0);
-  const lastApiOkRef = useRef(0);
-  const socketConnectedRef = useRef(false);
-
-  const evaluateServerDown = useCallback(() => {
-    const noRecentApi = Date.now() - lastApiOkRef.current > RECENT_API_OK_MS;
-    const shouldDown =
-      failStreakRef.current >= FAILURES_BEFORE_DOWN &&
-      noRecentApi &&
-      !socketConnectedRef.current;
-    setServerDown(shouldDown);
-  }, []);
+  const lastOkRef = useRef(0);
 
   const markApiOk = useCallback(() => {
-    lastApiOkRef.current = Date.now();
+    lastOkRef.current = Date.now();
     failStreakRef.current = 0;
     setServerDown(false);
+  }, []);
+
+  const markConnectivityFailure = useCallback(() => {
+    // Tab/app nền: trình duyệt throttle request → bỏ qua, tránh banner giả
+    if (typeof document !== "undefined" && document.hidden) return;
+
+    failStreakRef.current += 1;
+    const stale = Date.now() - lastOkRef.current > RECENT_OK_MS;
+    if (failStreakRef.current >= FAILURES_BEFORE_BANNER && stale) {
+      setServerDown(true);
+    }
   }, []);
 
   const markInitialDataLoaded = useCallback(() => {
     setInitialDataLoaded(true);
+    setBootFailed(false);
     markApiOk();
   }, [markApiOk]);
 
-  const markApiFailure = useCallback(() => {
-    failStreakRef.current += 1;
-    evaluateServerDown();
-  }, [evaluateServerDown]);
-
-  const markSocketConnected = useCallback(() => {
-    socketConnectedRef.current = true;
-    failStreakRef.current = 0;
-    setServerDown(false);
+  /** Load /data lần đầu thất bại hết retry → trang bảo trì. */
+  const markBootFailed = useCallback(() => {
+    setBootFailed(true);
+    setServerDown(true);
   }, []);
 
+  /** Socket connect = server sống; chỉ dùng để gỡ banner, không dùng disconnect để bật. */
+  const markSocketConnected = useCallback(() => {
+    markApiOk();
+  }, [markApiOk]);
+
   const markSocketDisconnected = useCallback(() => {
-    socketConnectedRef.current = false;
-    evaluateServerDown();
-  }, [evaluateServerDown]);
+    // Cố ý không làm gì — socket hay ngắt tạm trên mobile, poll vẫn OK
+  }, []);
 
-  const pingVersion = useCallback(() => {
-    return fetch(`${apiBase}/version`, {
-      signal: AbortSignal.timeout(VERSION_TIMEOUT_MS),
-      cache: "no-store",
-    })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((v) => {
-        failStreakRef.current = 0;
-        const noRecentApi = Date.now() - lastApiOkRef.current > RECENT_API_OK_MS;
-        if (!noRecentApi || socketConnectedRef.current) setServerDown(false);
-        return v;
-      })
-      .catch(() => {
-        failStreakRef.current += 1;
-        evaluateServerDown();
-        throw new Error("version ping failed");
-      });
-  }, [apiBase, evaluateServerDown]);
-
+  // Quay lại app → gỡ banner nếu vừa có API OK gần đây
   useEffect(() => {
-    pingVersion()
-      .then((v) => console.log(`[CRM] Server version: ${v.version} uptime: ${Math.round(v.uptime)}s`))
-      .catch(() => {});
-    const iv = setInterval(() => {
-      pingVersion().catch(() => {});
-    }, HEALTH_INTERVAL_MS);
-    return () => clearInterval(iv);
-  }, [pingVersion]);
+    const onVisible = () => {
+      if (document.hidden) return;
+      if (lastOkRef.current && Date.now() - lastOkRef.current < RECENT_OK_MS) {
+        failStreakRef.current = 0;
+        setServerDown(false);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   return {
     serverDown,
     initialDataLoaded,
+    bootFailed,
     markApiOk,
     markInitialDataLoaded,
-    markApiFailure,
+    markBootFailed,
+    markConnectivityFailure,
     markSocketConnected,
     markSocketDisconnected,
   };
