@@ -699,6 +699,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [serverTabCounts, setServerTabCounts] = useState({ all: 0 });
   const [serverSaleRanking, setServerSaleRanking] = useState([]);
   const [projectLeadCounts, setProjectLeadCounts] = useState({ byProject: {}, all: 0 });
+  const [projectCountsLoading, setProjectCountsLoading] = useState(false);
   const [leadsFetching, setLeadsFetching] = useState(false);
   const leadsQueryRef = useRef({
     page: 1,
@@ -1069,7 +1070,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.tabCounts && typeof data.tabCounts === "object") setServerTabCounts(data.tabCounts);
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
-      setProjectLeadCounts(data.projectLeadCounts);
+      const pc = data.projectLeadCounts;
+      const hasData = (Number(pc.all) > 0) || Object.keys(pc.byProject || {}).length > 0;
+      if (hasData) setProjectLeadCounts(pc);
     }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
@@ -1174,6 +1177,21 @@ function CRMApp({ user, updateUser, onLogout }) {
     return fetchCrmData({ isBoot: false });
   }, [fetchCrmData]);
 
+  const fetchProjectLeadCounts = useCallback(async () => {
+    setProjectCountsLoading(true);
+    try {
+      const r = await apiFetch(`${API}/projects/lead-counts`);
+      if (r.ok) {
+        const d = await r.json();
+        if (d && typeof d === "object") setProjectLeadCounts(d);
+      }
+    } catch (err) {
+      console.warn("[CRM] project lead counts failed:", err?.message || err);
+    } finally {
+      setProjectCountsLoading(false);
+    }
+  }, []);
+
   const bootStartedRef = useRef(false);
   useEffect(() => {
     if (bootStartedRef.current) return;
@@ -1183,6 +1201,11 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
     };
   }, [runBootLoad]);
+
+  useEffect(() => {
+    if (!initialDataLoaded) return;
+    fetchProjectLeadCounts();
+  }, [initialDataLoaded, fetchProjectLeadCounts]);
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
@@ -1226,10 +1249,11 @@ function CRMApp({ user, updateUser, onLogout }) {
           if (Array.isArray(data.leads)) leadsRef.current = data.leads;
         })
         .catch(() => markConnectivityFailure());
+      fetchProjectLeadCounts();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, buildDataUrl, fetchAnnouncements, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, buildDataUrl, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -1950,6 +1974,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             leadsTotal={leadsTotal}
             serverTabCounts={serverTabCounts}
             projectLeadCounts={projectLeadCounts}
+            projectCountsLoading={projectCountsLoading}
             onLeadsQueryChange={updateLeadsQuery}
             leadsFetching={leadsFetching}
             searchText={searchText}
@@ -3067,6 +3092,7 @@ const LeadsPage = (props) => {
     leadsTotal = 0,
     serverTabCounts = { all: 0 },
     projectLeadCounts = { byProject: {}, all: 0 },
+    projectCountsLoading = false,
     onLeadsQueryChange,
     leadsFetching = false,
     searchText,
@@ -3384,9 +3410,13 @@ const LeadsPage = (props) => {
   // Lead counts per project (from server — full DB counts, not current page)
   const projectLeadCountsMap = useMemo(() => {
     const counts = projectLeadCounts?.byProject || {};
-    return Object.fromEntries(Object.entries(counts).map(([k, v]) => [Number(k), v]));
+    return Object.fromEntries(Object.entries(counts).map(([k, v]) => [Number(k), Number(v) || 0]));
   }, [projectLeadCounts]);
-  const totalLeadCount = projectLeadCounts?.all ?? serverTabCounts?.all ?? leadsTotal ?? 0;
+  const hasProjectCounts = Object.keys(projectLeadCounts?.byProject || {}).length > 0 || (Number(projectLeadCounts?.all) > 0);
+  const totalLeadCount = hasProjectCounts
+    ? Number(projectLeadCounts.all) || 0
+    : (Number(serverTabCounts?.all) || Number(leadsTotal) || 0);
+  const fmtProjectCount = (n) => (projectCountsLoading && !hasProjectCounts ? "…" : (Number(n) || 0).toLocaleString("vi-VN"));
 
   const recentLeadPreview = useMemo(() => {
     const list = Array.isArray(leads) ? [...leads] : [];
@@ -3867,7 +3897,7 @@ const LeadsPage = (props) => {
                   <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800, textTransform: "uppercase", marginBottom: 3 }}>Dự án đang xem</div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                     <div style={{ fontSize: 16, color: "#0f172a", fontWeight: 850 }}>Tất cả dự án</div>
-                    <div style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 850 }}>{totalLeadCount} khách</div>
+                    <div style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 850 }}>{fmtProjectCount(totalLeadCount)} khách</div>
                   </div>
                 </div>
                 <div>
@@ -3880,7 +3910,7 @@ const LeadsPage = (props) => {
                           <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>Tổng hợp toàn hệ thống</span>
                         </span>
                       </span>
-                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f3d1e", fontSize: 13, fontWeight: 850 }}>{totalLeadCount}<ChevronRight size={16} /></span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#0f3d1e", fontSize: 13, fontWeight: 850 }}>{fmtProjectCount(totalLeadCount)}<ChevronRight size={16} /></span>
                     </button>
                   )}
                   {availableProjects.map((p) => {
@@ -3894,7 +3924,7 @@ const LeadsPage = (props) => {
                             <span style={{ display: "block", fontSize: 11, color: "#64748b", marginTop: 2 }}>{p.dailyReportEnabled ? "Báo cáo Tele đang bật" : "Dữ liệu dự án"}</span>
                           </span>
                         </span>
-                        <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#d97706", fontSize: 13, fontWeight: 850 }}>{count}<ChevronRight size={16} /></span>
+                        <span style={{ display: "flex", alignItems: "center", gap: 8, color: "#d97706", fontSize: 13, fontWeight: 850 }}>{fmtProjectCount(count)}<ChevronRight size={16} /></span>
                       </button>
                     );
                   })}
@@ -3946,7 +3976,7 @@ const LeadsPage = (props) => {
                 <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                   <ClipboardList size={16} /> Tất cả dự án
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 800 }}>{totalLeadCount}</div>
+                <div style={{ fontSize: 24, fontWeight: 800 }}>{fmtProjectCount(totalLeadCount)}</div>
                 <div style={{ fontSize: 12, opacity: 0.9 }}>khách hàng</div>
               </div>
             )}
@@ -3960,7 +3990,7 @@ const LeadsPage = (props) => {
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                     <Building2 size={16} style={{ color: "#e88a2e" }} /> {p.name}
                   </div>
-                  <div style={{ fontSize: 24, fontWeight: 800, color: "#e88a2e" }}>{count}</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: "#e88a2e" }}>{fmtProjectCount(count)}</div>
                   <div style={{ fontSize: 12, color: "#6b7280" }}>khách hàng</div>
                 </div>
               );

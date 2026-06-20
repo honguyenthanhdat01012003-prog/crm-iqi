@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-fast-boot";
+const BUILD_VERSION = "2026-06-20-project-counts";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2205,6 +2205,8 @@ let bootstrapCache = { at: 0, data: null, key: "" };
 const BOOTSTRAP_CACHE_MS = 45_000;
 let leadAuxCache = { at: 0, historyCountMap: null, dupPhones: null };
 const LEAD_AUX_CACHE_MS = 120_000;
+let projectCountsCache = { at: 0, key: "", data: null };
+const PROJECT_COUNTS_CACHE_MS = 60_000;
 
 function invalidateBootstrapCache() {
   bootstrapCache = { at: 0, data: null, key: "" };
@@ -2212,6 +2214,10 @@ function invalidateBootstrapCache() {
 
 function invalidateLeadAuxCache() {
   leadAuxCache = { at: 0, historyCountMap: null, dupPhones: null };
+}
+
+function invalidateProjectCountsCache() {
+  projectCountsCache = { at: 0, key: "", data: null };
 }
 
 function safeJsonParse(raw, fallback = {}) {
@@ -2446,16 +2452,37 @@ async function querySaleRankingSummary(db, user, filters = {}) {
 }
 
 async function queryProjectLeadCounts(db, user) {
-  const f = { statusTab: "all", statusFilter: "all" };
-  const { where, params } = await buildLeadsSqlFilters(db, user, f);
-  const rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
-  const byProject = {};
-  let all = 0;
-  for (const r of rows) {
-    byProject[r.project_id] = r.c;
-    all += r.c;
+  const cacheKey = `${user.role}:${user.userId || user.displayName}`;
+  const now = Date.now();
+  if (projectCountsCache.data && projectCountsCache.key === cacheKey && now - projectCountsCache.at < PROJECT_COUNTS_CACHE_MS) {
+    return projectCountsCache.data;
   }
-  return { byProject, all };
+
+  let rows;
+  if (user.role === "admin") {
+    rows = await all(db, "SELECT project_id, COUNT(*) as c FROM leads GROUP BY project_id");
+  } else if (user.role === "manager") {
+    const pids = await getUserProjectIds(user.userId);
+    if (!pids.length) return { byProject: {}, all: 0 };
+    const ph = pids.map(() => "?").join(",");
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE project_id IN (${ph}) GROUP BY project_id`, pids);
+  } else {
+    const f = { statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, f);
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
+  }
+
+  const byProject = {};
+  let allCount = 0;
+  for (const r of rows) {
+    const pid = Number(r.project_id);
+    const c = Number(r.c) || 0;
+    if (!Number.isNaN(pid) && pid > 0) byProject[pid] = c;
+    allCount += c;
+  }
+  const data = { byProject, all: allCount };
+  projectCountsCache = { at: now, key: cacheKey, data };
+  return data;
 }
 
 async function queryLeadsPage(db, user, filters, page, limit) {
@@ -4210,8 +4237,8 @@ app.get("/api/data", requireAuth, async (req, res) => {
         return { all: 0 };
       }),
       queryProjectLeadCounts(db, req.user).catch((e) => {
-        console.warn("[GET /api/data] projectLeadCounts failed:", e.message);
-        return { byProject: {}, all: 0 };
+        console.error("[GET /api/data] projectLeadCounts failed:", e.message, e.stack);
+        return null;
       }),
     ]);
     let saleRanking = [];
@@ -4230,7 +4257,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
       paginated: true,
       tabCounts,
       saleRanking,
-      projectLeadCounts,
+      projectLeadCounts: projectLeadCounts || undefined,
       phoneRegistrations: pageData.phoneRegistrations,
     };
     stripLeadsForClient(data);
@@ -4245,6 +4272,16 @@ app.get("/api/data", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[GET /api/data]", err?.message || err, err?.stack);
     res.status(500).json({ error: err.message || "Could not read data" });
+  }
+});
+
+app.get("/api/projects/lead-counts", requireAuth, async (req, res) => {
+  try {
+    const counts = await queryProjectLeadCounts(db, req.user);
+    res.json(counts);
+  } catch (err) {
+    console.error("[GET /api/projects/lead-counts]", err?.message || err);
+    res.status(500).json({ error: err.message || "Could not read project counts" });
   }
 });
 
@@ -4299,6 +4336,7 @@ function emitDataChanged(reason) {
   dataVersion += 1;
   invalidateBootstrapCache();
   invalidateLeadAuxCache();
+  invalidateProjectCountsCache();
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
