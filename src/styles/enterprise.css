@@ -1434,3 +1434,359 @@
     padding-right: 4px;
   }
 }
+
+/* Dashboard */
+.crm-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.crm-dash-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.crm-dash-toolbar__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.crm-dash-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.crm-dash-pill {
+  padding: 7px 12px;
+  border: 1px solid #d9e2dc;
+  border-radius: 999px;
+  background: #fff;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.crm-dash-pill:hover {
+  border-color: #1a3c20;
+  color: #1a3c20;
+}
+
+.crm-dash-pill--active {
+  background: #1a3c20;
+  border-color: #1a3c20;
+  color: #fff;
+}
+
+.crm-dash-custom-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-dash-custom-range input {
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.crm-dash-project-select {
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 160px;
+  background: #fff;
+}
+
+.crm-dash-toolbar__meta {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.crm-dash-row {
+  display: grid;
+  gap: 16px;
+}
+
+.crm-dash-row--kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.crm-dash-row--charts {
+  grid-template-columns: 1.2fr 1fr;
+}
+
+.crm-dash-row--bottom {
+  grid-template-columns: 1.5fr 1fr;
+}
+
+.crm-dash-row--stack {
+  grid-template-columns: 1fr !important;
+}
+
+.crm-dash-kpi-group {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  border-top: 3px solid var(--dash-accent, #1a3c20);
+}
+
+.crm-dash-kpi-group__title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-dash-kpi-group__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.crm-dash-panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.crm-dash-panel--wide {
+  overflow-x: auto;
+}
+
+.crm-dash-panel__title {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-dash-panel__title--sub {
+  margin-top: 18px;
+  font-size: 13px;
+}
+
+.crm-dash-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 28px 12px;
+  font-size: 13px;
+}
+
+.crm-funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crm-funnel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-funnel__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.crm-funnel__label {
+  font-weight: 700;
+  color: #334155;
+}
+
+.crm-funnel__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: #64748b;
+}
+
+.crm-funnel__stats strong {
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.crm-funnel__drop {
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.crm-funnel__track {
+  height: 10px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.crm-funnel__bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1a3c20, #22c55e);
+  transition: width 0.35s ease;
+}
+
+.crm-trend-chart__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.crm-trend-chart__legend {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.crm-trend-chart__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-trend-chart__legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.crm-dash-source-list,
+.crm-dash-campaign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.crm-dash-source-row__head,
+.crm-dash-campaign-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.crm-dash-source-row__head span:first-child {
+  font-weight: 700;
+  color: #334155;
+}
+
+.crm-dash-source-row__bar {
+  height: 6px;
+  background: #f1f5f9;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.crm-dash-source-row__bar div {
+  height: 100%;
+  background: #1a3c20;
+  border-radius: 999px;
+}
+
+.crm-dash-campaign-row {
+  padding: 8px 10px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #eef2f7;
+}
+
+.crm-dash-campaign-row__name {
+  font-weight: 600;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.crm-dash-campaign-row__count {
+  font-weight: 800;
+  color: #1a3c20;
+}
+
+.crm-dash-sale-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crm-dash-sale-card {
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.crm-dash-sale-card__head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.crm-dash-sale-card__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+@media (max-width: 1100px) {
+  .crm-dash-row--kpis {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .crm-dash-toolbar {
+    padding: 12px;
+  }
+
+  .crm-dash-pills {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .crm-dash-kpi-group__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

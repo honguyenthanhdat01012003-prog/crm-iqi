@@ -2001,7 +2001,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
         <div className={`crm-content${isMobile ? " crm-content--mobile" : ""}`}>
         {page === "dashboard" && (
-          <DashboardPage stats={stats} cost={activeCost} saleRanking={saleRanking} leads={leads} />
+          <DashboardPage projects={projects} apiFetch={apiFetch} />
         )}
         {page === "leads" && (
           <LeadsPage
@@ -2940,182 +2940,338 @@ function DonutChart({ segments, size = 220 }) {
   );
 }
 
-function DashboardPage({ stats, cost, saleRanking }) {
-  const isMobile = useIsMobile();
-  const pct = (v) => stats.total ? ((v / stats.total) * 100).toFixed(1) : "0.0";
+function formatResponseMs(ms) {
+  if (ms == null || ms <= 0) return "—";
+  const mins = ms / 60000;
+  if (mins < 60) return `${Math.round(mins)} phút`;
+  const hours = mins / 60;
+  if (hours < 24) return `${hours.toFixed(1)} giờ`;
+  return `${(hours / 24).toFixed(1)} ngày`;
+}
 
-  const statusCards = Object.entries(STATUS_LABELS)
-    .filter(([key]) => key !== "new")
-    .map(([key, label]) => ({ title: label, value: stats[key] || 0, color: STATUS_COLORS[key] }))
-    .filter(c => c.value > 0);
+function formatShortDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}`;
+}
 
-  const allCards = [
-    { title: "Mới (chưa feedback)", value: stats.new || 0, color: STATUS_COLORS.new },
-    ...statusCards,
-  ];
-
-  const donutSegments = allCards.map(c => ({ label: c.title, value: c.value, color: c.color }));
-
-  if (isMobile) {
-    const updateRate = stats.total ? (((stats.total - (stats.new || 0)) / stats.total) * 100).toFixed(1) : "0.0";
-    const primaryKeys = ["new", "interested", "spam", "not_interested", "booked", "closed", "callback", "unreachable"];
-    const primaryRows = primaryKeys
-      .map((key) => ({ key, label: STATUS_LABELS[key] || key, value: stats[key] || 0, color: STATUS_COLORS[key] || "#64748b" }))
-      .filter((row) => row.value > 0 || ["new", "interested", "spam", "not_interested"].includes(row.key));
-    const distribution = allCards.filter(c => c.value > 0).sort((a, b) => b.value - a.value).slice(0, 6);
-    const urgentRows = [
-      { label: "Chưa feedback", value: stats.new || 0, color: STATUS_COLORS.new },
-      { label: "Gọi lại sau", value: stats.callback || 0, color: STATUS_COLORS.callback },
-      { label: "Chưa liên lạc được", value: stats.unreachable || 0, color: STATUS_COLORS.unreachable },
-    ].filter(r => r.value > 0);
-
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2 }}>
-          <span style={{ padding: "7px 10px", border: "1px solid #d9e2dc", borderRadius: 999, background: "#fff", color: "#1a3c20", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>Hôm nay</span>
-          <span style={{ padding: "7px 10px", border: "1px solid #d9e2dc", borderRadius: 999, background: "#fff", color: "#374151", fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>Tất cả dự án</span>
-        </div>
-
-        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 14, boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            {[
-              { label: "Tổng lead", value: stats.total, color: "#0f3d1e" },
-              { label: "Chưa FB", value: stats.new || 0, color: "#d97706" },
-              { label: "Cập nhật", value: `${updateRate}%`, color: "#0284c7" },
-            ].map((item) => (
-              <div key={item.label} style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "#64748b", textTransform: "uppercase", marginBottom: 4 }}>{item.label}</div>
-                <div style={{ fontSize: 20, lineHeight: 1.1, fontWeight: 850, color: item.color, wordBreak: "break-word" }}>{item.value}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{ height: 8, borderRadius: 999, background: "#edf2f7", overflow: "hidden", display: "flex", marginTop: 14 }}>
-            {distribution.map((item) => (
-              <div key={item.title} style={{ width: `${Math.max(2, Number(pct(item.value)))}%`, background: item.color }} />
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-            {distribution.slice(0, 4).map((item) => (
-              <span key={item.title} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, color: "#475569", fontWeight: 600 }}>
-                <span style={{ width: 7, height: 7, borderRadius: 999, background: item.color }} />{item.title}
+function FunnelChart({ stages, compact }) {
+  const max = stages[0]?.value || 1;
+  if (!max) return <div className="crm-dash-empty">Không có dữ liệu</div>;
+  return (
+    <div className="crm-funnel">
+      {stages.map((stage, i) => {
+        const widthPct = Math.max(12, (stage.value / max) * 100);
+        const dropPct = i > 0 && stages[i - 1].value
+          ? (((stages[i - 1].value - stage.value) / stages[i - 1].value) * 100).toFixed(0)
+          : null;
+        const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
+        return (
+          <div key={stage.key} className="crm-funnel__row">
+            <div className="crm-funnel__meta">
+              <span className="crm-funnel__label">{stage.label}</span>
+              <span className="crm-funnel__stats">
+                <strong>{stage.value}</strong>
+                <span>{convPct}%</span>
+                {dropPct != null && Number(dropPct) > 0 && <span className="crm-funnel__drop">−{dropPct}%</span>}
               </span>
-            ))}
+            </div>
+            <div className="crm-funnel__track">
+              <div
+                className="crm-funnel__bar"
+                style={{ width: `${widthPct}%`, opacity: compact ? 0.85 : 1 - i * 0.08 }}
+              />
+            </div>
           </div>
-        </section>
+        );
+      })}
+    </div>
+  );
+}
 
-        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
-          <div style={{ padding: "12px 14px", borderBottom: "1px solid #eef2f7", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h4 style={{ margin: 0, fontSize: 13, color: "#0f172a", fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}><Activity size={15} /> Trạng thái chính</h4>
-            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>{primaryRows.length} mục</span>
-          </div>
-          <div>
-            {primaryRows.map((row) => {
-              const percent = stats.total ? Math.min(100, (row.value / stats.total) * 100) : 0;
-              return (
-                <div key={row.key} style={{ padding: "11px 14px", borderBottom: "1px solid #f1f5f9" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", marginBottom: 7 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: 999, background: row.color, flexShrink: 0 }} />
-                      <span style={{ fontSize: 13, fontWeight: 750, color: "#1e293b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                      <span style={{ fontSize: 15, fontWeight: 850, color: "#0f172a" }}>{row.value}</span>
-                      <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700 }}>{pct(row.value)}%</span>
-                    </div>
-                  </div>
-                  <div style={{ height: 5, borderRadius: 999, background: "#f1f5f9", overflow: "hidden" }}>
-                    <div style={{ width: `${percent}%`, height: "100%", borderRadius: 999, background: row.color }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
+function TrendChart({ data, compact }) {
+  if (!data?.length) return <div className="crm-dash-empty">Không có dữ liệu xu hướng</div>;
+  const w = compact ? 320 : 520;
+  const h = compact ? 160 : 220;
+  const pad = { t: 12, r: 12, b: 28, l: 36 };
+  const innerW = w - pad.l - pad.r;
+  const innerH = h - pad.t - pad.b;
+  const maxLeads = Math.max(1, ...data.map((d) => d.leads));
+  const maxCpl = Math.max(1, ...data.map((d) => d.cpl));
+  const step = data.length > 1 ? innerW / (data.length - 1) : innerW;
+  const barW = Math.min(24, Math.max(6, step * 0.55));
 
-        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 14, boxShadow: "0 1px 2px rgba(15,23,42,.05)" }}>
-          <h4 style={{ margin: "0 0 10px", fontSize: 13, color: "#0f172a", fontWeight: 800, display: "flex", alignItems: "center", gap: 6 }}><AlertCircle size={15} /> Cần xử lý</h4>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {(urgentRows.length ? urgentRows : [{ label: "Không có mục tồn", value: 0, color: "#16a34a" }]).map((row) => (
-              <div key={row.label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 10px", borderRadius: 8, background: "#f8fafc", border: "1px solid #edf2f7" }}>
-                <span style={{ fontSize: 12, color: "#475569", fontWeight: 700 }}>{row.label}</span>
-                <span style={{ fontSize: 13, color: row.color, fontWeight: 850 }}>{row.value}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      </div>
-    );
-  }
+  const cplPoints = data.map((d, i) => {
+    const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+    const y = pad.t + innerH - (d.cpl / maxCpl) * innerH;
+    return `${x},${y}`;
+  }).join(" ");
 
   return (
-    <>
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "repeat(2, 1fr)" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
-        <Card title="Tổng Lead" value={stats.total} color="#1a3c20" compact={isMobile} />
-        {allCards.map((c) => (
-          <Card key={c.title} title={c.title} value={c.value} color={c.color} percent={pct(c.value)} compact={isMobile} />
+    <div className="crm-trend-chart">
+      <svg viewBox={`0 0 ${w} ${h}`} className="crm-trend-chart__svg" preserveAspectRatio="xMidYMid meet">
+        {[0, 0.5, 1].map((f) => (
+          <line
+            key={f}
+            x1={pad.l}
+            x2={w - pad.r}
+            y1={pad.t + innerH * (1 - f)}
+            y2={pad.t + innerH * (1 - f)}
+            stroke="#e5e7eb"
+            strokeWidth="1"
+          />
         ))}
+        {data.map((d, i) => {
+          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+          const barH = (d.leads / maxLeads) * innerH;
+          return (
+            <rect
+              key={d.date}
+              x={x - barW / 2}
+              y={pad.t + innerH - barH}
+              width={barW}
+              height={barH}
+              rx="3"
+              fill="#1a3c20"
+              opacity="0.75"
+            />
+          );
+        })}
+        <polyline points={cplPoints} fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinejoin="round" />
+        {data.map((d, i) => {
+          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+          const y = pad.t + innerH - (d.cpl / maxCpl) * innerH;
+          return <circle key={`c-${d.date}`} cx={x} cy={y} r="3.5" fill="#8b5cf6" />;
+        })}
+        {data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 6) === 0).map((d) => {
+          const i = data.indexOf(d);
+          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+          return (
+            <text key={`t-${d.date}`} x={x} y={h - 6} textAnchor="middle" fontSize="9" fill="#64748b">
+              {formatShortDate(d.date)}
+            </text>
+          );
+        })}
+      </svg>
+      <div className="crm-trend-chart__legend">
+        <span><i style={{ background: "#1a3c20" }} /> Lead/ngày</span>
+        <span><i style={{ background: "#8b5cf6" }} /> CPL</span>
       </div>
+    </div>
+  );
+}
 
-      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(auto-fill, minmax(160px, 1fr))", gap: isMobile ? 8 : 16, marginBottom: isMobile ? 16 : 24 }}>
-        <Card title="Chi phí" value={formatVND(cost.totalSpent)} sub={`CPL: ${formatVND(stats.total ? Math.round(cost.totalSpent / stats.total) : 0)}`} color="#8b5cf6" compact={isMobile} />
-        <Card title="Booking" value={cost.totalBooking || 0} color="#ec4899" compact={isMobile} />
-      </div>
+function DashboardKpiGroup({ title, icon: Icon, children, accent }) {
+  return (
+    <section className="crm-dash-kpi-group" style={{ "--dash-accent": accent }}>
+      <h4 className="crm-dash-kpi-group__title">{Icon && <Icon size={16} />}{title}</h4>
+      <div className="crm-dash-kpi-group__grid">{children}</div>
+    </section>
+  );
+}
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 16 : 24, marginBottom: isMobile ? 16 : 24, boxShadow: "0 1px 3px rgba(0,0,0,.08)" }}>
-        <h4 style={{ margin: "0 0 16px", fontSize: isMobile ? 14 : 16, color: "#1f2937", display: "flex", alignItems: "center", gap: 6 }}><BarChart3 size={18} /> Biểu đồ phân bổ trạng thái</h4>
-        <DonutChart segments={donutSegments} size={isMobile ? 160 : 220} />
-      </div>
+function DashboardPage({ projects, apiFetch }) {
+  const isMobile = useIsMobile();
+  const [preset, setPreset] = useState("month");
+  const [projectId, setProjectId] = useState("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-      <div style={{ background: "#fff", borderRadius: 12, padding: isMobile ? 12 : 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", overflowX: "auto" }}>
-        <h4 style={{ margin: "0 0 12px", fontSize: isMobile ? 14 : 16, display: "flex", alignItems: "center", gap: 6 }}><Trophy size={18} /> Bảng xếp hạng Sale</h4>
-        {isMobile ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {saleRanking.map((s, i) => (
-              <div key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 10, padding: 12, border: "1px solid #e5e7eb" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{i === 0 ? <Trophy size={16} style={{ color: "#FFD700", display: "inline", verticalAlign: "middle" }} /> : i === 1 ? <Trophy size={16} style={{ color: "#C0C0C0", display: "inline", verticalAlign: "middle" }} /> : i === 2 ? <Trophy size={16} style={{ color: "#CD7F32", display: "inline", verticalAlign: "middle" }} /> : `#${i+1}`} {s.name}</span>
-                  <span style={{ fontWeight: 700, fontSize: 16, color: "#1a3c20" }}>{s.total} lead</span>
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {Object.entries(STATUS_LABELS).map(([k, v]) => {
-                    const val = s[k] || 0;
-                    if (!val) return null;
-                    return <span key={k} style={{ padding: "2px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[k] || "#6b7280") + "18", color: STATUS_COLORS[k] }}>{v}: {val}</span>;
-                  })}
-                </div>
-              </div>
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams({ preset, projectId });
+      if (preset === "custom") {
+        if (customFrom) qs.set("startDate", customFrom);
+        if (customTo) qs.set("endDate", customTo);
+      }
+      const res = await apiFetch(`${API}/dashboard?${qs}`);
+      if (!res.ok) throw new Error("Không tải được dashboard");
+      setData(await res.json());
+    } catch {
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [apiFetch, preset, projectId, customFrom, customTo]);
+
+  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  const kpis = data?.kpis;
+  const funnel = data?.funnel || [];
+  const trend = data?.trend || [];
+  const sources = data?.sources || [];
+  const campaigns = data?.campaigns || [];
+  const saleRanking = data?.saleRanking || [];
+  const rangeLabel = data?.range?.label || "";
+
+  const timePresets = [
+    { key: "today", label: "Hôm nay" },
+    { key: "week", label: "Tuần này" },
+    { key: "month", label: "Tháng này" },
+    { key: "custom", label: "Tùy chỉnh" },
+  ];
+
+  return (
+    <div className="crm-dashboard">
+      <div className="crm-dash-toolbar">
+        <div className="crm-dash-toolbar__filters">
+          <div className="crm-dash-pills">
+            {timePresets.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                className={`crm-dash-pill${preset === p.key ? " crm-dash-pill--active" : ""}`}
+                onClick={() => setPreset(p.key)}
+              >
+                {p.label}
+              </button>
             ))}
           </div>
-        ) : (
-        <table style={tableStyle}>
-          <thead>
-            <tr>
-              <th style={thStyle}>#</th>
-              <th style={thStyle}>Sale</th>
-              <th style={thStyle}>Tổng</th>
-              <th style={{ ...thStyle, color: "#6b7280", whiteSpace: "nowrap", fontSize: 11 }}>Chưa FB</th>
-              {Object.entries(STATUS_LABELS).filter(([k]) => k !== "new").map(([k, v]) => (
-                <th key={k} style={{ ...thStyle, color: STATUS_COLORS[k], whiteSpace: "nowrap", fontSize: 11 }}>{v}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {saleRanking.map((s, i) => (
-              <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
-                <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
-                <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{s.name}</td>
-                <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
-                <td style={{ ...tdStyle, color: s.new ? "#6b7280" : "#d1d5db" }}>{s.new || 0}</td>
-                {Object.keys(STATUS_LABELS).filter(k => k !== "new").map(k => (
-                  <td key={k} style={{ ...tdStyle, color: s[k] ? STATUS_COLORS[k] : "#d1d5db" }}>{s[k] || 0}</td>
-                ))}
-              </tr>
+          {preset === "custom" && (
+            <div className="crm-dash-custom-range">
+              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+              <span>→</span>
+              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+            </div>
+          )}
+          <select
+            className="crm-dash-project-select"
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+          >
+            <option value="all">Tất cả dự án</option>
+            {(projects || []).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
             ))}
-          </tbody>
-        </table>
-        )}
+          </select>
+        </div>
+        <div className="crm-dash-toolbar__meta">
+          {loading ? "Đang tải…" : rangeLabel}
+        </div>
       </div>
-    </>
+
+      {loading && !data ? (
+        <div className="crm-dash-empty">Đang tải dữ liệu dashboard…</div>
+      ) : !data ? (
+        <div className="crm-dash-empty">Không tải được dữ liệu. Thử lại sau.</div>
+      ) : (
+        <>
+          <div className="crm-dash-row crm-dash-row--kpis">
+            <DashboardKpiGroup title="Hiệu suất Marketing" icon={Megaphone} accent="#1a3c20">
+              <Card title="Tổng Lead" value={kpis.marketing.totalLeads} color="#1a3c20" compact={isMobile} />
+              <Card title="Chi phí" value={formatVND(kpis.marketing.totalSpent)} color="#8b5cf6" compact={isMobile} />
+              <Card title="CPL" value={formatVND(kpis.marketing.cpl)} sub="Cost per Lead" color="#6366f1" compact={isMobile} />
+            </DashboardKpiGroup>
+            <DashboardKpiGroup title="Chất lượng Lead" icon={Star} accent="#0284c7">
+              <Card title="Lead tốt" value={kpis.quality.good} sub={`${kpis.quality.qualityPct}% tổng lead`} color="#22c55e" compact={isMobile} />
+              <Card title="Quan tâm" value={kpis.quality.interested} color="#22c55e" compact={isMobile} />
+              <Card title="Đang tư vấn" value={kpis.quality.consulting} color="#6366f1" compact={isMobile} />
+              <Card title="Hẹn gặp" value={kpis.quality.appointment} color="#8b5cf6" compact={isMobile} />
+              <Card title="Không đạt" value={kpis.quality.bad} sub={`Sai số ${kpis.quality.wrongNumber} · Thuê bao ${kpis.quality.wrongPhone} · Rác ${kpis.quality.spam}`} color="#ef4444" compact={isMobile} />
+            </DashboardKpiGroup>
+            <DashboardKpiGroup title="Kết quả Kinh doanh" icon={Trophy} accent="#059669">
+              <Card title="Booking/Cọc" value={kpis.sales.booked} color="#10b981" compact={isMobile} />
+              <Card title="Chốt" value={kpis.sales.closed} color="#059669" compact={isMobile} />
+            </DashboardKpiGroup>
+          </div>
+
+          <div className={`crm-dash-row crm-dash-row--charts${isMobile ? " crm-dash-row--stack" : ""}`}>
+            <div className="crm-dash-panel">
+              <h4 className="crm-dash-panel__title"><TrendingUp size={18} /> Xu hướng Lead & CPL</h4>
+              <TrendChart data={trend} compact={isMobile} />
+            </div>
+            <div className="crm-dash-panel">
+              <h4 className="crm-dash-panel__title"><Filter size={18} /> Phễu chuyển đổi</h4>
+              <FunnelChart stages={funnel} compact={isMobile} />
+            </div>
+          </div>
+
+          <div className={`crm-dash-row crm-dash-row--bottom${isMobile ? " crm-dash-row--stack" : ""}`}>
+            <div className="crm-dash-panel crm-dash-panel--wide">
+              <h4 className="crm-dash-panel__title"><Trophy size={18} /> Bảng xếp hạng Sale</h4>
+              {isMobile ? (
+                <div className="crm-dash-sale-cards">
+                  {saleRanking.slice(0, 10).map((s, i) => (
+                    <div key={s.name} className="crm-dash-sale-card">
+                      <div className="crm-dash-sale-card__head">
+                        <span>{i < 3 ? <Trophy size={14} style={{ color: ["#FFD700", "#C0C0C0", "#CD7F32"][i] }} /> : `#${i + 1}`} {s.name}</span>
+                        <strong>{s.total} lead</strong>
+                      </div>
+                      <div className="crm-dash-sale-card__metrics">
+                        <span>Win: <b>{s.winRate}%</b></span>
+                        <span>Chốt: <b>{s.closed}</b></span>
+                        <span>Phản hồi: <b>{formatResponseMs(s.avgResponseMs)}</b></span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="crm-dash-table-wrap">
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>#</th>
+                        <th style={thStyle}>Sale</th>
+                        <th style={thStyle}>Tổng lead</th>
+                        <th style={thStyle}>Quan tâm</th>
+                        <th style={thStyle}>Booking</th>
+                        <th style={thStyle}>Chốt</th>
+                        <th style={thStyle}>Win rate</th>
+                        <th style={thStyle}>Phản hồi TB</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {saleRanking.map((s, i) => (
+                        <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
+                          <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
+                          <td style={{ ...tdStyle, fontWeight: 600 }}>{s.name}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
+                          <td style={tdStyle}>{s.interested || 0}</td>
+                          <td style={tdStyle}>{s.booked || 0}</td>
+                          <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{s.closed || 0}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700, color: s.winRate >= 10 ? "#059669" : "#64748b" }}>{s.winRate}%</td>
+                          <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{formatResponseMs(s.avgResponseMs)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="crm-dash-panel">
+              <h4 className="crm-dash-panel__title"><Globe size={18} /> Nguồn Lead</h4>
+              <div className="crm-dash-source-list">
+                {sources.length ? sources.map((src) => (
+                  <div key={src.name} className="crm-dash-source-row">
+                    <div className="crm-dash-source-row__head">
+                      <span>{src.name}</span>
+                      <span><strong>{src.leads}</strong> ({src.pct}%)</span>
+                    </div>
+                    <div className="crm-dash-source-row__bar">
+                      <div style={{ width: `${Math.max(4, src.pct)}%` }} />
+                    </div>
+                  </div>
+                )) : <div className="crm-dash-empty">Chưa có dữ liệu nguồn</div>}
+              </div>
+
+              <h4 className="crm-dash-panel__title crm-dash-panel__title--sub"><Megaphone size={16} /> Chiến dịch</h4>
+              <div className="crm-dash-campaign-list">
+                {campaigns.length ? campaigns.slice(0, 8).map((c) => (
+                  <div key={c.name} className="crm-dash-campaign-row">
+                    <span className="crm-dash-campaign-row__name" title={c.name}>{c.name}</span>
+                    <span className="crm-dash-campaign-row__count">{c.leads}</span>
+                  </div>
+                )) : <div className="crm-dash-empty">Chưa có chiến dịch</div>}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 

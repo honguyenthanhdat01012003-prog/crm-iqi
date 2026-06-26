@@ -4202,6 +4202,279 @@ app.get("/api/sales/analytics", requireAuth, requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+function resolveDashboardDateRange(preset, startDate, endDate) {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayEnd = new Date(todayStart.getTime() + 86400000 - 1);
+  if (preset === "today") return { start: todayStart, end: todayEnd, label: "Hôm nay" };
+  if (preset === "week") {
+    const monday = new Date(todayStart);
+    monday.setDate(todayStart.getDate() - ((todayStart.getDay() + 6) % 7));
+    return { start: monday, end: todayEnd, label: "Tuần này" };
+  }
+  if (preset === "month") {
+    const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+    return { start: monthStart, end: todayEnd, label: "Tháng này" };
+  }
+  const start = startDate ? new Date(startDate + "T00:00:00") : null;
+  const end = endDate ? new Date(endDate + "T23:59:59") : null;
+  if (start && end) return { start, end, label: `${startDate} → ${endDate}` };
+  if (start) return { start, end: todayEnd, label: `Từ ${startDate}` };
+  if (end) return { start: null, end, label: `Đến ${endDate}` };
+  return { start: null, end: null, label: "Tất cả thời gian" };
+}
+
+function leadInDateRange(lead, range) {
+  const dt = parseLeadDate(lead.created_at);
+  if (!dt) return false;
+  const t = dt.getTime();
+  if (range.start && t < range.start.getTime()) return false;
+  if (range.end && t > range.end.getTime()) return false;
+  return true;
+}
+
+function leadCreatedIsoDate(lead) {
+  const dt = parseLeadDate(lead.created_at);
+  if (!dt) return null;
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+
+function normalizeLeadChannel(lead = {}) {
+  const src = foldText(lead.source || "");
+  const camp = foldText(lead.campaign || "");
+  const ad = foldText(lead.ad_name || "");
+  const combined = `${src} ${camp} ${ad}`;
+  if (combined.includes("facebook") || combined.includes("fb ads") || src.includes("facebook")) return "Facebook Ads";
+  if (combined.includes("zalo")) return "Zalo";
+  if (combined.includes("referral") || combined.includes("gioi thieu") || combined.includes("gtvv")) return "Referral";
+  if (combined.includes("google") || combined.includes("organic") || combined.includes("website") || combined.includes("landing")) return "Organic";
+  if (lead.source && String(lead.source).trim()) return String(lead.source).trim();
+  if (lead.campaign && String(lead.campaign).trim()) return String(lead.campaign).trim();
+  return "Khác";
+}
+
+const FUNNEL_STAGE_DEFS = [
+  { key: "total", label: "Tổng Lead", match: () => true },
+  { key: "interested", label: "Quan tâm", match: (s) => ["interested", "low_interest", "other_project", "consulting", "appointment", "booked", "booking_other", "closed"].includes(s) },
+  { key: "consulting", label: "Đang tư vấn", match: (s) => ["consulting", "appointment", "booked", "booking_other", "closed"].includes(s) },
+  { key: "appointment", label: "Hẹn gặp/Xem dự án", match: (s) => ["appointment", "booked", "booking_other", "closed"].includes(s) },
+  { key: "booked", label: "Booking/Cọc", match: (s) => ["booked", "booking_other", "closed"].includes(s) },
+  { key: "closed", label: "Chốt", match: (s) => s === "closed" },
+];
+
+function buildTrendSeries(range, leadsByDay, dailyCostMap) {
+  const days = [];
+  if (range.start && range.end) {
+    const cursor = new Date(range.start.getFullYear(), range.start.getMonth(), range.start.getDate());
+    const endDay = new Date(range.end.getFullYear(), range.end.getMonth(), range.end.getDate());
+    while (cursor.getTime() <= endDay.getTime()) {
+      const iso = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+      days.push(iso);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  } else {
+    const allDates = new Set([...Object.keys(leadsByDay), ...Object.keys(dailyCostMap)]);
+    days.push(...Array.from(allDates).sort());
+  }
+  return days.map((date) => {
+    const leads = leadsByDay[date] || 0;
+    const spent = dailyCostMap[date]?.spent || 0;
+    const cpl = leads > 0 ? Math.round(spent / leads) : (dailyCostMap[date]?.leads > 0 ? Math.round(spent / dailyCostMap[date].leads) : 0);
+    return { date, leads, spent, cpl };
+  });
+}
+
+app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId = "all", preset = "month", startDate, endDate } = req.query;
+    const range = resolveDashboardDateRange(preset, startDate, endDate);
+
+    let leadRows = await all(db, "SELECT * FROM leads");
+    if (req.user.role === "manager") {
+      const pids = await getUserProjectIds(req.user.userId);
+      leadRows = leadRows.filter((l) => pids.includes(l.project_id));
+    }
+    if (projectId && projectId !== "all") {
+      const pid = Number(projectId);
+      if (req.user.role === "manager") {
+        const pids = await getUserProjectIds(req.user.userId);
+        if (!pids.includes(pid)) return res.status(403).json({ error: "Không có quyền" });
+      }
+      leadRows = leadRows.filter((l) => l.project_id === pid);
+    }
+
+    const filteredLeads = leadRows.filter((l) => leadInDateRange(l, range));
+    const historyMap = await loadHistoryForLeads(db, filteredLeads.map((l) => l.id));
+
+    const stats = { total: 0 };
+    const leadsByDay = {};
+    const sourceMap = {};
+    const campaignMap = {};
+    const saleMap = {};
+
+    for (const lead of filteredLeads) {
+      const tabStatus = getAdminLeadTabStatus(lead, historyMap[lead.id] || []);
+      stats.total += 1;
+      stats[tabStatus] = (stats[tabStatus] || 0) + 1;
+
+      const iso = leadCreatedIsoDate(lead);
+      if (iso) leadsByDay[iso] = (leadsByDay[iso] || 0) + 1;
+
+      const channel = normalizeLeadChannel(lead);
+      sourceMap[channel] = (sourceMap[channel] || 0) + 1;
+
+      const campKey = (lead.campaign || "").trim() || "(Không có chiến dịch)";
+      if (!campaignMap[campKey]) campaignMap[campKey] = { name: campKey, leads: 0, channel };
+      campaignMap[campKey].leads += 1;
+
+      const saleName = (lead.sale_name || "").trim();
+      if (!saleName || saleName.toLowerCase() === "chưa chia") continue;
+      if (!saleMap[saleName]) {
+        saleMap[saleName] = {
+          name: saleName, total: 0, closed: 0, booked: 0,
+          interested: 0, consulting: 0, appointment: 0,
+          responseTimes: [], winBase: 0,
+        };
+      }
+      const sm = saleMap[saleName];
+      sm.total += 1;
+      sm[tabStatus] = (sm[tabStatus] || 0) + 1;
+      if (tabStatus === "closed") sm.closed += 1;
+      if (tabStatus === "booked" || tabStatus === "booking_other") sm.booked += 1;
+      if (["interested", "low_interest", "other_project"].includes(tabStatus)) sm.interested += 1;
+      if (tabStatus === "consulting") sm.consulting += 1;
+      if (tabStatus === "appointment") sm.appointment += 1;
+
+      const hist = historyMap[lead.id] || [];
+      const firstAction = hist.find((h) => h.sale_name && h.contact_date);
+      if (firstAction && lead.created_at && firstAction.contact_date) {
+        const diff = new Date(firstAction.contact_date).getTime() - parseLeadDate(lead.created_at)?.getTime();
+        if (diff > 0) sm.responseTimes.push(diff);
+      }
+    }
+
+    const funnel = FUNNEL_STAGE_DEFS.map((stage) => {
+      let count = 0;
+      for (const lead of filteredLeads) {
+        const tabStatus = getAdminLeadTabStatus(lead, historyMap[lead.id] || []);
+        if (stage.match(tabStatus)) count += 1;
+      }
+      return { key: stage.key, label: stage.label, value: count };
+    });
+
+    const qualityGood = (stats.interested || 0) + (stats.consulting || 0) + (stats.appointment || 0);
+    const qualityBad = (stats.wrong_number || 0) + (stats.wrong_phone || 0) + (stats.spam || 0);
+
+    let projectRows = await all(db, "SELECT id, cost_data FROM projects");
+    if (req.user.role === "manager") {
+      const pids = await getUserProjectIds(req.user.userId);
+      projectRows = projectRows.filter((p) => pids.includes(p.id));
+    }
+    if (projectId && projectId !== "all") {
+      projectRows = projectRows.filter((p) => p.id === Number(projectId));
+    }
+
+    const dailyCostMap = {};
+    const startIso = range.start ? `${range.start.getFullYear()}-${String(range.start.getMonth() + 1).padStart(2, "0")}-${String(range.start.getDate()).padStart(2, "0")}` : null;
+    const endIso = range.end ? `${range.end.getFullYear()}-${String(range.end.getMonth() + 1).padStart(2, "0")}-${String(range.end.getDate()).padStart(2, "0")}` : null;
+
+    for (const p of projectRows) {
+      const costData = safeJsonParse(p.cost_data) || {};
+      for (const d of costData.daily || []) {
+        if (startIso && d.date < startIso) continue;
+        if (endIso && d.date > endIso) continue;
+        if (!dailyCostMap[d.date]) dailyCostMap[d.date] = { spent: 0, leads: 0, booking: 0 };
+        dailyCostMap[d.date].spent += d.spent || 0;
+        dailyCostMap[d.date].leads += d.leads || 0;
+        dailyCostMap[d.date].booking += d.booking || 0;
+      }
+    }
+
+    let totalSpent = 0;
+    let totalBooking = 0;
+    if (Object.keys(dailyCostMap).length) {
+      totalSpent = Object.values(dailyCostMap).reduce((s, d) => s + (d.spent || 0), 0);
+      totalBooking = Object.values(dailyCostMap).reduce((s, d) => s + (d.booking || 0), 0);
+    } else {
+      for (const p of projectRows) {
+        const costData = safeJsonParse(p.cost_data) || {};
+        totalSpent += costData.totalSpent || 0;
+        totalBooking += costData.totalBooking || 0;
+      }
+    }
+
+    const cpl = stats.total > 0 ? Math.round(totalSpent / stats.total) : 0;
+    const trend = buildTrendSeries(range, leadsByDay, dailyCostMap);
+
+    const saleRanking = Object.values(saleMap)
+      .map((s) => {
+        const rt = s.responseTimes;
+        const avgResponseMs = rt.length ? Math.round(rt.reduce((a, b) => a + b, 0) / rt.length) : null;
+        const winRate = s.total ? +((s.closed / s.total) * 100).toFixed(1) : 0;
+        const convertRate = s.total ? +(((s.closed + s.booked) / s.total) * 100).toFixed(1) : 0;
+        return {
+          name: s.name,
+          total: s.total,
+          closed: s.closed,
+          booked: s.booked,
+          interested: s.interested,
+          consulting: s.consulting,
+          appointment: s.appointment,
+          winRate,
+          convertRate,
+          avgResponseMs,
+        };
+      })
+      .sort((a, b) => b.closed - a.closed || b.total - a.total);
+
+    const sources = Object.entries(sourceMap)
+      .map(([name, leads]) => ({ name, leads, pct: stats.total ? +((leads / stats.total) * 100).toFixed(1) : 0 }))
+      .sort((a, b) => b.leads - a.leads);
+
+    const campaigns = Object.values(campaignMap)
+      .map((c) => ({ ...c, pct: stats.total ? +((c.leads / stats.total) * 100).toFixed(1) : 0 }))
+      .sort((a, b) => b.leads - a.leads)
+      .slice(0, 15);
+
+    res.json({
+      range: {
+        preset,
+        startDate: startIso,
+        endDate: endIso,
+        label: range.label,
+      },
+      stats,
+      kpis: {
+        marketing: { totalLeads: stats.total, totalSpent, cpl },
+        quality: {
+          good: qualityGood,
+          bad: qualityBad,
+          qualityPct: stats.total ? +((qualityGood / stats.total) * 100).toFixed(1) : 0,
+          interested: stats.interested || 0,
+          consulting: stats.consulting || 0,
+          appointment: stats.appointment || 0,
+          wrongNumber: stats.wrong_number || 0,
+          wrongPhone: stats.wrong_phone || 0,
+          spam: stats.spam || 0,
+        },
+        sales: {
+          booked: (stats.booked || 0) + (stats.booking_other || 0),
+          closed: stats.closed || 0,
+          totalBooking: totalBooking || 0,
+        },
+      },
+      funnel,
+      trend,
+      sources,
+      campaigns,
+      saleRanking,
+    });
+  } catch (err) {
+    console.error("[GET /api/dashboard]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== LEAD QUALITY REPORT ==========
 app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
   try {
