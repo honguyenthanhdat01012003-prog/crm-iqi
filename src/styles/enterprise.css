@@ -1546,6 +1546,65 @@
   grid-column: span 1;
 }
 
+.crm-marketing-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.crm-marketing-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
+.crm-marketing-card__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.crm-marketing-card__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.crm-marketing-card__label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+.crm-marketing-card__value {
+  font-size: clamp(15px, 1.6vw, 20px);
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crm-marketing-card__sub {
+  font-size: 9px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.crm-dash-kpi-group--marketing {
+  align-self: start;
+}
+
 .crm-marketing-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1696,20 +1755,20 @@
 }
 
 .crm-dash-loading {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 2000;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(2px);
-  border-radius: 12px;
-  font-size: 13px;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(4px);
+  font-size: 14px;
   font-weight: 600;
   color: #475569;
+  pointer-events: all;
 }
 
 .crm-dash-loading__icon {
@@ -1720,13 +1779,19 @@
 .crm-trend-split {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+}
+
+.crm-trend-split__scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
 }
 
 .crm-trend-split__block {
   border: 1px solid #eef2f7;
   border-radius: 10px;
-  padding: 10px 8px 4px;
+  padding: 10px 8px 6px;
   background: #fafafa;
 }
 
@@ -1773,6 +1838,10 @@
 }
 
 @media (max-width: 1100px) {
+  .crm-marketing-row {
+    grid-template-columns: 1fr;
+  }
+
   .crm-marketing-strip {
     grid-template-columns: 1fr;
   }

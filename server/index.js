@@ -4302,6 +4302,38 @@ function getSaleResponseMs(lead = {}, history = [], saleName = "") {
   return null;
 }
 
+function getLeadAssignedSales(lead = {}, rawHistory = []) {
+  const names = new Map();
+  const add = (n) => {
+    const v = (n || "").trim();
+    if (!v || v.toLowerCase() === "chưa chia") return;
+    const key = normalizePersonNameServer(v);
+    if (!names.has(key)) names.set(key, v);
+  };
+  for (const h of rawHistory) {
+    if (h.action === "Chia lead") add(h.sale_name);
+  }
+  add(lead.sale_name);
+  return Array.from(names.values());
+}
+
+function getSaleStatusForLead(rawHistory = [], saleName = "") {
+  const key = normalizePersonNameServer(saleName);
+  if (!key) return "new";
+  const sorted = [...rawHistory].sort((a, b) => {
+    const ta = parseLeadDate(a.contact_date)?.getTime() || 0;
+    const tb = parseLeadDate(b.contact_date)?.getTime() || 0;
+    return tb - ta || (b.seq || 0) - (a.seq || 0);
+  });
+  for (const h of sorted) {
+    if (!h.status || h.action === "Chia lead") continue;
+    if (normalizePersonNameServer(h.sale_name || "") === key) {
+      return normalizeStatus(h.status);
+    }
+  }
+  return "new";
+}
+
 function bumpSourceStats(bucket, tabStatus) {
   if (tabStatus === "booked") bucket.booked += 1;
   else if (tabStatus === "booking_other") bucket.bookingOther += 1;
@@ -4379,27 +4411,30 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       campaignMap[campKey].leads += 1;
       bumpSourceStats(campaignMap[campKey], tabStatus);
 
-      const saleName = resolveLeadSaleName(lead, hist);
-      if (!saleName) continue;
-      if (!saleMap[saleName]) {
-        saleMap[saleName] = {
-          name: saleName, total: 0, closed: 0, booked: 0, bookingOther: 0,
-          interested: 0, consulting: 0, appointment: 0,
-          responseTimes: [],
-        };
-      }
-      const sm = saleMap[saleName];
-      sm.total += 1;
-      sm[tabStatus] = (sm[tabStatus] || 0) + 1;
-      if (tabStatus === "closed") sm.closed += 1;
-      if (tabStatus === "booked") sm.booked += 1;
-      if (tabStatus === "booking_other") sm.bookingOther += 1;
-      if (["interested", "low_interest", "other_project"].includes(tabStatus)) sm.interested += 1;
-      if (tabStatus === "consulting") sm.consulting += 1;
-      if (tabStatus === "appointment") sm.appointment += 1;
+      const assignedSales = getLeadAssignedSales(lead, hist);
+      for (const saleName of assignedSales) {
+        if (!saleMap[saleName]) {
+          saleMap[saleName] = {
+            name: saleName, total: 0, closed: 0, booked: 0, bookingOther: 0,
+            interested: 0, consulting: 0, appointment: 0, hasSale: 0,
+            responseTimes: [],
+          };
+        }
+        const sm = saleMap[saleName];
+        const saleStatus = getSaleStatusForLead(hist, saleName);
+        sm.total += 1;
+        sm[saleStatus] = (sm[saleStatus] || 0) + 1;
+        if (saleStatus === "closed") sm.closed += 1;
+        if (saleStatus === "booked") sm.booked += 1;
+        if (saleStatus === "booking_other") sm.bookingOther += 1;
+        if (["interested", "low_interest", "other_project"].includes(saleStatus)) sm.interested += 1;
+        if (saleStatus === "consulting") sm.consulting += 1;
+        if (saleStatus === "appointment") sm.appointment += 1;
+        if (saleStatus === "has_sale") sm.hasSale += 1;
 
-      const respMs = getSaleResponseMs(lead, hist, saleName);
-      if (respMs != null) sm.responseTimes.push(respMs);
+        const respMs = getSaleResponseMs(lead, hist, saleName);
+        if (respMs != null) sm.responseTimes.push(respMs);
+      }
     }
 
     const funnel = FUNNEL_STAGE_DEFS.map((stage) => {
@@ -4473,6 +4508,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           interested: s.interested,
           consulting: s.consulting,
           appointment: s.appointment,
+          hasSale: s.hasSale || 0,
           winRate,
           convertRate,
           avgResponseMs,
@@ -4480,7 +4516,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       })
       .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
-    const unassignedLeads = filteredLeads.filter((l) => !resolveLeadSaleName(l, historyMap[l.id] || [])).length;
+    const unassignedLeads = filteredLeads.filter((l) => !getLeadAssignedSales(l, historyMap[l.id] || []).length).length;
 
     const sources = Object.entries(sourceMap)
       .map(([name, row]) => ({
@@ -4521,6 +4557,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           otherProject: stats.other_project || 0,
           consulting: stats.consulting || 0,
           appointment: stats.appointment || 0,
+          hasSale: stats.has_sale || 0,
           notInterested: stats.not_interested || 0,
           spam: stats.spam || 0,
           sale: stats.sale || 0,
