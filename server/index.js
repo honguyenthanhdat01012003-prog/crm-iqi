@@ -4254,13 +4254,59 @@ function normalizeLeadChannel(lead = {}) {
 }
 
 const FUNNEL_STAGE_DEFS = [
-  { key: "total", label: "Tổng Lead", match: () => true },
-  { key: "interested", label: "Quan tâm", match: (s) => ["interested", "low_interest", "other_project", "consulting", "appointment", "booked", "booking_other", "closed"].includes(s) },
-  { key: "consulting", label: "Đang tư vấn", match: (s) => ["consulting", "appointment", "booked", "booking_other", "closed"].includes(s) },
-  { key: "appointment", label: "Hẹn gặp/Xem dự án", match: (s) => ["appointment", "booked", "booking_other", "closed"].includes(s) },
-  { key: "booked", label: "Booking/Cọc", match: (s) => ["booked", "booking_other", "closed"].includes(s) },
-  { key: "closed", label: "Chốt", match: (s) => s === "closed" },
+  { key: "total", label: "Tổng Lead", match: () => true, kind: "core" },
+  { key: "new", label: "Chưa feedback", match: (s) => s === "new", kind: "core" },
+  { key: "interested", label: "Quan tâm", match: (s) => ["interested", "low_interest", "other_project", "consulting", "appointment", "booked", "booking_other", "closed"].includes(s), kind: "positive" },
+  { key: "consulting", label: "Đang tư vấn", match: (s) => ["consulting", "appointment", "booked", "booking_other", "closed"].includes(s), kind: "positive" },
+  { key: "appointment", label: "Hẹn gặp/Xem dự án", match: (s) => ["appointment", "booked", "booking_other", "closed"].includes(s), kind: "positive" },
+  { key: "booked", label: "Booking/Cọc", match: (s) => ["booked", "booking_other", "closed"].includes(s), kind: "positive" },
+  { key: "closed", label: "Chốt", match: (s) => s === "closed", kind: "positive" },
+  { key: "rejected", label: "Không QT / Phá", match: (s) => ["not_interested", "spam", "sale", "wrong_phone", "wrong_number", "hung_up"].includes(s), kind: "negative" },
+  { key: "weak_finance", label: "Tài chính yếu", match: (s) => s === "weak_finance", kind: "negative" },
+  { key: "unreachable_group", label: "Chưa LL / LH lại sau", match: (s) => ["unreachable", "callback"].includes(s), kind: "negative" },
 ];
+
+function resolveLeadSaleName(lead = {}, history = []) {
+  const sn = (lead.sale_name || "").trim();
+  if (sn && sn.toLowerCase() !== "chưa chia") return sn;
+  const sorted = [...history].sort((a, b) => {
+    const ta = parseLeadDate(a.contact_date)?.getTime() || 0;
+    const tb = parseLeadDate(b.contact_date)?.getTime() || 0;
+    return tb - ta || (b.seq || 0) - (a.seq || 0);
+  });
+  for (const h of sorted) {
+    const hn = (h.sale_name || "").trim();
+    if (hn && hn.toLowerCase() !== "chưa chia") return hn;
+  }
+  return null;
+}
+
+function getSaleResponseMs(lead = {}, history = [], saleName = "") {
+  const created = parseLeadDate(lead.created_at);
+  if (!created || !saleName) return null;
+  const target = normalizePersonNameServer(saleName);
+  const sorted = [...history].sort((a, b) => {
+    const ta = parseLeadDate(a.contact_date)?.getTime() || 0;
+    const tb = parseLeadDate(b.contact_date)?.getTime() || 0;
+    return ta - tb || (a.seq || 0) - (b.seq || 0);
+  });
+  for (const h of sorted) {
+    const st = normalizeStatus(h.status || "");
+    if (!st || st === "new") continue;
+    if (normalizePersonNameServer(h.sale_name || "") !== target) continue;
+    const contact = parseLeadDate(h.contact_date);
+    if (!contact) continue;
+    const diff = contact.getTime() - created.getTime();
+    if (diff >= 0) return diff;
+  }
+  return null;
+}
+
+function bumpSourceStats(bucket, tabStatus) {
+  if (tabStatus === "booked") bucket.booked += 1;
+  else if (tabStatus === "booking_other") bucket.bookingOther += 1;
+  else if (tabStatus === "closed") bucket.closed += 1;
+}
 
 function buildTrendSeries(range, leadsByDay, dailyCostMap) {
   const days = [];
@@ -4313,7 +4359,8 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     const saleMap = {};
 
     for (const lead of filteredLeads) {
-      const tabStatus = getAdminLeadTabStatus(lead, historyMap[lead.id] || []);
+      const hist = historyMap[lead.id] || [];
+      const tabStatus = getAdminLeadTabStatus(lead, hist);
       stats.total += 1;
       stats[tabStatus] = (stats[tabStatus] || 0) + 1;
 
@@ -4321,36 +4368,38 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       if (iso) leadsByDay[iso] = (leadsByDay[iso] || 0) + 1;
 
       const channel = normalizeLeadChannel(lead);
-      sourceMap[channel] = (sourceMap[channel] || 0) + 1;
+      if (!sourceMap[channel]) sourceMap[channel] = { leads: 0, booked: 0, bookingOther: 0, closed: 0 };
+      sourceMap[channel].leads += 1;
+      bumpSourceStats(sourceMap[channel], tabStatus);
 
       const campKey = (lead.campaign || "").trim() || "(Không có chiến dịch)";
-      if (!campaignMap[campKey]) campaignMap[campKey] = { name: campKey, leads: 0, channel };
+      if (!campaignMap[campKey]) {
+        campaignMap[campKey] = { name: campKey, leads: 0, booked: 0, bookingOther: 0, closed: 0, channel };
+      }
       campaignMap[campKey].leads += 1;
+      bumpSourceStats(campaignMap[campKey], tabStatus);
 
-      const saleName = (lead.sale_name || "").trim();
-      if (!saleName || saleName.toLowerCase() === "chưa chia") continue;
+      const saleName = resolveLeadSaleName(lead, hist);
+      if (!saleName) continue;
       if (!saleMap[saleName]) {
         saleMap[saleName] = {
-          name: saleName, total: 0, closed: 0, booked: 0,
+          name: saleName, total: 0, closed: 0, booked: 0, bookingOther: 0,
           interested: 0, consulting: 0, appointment: 0,
-          responseTimes: [], winBase: 0,
+          responseTimes: [],
         };
       }
       const sm = saleMap[saleName];
       sm.total += 1;
       sm[tabStatus] = (sm[tabStatus] || 0) + 1;
       if (tabStatus === "closed") sm.closed += 1;
-      if (tabStatus === "booked" || tabStatus === "booking_other") sm.booked += 1;
+      if (tabStatus === "booked") sm.booked += 1;
+      if (tabStatus === "booking_other") sm.bookingOther += 1;
       if (["interested", "low_interest", "other_project"].includes(tabStatus)) sm.interested += 1;
       if (tabStatus === "consulting") sm.consulting += 1;
       if (tabStatus === "appointment") sm.appointment += 1;
 
-      const hist = historyMap[lead.id] || [];
-      const firstAction = hist.find((h) => h.sale_name && h.contact_date);
-      if (firstAction && lead.created_at && firstAction.contact_date) {
-        const diff = new Date(firstAction.contact_date).getTime() - parseLeadDate(lead.created_at)?.getTime();
-        if (diff > 0) sm.responseTimes.push(diff);
-      }
+      const respMs = getSaleResponseMs(lead, hist, saleName);
+      if (respMs != null) sm.responseTimes.push(respMs);
     }
 
     const funnel = FUNNEL_STAGE_DEFS.map((stage) => {
@@ -4359,11 +4408,14 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         const tabStatus = getAdminLeadTabStatus(lead, historyMap[lead.id] || []);
         if (stage.match(tabStatus)) count += 1;
       }
-      return { key: stage.key, label: stage.label, value: count };
+      return { key: stage.key, label: stage.label, value: count, kind: stage.kind };
     });
 
-    const qualityGood = (stats.interested || 0) + (stats.consulting || 0) + (stats.appointment || 0);
-    const qualityBad = (stats.wrong_number || 0) + (stats.wrong_phone || 0) + (stats.spam || 0);
+    const qualityGood = (stats.interested || 0) + (stats.low_interest || 0) + (stats.other_project || 0)
+      + (stats.consulting || 0) + (stats.appointment || 0);
+    const qualityBad = (stats.not_interested || 0) + (stats.spam || 0) + (stats.sale || 0)
+      + (stats.wrong_number || 0) + (stats.wrong_phone || 0) + (stats.hung_up || 0)
+      + (stats.weak_finance || 0) + (stats.unreachable || 0) + (stats.callback || 0);
 
     let projectRows = await all(db, "SELECT id, cost_data FROM projects");
     if (req.user.role === "manager") {
@@ -4411,12 +4463,13 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         const rt = s.responseTimes;
         const avgResponseMs = rt.length ? Math.round(rt.reduce((a, b) => a + b, 0) / rt.length) : null;
         const winRate = s.total ? +((s.closed / s.total) * 100).toFixed(1) : 0;
-        const convertRate = s.total ? +(((s.closed + s.booked) / s.total) * 100).toFixed(1) : 0;
+        const convertRate = s.total ? +(((s.closed + s.booked + s.bookingOther) / s.total) * 100).toFixed(1) : 0;
         return {
           name: s.name,
           total: s.total,
           closed: s.closed,
           booked: s.booked,
+          bookingOther: s.bookingOther,
           interested: s.interested,
           consulting: s.consulting,
           appointment: s.appointment,
@@ -4427,12 +4480,24 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       })
       .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
+    const unassignedLeads = filteredLeads.filter((l) => !resolveLeadSaleName(l, historyMap[l.id] || [])).length;
+
     const sources = Object.entries(sourceMap)
-      .map(([name, leads]) => ({ name, leads, pct: stats.total ? +((leads / stats.total) * 100).toFixed(1) : 0 }))
+      .map(([name, row]) => ({
+        name,
+        leads: row.leads,
+        booked: row.booked,
+        bookingOther: row.bookingOther,
+        closed: row.closed,
+        pct: stats.total ? +((row.leads / stats.total) * 100).toFixed(1) : 0,
+      }))
       .sort((a, b) => b.leads - a.leads);
 
     const campaigns = Object.values(campaignMap)
-      .map((c) => ({ ...c, pct: stats.total ? +((c.leads / stats.total) * 100).toFixed(1) : 0 }))
+      .map((c) => ({
+        ...c,
+        pct: stats.total ? +((c.leads / stats.total) * 100).toFixed(1) : 0,
+      }))
       .sort((a, b) => b.leads - a.leads)
       .slice(0, 15);
 
@@ -4449,13 +4514,23 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         quality: {
           good: qualityGood,
           bad: qualityBad,
+          neutral: stats.new || 0,
           qualityPct: stats.total ? +((qualityGood / stats.total) * 100).toFixed(1) : 0,
           interested: stats.interested || 0,
+          lowInterest: stats.low_interest || 0,
+          otherProject: stats.other_project || 0,
           consulting: stats.consulting || 0,
           appointment: stats.appointment || 0,
+          notInterested: stats.not_interested || 0,
+          spam: stats.spam || 0,
+          sale: stats.sale || 0,
           wrongNumber: stats.wrong_number || 0,
           wrongPhone: stats.wrong_phone || 0,
-          spam: stats.spam || 0,
+          hungUp: stats.hung_up || 0,
+          weakFinance: stats.weak_finance || 0,
+          unreachable: stats.unreachable || 0,
+          callback: stats.callback || 0,
+          newLeads: stats.new || 0,
         },
         sales: {
           booked: (stats.booked || 0) + (stats.booking_other || 0),
@@ -4468,6 +4543,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       sources,
       campaigns,
       saleRanking,
+      unassignedLeads,
     });
   } catch (err) {
     console.error("[GET /api/dashboard]", err);

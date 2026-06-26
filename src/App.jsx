@@ -2955,107 +2955,207 @@ function formatShortDate(iso) {
   return `${d}/${m}`;
 }
 
-function FunnelChart({ stages, compact }) {
-  const max = stages[0]?.value || 1;
+function FunnelChart({ stages }) {
+  const max = stages.find((s) => s.key === "total")?.value || stages[0]?.value || 1;
   if (!max) return <div className="crm-dash-empty">Không có dữ liệu</div>;
+  let lastPositiveValue = max;
+  const rows = [];
+  for (const stage of stages) {
+    const isNegative = stage.kind === "negative";
+    const isCore = stage.kind === "core";
+    const widthPct = Math.max(isNegative ? 8 : 12, (stage.value / max) * 100);
+    const dropPct = !isNegative && !isCore && lastPositiveValue
+      ? (((lastPositiveValue - stage.value) / lastPositiveValue) * 100).toFixed(0)
+      : null;
+    if (!isNegative && !isCore) lastPositiveValue = stage.value;
+    const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
+    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore });
+  }
   return (
     <div className="crm-funnel">
-      {stages.map((stage, i) => {
-        const widthPct = Math.max(12, (stage.value / max) * 100);
-        const dropPct = i > 0 && stages[i - 1].value
-          ? (((stages[i - 1].value - stage.value) / stages[i - 1].value) * 100).toFixed(0)
-          : null;
-        const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
-        return (
-          <div key={stage.key} className="crm-funnel__row">
-            <div className="crm-funnel__meta">
-              <span className="crm-funnel__label">{stage.label}</span>
-              <span className="crm-funnel__stats">
-                <strong>{stage.value}</strong>
-                <span>{convPct}%</span>
-                {dropPct != null && Number(dropPct) > 0 && <span className="crm-funnel__drop">−{dropPct}%</span>}
-              </span>
-            </div>
-            <div className="crm-funnel__track">
-              <div
-                className="crm-funnel__bar"
-                style={{ width: `${widthPct}%`, opacity: compact ? 0.85 : 1 - i * 0.08 }}
-              />
-            </div>
+      {rows.map(({ stage, widthPct, dropPct, convPct, isNegative, isCore }) => (
+        <div key={stage.key} className={`crm-funnel__row${isNegative ? " crm-funnel__row--negative" : ""}${isCore && stage.key === "new" ? " crm-funnel__row--neutral" : ""}`}>
+          <div className="crm-funnel__meta">
+            <span className="crm-funnel__label">{stage.label}</span>
+            <span className="crm-funnel__stats">
+              <strong>{stage.value}</strong>
+              <span>{convPct}%</span>
+              {dropPct != null && Number(dropPct) > 0 && <span className="crm-funnel__drop">−{dropPct}%</span>}
+            </span>
           </div>
-        );
-      })}
+          <div className="crm-funnel__track">
+            <div
+              className="crm-funnel__bar"
+              style={{
+                width: `${widthPct}%`,
+                background: isNegative
+                  ? "linear-gradient(90deg, #ef4444, #f97316)"
+                  : isCore && stage.key === "new"
+                    ? "linear-gradient(90deg, #f59e0b, #fbbf24)"
+                    : undefined,
+              }}
+            />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
 
 function TrendChart({ data, compact }) {
   if (!data?.length) return <div className="crm-dash-empty">Không có dữ liệu xu hướng</div>;
-  const w = compact ? 320 : 520;
-  const h = compact ? 160 : 220;
-  const pad = { t: 12, r: 12, b: 28, l: 36 };
+  const w = compact ? 320 : 560;
+  const hLead = compact ? 100 : 130;
+  const hCpl = compact ? 90 : 110;
+  const pad = { t: 8, r: 8, b: 22, l: 32 };
   const innerW = w - pad.l - pad.r;
-  const innerH = h - pad.t - pad.b;
   const maxLeads = Math.max(1, ...data.map((d) => d.leads));
-  const maxCpl = Math.max(1, ...data.map((d) => d.cpl));
+  const maxCpl = Math.max(1, ...data.filter((d) => d.cpl > 0).map((d) => d.cpl));
   const step = data.length > 1 ? innerW / (data.length - 1) : innerW;
-  const barW = Math.min(24, Math.max(6, step * 0.55));
+  const barW = Math.min(22, Math.max(5, step * 0.5));
+  const innerHLead = hLead - pad.t - pad.b;
+  const innerHCpl = hCpl - pad.t - pad.b;
 
-  const cplPoints = data.map((d, i) => {
-    const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
-    const y = pad.t + innerH - (d.cpl / maxCpl) * innerH;
-    return `${x},${y}`;
-  }).join(" ");
+  const labelDates = data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.max(1, Math.ceil(data.length / 7)) === 0);
 
   return (
-    <div className="crm-trend-chart">
-      <svg viewBox={`0 0 ${w} ${h}`} className="crm-trend-chart__svg" preserveAspectRatio="xMidYMid meet">
-        {[0, 0.5, 1].map((f) => (
-          <line
-            key={f}
-            x1={pad.l}
-            x2={w - pad.r}
-            y1={pad.t + innerH * (1 - f)}
-            y2={pad.t + innerH * (1 - f)}
-            stroke="#e5e7eb"
-            strokeWidth="1"
-          />
-        ))}
-        {data.map((d, i) => {
-          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
-          const barH = (d.leads / maxLeads) * innerH;
-          return (
-            <rect
-              key={d.date}
-              x={x - barW / 2}
-              y={pad.t + innerH - barH}
-              width={barW}
-              height={barH}
-              rx="3"
-              fill="#1a3c20"
-              opacity="0.75"
-            />
-          );
-        })}
-        <polyline points={cplPoints} fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinejoin="round" />
-        {data.map((d, i) => {
-          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
-          const y = pad.t + innerH - (d.cpl / maxCpl) * innerH;
-          return <circle key={`c-${d.date}`} cx={x} cy={y} r="3.5" fill="#8b5cf6" />;
-        })}
-        {data.filter((_, i) => i === 0 || i === data.length - 1 || i % Math.ceil(data.length / 6) === 0).map((d) => {
-          const i = data.indexOf(d);
-          const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
-          return (
-            <text key={`t-${d.date}`} x={x} y={h - 6} textAnchor="middle" fontSize="9" fill="#64748b">
-              {formatShortDate(d.date)}
-            </text>
-          );
-        })}
-      </svg>
-      <div className="crm-trend-chart__legend">
-        <span><i style={{ background: "#1a3c20" }} /> Lead/ngày</span>
-        <span><i style={{ background: "#8b5cf6" }} /> CPL</span>
+    <div className="crm-trend-split">
+      <div className="crm-trend-split__block">
+        <div className="crm-trend-split__head">
+          <span className="crm-trend-split__dot" style={{ background: "#1a3c20" }} />
+          Số lead nhận mỗi ngày
+        </div>
+        <svg viewBox={`0 0 ${w} ${hLead}`} className="crm-trend-chart__svg" preserveAspectRatio="xMidYMid meet">
+          {[0, 0.5, 1].map((f) => (
+            <line key={f} x1={pad.l} x2={w - pad.r} y1={pad.t + innerHLead * (1 - f)} y2={pad.t + innerHLead * (1 - f)} stroke="#e5e7eb" strokeWidth="1" />
+          ))}
+          {data.map((d, i) => {
+            const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+            const barH = (d.leads / maxLeads) * innerHLead;
+            return (
+              <g key={d.date}>
+                <rect x={x - barW / 2} y={pad.t + innerHLead - barH} width={barW} height={barH} rx="3" fill="#1a3c20" opacity="0.82" />
+                {d.leads > 0 && barH > 14 && (
+                  <text x={x} y={pad.t + innerHLead - barH + 12} textAnchor="middle" fontSize="8" fill="#fff" fontWeight="700">{d.leads}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      <div className="crm-trend-split__block">
+        <div className="crm-trend-split__head">
+          <span className="crm-trend-split__dot" style={{ background: "#8b5cf6" }} />
+          CPL mỗi ngày (chi phí / lead)
+        </div>
+        <svg viewBox={`0 0 ${w} ${hCpl}`} className="crm-trend-chart__svg" preserveAspectRatio="xMidYMid meet">
+          {[0, 0.5, 1].map((f) => (
+            <line key={f} x1={pad.l} x2={w - pad.r} y1={pad.t + innerHCpl * (1 - f)} y2={pad.t + innerHCpl * (1 - f)} stroke="#e5e7eb" strokeWidth="1" />
+          ))}
+          {data.map((d, i) => {
+            if (i === 0) return null;
+            const x0 = pad.l + (i - 1) * step;
+            const x1 = pad.l + i * step;
+            const y0 = pad.t + innerHCpl - ((data[i - 1].cpl / maxCpl) * innerHCpl);
+            const y1 = pad.t + innerHCpl - ((d.cpl / maxCpl) * innerHCpl);
+            return <line key={`l-${d.date}`} x1={x0} y1={y0} x2={x1} y2={y1} stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round" />;
+          })}
+          {data.map((d, i) => {
+            const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+            const y = pad.t + innerHCpl - ((d.cpl / maxCpl) * innerHCpl);
+            return (
+              <g key={d.date}>
+                <circle cx={x} cy={y} r="4" fill="#8b5cf6" />
+                {d.cpl > 0 && (
+                  <text x={x} y={Math.max(pad.t + 8, y - 8)} textAnchor="middle" fontSize="7" fill="#7c3aed" fontWeight="700">
+                    {d.cpl >= 1000 ? `${Math.round(d.cpl / 1000)}k` : d.cpl}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          {labelDates.map((d) => {
+            const i = data.indexOf(d);
+            const x = pad.l + (data.length > 1 ? i * step : innerW / 2);
+            return (
+              <text key={`t-${d.date}`} x={x} y={hCpl - 4} textAnchor="middle" fontSize="8" fill="#64748b">{formatShortDate(d.date)}</text>
+            );
+          })}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function MarketingKpiStrip({ totalLeads, totalSpent, cpl }) {
+  const items = [
+    { label: "Tổng Lead", value: totalLeads, color: "#1a3c20" },
+    { label: "Chi phí", value: formatVND(totalSpent), color: "#8b5cf6" },
+    { label: "CPL", value: formatVND(cpl), sub: "Cost per Lead", color: "#6366f1" },
+  ];
+  return (
+    <div className="crm-marketing-strip">
+      {items.map((item) => (
+        <div key={item.label} className="crm-marketing-stat">
+          <div className="crm-marketing-stat__label">{item.label}</div>
+          <div className="crm-marketing-stat__value" style={{ color: item.color }}>{item.value}</div>
+          {item.sub && <div className="crm-marketing-stat__sub">{item.sub}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function QualityMiniStat({ label, value, tone = "neutral" }) {
+  return (
+    <div className={`crm-quality-stat crm-quality-stat--${tone}`}>
+      <span className="crm-quality-stat__value">{value ?? 0}</span>
+      <span className="crm-quality-stat__label">{label}</span>
+    </div>
+  );
+}
+
+function QualityKpiBoard({ q, total }) {
+  const pct = (v) => (total ? ((v / total) * 100).toFixed(1) : "0.0");
+  return (
+    <div className="crm-quality-board">
+      <div className="crm-quality-board__summary">
+        <div className="crm-quality-board__pill crm-quality-board__pill--good">
+          <strong>{q.good}</strong>
+          <span>Lead tốt ({q.qualityPct}%)</span>
+        </div>
+        <div className="crm-quality-board__pill crm-quality-board__pill--bad">
+          <strong>{q.bad}</strong>
+          <span>Không đạt ({pct(q.bad)}%)</span>
+        </div>
+        <div className="crm-quality-board__pill crm-quality-board__pill--neutral">
+          <strong>{q.newLeads}</strong>
+          <span>Chưa feedback ({pct(q.newLeads)}%)</span>
+        </div>
+      </div>
+      <div className="crm-quality-board__section">
+        <div className="crm-quality-board__section-title">Chất lượng tốt</div>
+        <div className="crm-quality-board__grid">
+          <QualityMiniStat label="Quan tâm" value={q.interested} tone="good" />
+          <QualityMiniStat label="QT hời hợt" value={q.lowInterest} tone="good" />
+          <QualityMiniStat label="QT DA khác" value={q.otherProject} tone="good" />
+          <QualityMiniStat label="Đang tư vấn" value={q.consulting} tone="good" />
+          <QualityMiniStat label="Hẹn gặp" value={q.appointment} tone="good" />
+        </div>
+      </div>
+      <div className="crm-quality-board__section">
+        <div className="crm-quality-board__section-title">Không đạt / cần theo dõi</div>
+        <div className="crm-quality-board__grid">
+          <QualityMiniStat label="Không QT" value={q.notInterested} tone="bad" />
+          <QualityMiniStat label="Phá/rác" value={q.spam} tone="bad" />
+          <QualityMiniStat label="Sale" value={q.sale} tone="bad" />
+          <QualityMiniStat label="Sai số" value={q.wrongNumber} tone="bad" />
+          <QualityMiniStat label="Thuê bao" value={q.wrongPhone} tone="bad" />
+          <QualityMiniStat label="Tắt máy ngang" value={q.hungUp} tone="bad" />
+          <QualityMiniStat label="Tài chính yếu" value={q.weakFinance} tone="warn" />
+          <QualityMiniStat label="Chưa LL được" value={q.unreachable} tone="warn" />
+          <QualityMiniStat label="LH lại sau" value={q.callback} tone="warn" />
+        </div>
       </div>
     </div>
   );
@@ -3105,6 +3205,7 @@ function DashboardPage({ projects, apiFetch }) {
   const sources = data?.sources || [];
   const campaigns = data?.campaigns || [];
   const saleRanking = data?.saleRanking || [];
+  const unassignedLeads = data?.unassignedLeads || 0;
   const rangeLabel = data?.range?.label || "";
 
   const timePresets = [
@@ -3149,29 +3250,35 @@ function DashboardPage({ projects, apiFetch }) {
           </select>
         </div>
         <div className="crm-dash-toolbar__meta">
-          {loading ? "Đang tải…" : rangeLabel}
+          {rangeLabel}
         </div>
       </div>
 
-      {loading && !data ? (
-        <div className="crm-dash-empty">Đang tải dữ liệu dashboard…</div>
-      ) : !data ? (
-        <div className="crm-dash-empty">Không tải được dữ liệu. Thử lại sau.</div>
-      ) : (
-        <>
+      <div className="crm-dashboard__body">
+        {loading && (
+          <div className="crm-dash-loading">
+            <RefreshCw size={36} className="crm-dash-loading__icon" />
+            <span>Đang tải dữ liệu…</span>
+          </div>
+        )}
+
+        {!loading && !data ? (
+          <div className="crm-dash-empty">Không tải được dữ liệu. Thử lại sau.</div>
+        ) : data ? (
+          <div className={`crm-dashboard__content${loading ? " crm-dashboard__content--dim" : ""}`}>
           <div className="crm-dash-row crm-dash-row--kpis">
-            <DashboardKpiGroup title="Hiệu suất Marketing" icon={Megaphone} accent="#1a3c20">
-              <Card title="Tổng Lead" value={kpis.marketing.totalLeads} color="#1a3c20" compact={isMobile} />
-              <Card title="Chi phí" value={formatVND(kpis.marketing.totalSpent)} color="#8b5cf6" compact={isMobile} />
-              <Card title="CPL" value={formatVND(kpis.marketing.cpl)} sub="Cost per Lead" color="#6366f1" compact={isMobile} />
-            </DashboardKpiGroup>
-            <DashboardKpiGroup title="Chất lượng Lead" icon={Star} accent="#0284c7">
-              <Card title="Lead tốt" value={kpis.quality.good} sub={`${kpis.quality.qualityPct}% tổng lead`} color="#22c55e" compact={isMobile} />
-              <Card title="Quan tâm" value={kpis.quality.interested} color="#22c55e" compact={isMobile} />
-              <Card title="Đang tư vấn" value={kpis.quality.consulting} color="#6366f1" compact={isMobile} />
-              <Card title="Hẹn gặp" value={kpis.quality.appointment} color="#8b5cf6" compact={isMobile} />
-              <Card title="Không đạt" value={kpis.quality.bad} sub={`Sai số ${kpis.quality.wrongNumber} · Thuê bao ${kpis.quality.wrongPhone} · Rác ${kpis.quality.spam}`} color="#ef4444" compact={isMobile} />
-            </DashboardKpiGroup>
+            <section className="crm-dash-kpi-group crm-dash-kpi-group--marketing" style={{ "--dash-accent": "#1a3c20" }}>
+              <h4 className="crm-dash-kpi-group__title"><Megaphone size={16} /> Hiệu suất Marketing</h4>
+              <MarketingKpiStrip
+                totalLeads={kpis.marketing.totalLeads}
+                totalSpent={kpis.marketing.totalSpent}
+                cpl={kpis.marketing.cpl}
+              />
+            </section>
+            <section className="crm-dash-kpi-group crm-dash-kpi-group--quality" style={{ "--dash-accent": "#0284c7" }}>
+              <h4 className="crm-dash-kpi-group__title"><Star size={16} /> Chất lượng Lead</h4>
+              <QualityKpiBoard q={kpis.quality} total={kpis.marketing.totalLeads} />
+            </section>
             <DashboardKpiGroup title="Kết quả Kinh doanh" icon={Trophy} accent="#059669">
               <Card title="Booking/Cọc" value={kpis.sales.booked} color="#10b981" compact={isMobile} />
               <Card title="Chốt" value={kpis.sales.closed} color="#059669" compact={isMobile} />
@@ -3192,6 +3299,9 @@ function DashboardPage({ projects, apiFetch }) {
           <div className={`crm-dash-row crm-dash-row--bottom${isMobile ? " crm-dash-row--stack" : ""}`}>
             <div className="crm-dash-panel crm-dash-panel--wide">
               <h4 className="crm-dash-panel__title"><Trophy size={18} /> Bảng xếp hạng Sale</h4>
+              {unassignedLeads > 0 && (
+                <div className="crm-dash-sale-note">{unassignedLeads} lead chưa gán sale (Chưa chia)</div>
+              )}
               {isMobile ? (
                 <div className="crm-dash-sale-cards">
                   {saleRanking.slice(0, 10).map((s, i) => (
@@ -3201,7 +3311,8 @@ function DashboardPage({ projects, apiFetch }) {
                         <strong>{s.total} lead</strong>
                       </div>
                       <div className="crm-dash-sale-card__metrics">
-                        <span>Win: <b>{s.winRate}%</b></span>
+                        <span>Booking: <b>{s.booked || 0}</b></span>
+                        <span>BK khác: <b>{s.bookingOther || 0}</b></span>
                         <span>Chốt: <b>{s.closed}</b></span>
                         <span>Phản hồi: <b>{formatResponseMs(s.avgResponseMs)}</b></span>
                       </div>
@@ -3218,9 +3329,10 @@ function DashboardPage({ projects, apiFetch }) {
                         <th style={thStyle}>Tổng lead</th>
                         <th style={thStyle}>Quan tâm</th>
                         <th style={thStyle}>Booking</th>
+                        <th style={thStyle}>BK sàn khác</th>
                         <th style={thStyle}>Chốt</th>
                         <th style={thStyle}>Win rate</th>
-                        <th style={thStyle}>Phản hồi TB</th>
+                        <th style={thStyle}>Cập nhật TB</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3231,6 +3343,7 @@ function DashboardPage({ projects, apiFetch }) {
                           <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
                           <td style={tdStyle}>{s.interested || 0}</td>
                           <td style={tdStyle}>{s.booked || 0}</td>
+                          <td style={tdStyle}>{s.bookingOther || 0}</td>
                           <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{s.closed || 0}</td>
                           <td style={{ ...tdStyle, fontWeight: 700, color: s.winRate >= 10 ? "#059669" : "#64748b" }}>{s.winRate}%</td>
                           <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{formatResponseMs(s.avgResponseMs)}</td>
@@ -3244,33 +3357,65 @@ function DashboardPage({ projects, apiFetch }) {
 
             <div className="crm-dash-panel">
               <h4 className="crm-dash-panel__title"><Globe size={18} /> Nguồn Lead</h4>
-              <div className="crm-dash-source-list">
-                {sources.length ? sources.map((src) => (
-                  <div key={src.name} className="crm-dash-source-row">
-                    <div className="crm-dash-source-row__head">
-                      <span>{src.name}</span>
-                      <span><strong>{src.leads}</strong> ({src.pct}%)</span>
-                    </div>
-                    <div className="crm-dash-source-row__bar">
-                      <div style={{ width: `${Math.max(4, src.pct)}%` }} />
-                    </div>
-                  </div>
-                )) : <div className="crm-dash-empty">Chưa có dữ liệu nguồn</div>}
+              <div className="crm-dash-table-wrap">
+                {sources.length ? (
+                  <table style={tableStyle} className="crm-dash-source-table">
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Nguồn</th>
+                        <th style={thStyle}>Lead</th>
+                        <th style={thStyle}>Booking</th>
+                        <th style={thStyle}>BK sàn khác</th>
+                        <th style={thStyle}>Chốt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sources.map((src) => (
+                        <tr key={src.name}>
+                          <td style={{ ...tdStyle, fontWeight: 600 }}>{src.name}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>{src.leads} <span style={{ color: "#94a3b8", fontSize: 11 }}>({src.pct}%)</span></td>
+                          <td style={tdStyle}>{src.booked || 0}</td>
+                          <td style={tdStyle}>{src.bookingOther || 0}</td>
+                          <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{src.closed || 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <div className="crm-dash-empty">Chưa có dữ liệu nguồn</div>}
               </div>
 
               <h4 className="crm-dash-panel__title crm-dash-panel__title--sub"><Megaphone size={16} /> Chiến dịch</h4>
-              <div className="crm-dash-campaign-list">
-                {campaigns.length ? campaigns.slice(0, 8).map((c) => (
-                  <div key={c.name} className="crm-dash-campaign-row">
-                    <span className="crm-dash-campaign-row__name" title={c.name}>{c.name}</span>
-                    <span className="crm-dash-campaign-row__count">{c.leads}</span>
-                  </div>
-                )) : <div className="crm-dash-empty">Chưa có chiến dịch</div>}
+              <div className="crm-dash-table-wrap">
+                {campaigns.length ? (
+                  <table style={tableStyle} className="crm-dash-source-table">
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Chiến dịch</th>
+                        <th style={thStyle}>Lead</th>
+                        <th style={thStyle}>Booking</th>
+                        <th style={thStyle}>BK sàn khác</th>
+                        <th style={thStyle}>Chốt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {campaigns.slice(0, 10).map((c) => (
+                        <tr key={c.name}>
+                          <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.name}>{c.name}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>{c.leads}</td>
+                          <td style={tdStyle}>{c.booked || 0}</td>
+                          <td style={tdStyle}>{c.bookingOther || 0}</td>
+                          <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{c.closed || 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : <div className="crm-dash-empty">Chưa có chiến dịch</div>}
               </div>
             </div>
           </div>
-        </>
-      )}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
