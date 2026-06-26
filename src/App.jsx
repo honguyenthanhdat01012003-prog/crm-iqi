@@ -3148,6 +3148,40 @@ function buildLeadTabs(isSale) {
   ];
 }
 
+function AdminToolbarDropdown({ menuKey, activeKey, onToggle, label, icon: Icon, children }) {
+  const open = activeKey === menuKey;
+  return (
+    <div className="crm-admin-toolbar-dropdown">
+      <button
+        type="button"
+        className={`crm-admin-toolbar-btn${open ? " crm-admin-toolbar-btn--open" : ""}`}
+        onClick={() => onToggle(open ? null : menuKey)}
+      >
+        <Icon size={15} strokeWidth={2} />
+        {label}
+        <ChevronDown size={14} className={`crm-admin-toolbar-chevron${open ? " crm-admin-toolbar-chevron--open" : ""}`} />
+      </button>
+      {open && (
+        <div className="crm-admin-toolbar-panel" role="menu">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminToolbarMenuItem({ icon: Icon, title, desc, disabled, onClick }) {
+  return (
+    <button type="button" role="menuitem" className="crm-admin-toolbar-panel-item" disabled={disabled} onClick={onClick}>
+      <span className="crm-admin-toolbar-panel-icon">{Icon ? <Icon size={15} /> : null}</span>
+      <span className="crm-admin-toolbar-panel-text">
+        <span className="crm-admin-toolbar-panel-title">{title}</span>
+        {desc && <span className="crm-admin-toolbar-panel-desc">{desc}</span>}
+      </span>
+    </button>
+  );
+}
+
 const LeadsPage = (props) => {
   const {
     leads,
@@ -3248,6 +3282,16 @@ const LeadsPage = (props) => {
   }, [saleFilterOpen]);
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [adminToolsOpen, setAdminToolsOpen] = useState(false);
+  const [adminDeskMenu, setAdminDeskMenu] = useState(null);
+  const adminDeskMenuRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!adminDeskMenu) return;
+    const handler = (e) => {
+      if (adminDeskMenuRef.current && !adminDeskMenuRef.current.contains(e.target)) setAdminDeskMenu(null);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [adminDeskMenu]);
   const [shuffleProject, setShuffleProject] = useState("");
   const [shuffleMktMode, setShuffleMktMode] = useState(false);
   const [shuffleTargetProject, setShuffleTargetProject] = useState("");
@@ -3929,6 +3973,103 @@ const LeadsPage = (props) => {
     setRotateHistLoading(false);
   };
 
+  const closeAdminDeskMenu = () => setAdminDeskMenu(null);
+
+  const handleRedistributeManagers = async () => {
+    if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
+    if (!(await showConfirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?"))) return;
+    setRedistributing(true);
+    try {
+      const r = await apiFetch(`${API}/admin/redistribute-managers/${selectedProject}`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+      const distStr = Object.entries(data.distribution).map(([k, v]) => `${k}: ${v}`).join(", ");
+      showToast(`Đã phân chia ${data.total} lead cho ${data.managers} quản lý (${distStr})`, "success");
+      const r2 = await apiFetch(`${API}/data`);
+      applyApiData(await r2.json());
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    } finally {
+      setRedistributing(false);
+    }
+  };
+
+  const handleRecoverSalesFromHistory = async () => {
+    if (!(await showConfirm("Khôi phục lại Sale + Trạng thái từ lịch sử liên hệ?\nDùng khi bị mất dữ liệu sale sau sync lỗi."))) return;
+    try {
+      const r = await apiFetch(`${API}/recover-sales`, { method: "POST", body: JSON.stringify({ projectId: selectedProject }) });
+      const data = await r.json();
+      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+      showToast(`Khôi phục xong: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái (${data.total} lead)`, "success");
+      const r2 = await apiFetch(`${API}/data`);
+      applyApiData(await r2.json());
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    }
+  };
+
+  const handleRecoverFromProjectBackup = async () => {
+    if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu."))) return;
+    try {
+      const r = await apiFetch(`${API}/recover-from-backup`, { method: "POST", body: JSON.stringify({ projectId: selectedProject }) });
+      const data = await r.json();
+      if (data.error && data.total === 0) { showToast(data.error, "error"); return; }
+      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+      showToast(`Khôi phục từ backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử (${data.total} lead)`, "success");
+      const r2 = await apiFetch(`${API}/data`);
+      applyApiData(await r2.json());
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    }
+  };
+
+  const handleRecoverFromDbBackup = async () => {
+    if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ"))) return;
+    try {
+      const r = await apiFetch(`${API}/recover-sale-from-dbbackup`, { method: "POST", body: JSON.stringify({}) });
+      const data = await r.json();
+      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+      showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử`, "success");
+      const r2 = await apiFetch(`${API}/data`);
+      applyApiData(await r2.json());
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    }
+  };
+
+  const handleBackupNow = async () => {
+    if (!(await showConfirm("Backup database ngay bây giờ?"))) return;
+    try {
+      const r = await apiFetch(`${API}/backup-now`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
+      showToast(`Backup OK: ${data.filename} (${data.sizeMB}MB)${data.removed ? `, xóa ${data.removed} bản cũ` : ""}`, "success");
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    }
+  };
+
+  const handleRestoreDb = async () => {
+    try {
+      const r = await apiFetch(`${API}/backups`);
+      const data = await r.json();
+      if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
+      const list = data.backups.map((b, i) => `${i + 1}. ${b.filename} (${b.sizeMB}MB) - ${new Date(b.date).toLocaleString("vi-VN")}`).join("\n");
+      const choice = window.prompt(`Có ${data.total} bản backup:\n\n${list}\n\nNhập số thứ tự để khôi phục (hoặc bấm Cancel):`);
+      if (!choice) return;
+      const idx = parseInt(choice) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
+      const selected = data.backups[idx];
+      if (!(await showConfirm(`⚠️ Khôi phục DB từ:\n${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nDB hiện tại sẽ được backup trước khi restore.\nSau khi restore cần RESTART server.`))) return;
+      const r2 = await apiFetch(`${API}/restore-backup`, { method: "POST", body: JSON.stringify({ filename: selected.filename }) });
+      const d2 = await r2.json();
+      if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
+      showToast(d2.message, "success");
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    }
+  };
+
   return (
     <>
       {/* Sale header */}
@@ -4309,7 +4450,7 @@ const LeadsPage = (props) => {
       ) : (
       <>
       {isAdmin && (
-        <div className={isMobile ? "crm-admin-tools-wrap" : ""} style={{ marginBottom: isMobile ? 10 : 16 }}>
+        <div className={isMobile ? "crm-admin-tools-wrap" : ""} style={{ marginBottom: isMobile ? 10 : 0 }}>
           {isMobile && !adminToolsOpen && !shuffleOpen && (
             <div className="crm-admin-tools-mobile-bar">
               <button
@@ -4333,119 +4474,47 @@ const LeadsPage = (props) => {
               <ChevronDown size={14} style={{ transform: "rotate(180deg)" }} /> Thu gọn công cụ
             </button>
           )}
+        {isMobile ? (
         <div
-          className={isMobile
-            ? `crm-admin-tools-grid${!adminToolsOpen && shuffleOpen ? " crm-admin-tools-grid--shuffle-only" : ""}`
-            : ""}
-          style={isMobile
-            ? ((adminToolsOpen || shuffleOpen) ? undefined : { display: "none" })
-            : { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}
+          className={`crm-admin-tools-grid${!adminToolsOpen && shuffleOpen ? " crm-admin-tools-grid--shuffle-only" : ""}`}
+          style={(adminToolsOpen || shuffleOpen) ? undefined : { display: "none" }}
         >
           <button onClick={() => setShuffleOpen(!shuffleOpen)}
             style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
             <Shuffle size={16} /> Chia Lead cho Sale
           </button>
           {isAdminOnly && selectedProject && (
-            <button
-              disabled={redistributing}
-              onClick={async () => {
-                if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
-                if (!(await showConfirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?"))) return;
-                setRedistributing(true);
-                try {
-                  const r = await apiFetch(`${API}/admin/redistribute-managers/${selectedProject}`, { method: "POST" });
-                  const data = await r.json();
-                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                  const distStr = Object.entries(data.distribution).map(([k, v]) => `${k}: ${v}`).join(", ");
-                  showToast(`Đã phân chia ${data.total} lead cho ${data.managers} quản lý (${distStr})`, "success");
-                  // Refresh data
-                  const r2 = await apiFetch(`${API}/data`);
-                  const d2 = await r2.json();
-                  applyApiData(d2);
-                } catch (e) {
-                  showToast("Lỗi: " + e.message, "error");
-                } finally {
-                  setRedistributing(false);
-                }
-              }}
+            <button disabled={redistributing} onClick={handleRedistributeManagers}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #7c3aed, #6d28d9)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
               <Shield size={16} /> {redistributing ? "Đang chia..." : "Phân chia lại quản lý"}
             </button>
           )}
           {isAdminOnly && selectedProject && (
-            <button
-              onClick={async () => {
-                if (!(await showConfirm("Khôi phục lại Sale + Trạng thái từ lịch sử liên hệ?\nDùng khi bị mất dữ liệu sale sau sync lỗi."))) return;
-                try {
-                  const r = await apiFetch(`${API}/recover-sales`, {
-                    method: "POST",
-                    body: JSON.stringify({ projectId: selectedProject }),
-                  });
-                  const data = await r.json();
-                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                  showToast(`Khôi phục xong: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái (${data.total} lead)`, "success");
-                  const r2 = await apiFetch(`${API}/data`);
-                  const d2 = await r2.json();
-                  applyApiData(d2);
-                } catch (e) {
-                  showToast("Lỗi: " + e.message, "error");
-                }
-              }}
+            <button onClick={handleRecoverSalesFromHistory}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #dc2626, #b91c1c)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
               <RefreshCw size={16} /> Khôi phục Sale từ lịch sử
             </button>
           )}
           {isAdminOnly && (
-            <button
-              onClick={() => setRestoreModal({ step: 'pick', projectId: selectedProject ? Number(selectedProject) : null, preview: null, loading: false, result: null })}
+            <button onClick={() => setRestoreModal({ step: "pick", projectId: selectedProject ? Number(selectedProject) : null, preview: null, loading: false, result: null })}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #16a34a, #15803d)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
               <RefreshCw size={16} /> Khôi phục lead về Sale cũ
             </button>
           )}
           {isAdminOnly && selectedProject && (
-            <button
-              onClick={async () => {
-                if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ bản backup trước sync?\nDùng khi sync lỗi làm mất hết dữ liệu."))) return;
-                try {
-                  const r = await apiFetch(`${API}/recover-from-backup`, {
-                    method: "POST",
-                    body: JSON.stringify({ projectId: selectedProject }),
-                  });
-                  const data = await r.json();
-                  if (data.error && data.total === 0) { showToast(data.error, "error"); return; }
-                  if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                  showToast(`Khôi phục từ backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử (${data.total} lead)`, "success");
-                  const r2 = await apiFetch(`${API}/data`);
-                  const d2 = await r2.json();
-                  applyApiData(d2);
-                } catch (e) {
-                  showToast("Lỗi: " + e.message, "error");
-                }
-              }}
+            <button onClick={handleRecoverFromProjectBackup}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #7c3aed, #5b21b6)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
               <RefreshCw size={16} /> Khôi phục từ Backup
             </button>
           )}
-          {isAdminOnly && <button
-            onClick={async () => {
-              if (!(await showConfirm("Khôi phục Sale + Trạng thái + Lịch sử từ file crm.db.backup (hôm qua)?\n\n• Sale: chỉ cập nhật lead đang 'Chưa chia'\n• Trạng thái: chỉ cập nhật lead đang 'Mới'\n• Lịch sử: khôi phục các lần feedback/liên hệ cũ"))) return;
-              try {
-                const r = await apiFetch(`${API}/recover-sale-from-dbbackup`, { method: "POST", body: JSON.stringify({}) });
-                const data = await r.json();
-                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử`, "success");
-                const r2 = await apiFetch(`${API}/data`);
-                const d2 = await r2.json();
-                applyApiData(d2);
-              } catch (e) {
-                showToast("Lỗi: " + e.message, "error");
-              }
-            }}
-            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #059669, #047857)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
-            <RefreshCw size={16} /> Khôi phục Sale từ DB Backup
-          </button>}
-          {isAdminOnly && <button
-            onClick={async () => {
+          {isAdminOnly && (
+            <button onClick={handleRecoverFromDbBackup}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #059669, #047857)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+              <RefreshCw size={16} /> Khôi phục Sale từ DB Backup
+            </button>
+          )}
+          {isAdminOnly && (
+            <button onClick={async () => {
               try {
                 const r = await apiFetch(`${API}/backups`);
                 const data = await r.json();
@@ -4453,50 +4522,124 @@ const LeadsPage = (props) => {
                 setRecoverModal({ backups: data.backups, step: 1, selectedBackup: null, selectedProject: null, loading: false });
               } catch (e) { showToast("Lỗi: " + e.message, "error"); }
             }}
-            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #d97706, #b45309)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
-            <RefreshCw size={16} /> Khôi phục theo dự án
-          </button>}
-          {isAdminOnly && <button
-            onClick={async () => {
-              if (!(await showConfirm("Backup database ngay bây giờ?"))) return;
-              try {
-                const r = await apiFetch(`${API}/backup-now`, { method: "POST" });
-                const data = await r.json();
-                if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                showToast(`Backup OK: ${data.filename} (${data.sizeMB}MB)${data.removed ? `, xóa ${data.removed} bản cũ` : ""}`, "success");
-              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
-            }}
-            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #0284c7, #0369a1)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
-            <Save size={16} /> Backup DB
-          </button>}
-          {isAdminOnly && <button
-            onClick={async () => {
-              try {
-                const r = await apiFetch(`${API}/backups`);
-                const data = await r.json();
-                if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
-                const list = data.backups.map((b, i) => `${i + 1}. ${b.filename} (${b.sizeMB}MB) - ${new Date(b.date).toLocaleString("vi-VN")}`).join("\n");
-                const choice = window.prompt(`Có ${data.total} bản backup:\n\n${list}\n\nNhập số thứ tự để khôi phục (hoặc bấm Cancel):`);
-                if (!choice) return;
-                const idx = parseInt(choice) - 1;
-                if (isNaN(idx) || idx < 0 || idx >= data.backups.length) { showToast("Số không hợp lệ", "error"); return; }
-                const selected = data.backups[idx];
-                if (!(await showConfirm(`⚠️ Khôi phục DB từ:\n${selected.filename}\n(${new Date(selected.date).toLocaleString("vi-VN")})\n\nDB hiện tại sẽ được backup trước khi restore.\nSau khi restore cần RESTART server.`))) return;
-                const r2 = await apiFetch(`${API}/restore-backup`, { method: "POST", body: JSON.stringify({ filename: selected.filename }) });
-                const d2 = await r2.json();
-                if (!r2.ok) { showToast(d2.error || "Lỗi", "error"); return; }
-                showToast(d2.message, "success");
-              } catch (e) { showToast("Lỗi: " + e.message, "error"); }
-            }}
-            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
-            <RefreshCw size={16} /> Restore DB
-          </button>}
-
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #d97706, #b45309)", borderRadius: 12, flex: "1 1 auto", minWidth: 200, justifyContent: "center" }}>
+              <RefreshCw size={16} /> Khôi phục theo dự án
+            </button>
+          )}
           {isAdminOnly && (
-          <button onClick={() => { setCrossRefOpen(true); setCrossRefResults(null); setCrossRefInput(""); setCrossRefExpandedId(null); }}
-            style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
-            <ClipboardList size={16} /> Đối chiếu form KH
-          </button>)}
+            <button onClick={handleBackupNow}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #0284c7, #0369a1)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
+              <Save size={16} /> Backup DB
+            </button>
+          )}
+          {isAdminOnly && (
+            <button onClick={handleRestoreDb}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #64748b, #475569)", borderRadius: 12, flex: "1 1 auto", minWidth: 140, justifyContent: "center" }}>
+              <RefreshCw size={16} /> Restore DB
+            </button>
+          )}
+          {isAdminOnly && (
+            <button onClick={() => { setCrossRefOpen(true); setCrossRefResults(null); setCrossRefInput(""); setCrossRefExpandedId(null); }}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+              <ClipboardList size={16} /> Đối chiếu form KH
+            </button>
+          )}
+        </div>
+        ) : (
+        <div className="crm-admin-toolbar" ref={adminDeskMenuRef}>
+          <div className="crm-admin-toolbar-row">
+            <button
+              type="button"
+              className={`crm-admin-toolbar-primary${shuffleOpen ? " crm-admin-toolbar-primary--active" : ""}`}
+              onClick={() => setShuffleOpen(!shuffleOpen)}
+            >
+              <Shuffle size={16} strokeWidth={2.2} />
+              Chia Lead cho Sale
+            </button>
+            <span className="crm-admin-toolbar-divider" aria-hidden="true" />
+            {isAdminOnly && selectedProject && (
+              <button type="button" className="crm-admin-toolbar-action" disabled={redistributing} onClick={handleRedistributeManagers}>
+                <Shield size={15} />
+                {redistributing ? "Đang chia..." : "Phân chia quản lý"}
+              </button>
+            )}
+            {isAdminOnly && (
+              <button
+                type="button"
+                className="crm-admin-toolbar-action"
+                onClick={() => { setCrossRefOpen(true); setCrossRefResults(null); setCrossRefInput(""); setCrossRefExpandedId(null); }}
+              >
+                <ClipboardList size={15} />
+                Đối chiếu form
+              </button>
+            )}
+            <span className="crm-admin-toolbar-spacer" />
+            {isAdminOnly && (
+              <AdminToolbarDropdown menuKey="recover" activeKey={adminDeskMenu} onToggle={setAdminDeskMenu} label="Khôi phục" icon={RefreshCw}>
+                <AdminToolbarMenuItem
+                  icon={RefreshCw}
+                  title="Sale từ lịch sử"
+                  desc="Khôi phục sale + trạng thái từ lịch sử liên hệ"
+                  disabled={!selectedProject}
+                  onClick={() => { closeAdminDeskMenu(); handleRecoverSalesFromHistory(); }}
+                />
+                <AdminToolbarMenuItem
+                  icon={Users}
+                  title="Lead về Sale cũ"
+                  desc="Lead chưa có sale → gán lại sale cũ"
+                  onClick={() => {
+                    closeAdminDeskMenu();
+                    setRestoreModal({ step: "pick", projectId: selectedProject ? Number(selectedProject) : null, preview: null, loading: false, result: null });
+                  }}
+                />
+                <AdminToolbarMenuItem
+                  icon={RefreshCw}
+                  title="Từ backup dự án"
+                  desc="Khôi phục sau sync lỗi (dự án hiện tại)"
+                  disabled={!selectedProject}
+                  onClick={() => { closeAdminDeskMenu(); handleRecoverFromProjectBackup(); }}
+                />
+                <AdminToolbarMenuItem
+                  icon={FolderOpen}
+                  title="Sale từ DB backup"
+                  desc="File crm.db.backup — toàn hệ thống"
+                  onClick={() => { closeAdminDeskMenu(); handleRecoverFromDbBackup(); }}
+                />
+                <AdminToolbarMenuItem
+                  icon={FolderOpen}
+                  title="Theo dự án (chọn backup)"
+                  desc="Chọn dự án + bản backup cụ thể"
+                  onClick={async () => {
+                    closeAdminDeskMenu();
+                    try {
+                      const r = await apiFetch(`${API}/backups`);
+                      const data = await r.json();
+                      if (!data.backups?.length) { showToast("Chưa có bản backup nào", "info"); return; }
+                      setRecoverModal({ backups: data.backups, step: 1, selectedBackup: null, selectedProject: null, loading: false });
+                    } catch (e) { showToast("Lỗi: " + e.message, "error"); }
+                  }}
+                />
+              </AdminToolbarDropdown>
+            )}
+            {isAdminOnly && (
+              <AdminToolbarDropdown menuKey="backup" activeKey={adminDeskMenu} onToggle={setAdminDeskMenu} label="Backup DB" icon={Save}>
+                <AdminToolbarMenuItem
+                  icon={Save}
+                  title="Backup ngay"
+                  desc="Tạo bản sao database ngay lập tức"
+                  onClick={() => { closeAdminDeskMenu(); handleBackupNow(); }}
+                />
+                <AdminToolbarMenuItem
+                  icon={RefreshCw}
+                  title="Restore DB"
+                  desc="Khôi phục toàn DB từ bản backup"
+                  onClick={() => { closeAdminDeskMenu(); handleRestoreDb(); }}
+                />
+              </AdminToolbarDropdown>
+            )}
+          </div>
+        </div>
+        )}
 
           {/* Restore Lead Modal */}
           {restoreModal && (
@@ -6030,7 +6173,6 @@ const LeadsPage = (props) => {
               {shuffleMsg && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 600, color: shuffleMsg.startsWith("[OK]") || shuffleMsg.includes("thành công") ? "#059669" : "#dc2626" }}>{shuffleMsg.replace(/^\[(OK|ERR)\] /, "")}</div>}
             </div>
           )}
-        </div>
         </div>
       )}
 
