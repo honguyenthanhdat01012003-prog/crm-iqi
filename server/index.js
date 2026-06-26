@@ -4334,6 +4334,31 @@ function getSaleStatusForLead(rawHistory = [], saleName = "") {
   return "new";
 }
 
+function getDealOutcomeOwner(lead = {}, rawHistory = [], tabStatus = "") {
+  if (!["closed", "booked", "booking_other"].includes(tabStatus)) return null;
+  const sorted = [...rawHistory].sort((a, b) => {
+    const ta = parseLeadDate(a.contact_date)?.getTime() || 0;
+    const tb = parseLeadDate(b.contact_date)?.getTime() || 0;
+    return tb - ta || (b.seq || 0) - (a.seq || 0);
+  });
+  for (const h of sorted) {
+    const st = normalizeStatus(h.status || "");
+    if (st !== tabStatus) continue;
+    const sn = (h.sale_name || "").trim();
+    if (sn && sn.toLowerCase() !== "chưa chia") return sn;
+  }
+  const current = (lead.sale_name || "").trim();
+  if (current && normalizeStatus(lead.status || "") === tabStatus) return current;
+  return null;
+}
+
+function normalizeCampaignKey(lead = {}) {
+  const raw = (lead.campaign || "").trim()
+    || (lead.ad_name || "").trim()
+    || (lead.form_name || "").trim();
+  return raw || "(Không có chiến dịch)";
+}
+
 function bumpSourceStats(bucket, tabStatus) {
   if (tabStatus === "booked") bucket.booked += 1;
   else if (tabStatus === "booking_other") bucket.bookingOther += 1;
@@ -4404,7 +4429,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       sourceMap[channel].leads += 1;
       bumpSourceStats(sourceMap[channel], tabStatus);
 
-      const campKey = (lead.campaign || "").trim() || "(Không có chiến dịch)";
+      const campKey = normalizeCampaignKey(lead);
       if (!campaignMap[campKey]) {
         campaignMap[campKey] = { name: campKey, leads: 0, booked: 0, bookingOther: 0, closed: 0, channel };
       }
@@ -4412,6 +4437,9 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       bumpSourceStats(campaignMap[campKey], tabStatus);
 
       const assignedSales = getLeadAssignedSales(lead, hist);
+      const dealOwner = getDealOutcomeOwner(lead, hist, tabStatus);
+      const dealOwnerKey = dealOwner ? normalizePersonNameServer(dealOwner) : "";
+
       for (const saleName of assignedSales) {
         if (!saleMap[saleName]) {
           saleMap[saleName] = {
@@ -4422,15 +4450,19 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         }
         const sm = saleMap[saleName];
         const saleStatus = getSaleStatusForLead(hist, saleName);
+        const saleKey = normalizePersonNameServer(saleName);
         sm.total += 1;
         sm[saleStatus] = (sm[saleStatus] || 0) + 1;
-        if (saleStatus === "closed") sm.closed += 1;
-        if (saleStatus === "booked") sm.booked += 1;
-        if (saleStatus === "booking_other") sm.bookingOther += 1;
         if (["interested", "low_interest", "other_project"].includes(saleStatus)) sm.interested += 1;
         if (saleStatus === "consulting") sm.consulting += 1;
         if (saleStatus === "appointment") sm.appointment += 1;
         if (saleStatus === "has_sale") sm.hasSale += 1;
+
+        if (dealOwnerKey && saleKey === dealOwnerKey) {
+          if (tabStatus === "closed") sm.closed += 1;
+          if (tabStatus === "booked") sm.booked += 1;
+          if (tabStatus === "booking_other") sm.bookingOther += 1;
+        }
 
         const respMs = getSaleResponseMs(lead, hist, saleName);
         if (respMs != null) sm.responseTimes.push(respMs);
@@ -4529,13 +4561,25 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       }))
       .sort((a, b) => b.leads - a.leads);
 
-    const campaigns = Object.values(campaignMap)
+    const campaignsAll = Object.values(campaignMap)
       .map((c) => ({
         ...c,
         pct: stats.total ? +((c.leads / stats.total) * 100).toFixed(1) : 0,
       }))
-      .sort((a, b) => b.leads - a.leads)
-      .slice(0, 15);
+      .sort((a, b) => b.leads - a.leads);
+
+    const campaignLeadSum = campaignsAll.reduce((s, c) => s + c.leads, 0);
+    const campaignMeta = {
+      totalLeads: stats.total,
+      campaignCount: campaignsAll.length,
+      campaignLeadSum,
+      totalBooked: campaignsAll.reduce((s, c) => s + (c.booked || 0), 0),
+      totalBookingOther: campaignsAll.reduce((s, c) => s + (c.bookingOther || 0), 0),
+      totalClosed: campaignsAll.reduce((s, c) => s + (c.closed || 0), 0),
+      otherLeads: 0,
+    };
+
+    const campaigns = campaignsAll;
 
     res.json({
       range: {
@@ -4568,6 +4612,9 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           unreachable: stats.unreachable || 0,
           callback: stats.callback || 0,
           newLeads: stats.new || 0,
+          booked: stats.booked || 0,
+          bookingOther: stats.booking_other || 0,
+          closed: stats.closed || 0,
         },
         sales: {
           booked: (stats.booked || 0) + (stats.booking_other || 0),
@@ -4579,6 +4626,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       trend,
       sources,
       campaigns,
+      campaignMeta,
       saleRanking,
       unassignedLeads,
     });

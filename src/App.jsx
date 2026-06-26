@@ -237,6 +237,15 @@ function formatVND(n) {
   return Number(n).toLocaleString("vi-VN") + " ₫";
 }
 
+function formatVNDCompact(n) {
+  if (!n && n !== 0) return "0 đ";
+  const num = Number(n);
+  if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1).replace(/\.0$/, "")} tỷ đ`;
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1).replace(/\.0$/, "")} triệu đ`;
+  if (num >= 1_000) return `${Math.round(num / 1_000)}k đ`;
+  return num.toLocaleString("vi-VN") + " đ";
+}
+
 function getLeadTemp(createdAt) {
   const d = parseLeadDate(createdAt);
   if (!d) return { label: "Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "cold" };
@@ -3154,22 +3163,22 @@ function TrendChart({ data, compact, preset }) {
 
 function MarketingKpiStrip({ totalLeads, totalSpent, cpl }) {
   const items = [
-    { label: "Tổng Lead", value: totalLeads, color: "#1a3c20", bg: "#ecfdf5", icon: Users },
-    { label: "Chi phí", value: formatVND(totalSpent), color: "#7c3aed", bg: "#f5f3ff", icon: DollarSign },
-    { label: "CPL", value: formatVND(cpl), sub: "Cost per Lead", color: "#4f46e5", bg: "#eef2ff", icon: Target },
+    { label: "Tổng Lead", value: String(totalLeads), full: String(totalLeads), color: "#1a3c20", bg: "#ecfdf5", icon: Users, compact: false },
+    { label: "Chi phí", value: formatVNDCompact(totalSpent), full: formatVND(totalSpent), color: "#7c3aed", bg: "#f5f3ff", icon: DollarSign, compact: true },
+    { label: "CPL", value: formatVNDCompact(cpl), full: formatVND(cpl), sub: "Cost per Lead", color: "#4f46e5", bg: "#eef2ff", icon: Target, compact: true },
   ];
   return (
     <div className="crm-marketing-row">
       {items.map((item) => {
         const Icon = item.icon;
         return (
-          <div key={item.label} className="crm-marketing-card" style={{ background: item.bg }}>
+          <div key={item.label} className="crm-marketing-card" style={{ background: item.bg }} title={item.full}>
             <div className="crm-marketing-card__icon" style={{ color: item.color, background: `${item.color}18` }}>
               <Icon size={18} />
             </div>
             <div className="crm-marketing-card__body">
               <div className="crm-marketing-card__label">{item.label}</div>
-              <div className="crm-marketing-card__value" style={{ color: item.color }}>{item.value}</div>
+              <div className={`crm-marketing-card__value${item.compact ? " crm-marketing-card__value--money" : ""}`} style={{ color: item.color }}>{item.value}</div>
               {item.sub && <div className="crm-marketing-card__sub">{item.sub}</div>}
             </div>
           </div>
@@ -3220,6 +3229,14 @@ function QualityKpiBoard({ q, total }) {
           <QualityMiniStat label="QT hời hợt" value={q.lowInterest} tone="good" />
           <QualityMiniStat label="QT DA khác" value={q.otherProject} tone="good" />
           <QualityMiniStat label="Hẹn gặp" value={q.appointment} tone="good" />
+        </div>
+      </div>
+      <div className="crm-quality-board__section">
+        <div className="crm-quality-board__section-title">Kết quả kinh doanh</div>
+        <div className="crm-quality-board__grid">
+          <QualityMiniStat label="Booking/Cọc" value={q.booked} tone="good" />
+          <QualityMiniStat label="BK sàn khác" value={q.bookingOther} tone="good" />
+          <QualityMiniStat label="Chốt" value={q.closed} tone="good" />
         </div>
       </div>
       <div className="crm-quality-board__section">
@@ -3283,6 +3300,7 @@ function DashboardPage({ projects, apiFetch }) {
   const trend = data?.trend || [];
   const sources = data?.sources || [];
   const campaigns = data?.campaigns || [];
+  const campaignMeta = data?.campaignMeta || {};
   const saleRanking = data?.saleRanking || [];
   const unassignedLeads = data?.unassignedLeads || 0;
   const rangeLabel = data?.range?.label || "";
@@ -3466,7 +3484,12 @@ function DashboardPage({ projects, apiFetch }) {
               </div>
 
               <h4 className="crm-dash-panel__title crm-dash-panel__title--sub"><Megaphone size={16} /> Chiến dịch</h4>
-              <div className="crm-dash-table-wrap">
+              {campaignMeta.totalLeads > 0 && (
+                <div className="crm-dash-campaign-meta">
+                  {campaignMeta.campaignCount} chiến dịch · tổng {campaignMeta.totalLeads} lead
+                </div>
+              )}
+              <div className="crm-dash-table-wrap crm-dash-table-wrap--campaigns">
                 {campaigns.length ? (
                   <table style={tableStyle} className="crm-dash-source-table">
                     <thead>
@@ -3479,15 +3502,24 @@ function DashboardPage({ projects, apiFetch }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {campaigns.slice(0, 10).map((c) => (
+                      {campaigns.map((c) => (
                         <tr key={c.name}>
-                          <td style={{ ...tdStyle, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.name}>{c.name}</td>
+                          <td style={{ ...tdStyle, maxWidth: 220, whiteSpace: "normal", wordBreak: "break-word" }} title={c.name}>{c.name}</td>
                           <td style={{ ...tdStyle, fontWeight: 700 }}>{c.leads}</td>
                           <td style={tdStyle}>{c.booked || 0}</td>
                           <td style={tdStyle}>{c.bookingOther || 0}</td>
                           <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{c.closed || 0}</td>
                         </tr>
                       ))}
+                      {campaignMeta.totalLeads > 0 && (
+                        <tr style={{ background: "#f8fafc", fontWeight: 700 }}>
+                          <td style={tdStyle}>Tổng cộng</td>
+                          <td style={tdStyle}>{campaignMeta.totalLeads}</td>
+                          <td style={tdStyle}>{campaignMeta.totalBooked || 0}</td>
+                          <td style={tdStyle}>{campaignMeta.totalBookingOther || 0}</td>
+                          <td style={{ ...tdStyle, color: "#059669" }}>{campaignMeta.totalClosed || 0}</td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 ) : <div className="crm-dash-empty">Chưa có chiến dịch</div>}
