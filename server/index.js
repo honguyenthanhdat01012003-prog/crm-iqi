@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-fix-sale-counts-perf";
+const BUILD_VERSION = "2026-06-10-fix-sale-zero-flicker";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2979,16 +2979,21 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
     const saleIn = await buildSaleNameLowerInClause(db, dn);
-    // Lead đang phụ trách HOẶC sale đã feedback (lead_sale_summary) — không quét lead_history từng dòng
+    // Lead đang phụ trách HOẶC đã feedback — IN subquery (1 lần), không EXISTS từng dòng
     parts.push(`(
       LOWER(TRIM(COALESCE(sale_name, ''))) IN (${saleIn.inSql})
-      OR EXISTS (
-        SELECT 1 FROM lead_sale_summary lss
-        WHERE lss.lead_id = leads.id
-          AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) IN (${saleIn.inSql})
+      OR id IN (
+        SELECT lss.lead_id FROM lead_sale_summary lss
+        WHERE LOWER(TRIM(COALESCE(lss.sale_name, ''))) IN (${saleIn.inSql})
+      )
+      OR id IN (
+        SELECT DISTINCT h.lead_id FROM lead_history h
+        WHERE LOWER(TRIM(COALESCE(h.sale_name, ''))) IN (${saleIn.inSql})
+          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
+          AND TRIM(COALESCE(h.status, '')) != ''
       )
     )`);
-    params.push(...saleIn.params, ...saleIn.params);
+    params.push(...saleIn.params, ...saleIn.params, ...saleIn.params);
   }
 
   if (filters.projectId && filters.projectId !== "all") {

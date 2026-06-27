@@ -822,6 +822,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [serverSaleRanking, setServerSaleRanking] = useState([]);
   const [projectLeadCounts, setProjectLeadCounts] = useState({ byProject: {}, all: 0 });
   const [projectCountsLoading, setProjectCountsLoading] = useState(false);
+  const projectLeadCountsRef = useRef({ byProject: {}, all: 0 });
+  const projectCountsFetchTimerRef = useRef(null);
   const [leadsFetching, setLeadsFetching] = useState(false);
   const leadsQueryRef = useRef({
     page: 1,
@@ -1245,7 +1247,10 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
       const pc = data.projectLeadCounts;
       const hasData = (Number(pc.all) > 0) || Object.keys(pc.byProject || {}).length > 0;
-      if (hasData) setProjectLeadCounts(pc);
+      if (hasData) {
+        projectLeadCountsRef.current = pc;
+        setProjectLeadCounts(pc);
+      }
     }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
@@ -1403,13 +1408,21 @@ function CRMApp({ user, updateUser, onLogout }) {
     return fetchCrmData({ isBoot: false });
   }, [fetchCrmData]);
 
-  const fetchProjectLeadCounts = useCallback(async () => {
-    setProjectCountsLoading(true);
+  const fetchProjectLeadCounts = useCallback(async ({ soft = false } = {}) => {
+    const prev = projectLeadCountsRef.current;
+    const hadCounts = (Number(prev?.all) > 0) || Object.keys(prev?.byProject || {}).length > 0;
+    if (!soft || !hadCounts) setProjectCountsLoading(true);
     try {
       const r = await apiFetch(`${API}/projects/lead-counts`);
       if (r.ok) {
         const d = await r.json();
-        if (d && typeof d === "object") setProjectLeadCounts(d);
+        if (d && typeof d === "object") {
+          const hasData = (Number(d.all) > 0) || Object.keys(d.byProject || {}).length > 0;
+          if (hasData || !hadCounts) {
+            projectLeadCountsRef.current = d;
+            setProjectLeadCounts(d);
+          }
+        }
       }
     } catch (err) {
       console.warn("[CRM] project lead counts failed:", err?.message || err);
@@ -1417,6 +1430,14 @@ function CRMApp({ user, updateUser, onLogout }) {
       setProjectCountsLoading(false);
     }
   }, []);
+
+  const scheduleProjectLeadCountsRefresh = useCallback((delayMs = 800) => {
+    if (projectCountsFetchTimerRef.current) clearTimeout(projectCountsFetchTimerRef.current);
+    projectCountsFetchTimerRef.current = setTimeout(() => {
+      projectCountsFetchTimerRef.current = null;
+      fetchProjectLeadCounts({ soft: true });
+    }, delayMs);
+  }, [fetchProjectLeadCounts]);
 
   const bootStartedRef = useRef(false);
   useEffect(() => {
@@ -1495,11 +1516,14 @@ function CRMApp({ user, updateUser, onLogout }) {
           fetchTabCounts();
         })
         .catch(() => markConnectivityFailure());
-      fetchProjectLeadCounts();
+      scheduleProjectLeadCountsRefresh();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
-    return () => socket.disconnect();
-  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+    return () => {
+      if (projectCountsFetchTimerRef.current) clearTimeout(projectCountsFetchTimerRef.current);
+      socket.disconnect();
+    };
+  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, scheduleProjectLeadCountsRefresh, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
