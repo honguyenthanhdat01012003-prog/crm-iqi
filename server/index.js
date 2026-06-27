@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-sla-instant-reassign";
+const BUILD_VERSION = "2026-06-10-tele-recall-batch";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -6848,32 +6848,6 @@ async function notifyInstantSlaWarnTelegram(db, lead, saleName) {
   }
 }
 
-async function notifyInstantSlaRecallTelegram(db, lead, saleName) {
-  try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (!saleUser?.telegram_id) return;
-    const activeBot = await getBotForProject(lead.project_id);
-    if (!activeBot?.token) return;
-    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: saleUser.telegram_id,
-        text: [
-          "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*",
-          `👤 Khách: *${escMd(lead.name || "N/A")}*`,
-          "",
-          "❌ _Quá 10 phút chưa cập nhật trạng thái._",
-          "_Lead đã về rổ xáo — bạn không cần xử lý lead này nữa._",
-        ].join("\n"),
-        parse_mode: "Markdown",
-      }),
-    });
-  } catch (err) {
-    console.error("[Telegram] Instant SLA recall notify failed:", err.message);
-  }
-}
-
 async function getLeadPoolExcludedSales(db, leadId) {
   const rows = await all(db,
     `SELECT DISTINCT from_sale AS sn FROM auto_rotate_log
@@ -6968,19 +6942,96 @@ async function deleteTelegramMsgsForLeadSale(db, leadId, saleName, projectId) {
     if (!saleUser?.telegram_id) return;
     const activeBot = await getBotForProject(projectId);
     if (!activeBot?.token) return;
-    const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+    const chatId = saleUser.telegram_id;
+    const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
+    const pending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
+    const msgIds = new Set();
     for (const tm of trackedMsgs) {
+      if (tm.message_id) msgIds.add(tm.message_id);
+    }
+    if (pending?.message_id) msgIds.add(pending.message_id);
+    for (const message_id of msgIds) {
       try {
         await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
+          body: JSON.stringify({ chat_id: chatId, message_id }),
         });
       } catch (_) {}
     }
-    await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
-    await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+    await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
+    if (pending) {
+      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
+    }
   } catch (err) {
     console.error("[Telegram] deleteTelegramMsgsForLeadSale failed:", err.message);
+  }
+}
+
+/** Một tin Telegram duy nhất khi thu hồi — chỉ tên khách, không SĐT. */
+async function notifySaleBatchSlaRecallTelegram(db, saleName, recalls = []) {
+  const unique = [];
+  const seen = new Set();
+  for (const r of recalls) {
+    const key = `${r.leadId || ""}|${r.name || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(r);
+  }
+  if (!unique.length) return;
+
+  try {
+    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    if (!saleUser?.telegram_id) return;
+    const projectId = unique[0].projectId;
+    const activeBot = await getBotForProject(projectId);
+    if (!activeBot?.token) return;
+
+    const projectCache = {};
+    const nameLines = [];
+    for (let i = 0; i < unique.length; i += 1) {
+      const r = unique[i];
+      if (r.projectId && !projectCache[r.projectId]) {
+        const prow = await get(db, "SELECT name FROM projects WHERE id = ?", [r.projectId]);
+        projectCache[r.projectId] = prow?.name || "-";
+      }
+      const projLabel = r.projectId ? projectCache[r.projectId] : (r.projectName || "");
+      const suffix = projLabel && unique.some((x) => x.projectId !== r.projectId) ? ` _(${escMd(projLabel)})_` : "";
+      nameLines.push(`${i + 1}. *${escMd(r.name || "Khách")}*${suffix}`);
+    }
+
+    const isScheduled = unique[0].kind === "scheduled";
+    const title = isScheduled
+      ? "🚫 *LEAD ĐẶT LỊCH BỊ THU HỒI (24H)*"
+      : "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*";
+    const reason = isScheduled
+      ? "❌ _Quá 24 giờ chưa cập nhật feedback._"
+      : "❌ _Quá 10 phút chưa cập nhật trạng thái._";
+    const singleProject = unique.every((r) => r.projectId === unique[0].projectId);
+    const headerProject = singleProject && projectCache[unique[0].projectId]
+      ? [`Dự án: *${escMd(projectCache[unique[0].projectId])}*`, "----------------------------------------------"]
+      : [];
+
+    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: saleUser.telegram_id,
+        text: [
+          title,
+          ...headerProject,
+          `📋 *${unique.length}* khách bị thu hồi:`,
+          "",
+          ...nameLines,
+          "",
+          reason,
+          "_Lead đã chuyển khỏi bạn — tin nhắn lead cũ (kèm SĐT) đã được xóa trên Telegram._",
+          "_Bạn không cần liên hệ các khách này nữa._",
+        ].join("\n"),
+        parse_mode: "Markdown",
+      }),
+    });
+  } catch (err) {
+    console.error("[Telegram] Batch SLA recall notify failed:", err.message);
   }
 }
 
@@ -7005,35 +7056,6 @@ async function notifySaleScheduledSlaWarnTelegram(db, saleName, count) {
     });
   } catch (err) {
     console.error("[Telegram] SLA 12h warn failed:", err.message);
-  }
-}
-
-async function notifySaleScheduledSlaRecall(db, lead, saleName) {
-  try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (!saleUser?.telegram_id) return;
-    const activeBot = await getBotForProject(lead.project_id);
-    if (!activeBot?.token) return;
-    const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
-    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: saleUser.telegram_id,
-        text: [
-          "🚫 *LEAD ĐẶT LỊCH BỊ THU HỒI (24H)*",
-          `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
-          "----------------------------------------------",
-          `👤 Khách: *${escMd(lead.name || "N/A")}*`,
-          `📞 SĐT: \`${lead.phone || "-"}\``,
-          "",
-          "❌ _Quá 24 giờ chưa cập nhật feedback._",
-          "_Lead đã được đưa về kho xáo — bạn không cần liên hệ khách này nữa._",
-        ].join("\n"),
-        parse_mode: "Markdown",
-      }),
-    });
-  } catch (err) {
-    console.error("[Telegram] SLA recall notify failed:", err.message);
   }
 }
 
@@ -7069,8 +7091,6 @@ async function recallScheduledLeadSLA(db, lead, nowStr) {
 
   await emitLeadSlaRecallEvent(db, lead, saleName, "Lead đặt lịch quá 24h chưa feedback");
 
-  await notifySaleScheduledSlaRecall(db, lead, saleName);
-
   sendPushToDisplayName(saleName, {
     title: "Lead đặt lịch bị thu hồi",
     body: `${lead.name || "Khách"} — quá 24h chưa feedback, đã đưa về rổ xáo 24h`,
@@ -7102,6 +7122,7 @@ async function processScheduledLeadSLA(db) {
   );
 
   const warnBySale = new Map();
+  const recallBySale = new Map();
   let recalled = 0;
   let warned = 0;
 
@@ -7123,7 +7144,16 @@ async function processScheduledLeadSLA(db) {
 
     if (ageMs >= SCHEDULED_SLA_RECALL_MS) {
       const ok = await recallScheduledLeadSLA(db, lead, nowStr);
-      if (ok) recalled += 1;
+      if (ok) {
+        recalled += 1;
+        if (!recallBySale.has(saleName)) recallBySale.set(saleName, []);
+        recallBySale.get(saleName).push({
+          leadId: lead.id,
+          name: lead.name,
+          projectId: lead.project_id,
+          kind: "scheduled",
+        });
+      }
       continue;
     }
 
@@ -7147,6 +7177,10 @@ async function processScheduledLeadSLA(db) {
     notifySaleScheduledSlaWarnTelegram(db, saleName, count).catch((err) => {
       console.error(`[Telegram] SLA 12h warn failed for ${saleName}:`, err.message);
     });
+  }
+
+  for (const [saleName, items] of recallBySale.entries()) {
+    await notifySaleBatchSlaRecallTelegram(db, saleName, items);
   }
 
   if (recalled > 0 || warned > 0) {
@@ -7204,7 +7238,6 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
 
   await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
-  notifyInstantSlaRecallTelegram(db, lead, saleName).catch(() => {});
 
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -7270,6 +7303,7 @@ async function processInstantLeadSLA(db) {
 
   let recalled = 0;
   let warned = 0;
+  const recallBySale = new Map();
 
   for (const lead of candidates) {
     const assignedAt = parseLeadDate(lead.assigned_at);
@@ -7279,7 +7313,16 @@ async function processInstantLeadSLA(db) {
 
     if (ageMs >= INSTANT_SLA_RECALL_MS) {
       const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
-      if (ok) recalled += 1;
+      if (ok) {
+        recalled += 1;
+        if (!recallBySale.has(saleName)) recallBySale.set(saleName, []);
+        recallBySale.get(saleName).push({
+          leadId: lead.id,
+          name: lead.name,
+          projectId: lead.project_id,
+          kind: "instant",
+        });
+      }
       continue;
     }
 
@@ -7299,6 +7342,10 @@ async function processInstantLeadSLA(db) {
 
   const cleanedTele = await cleanupStaleTelegramLeadMsgs(db).catch(() => 0);
   if (cleanedTele > 0) console.log(`[instant-sla] Cleaned ${cleanedTele} stale Telegram lead msgs`);
+
+  for (const [saleName, items] of recallBySale.entries()) {
+    await notifySaleBatchSlaRecallTelegram(db, saleName, items);
+  }
 
   if (recalled > 0 || warned > 0) {
     lastSyncHash = "";
