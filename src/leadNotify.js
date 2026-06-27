@@ -1,4 +1,7 @@
-const RECENT_LEAD_MAX_AGE_MS = 120 * 60 * 1000;
+function getVnCalendarDay(date) {
+  if (!date || Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+}
 
 export function normalizePersonName(value = "") {
   return String(value || "")
@@ -55,10 +58,11 @@ function parseLeadCreatedAt(createdAt) {
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
-export function isRecentLead(lead, maxAgeMs = RECENT_LEAD_MAX_AGE_MS) {
+/** Khớp tag NEW — lead nhận trong ngày (VN), không theo cửa sổ 2h/7 ngày. */
+export function isRecentLead(lead) {
   const dt = parseLeadCreatedAt(lead?.createdAt);
   if (!dt) return false;
-  return Date.now() - dt.getTime() <= maxAgeMs;
+  return getVnCalendarDay(dt) === getVnCalendarDay(new Date());
 }
 
 export function registerKnownLeadIds(leads, knownLeadIds) {

@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-fix-restore-note-overflow";
+const BUILD_VERSION = "2026-06-10-new-tag-sla-grid";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -440,28 +440,26 @@ const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
 const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
 const INSTANT_SLA_RECALL_MS = 10 * 60 * 1000;
-/** Lead mới từ MKT (≤7 ngày) — SLA 10p chỉ áp dụng cho nhóm này hoặc lead vừa được chia lại hôm nay. */
-const INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
 function getVnCalendarDay(date) {
   const d = date instanceof Date ? date : parseLeadDate(date);
   if (!d || isNaN(d.getTime())) return "";
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
 }
 
-function isFreshMarketingLead(lead) {
+/** Lead có tag NEW trên UI — nhận trong ngày (VN), không phải lead ≤7 ngày. */
+function isNewTaggedLead(lead) {
   const created = parseLeadDate(lead?.created_at || lead?.createdAt);
   if (!created) return false;
-  return Date.now() - created.getTime() <= INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS;
+  return getVnCalendarDay(created) === getVnCalendarDay(new Date());
 }
 
-/** SLA 10p Lead New: chỉ lead MKT mới (≤7 ngày), lần chia đầu hoặc chuyển tiếp instant A→B — không áp dụng lead cũ từ rổ xáo/xáo/rotate. */
+/** SLA 10p Lead New: chỉ lead có tag NEW, lần chia thủ công hoặc chuyển tiếp instant A→B — không áp dụng lead cũ từ rổ xáo/xáo/rotate. */
 async function isInstantSlaEligibleLead(db, lead, assignedAt) {
   if (!assignedAt) return false;
   const saleName = (lead.sale_name || lead.saleName || "").trim();
   if (!saleName) return false;
 
-  if (!isFreshMarketingLead(lead)) return false;
+  if (!isNewTaggedLead(lead)) return false;
 
   const kind = String(lead.distribution_kind || "").trim();
   if (kind !== LEAD_DISTRIBUTION_KINDS.manual && kind !== LEAD_DISTRIBUTION_KINDS.instantChain) {

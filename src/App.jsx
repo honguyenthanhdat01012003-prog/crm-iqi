@@ -290,27 +290,22 @@ function parseLeadDate(str) {
   return isNaN(iso.getTime()) ? null : iso;
 }
 
-const INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
 function getVnCalendarDay(date) {
   if (!date || isNaN(date.getTime())) return "";
   return date.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
 }
 
-function isFreshMarketingLead(lead) {
+/** Khớp tag NEW trên bảng — lead nhận trong ngày (VN). */
+function isNewTaggedLead(lead) {
   const created = parseLeadDate(lead?.createdAt || lead?.created_at);
   if (!created) return false;
-  return Date.now() - created.getTime() <= INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS;
+  return getVnCalendarDay(created) === getVnCalendarDay(new Date());
 }
 
 function isInstantSlaEligibleLeadClient(lead) {
-  if (isFreshMarketingLead(lead)) return true;
-  const assigned = parseLeadDate(lead?.assignedAt);
-  if (!assigned) return false;
-  if (getVnCalendarDay(assigned) !== getVnCalendarDay(new Date())) return false;
-  const kind = lead?.distributionKind || "";
-  if (kind === "rotate") return false;
-  return true;
+  if (!isNewTaggedLead(lead)) return false;
+  const kind = String(lead?.distributionKind || "").trim();
+  return kind === "manual" || kind === "instant_chain";
 }
 
 const SCHEDULED_SLA_MS = 24 * 60 * 60 * 1000;
@@ -4419,13 +4414,7 @@ const LeadsPage = (props) => {
     }
   }, [isAdmin]);
 
-  // Show NEW tag: only for leads received TODAY (same date)
-  const isRecentLead = useCallback((l) => {
-    const d = parseLeadDate(l.createdAt);
-    if (!d) return false;
-    const today = new Date();
-    return d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate();
-  }, []);
+  const isRecentLead = useCallback((l) => isNewTaggedLead(l), []);
 
   const projectMap = useMemo(() => {
     const m = {};

@@ -502,10 +502,21 @@
   box-shadow: inset 3px 0 0 var(--crm-danger);
 }
 
+.crm-data-grid-col-index { width: 44px; }
+.crm-data-grid-col-name { width: 16%; }
+.crm-data-grid-col-phone { width: 108px; }
+.crm-data-grid-col-product { width: 12%; }
+.crm-data-grid-col-status { width: 118px; }
+.crm-data-grid-col-manager { width: 96px; }
+.crm-data-grid-col-sale { width: 96px; }
+.crm-data-grid-col-project { width: 11%; }
+.crm-data-grid-col-date { width: 132px; }
+.crm-data-grid-col-temp { width: 88px; }
+.crm-data-grid-col-actions { width: 112px; }
+
 .crm-data-grid-name {
   font-weight: 600;
   color: var(--crm-text);
-  max-width: 180px;
   overflow: hidden;
 }
 
@@ -515,6 +526,7 @@
   gap: 6px;
   flex-wrap: nowrap;
   min-width: 0;
+  width: 100%;
   overflow: hidden;
 }
 
@@ -523,7 +535,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0;
+  width: 0;
 }
 
 .crm-data-grid-muted {
@@ -546,7 +559,20 @@
   color: var(--crm-text-muted);
   font-size: 12px;
   font-weight: 600;
-  width: 48px;
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  padding-left: 8px;
+  padding-right: 4px;
+  text-align: center;
+}
+
+.crm-data-grid-index-inner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
 }
 
 .crm-data-grid-actions-col {

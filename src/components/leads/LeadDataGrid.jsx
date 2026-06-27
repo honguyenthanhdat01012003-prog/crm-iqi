@@ -27,6 +27,19 @@ export function LeadDataGrid({
     <div className="crm-card crm-data-grid-shell">
       <div className="crm-data-grid-scroll">
         <table className="crm-data-grid">
+          <colgroup>
+            <col className="crm-data-grid-col-index" />
+            <col className="crm-data-grid-col-name" />
+            <col className="crm-data-grid-col-phone" />
+            <col className="crm-data-grid-col-product" />
+            <col className="crm-data-grid-col-status" />
+            <col className="crm-data-grid-col-manager" />
+            <col className="crm-data-grid-col-sale" />
+            <col className="crm-data-grid-col-project" />
+            {!isSale && <col className="crm-data-grid-col-date" />}
+            {!isSale && <col className="crm-data-grid-col-temp" />}
+            <col className="crm-data-grid-col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>#</th>
@@ -64,8 +77,10 @@ export function LeadDataGrid({
                   onClick={() => onSelectLead(selected ? null : lead.id)}
                 >
                   <td className="crm-data-grid-index">
-                    {idx + 1}
-                    {locked && <Lock size={11} className="crm-inline-icon crm-text-danger" />}
+                    <span className="crm-data-grid-index-inner">
+                      <span>{idx + 1}</span>
+                      {locked && <Lock size={11} className="crm-text-danger" aria-label="Lead đã khóa" />}
+                    </span>
                   </td>
                   <td className="crm-data-grid-name">
                     <div className="crm-data-grid-name-inner">
