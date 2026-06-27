@@ -274,12 +274,37 @@ async function apiFetch(url, opts = {}) {
 
 function parseLeadDate(str) {
   if (!str || str === "-") return null;
+  const mTimeFirst = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mTimeFirst) {
+    return new Date(Number(mTimeFirst[6]), Number(mTimeFirst[5]) - 1, Number(mTimeFirst[4]), Number(mTimeFirst[1]), Number(mTimeFirst[2]), Number(mTimeFirst[3] || 0));
+  }
   const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
-  const m2 = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m2) return new Date(Number(m2[6]), Number(m2[5]) - 1, Number(m2[4]), Number(m2[1]), Number(m2[2]), Number(m2[3] || 0));
   const iso = new Date(str);
   return isNaN(iso.getTime()) ? null : iso;
+}
+
+const INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function getVnCalendarDay(date) {
+  if (!date || isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+function isFreshMarketingLead(lead) {
+  const created = parseLeadDate(lead?.createdAt || lead?.created_at);
+  if (!created) return false;
+  return Date.now() - created.getTime() <= INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS;
+}
+
+function isInstantSlaEligibleLeadClient(lead) {
+  if (isFreshMarketingLead(lead)) return true;
+  const assigned = parseLeadDate(lead?.assignedAt);
+  if (!assigned) return false;
+  if (getVnCalendarDay(assigned) !== getVnCalendarDay(new Date())) return false;
+  const kind = lead?.distributionKind || "";
+  if (kind === "rotate") return false;
+  return true;
 }
 
 const SCHEDULED_SLA_MS = 24 * 60 * 60 * 1000;
@@ -316,6 +341,7 @@ function getScheduledSlaInfo(lead) {
 
 function getInstantSlaInfo(lead) {
   if (!lead || lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
+  if (!isInstantSlaEligibleLeadClient(lead)) return null;
   const st = lead.status || "new";
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
   const start = parseLeadDate(lead.assignedAt);
@@ -8467,7 +8493,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 saleBlocks.push(currentBlock);
               }
             } else if (evt.type === "recall") {
-              recalls.push(evt);
+              let target = null;
+              for (let i = saleBlocks.length - 1; i >= 0; i--) {
+                if (saleBlocks[i].saleName === evt.saleName) { target = saleBlocks[i]; break; }
+              }
+              if (target) {
+                if (!target.recalls) target.recalls = [];
+                target.recalls.push(evt);
+              } else {
+                recalls.push(evt);
+              }
             } else {
               // Contact — attach to matching block or create implicit
               const sn = evt.saleName;
@@ -8491,11 +8526,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             blk.contacts.forEach((c, i) => { c.num = i + 1; });
           });
 
+          const totalRecalls = saleBlocks.reduce((n, b) => n + (b.recalls?.length || 0), 0) + recalls.length;
           const hasContent = regEvents.length > 0 || saleBlocks.length > 0 || recalls.length > 0;
           if (!hasContent) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
 
           return (
             <div style={{ paddingBottom: 8 }}>
+              {(saleBlocks.length > 0 || totalRecalls > 0) && (
+                <div style={{ marginBottom: 10, padding: "8px 12px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12, color: "#475569", display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <span>📊 Đã qua <strong style={{ color: "#1e293b" }}>{saleBlocks.length}</strong> sale</span>
+                  {totalRecalls > 0 && (
+                    <span>· <strong style={{ color: "#dc2626" }}>{totalRecalls}</strong> lần thu hồi SLA</span>
+                  )}
+                </div>
+              )}
               {/* Registration events */}
               {regEvents.map((reg, ri) => (
                 <div key={`reg-${ri}`} style={{ background: "#fffbeb", borderRadius: 8, padding: isMobile ? 10 : 12, border: "1px solid #fde68a", marginBottom: 10 }}>
@@ -8515,7 +8559,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </div>
               ))}
 
-              {/* Recall events */}
+              {/* Recall không gắn được block sale (dữ liệu cũ) */}
               {recalls.map((h, ri) => (
                 <div key={`recall-${ri}`} style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
                   <div style={{ flex: 1, height: 1, background: "#fecaca" }} />
@@ -8557,6 +8601,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                           {ct.length > 0 && (
                             <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStColor + "18", color: lastStColor }}>
                               {lastStLabel}
+                            </span>
+                          )}
+                          {(blk.recalls?.length || 0) > 0 && (
+                            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
+                              Đã thu hồi SLA{blk.recalls.length > 1 ? ` ×${blk.recalls.length}` : ""}
                             </span>
                           )}
                         </div>
@@ -8630,6 +8679,30 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                             </div>
                           );
                         })}
+                        {(blk.recalls || []).map((r, ri) => (
+                          <div key={`recall-${ri}`} style={{ marginTop: 8, position: "relative", paddingLeft: isMobile ? 20 : 24 }}>
+                            <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: "#fecaca", border: "2px solid #dc2626" }} />
+                            <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontWeight: 700, fontSize: 12, color: "#dc2626", display: "flex", alignItems: "center", gap: 6 }}>
+                                  🔄 Thu hồi SLA
+                                  <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>Đã thu hồi</span>
+                                </span>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                                  <span style={{ fontSize: 10, color: "#9ca3af" }}>{r.date || "-"}</span>
+                                  {r.id && (
+                                    <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(r.id); }}
+                                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px" }}
+                                      title="Xóa"><Trash2 size={12} /></button>
+                                  )}
+                                </div>
+                              </div>
+                              <div style={{ fontSize: isMobile ? 12 : 11, color: "#7f1d1d", marginTop: 4 }}>
+                                {r.feedback || "Lead quá hạn chưa feedback — đã chuyển sale khác"}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>

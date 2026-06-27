@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-instant-sla-datefix";
+const BUILD_VERSION = "2026-06-10-instant-sla-new-only";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -440,6 +440,38 @@ const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
 const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
 const INSTANT_SLA_RECALL_MS = 10 * 60 * 1000;
+/** Lead mới từ MKT (≤7 ngày) — SLA 10p chỉ áp dụng cho nhóm này hoặc lead vừa được chia lại hôm nay. */
+const INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+function getVnCalendarDay(date) {
+  const d = date instanceof Date ? date : parseLeadDate(date);
+  if (!d || isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+function isFreshMarketingLead(lead) {
+  const created = parseLeadDate(lead?.created_at || lead?.createdAt);
+  if (!created) return false;
+  return Date.now() - created.getTime() <= INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS;
+}
+
+/** SLA 10p Lead New: không áp dụng lead cũ treo "Chưa feedback" từ tháng trước (auto-rotate 2 ngày xử lý). */
+async function isInstantSlaEligibleLead(db, lead, assignedAt) {
+  if (isFreshMarketingLead(lead)) return true;
+  if (!assignedAt) return false;
+  if (getVnCalendarDay(assignedAt) !== getVnCalendarDay(new Date())) return false;
+  const saleName = (lead.sale_name || lead.saleName || "").trim();
+  if (!saleName) return false;
+  const chia = await get(db,
+    `SELECT source FROM lead_history
+     WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+     ORDER BY seq DESC LIMIT 1`,
+    [lead.id, saleName]
+  );
+  const src = String(chia?.source || "").toLowerCase();
+  if (src.includes("rotate") || src === "auto-rotate" || src === "sprint-rotate") return false;
+  return true;
+}
 
 const LEAD_DISTRIBUTION_KINDS = {
   scheduled: "scheduled",
@@ -2862,14 +2894,9 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     params.push(...pids);
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
-    parts.push(`(
-      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
-      OR EXISTS (
-        SELECT 1 FROM lead_history h
-        WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-      )
-    )`);
-    params.push(dn, dn);
+    // Chỉ lead đang phụ trách — lead bị thu hồi SLA/chuyển sale biến khỏi list ngay
+    parts.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
+    params.push(dn);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -7327,7 +7354,7 @@ async function processInstantLeadSLA(db) {
   const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.shuffle, LEAD_DISTRIBUTION_KINDS.rotate];
   const placeholders = instantKinds.map(() => "?").join(",");
   const candidates = await all(db,
-    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, created_at
      FROM leads
      WHERE distribution_kind IN (${placeholders})
        AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
@@ -7348,6 +7375,7 @@ async function processInstantLeadSLA(db) {
 
     const assignedAt = await getInstantSlaAssignmentTime(db, lead);
     if (!assignedAt) continue;
+    if (!(await isInstantSlaEligibleLead(db, lead, assignedAt))) continue;
     const ageMs = now - assignedAt.getTime();
 
     if (ageMs >= INSTANT_SLA_RECALL_MS) {
