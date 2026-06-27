@@ -1240,12 +1240,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   const bootDoneRef = useRef(false);
   const bootRetryTimerRef = useRef(null);
 
-  const buildDataUrl = useCallback(({ lite = false } = {}) => {
+  const buildDataUrl = useCallback(({ lite = true, skipTabCounts = false } = {}) => {
     const q = leadsQueryRef.current;
     const p = new URLSearchParams();
     p.set("page", String(q.page));
     p.set("limit", String(q.limit));
     if (lite) p.set("lite", "1");
+    if (skipTabCounts) p.set("skipTabCounts", "1");
     if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
     if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
     if (searchText.trim()) p.set("search", searchText.trim());
@@ -1258,17 +1259,54 @@ function CRMApp({ user, updateUser, onLogout }) {
     return `${API}/data?${p}`;
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
-  const fetchCrmData = useCallback(async ({ isBoot = false } = {}) => {
+  const buildTabCountsUrl = useCallback(() => {
+    const q = leadsQueryRef.current;
+    const p = new URLSearchParams();
+    if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
+    if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
+    if (searchText.trim()) p.set("search", searchText.trim());
+    if (statusFilter && statusFilter !== "all") p.set("statusFilter", statusFilter);
+    if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
+    if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
+    if (q.products) p.set("products", q.products);
+    return `${API}/data/tab-counts?${p}`;
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
+
+  const fetchTabCounts = useCallback(async () => {
+    try {
+      const r = await apiFetch(buildTabCountsUrl());
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.tabCounts && typeof data.tabCounts === "object") {
+        setServerTabCounts(data.tabCounts);
+      }
+    } catch (err) {
+      console.warn("[CRM] tab counts failed:", err?.message || err);
+    }
+  }, [buildTabCountsUrl]);
+
+  const fetchDataExtras = useCallback(async () => {
+    if (user.role !== "admin" && user.role !== "manager") return;
+    try {
+      const r = await apiFetch(`${API}/data/extras`);
+      if (!r.ok) return;
+      const data = await r.json();
+      applyApiData(data, { suppressNotifications: true });
+    } catch (err) {
+      console.warn("[CRM] data extras failed:", err?.message || err);
+    }
+  }, [user.role, applyApiData]);
+
+  const fetchCrmData = useCallback(async ({ isBoot = false, skipTabCounts = true } = {}) => {
     const seq = isBoot ? 0 : ++fetchSeqRef.current;
     if (!isBoot) fetchSeqRef.current = seq;
     setLeadsFetching(true);
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 90000);
-      const isSalePicker = user.role === "sale" && !selectedProject;
-      const url = isBoot && isSalePicker
+      const url = isBoot
         ? `${API}/data?bootstrapOnly=1`
-        : buildDataUrl({ lite: !isBoot });
+        : buildDataUrl({ lite: true, skipTabCounts });
       const r = await fetch(url, {
         headers: authHeaders(),
         signal: controller.signal,
@@ -1301,6 +1339,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
       applyApiData(data, { suppressNotifications: true });
       if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+      if (!isBoot && skipTabCounts) fetchTabCounts();
       markApiOk();
       return data;
     } catch (err) {
@@ -1310,16 +1349,25 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (isBoot || seq === fetchSeqRef.current) setLeadsFetching(false);
       if (isBoot) setDataLoadAttempted(true);
     }
-  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk, user.role, selectedProject]);
+  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk, fetchTabCounts]);
 
   const runBootLoad = useCallback(async () => {
     if (bootDoneRef.current) return;
     clearBootFailed();
     const data = await fetchCrmData({ isBoot: true });
-    if (data || bootDoneRef.current) return;
-    if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
-    bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 3000);
-  }, [fetchCrmData, clearBootFailed]);
+    if (!data && !bootDoneRef.current) {
+      if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
+      bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 3000);
+      return;
+    }
+    // Phase 2: first lead page (admin/manager — sale waits until project picked)
+    if (user.role !== "sale") {
+      await fetchCrmData({ isBoot: false, skipTabCounts: true });
+      fetchTabCounts();
+    }
+    // Phase 3: schedules, ranking, rotate settings — không chặn UI
+    fetchDataExtras();
+  }, [fetchCrmData, fetchTabCounts, fetchDataExtras, clearBootFailed, user.role]);
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
@@ -1353,8 +1401,11 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!initialDataLoaded) return;
-    fetchProjectLeadCounts();
-  }, [initialDataLoaded, fetchProjectLeadCounts]);
+    // bootstrapOnly đã trả projectLeadCounts — bỏ qua nếu đã có
+    if (Object.keys(projectLeadCounts?.byProject || {}).length === 0 && !(Number(projectLeadCounts?.all) > 0)) {
+      fetchProjectLeadCounts();
+    }
+  }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
@@ -1369,12 +1420,13 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     }
 
-    const t = setTimeout(() => {
+    const t = setTimeout(async () => {
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
-      fetchCrmData({ isBoot: false });
+      await fetchCrmData({ isBoot: false, skipTabCounts: true });
+      fetchTabCounts();
     }, 400);
     return () => clearTimeout(t);
-  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, user.role]);
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, fetchTabCounts, user.role]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -1415,19 +1467,20 @@ function CRMApp({ user, updateUser, onLogout }) {
       showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
-      fetch(buildDataUrl({ lite: true }), { headers: authHeaders() })
+      fetch(buildDataUrl({ lite: true, skipTabCounts: true }), { headers: authHeaders() })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then((data) => {
           markApiOk();
           applyApiData(data, { suppressNotifications: true });
           if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+          fetchTabCounts();
         })
         .catch(() => markConnectivityFailure());
       fetchProjectLeadCounts();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, buildDataUrl, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -1447,7 +1500,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
-            return fetch(buildDataUrl({ lite: true }), { headers: authHeaders() })
+            return fetch(buildDataUrl({ lite: true, skipTabCounts: true }), { headers: authHeaders() })
               .then(r => {
                 if (!r.ok) {
                   markConnectivityFailure();
@@ -1459,6 +1512,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                 markApiOk();
                 applyApiData(data, { suppressNotifications: true });
                 if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+                fetchTabCounts();
               })
               .catch(() => markConnectivityFailure());
           }
@@ -1473,7 +1527,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, buildDataUrl]);
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, buildDataUrl, fetchTabCounts]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {

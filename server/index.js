@@ -2991,7 +2991,39 @@ function parseLeadsQuery(req) {
     sortDir: req.query.sortDir || "desc",
     all: req.query.all === "1",
     lite: req.query.lite === "1",
+    skipTabCounts: req.query.skipTabCounts === "1",
   };
+}
+
+function parseLeadsFilters(req) {
+  const q = parseLeadsQuery(req);
+  return {
+    q,
+    filters: {
+      projectId: q.projectId,
+      search: q.search,
+      statusTab: q.statusTab,
+      statusFilter: q.statusFilter,
+      managerFilter: q.managerFilter,
+      saleFilter: q.saleFilter,
+      products: q.products,
+      sortKey: q.sortKey,
+      sortDir: q.sortDir,
+    },
+  };
+}
+
+async function ensureSyncHash() {
+  if (!lastSyncHash) {
+    try {
+      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+      const lastSync2 = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
+      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync2}`;
+      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    } catch {}
+  }
+  return lastSyncHash;
 }
 
 async function readData(db) {
@@ -5167,13 +5199,14 @@ app.get("/api/data", requireAuth, async (req, res) => {
       while (syncInProgress && Date.now() - waitStart < 3000) await new Promise(r => setTimeout(r, 100));
     }
 
-    // Lightweight boot: metadata only (sale project picker — no lead scan)
+    // Phase 1 boot: metadata only — unblock UI shell immediately (no lead scan)
     if (req.query.bootstrapOnly === "1") {
-      const [bootstrap, projectLeadCounts] = await Promise.all([
+      const [bootstrap, projectLeadCounts, hash] = await Promise.all([
         getBootstrapPayload(db, req.user),
         queryProjectLeadCounts(db, req.user),
+        ensureSyncHash(),
       ]);
-      const payload = await buildDataPayloadExtras(db, req.user, {
+      return res.json({
         ...bootstrap,
         leads: [],
         leadsTotal: 0,
@@ -5183,22 +5216,13 @@ app.get("/api/data", requireAuth, async (req, res) => {
         tabCounts: { all: 0 },
         projectLeadCounts,
         phoneRegistrations: {},
+        hash,
+        version: dataVersion,
+        noChange: false,
       });
-      return res.json(payload);
     }
 
-    const q = parseLeadsQuery(req);
-    const filters = {
-      projectId: q.projectId,
-      search: q.search,
-      statusTab: q.statusTab,
-      statusFilter: q.statusFilter,
-      managerFilter: q.managerFilter,
-      saleFilter: q.saleFilter,
-      products: q.products,
-      sortKey: q.sortKey,
-      sortDir: q.sortDir,
-    };
+    const { q, filters } = parseLeadsFilters(req);
 
     // Legacy: admin shuffle tools request full lead list
     if (q.all && (req.user.role === "admin" || req.user.role === "manager")) {
@@ -5214,13 +5238,14 @@ app.get("/api/data", requireAuth, async (req, res) => {
     const isLite = q.lite;
 
     if (isLite) {
-      const [pageData, tabCounts] = await Promise.all([
-        queryLeadsPage(db, req.user, filters, q.page, q.limit),
-        queryLeadsTabCounts(db, req.user, filters).catch((e) => {
+      const pageData = await queryLeadsPage(db, req.user, filters, q.page, q.limit);
+      let tabCounts = { all: pageData.leadsTotal || 0 };
+      if (!q.skipTabCounts) {
+        tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
           console.warn("[GET /api/data] tabCounts failed:", e.message);
-          return { all: 0 };
-        }),
-      ]);
+          return { all: pageData.leadsTotal || 0 };
+        });
+      }
       const data = {
         leads: pageData.leads,
         leadsTotal: pageData.leadsTotal,
@@ -5301,6 +5326,48 @@ app.get("/api/projects/lead-counts", requireAuth, async (req, res) => {
   }
 });
 
+// Phase 2b: tab counts only (defer heavy index after first lead page paints)
+app.get("/api/data/tab-counts", requireAuth, async (req, res) => {
+  try {
+    const { filters } = parseLeadsFilters(req);
+    const tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
+      console.warn("[GET /api/data/tab-counts] failed:", e.message);
+      return { all: 0 };
+    });
+    res.json({ tabCounts, version: dataVersion });
+  } catch (err) {
+    console.error("[GET /api/data/tab-counts]", err?.message || err);
+    res.status(500).json({ error: err.message || "Could not read tab counts" });
+  }
+});
+
+// Phase 3: admin/manager extras — schedules, ranking, rotate settings (lazy after UI visible)
+app.get("/api/data/extras", requireAuth, async (req, res) => {
+  try {
+    const { filters } = parseLeadsFilters(req);
+    const payload = await buildDataPayloadExtras(db, req.user, {});
+    let saleRanking = [];
+    if (req.user.role === "admin" || req.user.role === "manager") {
+      try {
+        saleRanking = await querySaleRankingSummary(db, req.user, filters);
+      } catch (e) {
+        console.warn("[GET /api/data/extras] saleRanking skipped:", e.message);
+      }
+    }
+    res.json({
+      schedules: payload.schedules || [],
+      saleRanking,
+      autoRotateProjects: payload.autoRotateProjects || {},
+      sprintRotateProjects: payload.sprintRotateProjects || {},
+      hash: payload.hash,
+      version: dataVersion,
+    });
+  } catch (err) {
+    console.error("[GET /api/data/extras]", err?.message || err);
+    res.status(500).json({ error: err.message || "Could not read extras" });
+  }
+});
+
 let schedulesResponseCache = { at: 0, data: null };
 const SCHEDULES_RESPONSE_CACHE_MS = 60_000;
 
@@ -5316,15 +5383,7 @@ async function buildDataPayloadExtras(db, user, data) {
       schedulesResponseCache = { at: now, data: schedules };
     }
   }
-  if (!lastSyncHash) {
-    try {
-      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
-      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
-      const lastSync2 = (await get(db, "SELECT value FROM settings WHERE key = 'lastSync'"))?.value || "";
-      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync2}`;
-      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
-    } catch {}
-  }
+  await ensureSyncHash();
   const autoRotateRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%'");
   const autoRotateProjects = {};
   for (const r of autoRotateRows) {
