@@ -420,7 +420,11 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 33; // Bump this when adding new DDL/migrations
+const DB_VERSION = 34; // Bump this when adding new DDL/migrations
+
+const SALE_PENALTY_TYPES = {
+  scheduledSla24h: "scheduled_sla_24h",
+};
 
 const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
@@ -973,6 +977,52 @@ async function initDb() {
     console.log("[DB] v33 migration: scheduled lead SLA tracking columns...");
     try { await run(db, "ALTER TABLE leads ADD COLUMN sla_12h_warned_at TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE leads ADD COLUMN sla_recalled_at TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 34) {
+    console.log("[DB] v34 migration: sale_penalties table...");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS sale_penalties (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_name TEXT NOT NULL DEFAULT '',
+        lead_id INTEGER,
+        lead_name TEXT DEFAULT '',
+        lead_phone TEXT DEFAULT '',
+        project_id INTEGER,
+        penalty_type TEXT DEFAULT 'scheduled_sla_24h',
+        reason TEXT DEFAULT '',
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_sale_penalties_sale ON sale_penalties(sale_name)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_sale_penalties_lead ON sale_penalties(lead_id)"); } catch (_) {}
+    try {
+      const logs = await all(db, "SELECT * FROM auto_rotate_log WHERE source = 'scheduled-sla'");
+      for (const log of logs) {
+        const saleName = (log.from_sale || "").trim();
+        if (!saleName) continue;
+        const exists = await get(db,
+          "SELECT id FROM sale_penalties WHERE lead_id = ? AND sale_name = ? AND penalty_type = ? LIMIT 1",
+          [log.lead_id, saleName, SALE_PENALTY_TYPES.scheduledSla24h]
+        );
+        if (exists) continue;
+        await run(db,
+          `INSERT INTO sale_penalties(sale_name, lead_id, lead_name, lead_phone, project_id, penalty_type, reason, created_at)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            saleName,
+            log.lead_id,
+            log.lead_name || "",
+            log.lead_phone || "",
+            log.project_id,
+            SALE_PENALTY_TYPES.scheduledSla24h,
+            log.reason || "Lead đặt lịch quá 24h chưa feedback",
+            log.rotated_at || log.created_at || getAssignmentNowStr(),
+          ]
+        );
+      }
+    } catch (e) {
+      console.error("[DB] v34 backfill error:", e.message);
+    }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -4677,12 +4727,18 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     const cpl = stats.total > 0 ? Math.round(totalSpent / stats.total) : 0;
     const trend = buildTrendSeries(range, leadsByDay, dailyCostMap);
 
+    const penaltyCountMap = await querySalePenaltyCounts(db, req.user, { range, projectId });
+    const recentPenalties = await queryRecentSalePenalties(db, req.user, { range, projectId }, 30);
+    const totalPenalties = Object.values(penaltyCountMap).reduce((s, r) => s + r.count, 0);
+
     const saleRanking = Object.values(saleMap)
       .map((s) => {
         const rt = s.responseTimes;
         const avgResponseMs = rt.length ? Math.round(rt.reduce((a, b) => a + b, 0) / rt.length) : null;
         const winRate = s.total ? +((s.closed / s.total) * 100).toFixed(1) : 0;
         const convertRate = s.total ? +(((s.closed + s.booked + s.bookingOther) / s.total) * 100).toFixed(1) : 0;
+        const saleKey = normalizePersonNameServer(s.name);
+        const slaPenalties = penaltyCountMap[saleKey]?.count || 0;
         return {
           name: s.name,
           total: s.total,
@@ -4696,6 +4752,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           winRate,
           convertRate,
           avgResponseMs,
+          slaPenalties,
         };
       })
       .sort((a, b) => b.closed - a.closed || b.total - a.total);
@@ -4732,6 +4789,9 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     };
 
     const campaigns = campaignsAll;
+
+    const disciplineBySale = Object.values(penaltyCountMap)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "vi"));
 
     res.json({
       range: {
@@ -4781,9 +4841,37 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       campaignMeta,
       saleRanking,
       unassignedLeads,
+      discipline: {
+        totalPenalties,
+        bySale: disciplineBySale,
+        recent: recentPenalties,
+      },
     });
   } catch (err) {
     console.error("[GET /api/dashboard]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/sale-penalties", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { projectId = "all", preset = "all", startDate, endDate, limit = "50" } = req.query;
+    const range = preset && preset !== "all" ? resolveDashboardDateRange(preset, startDate, endDate) : null;
+
+    if (req.user.role === "manager" && projectId && projectId !== "all") {
+      const pids = await getUserProjectIds(req.user.userId);
+      if (!pids.includes(Number(projectId))) return res.status(403).json({ error: "Không có quyền" });
+    }
+
+    const penaltyCountMap = await querySalePenaltyCounts(db, req.user, { range, projectId });
+    const recent = await queryRecentSalePenalties(db, req.user, { range, projectId }, Math.min(Number(limit) || 50, 200));
+    const totalPenalties = Object.values(penaltyCountMap).reduce((s, r) => s + r.count, 0);
+    const bySale = Object.values(penaltyCountMap)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "vi"));
+
+    res.json({ totalPenalties, bySale, recent });
+  } catch (err) {
+    console.error("[GET /api/sale-penalties]", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -6351,6 +6439,15 @@ async function recallScheduledLeadSLA(db, lead, nowStr) {
       sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
       args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, "", nowStr, "scheduled-sla", "Lead đặt lịch quá 24h chưa feedback"],
     },
+    buildSalePenaltyInsertStmt({
+      saleName,
+      leadId: lead.id,
+      leadName: lead.name,
+      leadPhone: lead.phone,
+      projectId: lead.project_id,
+      reason: "Lead đặt lịch quá 24h chưa feedback — thu hồi về kho xáo",
+      createdAt: nowStr,
+    }),
   ];
   await db.batch(stmts, "write");
 
@@ -7584,6 +7681,78 @@ async function computeScheduleProgress(db, sch) {
     pending,
     feedbackPct: assigned ? Math.round((feedback / assigned) * 100) : 0,
     distributePct: totalCount ? Math.round((assigned / totalCount) * 100) : 0,
+  };
+}
+
+function eventInDateRange(dateStr, range) {
+  const dt = parseLeadDate(dateStr);
+  if (!dt) return !range?.start && !range?.end;
+  const t = dt.getTime();
+  if (range?.start && t < range.start.getTime()) return false;
+  if (range?.end && t > range.end.getTime()) return false;
+  return true;
+}
+
+async function fetchSalePenaltyRows(db, user, { projectId } = {}) {
+  let rows = await all(db, "SELECT * FROM sale_penalties ORDER BY id DESC");
+  if (user.role === "manager") {
+    const pids = new Set(await getUserProjectIds(user.userId));
+    rows = rows.filter((r) => pids.has(Number(r.project_id)));
+  }
+  if (projectId && projectId !== "all") {
+    const pid = Number(projectId);
+    rows = rows.filter((r) => Number(r.project_id) === pid);
+  }
+  return rows;
+}
+
+async function querySalePenaltyCounts(db, user, { range, projectId } = {}) {
+  const rows = await fetchSalePenaltyRows(db, user, { projectId });
+  const map = {};
+  for (const r of rows) {
+    if (range && !eventInDateRange(r.created_at, range)) continue;
+    const name = (r.sale_name || "").trim();
+    if (!name) continue;
+    const key = normalizePersonNameServer(name);
+    if (!map[key]) map[key] = { name, count: 0 };
+    map[key].count += 1;
+  }
+  return map;
+}
+
+async function queryRecentSalePenalties(db, user, { range, projectId } = {}, limit = 40) {
+  const rows = await fetchSalePenaltyRows(db, user, { projectId });
+  const projectRows = await all(db, "SELECT id, name FROM projects");
+  const projectMap = Object.fromEntries(projectRows.map((p) => [Number(p.id), p.name]));
+  const filtered = rows.filter((r) => !range || eventInDateRange(r.created_at, range));
+  return filtered.slice(0, limit).map((r) => ({
+    id: r.id,
+    saleName: r.sale_name,
+    leadId: r.lead_id,
+    leadName: r.lead_name || "",
+    leadPhone: r.lead_phone || "",
+    projectId: r.project_id,
+    projectName: projectMap[Number(r.project_id)] || "",
+    penaltyType: r.penalty_type,
+    reason: r.reason || "",
+    createdAt: r.created_at || "",
+  }));
+}
+
+function buildSalePenaltyInsertStmt({ saleName, leadId, leadName, leadPhone, projectId, penaltyType, reason, createdAt }) {
+  return {
+    sql: `INSERT INTO sale_penalties(sale_name, lead_id, lead_name, lead_phone, project_id, penalty_type, reason, created_at)
+          VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      saleName,
+      leadId,
+      leadName || "",
+      leadPhone || "",
+      projectId,
+      penaltyType || SALE_PENALTY_TYPES.scheduledSla24h,
+      reason || "Lead đặt lịch quá 24h chưa feedback",
+      createdAt || getAssignmentNowStr(),
+    ],
   };
 }
 

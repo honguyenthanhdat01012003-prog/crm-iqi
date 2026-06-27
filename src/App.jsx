@@ -3354,6 +3354,7 @@ function DashboardPage({ projects, apiFetch }) {
   const campaignMeta = data?.campaignMeta || {};
   const saleRanking = data?.saleRanking || [];
   const unassignedLeads = data?.unassignedLeads || 0;
+  const discipline = data?.discipline || { totalPenalties: 0, bySale: [], recent: [] };
   const rangeLabel = data?.range?.label || "";
 
   const timePresets = [
@@ -3463,6 +3464,9 @@ function DashboardPage({ projects, apiFetch }) {
                         <span>BK khác: <b>{s.bookingOther || 0}</b></span>
                         <span>Chốt: <b>{s.closed}</b></span>
                         <span>Phản hồi: <b>{formatResponseMs(s.avgResponseMs)}</b></span>
+                        <span className={s.slaPenalties > 0 ? "crm-dash-penalty--warn" : ""}>
+                          Vi phạm SLA: <b>{s.slaPenalties || 0}</b>
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -3482,6 +3486,7 @@ function DashboardPage({ projects, apiFetch }) {
                         <th style={thStyle}>Chốt</th>
                         <th style={thStyle}>Win rate</th>
                         <th style={thStyle}>Cập nhật TB</th>
+                        <th style={thStyle}>Vi phạm SLA</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3497,6 +3502,7 @@ function DashboardPage({ projects, apiFetch }) {
                           <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{s.closed || 0}</td>
                           <td style={{ ...tdStyle, fontWeight: 700, color: s.winRate >= 10 ? "#059669" : "#64748b" }}>{s.winRate}%</td>
                           <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{formatResponseMs(s.avgResponseMs)}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700, color: s.slaPenalties > 0 ? "#dc2626" : "#94a3b8" }}>{s.slaPenalties || 0}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -3575,6 +3581,62 @@ function DashboardPage({ projects, apiFetch }) {
                   </table>
                 ) : <div className="crm-dash-empty">Chưa có chiến dịch</div>}
               </div>
+            </div>
+          </div>
+
+          <div className="crm-dash-row crm-dash-row--discipline">
+            <div className="crm-dash-panel crm-dash-panel--wide crm-dash-discipline">
+              <h4 className="crm-dash-panel__title">
+                <Shield size={18} /> Kỷ luật lead đặt lịch
+                <span className="crm-dash-discipline__range">{rangeLabel}</span>
+              </h4>
+              <div className="crm-dash-discipline__summary">
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value">{discipline.totalPenalties || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">Lần vi phạm SLA 24h</span>
+                </div>
+                {discipline.bySale?.length > 0 && (
+                  <div className="crm-dash-discipline__by-sale">
+                    {discipline.bySale.slice(0, 8).map((row) => (
+                      <div key={row.name} className="crm-dash-discipline__sale-chip">
+                        <span>{row.name}</span>
+                        <strong>{row.count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {discipline.recent?.length ? (
+                <div className="crm-dash-table-wrap">
+                  <table style={tableStyle} className="crm-dash-discipline-table">
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Thời gian</th>
+                        <th style={thStyle}>Sale</th>
+                        <th style={thStyle}>Lead</th>
+                        <th style={thStyle}>Dự án</th>
+                        <th style={thStyle}>Lý do</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {discipline.recent.map((p) => (
+                        <tr key={p.id}>
+                          <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>{p.createdAt || "—"}</td>
+                          <td style={{ ...tdStyle, fontWeight: 600 }}>{p.saleName}</td>
+                          <td style={tdStyle}>
+                            <div>{p.leadName || "—"}</div>
+                            {p.leadPhone && <div style={{ fontSize: 11, color: "#94a3b8" }}>{p.leadPhone}</div>}
+                          </td>
+                          <td style={tdStyle}>{p.projectName || "—"}</td>
+                          <td style={{ ...tdStyle, fontSize: 12, color: "#64748b", maxWidth: 280, whiteSpace: "normal" }}>{p.reason || "Lead đặt lịch quá 24h chưa feedback"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="crm-dash-empty crm-dash-discipline__empty">Chưa có vi phạm SLA trong khoảng thời gian này</div>
+              )}
             </div>
           </div>
           </div>
@@ -11922,6 +11984,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
   const [dragId, setDragId] = useState(null);
   const [lbProject, setLbProject] = useState("all");
   const [lbPeriod, setLbPeriod] = useState("all");
+  const [penaltyData, setPenaltyData] = useState(null);
   const [dealModal, setDealModal] = useState(null); // { leadId, leadName, saleName }
   const [dealValueInput, setDealValueInput] = useState("");
   const [savingDeal, setSavingDeal] = useState(false);
@@ -11953,6 +12016,33 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
       apiFetch("/api/sales/analytics").then(r => r.json()).then(d => setAnalytics(d)).catch(() => {}).finally(() => setLoadingAnalytics(false));
     }
   }, [tab]);
+
+  useEffect(() => {
+    if (tab !== "leaderboard") return;
+    const qs = new URLSearchParams({ projectId: lbProject, limit: "200" });
+    if (lbPeriod === "week") qs.set("preset", "week");
+    else if (lbPeriod === "month") qs.set("preset", "month");
+    else if (lbPeriod === "quarter" || lbPeriod === "year") {
+      qs.set("preset", "custom");
+      const now = new Date();
+      const start = lbPeriod === "year"
+        ? new Date(now.getFullYear(), 0, 1)
+        : new Date(now.getFullYear(), Math.floor(now.getMonth() / 3) * 3, 1);
+      qs.set("startDate", `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`);
+    }
+    apiFetch(`${API}/sale-penalties?${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setPenaltyData(d))
+      .catch(() => setPenaltyData(null));
+  }, [tab, lbProject, lbPeriod, apiFetch]);
+
+  const penaltyBySale = useMemo(() => {
+    const map = {};
+    (penaltyData?.bySale || []).forEach((row) => {
+      map[normalizePersonName(row.name)] = row.count;
+    });
+    return map;
+  }, [penaltyData]);
 
   const handleDrop = async (stageKey) => {
     if (!dragId) return;
@@ -12210,6 +12300,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
     const sorted = lbFilteredRanking;
     const maxDeal = Math.max(...sorted.map(s => s.totalDealValue || 0), 1);
     const maxClosed = Math.max(...sorted.map(s => s.closed || 0), 1);
+    const getSlaPenalties = (name) => penaltyBySale[normalizePersonName(name)] || 0;
 
     const filterBar = (
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
@@ -12264,6 +12355,11 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
                 <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Eye size={12} /> {s.appointment || 0} hẹn</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 2 }}><BarChart3 size={12} /> {rate}%</span>
                 <span style={{ display: "flex", alignItems: "center", gap: 2 }}><Crosshair size={12} /> {effRate}{effRate !== "—" ? "%" : ""}</span>
+                {getSlaPenalties(s.name) > 0 && (
+                  <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#dc2626", fontWeight: 600 }}>
+                    <Shield size={12} /> {getSlaPenalties(s.name)} vi phạm SLA
+                  </span>
+                )}
               </div>
             </div>
           );})}
@@ -12300,6 +12396,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
                 <th style={{ ...thStyle, whiteSpace: "nowrap" }}>Chốt/Hẹn xem</th>
                 <th style={thStyle}>Tỷ lệ chốt</th>
                 <th style={{ ...thStyle, whiteSpace: "nowrap" }}>GT Lead TB</th>
+                <th style={thStyle}>Vi phạm SLA</th>
               </tr>
             </thead>
             <tbody>
@@ -12308,6 +12405,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
                 const effRate = (s.appointment || 0) ? ((s.closed || 0) / s.appointment * 100).toFixed(1) : "—";
                 const avgVal = s.closedDealCount ? (s.totalDealValue / s.closedDealCount) : 0;
                 const dealPct = maxDeal > 0 ? (s.totalDealValue || 0) / maxDeal : 0;
+                const slaPenalties = getSlaPenalties(s.name);
                 return (
                   <tr key={s.name} style={{
                     background: i === 0 ? "#fef9c3" : i === 1 ? "#f5f5f5" : i === 2 ? "#fef3e2" : i % 2 ? "#f9fafb" : "#fff",
@@ -12342,6 +12440,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
                       }}>{rate}%</span>
                     </td>
                     <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>{avgVal ? formatVND(avgVal) : "—"}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700, color: slaPenalties > 0 ? "#dc2626" : "#94a3b8" }}>{slaPenalties}</td>
                   </tr>
                 );
               })}

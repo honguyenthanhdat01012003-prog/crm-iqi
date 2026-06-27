@@ -2104,6 +2104,92 @@
   color: #64748b;
 }
 
+.crm-dash-penalty--warn {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.crm-dash-row--discipline {
+  margin-top: 0;
+}
+
+.crm-dash-discipline__range {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.crm-dash-discipline .crm-dash-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crm-dash-discipline__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.crm-dash-discipline__kpi {
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+}
+
+.crm-dash-discipline__kpi-value {
+  font-size: 28px;
+  font-weight: 800;
+  color: #dc2626;
+  line-height: 1.1;
+}
+
+.crm-dash-discipline__kpi-label {
+  font-size: 12px;
+  color: #991b1b;
+  margin-top: 4px;
+}
+
+.crm-dash-discipline__by-sale {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1;
+}
+
+.crm-dash-discipline__sale-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  font-size: 12px;
+  color: #475569;
+}
+
+.crm-dash-discipline__sale-chip strong {
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.crm-dash-discipline__empty {
+  padding: 24px 12px;
+}
+
+.crm-dash-discipline-table td {
+  vertical-align: top;
+}
+
 @media (max-width: 1100px) {
   .crm-dash-row--kpis {
     grid-template-columns: 1fr;
