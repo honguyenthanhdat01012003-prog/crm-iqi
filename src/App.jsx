@@ -5532,7 +5532,7 @@ const LeadsPage = (props) => {
                   <select
                     value={restoreFeedbackModal.saleName || ""}
                     onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, saleName: e.target.value }))}
-                    style={{ ...gt, width: "100%", marginBottom: 0 }}
+                    style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
                   >
                     <option value="">— Chọn sale —</option>
                     {saleNames.map((n) => (
@@ -5545,7 +5545,7 @@ const LeadsPage = (props) => {
                   <select
                     value={restoreFeedbackModal.projectId ?? ""}
                     onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, projectId: e.target.value ? Number(e.target.value) : null }))}
-                    style={{ ...gt, width: "100%", marginBottom: 0 }}
+                    style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
                   >
                     <option value="">Tất cả dự án</option>
                     {projects.map((p) => (
