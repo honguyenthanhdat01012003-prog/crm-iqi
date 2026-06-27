@@ -420,7 +420,42 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 31; // Bump this when adding new DDL/migrations
+const DB_VERSION = 32; // Bump this when adding new DDL/migrations
+
+const LEAD_DISTRIBUTION_KINDS = {
+  scheduled: "scheduled",
+  manual: "manual",
+  shuffle: "shuffle",
+  rotate: "rotate",
+};
+
+function getAssignmentNowStr() {
+  return new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
+  const ts = now || getAssignmentNowStr();
+  return {
+    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ? WHERE id = ?",
+    args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
+    now: ts,
+  };
+}
+
+function buildLeadUnassignUpdateStmt(leadId) {
+  return {
+    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '' WHERE id = ?",
+    args: [leadId],
+  };
+}
+
+function mapHistorySourceToDistributionKind(source = "") {
+  const s = String(source || "").toLowerCase();
+  if (s === "schedule") return LEAD_DISTRIBUTION_KINDS.scheduled;
+  if (s.includes("rotate") || s === "sprint" || s === "sprint-rotate" || s === "auto-rotate") return LEAD_DISTRIBUTION_KINDS.rotate;
+  if (s === "shuffle") return LEAD_DISTRIBUTION_KINDS.shuffle;
+  return LEAD_DISTRIBUTION_KINDS.manual;
+}
 
 async function initDb() {
   const dbUrl = process.env.TURSO_URL || `file:${DB_PATH}`;
@@ -897,6 +932,34 @@ async function initDb() {
     ];
     for (const sql of idx31) {
       try { await run(db, sql); } catch (_) {}
+    }
+  }
+  if (dbVersion < 32) {
+    console.log("[DB] v32 migration: assigned_at + distribution_kind on leads...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN assigned_at TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN distribution_kind TEXT DEFAULT ''"); } catch (_) {}
+    try {
+      const assignedLeads = await all(db,
+        `SELECT id, sale_name FROM leads
+         WHERE TRIM(COALESCE(sale_name, '')) != '' AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')`
+      );
+      for (const lead of assignedLeads) {
+        const chia = await get(db,
+          `SELECT contact_date, source, feedback FROM lead_history
+           WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+           ORDER BY seq DESC LIMIT 1`,
+          [lead.id, lead.sale_name]
+        );
+        if (!chia) continue;
+        let kind = mapHistorySourceToDistributionKind(chia.source);
+        const fb = String(chia.feedback || "").toLowerCase();
+        if (fb.includes("lịch chia tự động") || fb.includes("lich chia tu dong")) kind = LEAD_DISTRIBUTION_KINDS.scheduled;
+        else if (fb.includes("xáo lead") || fb.includes("xao lead")) kind = LEAD_DISTRIBUTION_KINDS.shuffle;
+        else if (fb.includes("tự động xáo") || fb.includes("tu dong xao") || fb.includes("nước rút") || fb.includes("nuoc rut")) kind = LEAD_DISTRIBUTION_KINDS.rotate;
+        await run(db, "UPDATE leads SET assigned_at = ?, distribution_kind = ? WHERE id = ?", [chia.contact_date || "", kind, lead.id]);
+      }
+    } catch (e) {
+      console.error("[DB] v32 backfill error:", e.message);
     }
   }
 
@@ -2460,6 +2523,8 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     syncAt: l.sync_at,
     notes: l.notes,
     dealValue: l.deal_value || 0,
+    assignedAt: l.assigned_at || "",
+    distributionKind: l.distribution_kind || "",
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
@@ -5038,7 +5103,7 @@ async function buildDataPayloadExtras(db, user, data) {
   let schedules = [];
   if (user.role === "admin" || user.role === "manager") {
     const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    schedules = rows.map(formatSchedule);
+    schedules = await enrichSchedulesForResponse(db, rows);
   }
   if (!lastSyncHash) {
     try {
@@ -5904,10 +5969,11 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     const { saleName, leadIds } = req.body;
     if (!saleName) return res.status(400).json({ error: "Cần chọn sale" });
     if (!leadIds || !leadIds.length) return res.status(400).json({ error: "Cần chọn ít nhất 1 lead" });
-    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const now = getAssignmentNowStr();
     const stmts = [];
     for (const lid of leadIds) {
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
+      const assign = buildLeadAssignUpdateStmt(saleName, lid, LEAD_DISTRIBUTION_KINDS.manual, now);
+      stmts.push({ sql: assign.sql, args: assign.args });
       // Add history
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -6003,7 +6069,7 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       [pid]
     );
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
-    const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    const now = getAssignmentNowStr();
     const stmts = [];
     const assignedBySale = new Map();
     for (let i = 0; i < leads.length; i++) {
@@ -6011,12 +6077,13 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
       const assignedSale = saleNames[i % saleNames.length];
       if (!assignedBySale.has(assignedSale)) assignedBySale.set(assignedSale, []);
       assignedBySale.get(assignedSale).push(l.id);
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [assignedSale, l.id] });
+      const assign = buildLeadAssignUpdateStmt(assignedSale, l.id, LEAD_DISTRIBUTION_KINDS.shuffle, now);
+      stmts.push({ sql: assign.sql, args: assign.args });
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [l.id]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       stmts.push({
         sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq, "admin"],
+        args: [l.id, assignedSale, "Chia lead", now, "", `Admin ${req.user.displayName} xáo lead`, nextSeq, "shuffle"],
       });
     }
     await db.batch(stmts, "write");
@@ -6398,7 +6465,8 @@ async function processAutoRotate(db) {
     if (!nextSale) continue;
 
     // A new assignment starts a fresh feedback cycle for the receiving sale.
-    stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [nextSale, lead.id] });
+    const assign = buildLeadAssignUpdateStmt(nextSale, lead.id, LEAD_DISTRIBUTION_KINDS.rotate, nowStr);
+    stmts.push({ sql: assign.sql, args: assign.args });
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
@@ -6720,7 +6788,8 @@ async function processSchedules(db, triggerUser) {
       roundCounter++;
       saleCounts[assignedIdx]++;
 
-      stmts.push({ sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '' WHERE id = ?", args: [saleName, lid] });
+      const assign = buildLeadAssignUpdateStmt(saleName, lid, LEAD_DISTRIBUTION_KINDS.scheduled, now);
+      stmts.push({ sql: assign.sql, args: assign.args });
       {
         const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lid]);
         const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -6991,7 +7060,7 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     const allSchedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
       msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người, ${distTimesArr.length} khung giờ: ${distTimesArr.join(', ')}). Giai đoạn: ${startDate} → ${endDate}`,
-      schedules: allSchedules.map(formatSchedule),
+      schedules: await enrichSchedulesForResponse(db, allSchedules),
       ...data,
     });
   } catch (err) {
@@ -7005,7 +7074,7 @@ app.get("/api/leads/schedules", requireAuth, requireAdmin, async (req, res) => {
     // Process pending schedules first
     await processSchedules(db);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ schedules: schedules.map(formatSchedule) });
+    res.json({ schedules: await enrichSchedulesForResponse(db, schedules) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to load schedules" });
   }
@@ -7036,7 +7105,7 @@ app.patch("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, res
     params.push(req.params.id);
     await run(db, `UPDATE lead_schedules SET ${updates.join(", ")} WHERE id = ?`, params);
     const allSchedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: "Đã cập nhật lịch chia lead", schedules: allSchedules.map(formatSchedule) });
+    res.json({ msg: "Đã cập nhật lịch chia lead", schedules: await enrichSchedulesForResponse(db, allSchedules) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to update schedule" });
   }
@@ -7047,7 +7116,7 @@ app.delete("/api/leads/schedules/:id", requireAuth, requireAdmin, async (req, re
   try {
     await run(db, "UPDATE lead_schedules SET is_active = 0 WHERE id = ?", [req.params.id]);
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: "Đã hủy lịch chia lead (lead đã chia giữ nguyên)", schedules: schedules.map(formatSchedule) });
+    res.json({ msg: "Đã hủy lịch chia lead (lead đã chia giữ nguyên)", schedules: await enrichSchedulesForResponse(db, schedules) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to cancel schedule" });
   }
@@ -7061,7 +7130,7 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
 
     const assignmentLog = JSON.parse(sch.assignment_log || "[]");
     const assignedEntries = assignmentLog.filter(e => !e.skipped);
-    if (!assignedEntries.length) return res.json({ msg: "Không có lead nào để thu hồi", schedules: (await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")).map(formatSchedule) });
+    if (!assignedEntries.length) return res.json({ msg: "Không có lead nào để thu hồi", schedules: await enrichSchedulesForResponse(db, await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")) });
 
     const stmts = [];
     let revokedCount = 0;
@@ -7117,7 +7186,8 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
         if (prev) {
           stmts.push({ sql: "UPDATE leads SET sale_name = ? WHERE id = ?", args: [prev.sale_name, lid] });
         } else {
-          stmts.push({ sql: "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", args: [lid] });
+          const unassign = buildLeadUnassignUpdateStmt(lid);
+          stmts.push({ sql: unassign.sql, args: unassign.args });
         }
         revokedCount++;
       }
@@ -7129,7 +7199,7 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
     if (stmts.length > 0) await db.batch(stmts, "write");
 
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: `Thu hồi thành công ${revokedCount} lead từ lịch #${sch.id}`, schedules: schedules.map(formatSchedule) });
+    res.json({ msg: `Thu hồi thành công ${revokedCount} lead từ lịch #${sch.id}`, schedules: await enrichSchedulesForResponse(db, schedules) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to revoke schedule" });
   }
@@ -7145,7 +7215,7 @@ app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (r
     const leadIds = [...new Set(JSON.parse(sch.lead_ids || "[]"))];
     // Collect all lead IDs from assignment log + lead_ids
     const allLids = [...new Set([...assignmentLog.filter(e => !e.skipped).map(e => e.leadId), ...leadIds])];
-    if (!allLids.length) return res.json({ msg: "Không có lead nào để khôi phục", schedules: (await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")).map(formatSchedule) });
+    if (!allLids.length) return res.json({ msg: "Không có lead nào để khôi phục", schedules: await enrichSchedulesForResponse(db, await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC")) });
 
     const stmts = [];
     let restoredCount = 0;
@@ -7202,7 +7272,7 @@ app.post("/api/leads/schedules/:id/restore", requireAuth, requireAdmin, async (r
     if (stmts.length > 0) await db.batch(stmts, "write");
 
     const schedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    res.json({ msg: `Khôi phục ${restoredCount} lead về sale cũ từ lịch #${sch.id} (thêm ${chiaEntriesAdded} lượt chia)`, schedules: schedules.map(formatSchedule) });
+    res.json({ msg: `Khôi phục ${restoredCount} lead về sale cũ từ lịch #${sch.id} (thêm ${chiaEntriesAdded} lượt chia)`, schedules: await enrichSchedulesForResponse(db, schedules) });
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to restore schedule" });
   }
@@ -7313,6 +7383,44 @@ app.get("/api/leads/restore-preview/:projectId", requireAuth, requireAdmin, asyn
   }
 });
 
+async function computeScheduleProgress(db, sch) {
+  let log = [];
+  try { log = JSON.parse(sch.assignment_log || "[]"); } catch { log = []; }
+  const assignedEntries = log.filter((e) => e && e.type === "assigned" && e.leadId && !e.skipped && !e.stopped);
+  const uniqueLeadIds = [...new Set(assignedEntries.map((e) => Number(e.leadId)).filter(Boolean))];
+  if (!uniqueLeadIds.length) {
+    return { assigned: 0, feedback: 0, pending: 0, feedbackPct: 0, distributePct: 0 };
+  }
+
+  const placeholders = uniqueLeadIds.map(() => "?").join(",");
+  const rows = await all(db, `SELECT id, status FROM leads WHERE id IN (${placeholders})`, uniqueLeadIds);
+  const statusMap = Object.fromEntries(rows.map((r) => [Number(r.id), normalizeStatus(r.status || "new")]));
+  let feedback = 0;
+  for (const lid of uniqueLeadIds) {
+    if (statusMap[lid] && statusMap[lid] !== "new") feedback += 1;
+  }
+  const assigned = uniqueLeadIds.length;
+  const pending = Math.max(0, assigned - feedback);
+  const totalCount = Number(sch.total_count) || assigned;
+  return {
+    assigned,
+    feedback,
+    pending,
+    feedbackPct: assigned ? Math.round((feedback / assigned) * 100) : 0,
+    distributePct: totalCount ? Math.round((assigned / totalCount) * 100) : 0,
+  };
+}
+
+async function enrichSchedulesForResponse(db, rows = []) {
+  const out = [];
+  for (const row of rows) {
+    const formatted = formatSchedule(row);
+    formatted.progress = await computeScheduleProgress(db, row);
+    out.push(formatted);
+  }
+  return out;
+}
+
 function formatSchedule(s) {
   const saleNames = JSON.parse(s.sale_names || "[]");
   let distributeTimes = [];
@@ -7354,13 +7462,18 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
       }
     }
     const formatted = formatSchedule(sch);
+    formatted.progress = await computeScheduleProgress(db, sch);
     // Get lead details for all leads in this schedule and historical log entries.
     const logLeadIds = (formatted.assignmentLog || []).map(e => e.leadId).filter(Boolean);
     const leadIds = [...new Set([...(formatted.leadIds || []), ...logLeadIds])];
     const leadDetails = [];
     for (const lid of leadIds) {
-      const lead = await get(db, "SELECT id, name, phone, status, sale_name, created_at FROM leads WHERE id = ?", [lid]);
-      if (lead) leadDetails.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, saleName: lead.sale_name, createdAt: lead.created_at });
+      const lead = await get(db, "SELECT id, name, phone, status, sale_name, created_at, assigned_at, distribution_kind FROM leads WHERE id = ?", [lid]);
+      if (lead) leadDetails.push({
+        id: lead.id, name: lead.name, phone: lead.phone, status: lead.status,
+        saleName: lead.sale_name, createdAt: lead.created_at,
+        assignedAt: lead.assigned_at || "", distributionKind: lead.distribution_kind || "",
+      });
     }
     const knownLeadIds = new Set(leadDetails.map(l => Number(l.id)));
     for (const entry of formatted.assignmentLog || []) {
@@ -7639,6 +7752,9 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           reassigning = true;
           sets.push("status = ?"); params.push("new");
           sets.push("raw_status = ?"); params.push("");
+          const assignNow = getAssignmentNowStr();
+          sets.push("assigned_at = ?"); params.push(assignNow);
+          sets.push("distribution_kind = ?"); params.push(LEAD_DISTRIBUTION_KINDS.manual);
         }
       }
       // Admin can directly reassign manager (without changing sale)
@@ -7993,8 +8109,8 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         // Revert to previous sale
         await run(db, "UPDATE leads SET sale_name = ? WHERE id = ?", [prev.sale_name, leadId]);
       } else {
-        // No prior assignment — clear sale
-        await run(db, "UPDATE leads SET sale_name = '', sale_id = NULL WHERE id = ?", [leadId]);
+        const unassign = buildLeadUnassignUpdateStmt(leadId);
+        await run(db, unassign.sql, unassign.args);
       }
 
       // Revert lead status to the most recent history entry's status (excluding the one being deleted)

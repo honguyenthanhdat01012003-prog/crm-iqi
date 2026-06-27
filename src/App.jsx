@@ -12,7 +12,7 @@ import {
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper,
-  Briefcase, AlertTriangle, ArrowUp, ArrowDown
+  Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
@@ -24,7 +24,7 @@ import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNot
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
-import { StatusBadge, NewLeadBadge } from "./components/ui/StatusBadge.jsx";
+import { StatusBadge, NewLeadBadge, ScheduledLeadBadge } from "./components/ui/StatusBadge.jsx";
 import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
 import {
   STATUS_LABEL_TO_KEY,
@@ -6040,9 +6040,13 @@ const LeadsPage = (props) => {
                     const curTour = sch.currentTour || 0;
                     const assignedLog = (sch.assignmentLog || []).filter(e => !e.skipped && !e.stopped && e.type !== "schedule_stopped" && e.type !== "sale_done");
                     const skippedLog = (sch.assignmentLog || []).filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done");
-                    const overallDone = assignedLog.length;
+                    const progress = sch.progress || {};
+                    const overallDone = progress.assigned ?? assignedLog.filter(e => e.type === "assigned").length;
                     const overallTotal = sch.totalCount || 0;
-                    const pct = overallTotal ? Math.round(overallDone / overallTotal * 100) : 0;
+                    const distributePct = progress.distributePct ?? (overallTotal ? Math.round(overallDone / overallTotal * 100) : 0);
+                    const feedbackCount = progress.feedback ?? 0;
+                    const pendingCount = progress.pending ?? Math.max(0, overallDone - feedbackCount);
+                    const feedbackPct = progress.feedbackPct ?? (overallDone ? Math.round(feedbackCount / overallDone * 100) : 0);
                     return (
                       <div key={sch.id} style={{
                         background: sch.isActive ? "#fff" : "#f9fafb",
@@ -6073,11 +6077,16 @@ const LeadsPage = (props) => {
                           {sch.distributeTimes && sch.distributeTimes.length > 0 && ` | ⏰ ${sch.distributeTimes.join(', ')}`}
                           {sch.startDate && ` | ${sch.startDate} → ${sch.endDate}`}
                         </div>
-                        <div style={{ background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 2 }}>
-                          <div style={{ background: sch.isActive ? "#22c55e" : "#9ca3af", height: "100%", width: `${pct}%`, transition: "width .3s" }} />
+                        <div style={{ background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 4 }}>
+                          <div style={{ background: sch.isActive ? "#22c55e" : "#9ca3af", height: "100%", width: `${distributePct}%`, transition: "width .3s" }} />
+                        </div>
+                        <div style={{ background: "#fef3c7", borderRadius: 4, height: 6, overflow: "hidden", marginBottom: 2 }}>
+                          <div style={{ background: feedbackPct >= 80 ? "#059669" : "#f59e0b", height: "100%", width: `${feedbackPct}%`, transition: "width .3s" }} />
                         </div>
                         <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                          Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia thật: {overallDone}/{overallTotal} ({pct}%)
+                          Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia: {overallDone}/{overallTotal} ({distributePct}%)
+                          {overallDone > 0 && ` | Phản hồi: ${feedbackCount}/${overallDone} (${feedbackPct}%)`}
+                          {pendingCount > 0 && ` | Chưa FB: ${pendingCount}`}
                           {skippedLog.length > 0 && ` | Bỏ qua/dừng: ${skippedLog.length}`}
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
@@ -6219,6 +6228,7 @@ const LeadsPage = (props) => {
                       {scheduleDetailData && scheduleDetailData.schedule && (() => {
                         const det = scheduleDetailData;
                         const log = det.schedule.assignmentLog || [];
+                        const schedProgress = det.schedule.progress || {};
                         const leadMap = {};
                         (det.leadDetails || []).forEach(l => { leadMap[l.id] = l; });
 
@@ -6317,6 +6327,19 @@ const LeadsPage = (props) => {
 
                         return (
                           <div>
+                            {schedProgress.assigned > 0 && (
+                              <div style={{ marginBottom: 12, padding: "10px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+                                <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 8 }}>Tiến độ phản hồi lịch chia</div>
+                                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, marginBottom: 8 }}>
+                                  <span>Đã chia: <strong>{schedProgress.assigned}</strong></span>
+                                  <span style={{ color: "#059669" }}>Đã phản hồi: <strong>{schedProgress.feedback || 0}</strong></span>
+                                  <span style={{ color: "#d97706" }}>Chưa feedback: <strong>{schedProgress.pending || 0}</strong></span>
+                                </div>
+                                <div style={{ background: "#fef3c7", borderRadius: 4, height: 8, overflow: "hidden" }}>
+                                  <div style={{ background: (schedProgress.feedbackPct || 0) >= 80 ? "#059669" : "#f59e0b", height: "100%", width: `${schedProgress.feedbackPct || 0}%`, transition: "width .3s" }} />
+                                </div>
+                              </div>
+                            )}
                             {/* Summary badges */}
                             <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
                               {sNames.map((name, si) => (
@@ -7070,6 +7093,7 @@ const LeadsPage = (props) => {
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <NewLeadBadge />}
+                        {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
                       <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -7091,6 +7115,7 @@ const LeadsPage = (props) => {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <NewLeadBadge />}
+                      {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <StatusBadge status={l.status} size="sm" />
@@ -7105,6 +7130,12 @@ const LeadsPage = (props) => {
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{getLeadProjectName(l)}</span>}
                     </div>
+                    {isSale && l.distributionKind === "scheduled" && l.assignedAt && (
+                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#f5f3ff", borderRadius: 6, border: "1px solid #ddd6fe", fontSize: 11, color: "#5b21b6", display: "flex", alignItems: "center", gap: 4 }}>
+                        <CalendarClock size={11} style={{ flexShrink: 0 }} />
+                        <span>Lead đặt lịch · Chia lúc: <strong>{l.assignedAt}</strong></span>
+                      </div>
+                    )}
                     {isSale && l.lastSaleUpdate && (
                       <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                         <Clock size={11} style={{ flexShrink: 0 }} />
