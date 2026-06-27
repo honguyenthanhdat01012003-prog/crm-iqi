@@ -4334,22 +4334,87 @@ function getSaleStatusForLead(rawHistory = [], saleName = "") {
   return "new";
 }
 
-function getDealOutcomeOwner(lead = {}, rawHistory = [], tabStatus = "") {
-  if (!["closed", "booked", "booking_other"].includes(tabStatus)) return null;
+function getHistoryUpdaterRole(h = {}) {
+  const act = (h.action || "").toLowerCase();
+  const fb = (h.feedback || "").toLowerCase();
+  const src = String(h.source || "").toLowerCase();
+  const sn = (h.sale_name || "").trim().toLowerCase();
+  const isAdminAction = act.includes("admin") || fb.includes(" - admin") || fb.includes("admin cập nhật") || src === "admin";
+  const isManagerAction = src === "manager" || act.includes("quản lý") || act.includes("manager");
+
+  if (isAdminAction) return "admin";
+  if (isManagerAction) return "manager";
+  if (src === "sale" || src === "telegram") return "sale";
+
+  if (sn && !["chưa chia", "administrator", "admin"].includes(sn)) {
+    if (act.includes("gọi lần") || act.includes("goi lan")) return "sale";
+    if (h.status && !isAdminAction) return "sale";
+  }
+
+  const inferred = String(inferHistorySource(h) || "").toLowerCase();
+  if (inferred === "admin") return "admin";
+  if (inferred === "manager") return "manager";
+  if (inferred === "sale" || inferred === "telegram") return "sale";
+  return "other";
+}
+
+/**
+ * Ghi nhận Booking/Chốt cho dashboard sale ranking:
+ * - Chỉ tính khi SALE tự cập nhật (không tính admin/quản lý)
+ * - Mỗi sale mỗi lần chuyển sang trạng thái chốt/booking = 1 credit (hỗ trợ xáo lead / mua lại)
+ * - Admin cập nhật Chốt nhiều lần không cộng oan cho sale hiện tại
+ */
+function getLeadSaleDealCredits(lead = {}, rawHistory = []) {
   const sorted = [...rawHistory].sort((a, b) => {
     const ta = parseLeadDate(a.contact_date)?.getTime() || 0;
     const tb = parseLeadDate(b.contact_date)?.getTime() || 0;
-    return tb - ta || (b.seq || 0) - (a.seq || 0);
+    return ta - tb || (a.seq || 0) - (b.seq || 0);
   });
+
+  const segments = [[]];
   for (const h of sorted) {
-    const st = normalizeStatus(h.status || "");
-    if (st !== tabStatus) continue;
-    const sn = (h.sale_name || "").trim();
-    if (sn && sn.toLowerCase() !== "chưa chia") return sn;
+    if (h.action === "Chia lead" && segments[segments.length - 1].length) segments.push([]);
+    segments[segments.length - 1].push(h);
   }
-  const current = (lead.sale_name || "").trim();
-  if (current && normalizeStatus(lead.status || "") === tabStatus) return current;
-  return null;
+
+  const result = new Map();
+
+  for (const segment of segments) {
+    const lastStatusBySale = new Map();
+
+    for (const h of segment) {
+      if (h.action === "Chia lead") {
+        lastStatusBySale.clear();
+        continue;
+      }
+      if (!h.status) continue;
+
+      const st = normalizeStatus(h.status);
+      const role = getHistoryUpdaterRole(h);
+      const sn = (h.sale_name || "").trim();
+      const isDeal = ["closed", "booked", "booking_other"].includes(st);
+
+      if (role !== "sale" || !sn || sn.toLowerCase() === "chưa chia") continue;
+
+      const saleKey = normalizePersonNameServer(sn);
+      const prevForSale = lastStatusBySale.get(saleKey) || "new";
+      const prevWasDeal = ["closed", "booked", "booking_other"].includes(prevForSale);
+
+      if (isDeal && !prevWasDeal) {
+        if (!result.has(saleKey)) {
+          result.set(saleKey, { name: sn, closed: 0, booked: 0, bookingOther: 0 });
+        }
+        const bucket = result.get(saleKey);
+        if (st === "closed") bucket.closed += 1;
+        else if (st === "booked") bucket.booked += 1;
+        else if (st === "booking_other") bucket.bookingOther += 1;
+      }
+
+      lastStatusBySale.set(saleKey, st);
+    }
+  }
+
+  return Array.from(result.values());
 }
 
 function normalizeCampaignKey(lead = {}) {
@@ -4437,8 +4502,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       bumpSourceStats(campaignMap[campKey], tabStatus);
 
       const assignedSales = getLeadAssignedSales(lead, hist);
-      const dealOwner = getDealOutcomeOwner(lead, hist, tabStatus);
-      const dealOwnerKey = dealOwner ? normalizePersonNameServer(dealOwner) : "";
+      const dealCredits = getLeadSaleDealCredits(lead, hist);
 
       for (const saleName of assignedSales) {
         if (!saleMap[saleName]) {
@@ -4458,14 +4522,23 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         if (saleStatus === "appointment") sm.appointment += 1;
         if (saleStatus === "has_sale") sm.hasSale += 1;
 
-        if (dealOwnerKey && saleKey === dealOwnerKey) {
-          if (tabStatus === "closed") sm.closed += 1;
-          if (tabStatus === "booked") sm.booked += 1;
-          if (tabStatus === "booking_other") sm.bookingOther += 1;
-        }
-
         const respMs = getSaleResponseMs(lead, hist, saleName);
         if (respMs != null) sm.responseTimes.push(respMs);
+      }
+
+      for (const credit of dealCredits) {
+        const saleKey = normalizePersonNameServer(credit.name);
+        if (!saleMap[credit.name]) {
+          saleMap[credit.name] = {
+            name: credit.name, total: 0, closed: 0, booked: 0, bookingOther: 0,
+            interested: 0, consulting: 0, appointment: 0, hasSale: 0,
+            responseTimes: [],
+          };
+        }
+        const sm = saleMap[credit.name];
+        sm.closed += credit.closed || 0;
+        sm.booked += credit.booked || 0;
+        sm.bookingOther += credit.bookingOther || 0;
       }
     }
 
