@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-restore-feedback-bulk";
+const BUILD_VERSION = "2026-06-10-tab-counts-sale-filter-fix";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2509,14 +2509,32 @@ function tabStatusSqlExpr(col = "admin_tab_status") {
   return `COALESCE(NULLIF(TRIM(${col}), ''), 'new')`;
 }
 
+function isAdminSalePerspective(filters = {}) {
+  return !!(filters.saleFilter && filters.saleFilter !== "all");
+}
+
 async function queryAdminTabCountsDenorm(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
-  const rows = await all(
-    db,
-    `SELECT ${tabStatusSqlExpr("admin_tab_status")} as tab_st, COUNT(*) as c FROM leads ${where} GROUP BY tab_st`,
-    params
-  );
+  let rows;
+  if (isAdminSalePerspective(f)) {
+    const saleName = f.saleFilter;
+    rows = await all(
+      db,
+      `SELECT ${tabStatusSqlExpr("s.sale_tab_status")} as tab_st, COUNT(*) as c
+       FROM (SELECT id FROM leads ${where}) vis
+       LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id
+         AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
+       GROUP BY tab_st`,
+      [...params, saleName]
+    );
+  } else {
+    rows = await all(
+      db,
+      `SELECT ${tabStatusSqlExpr("admin_tab_status")} as tab_st, COUNT(*) as c FROM leads ${where} GROUP BY tab_st`,
+      params
+    );
+  }
   const counts = { all: 0 };
   for (const r of rows) {
     const k = normalizeStatus(r.tab_st) || "new";
@@ -3101,10 +3119,26 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     };
   }
 
-  // Admin/manager tab filter — denormalized admin_tab_status when backfill done
+  // Admin/manager tab filter — denormalized tab status when backfill done
   if (v36DenormReady && statusTab && statusTab !== "all" && (user.role === "admin" || user.role === "manager")) {
     const baseFilters = { ...filters, statusTab: "all" };
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
+    if (isAdminSalePerspective(baseFilters)) {
+      const saleName = baseFilters.saleFilter;
+      const tabExpr = tabStatusSqlExpr("s.sale_tab_status");
+      const scopeSql = `
+        FROM (SELECT * FROM leads ${where}) l
+        LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
+          AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
+        WHERE ${tabExpr} = ?`;
+      const scopeParams = [...params, saleName, statusTab];
+      const [countRow, leadRows, projectRows] = await Promise.all([
+        get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
+        all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
+        all(db, "SELECT * FROM projects ORDER BY id ASC"),
+      ]);
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName: saleName });
+    }
     const tabClause = `${tabStatusSqlExpr("admin_tab_status")} = ?`;
     const tabWhere = where ? `${where} AND ${tabClause}` : `WHERE ${tabClause}`;
     const tabParams = [...params, statusTab];
@@ -3141,10 +3175,11 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
   ]);
 
-  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+  const salePerspectiveName = isAdminSalePerspective(filters) ? filters.saleFilter : null;
+  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName });
 }
 
-async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null, user = null) {
+async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null, user = null, viewOpts = {}) {
   const projectRows = projectRowsCached || await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
   const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
@@ -3171,6 +3206,8 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
 
   if (user?.role === "sale") {
     leads = leads.map((l) => applySaleLeadView(l, user.displayName));
+  } else if (viewOpts.salePerspectiveName) {
+    leads = leads.map((l) => applySaleLeadView(l, viewOpts.salePerspectiveName));
   }
 
   return {
@@ -5496,7 +5533,7 @@ app.get("/api/data", requireAuth, async (req, res) => {
 
     if (isLite) {
       const pageData = await queryLeadsPage(db, req.user, filters, q.page, q.limit);
-      let tabCounts = { all: pageData.leadsTotal || 0 };
+      let tabCounts;
       if (!q.skipTabCounts) {
         tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
           console.warn("[GET /api/data] tabCounts failed:", e.message);
@@ -5509,12 +5546,12 @@ app.get("/api/data", requireAuth, async (req, res) => {
         leadsPage: q.page,
         leadsLimit: q.limit,
         paginated: true,
-        tabCounts,
         phoneRegistrations: pageData.phoneRegistrations,
         hash: String(dataVersion),
         version: dataVersion,
         noChange: false,
       };
+      if (tabCounts) data.tabCounts = tabCounts;
       stripLeadsForClient(data);
       res.json(data);
       const totalMs = Date.now() - t0;

@@ -81,6 +81,12 @@ function isSamePersonName(a, b) {
   return normalizePersonName(a) === normalizePersonName(b);
 }
 
+/** Tab counts đầy đủ có breakdown theo status — không phải placeholder { all: N } từ lite fetch */
+function isFullTabCounts(tc) {
+  if (!tc || typeof tc !== "object") return false;
+  return Object.keys(tc).some((k) => k !== "all");
+}
+
 function ToastContainer() {
   const [toasts, setToasts] = useState([]);
   useEffect(() => {
@@ -1237,7 +1243,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPhoneRegistrations(data.phoneRegistrations);
     }
     if (data.leadsTotal != null) setLeadsTotal(Number(data.leadsTotal) || 0);
-    if (data.tabCounts && typeof data.tabCounts === "object") {
+    if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
       stableTabCountsRef.current = data.tabCounts;
       setServerTabCounts(data.tabCounts);
     }
@@ -1267,6 +1273,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
   const fetchSeqRef = useRef(0);
+  const tabCountsSeqRef = useRef(0);
   const bootDoneRef = useRef(false);
   const bootRetryTimerRef = useRef(null);
 
@@ -1302,11 +1309,12 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
   const fetchTabCounts = useCallback(async () => {
+    const seq = ++tabCountsSeqRef.current;
     try {
       const r = await apiFetch(buildTabCountsUrl());
-      if (!r.ok) return;
+      if (!r.ok || seq !== tabCountsSeqRef.current) return;
       const data = await r.json();
-      if (data.tabCounts && typeof data.tabCounts === "object") {
+      if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
         stableTabCountsRef.current = data.tabCounts;
         setServerTabCounts(data.tabCounts);
       }
@@ -4294,8 +4302,6 @@ const LeadsPage = (props) => {
   const processedLeads = useMemo(() => (Array.isArray(leads) ? [...leads] : []), [leads]);
 
   const tabCounts = serverTabCounts;
-
-  // Giữ số tab ổn định khi đang fetch — tránh giật nút "Tất cả / Chưa feedback..."
   const displayTabCounts = tabCounts;
 
   const displayLeadsTotal = leadsTotal || 0;
