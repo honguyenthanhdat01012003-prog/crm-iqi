@@ -3515,6 +3515,11 @@ function DashboardPage({ projects, apiFetch }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [monthlyReport, setMonthlyReport] = useState(null);
+  const [slaAudit, setSlaAudit] = useState(null);
+  const [slaAuditLoading, setSlaAuditLoading] = useState(false);
+  const [auditSaleFilter, setAuditSaleFilter] = useState("all");
+  const [auditSlaType, setAuditSlaType] = useState("all");
+  const [auditVerdict, setAuditVerdict] = useState("all");
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -3535,6 +3540,49 @@ function DashboardPage({ projects, apiFetch }) {
   }, [apiFetch, preset, projectId, customFrom, customTo]);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  const buildAuditQuery = useCallback(() => {
+    const qs = new URLSearchParams({ preset, projectId, slaType: auditSlaType, verdict: auditVerdict });
+    if (preset === "custom") {
+      if (customFrom) qs.set("startDate", customFrom);
+      if (customTo) qs.set("endDate", customTo);
+    }
+    if (auditSaleFilter && auditSaleFilter !== "all") qs.set("saleName", auditSaleFilter);
+    return qs;
+  }, [preset, projectId, customFrom, customTo, auditSaleFilter, auditSlaType, auditVerdict]);
+
+  const loadSlaAudit = useCallback(async () => {
+    setSlaAuditLoading(true);
+    try {
+      const res = await apiFetch(`${API}/sla-audit/recalls?${buildAuditQuery()}`);
+      if (!res.ok) throw new Error("Không tải được báo cáo SLA");
+      setSlaAudit(await res.json());
+    } catch {
+      setSlaAudit(null);
+    } finally {
+      setSlaAuditLoading(false);
+    }
+  }, [apiFetch, buildAuditQuery]);
+
+  useEffect(() => { loadSlaAudit(); }, [loadSlaAudit]);
+
+  const exportSlaAuditCsv = useCallback(async () => {
+    try {
+      const res = await apiFetch(`${API}/sla-audit/recalls/export?${buildAuditQuery()}`);
+      if (!res.ok) throw new Error("Xuất file thất bại");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `sla-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      showToast(e.message || "Xuất CSV thất bại", "error");
+    }
+  }, [apiFetch, buildAuditQuery]);
 
   useEffect(() => {
     const prev = new Date();
@@ -3559,6 +3607,14 @@ function DashboardPage({ projects, apiFetch }) {
   const unassignedLeads = data?.unassignedLeads || 0;
   const discipline = data?.discipline || { totalPenalties: 0, bySale: [], recent: [] };
   const rangeLabel = data?.range?.label || "";
+  const auditSummary = slaAudit?.summary || { total: 0, valid: 0, disputed: 0, instant10m: 0, scheduled24h: 0, bySale: [] };
+  const auditItems = slaAudit?.items || [];
+  const auditSaleOptions = useMemo(() => {
+    const names = new Set();
+    (auditSummary.bySale || []).forEach((r) => { if (r.name) names.add(r.name); });
+    (discipline.bySale || []).forEach((r) => { if (r.name) names.add(r.name); });
+    return [...names].sort((a, b) => a.localeCompare(b, "vi"));
+  }, [auditSummary.bySale, discipline.bySale]);
 
   const timePresets = [
     { key: "today", label: "Hôm nay" },
@@ -3857,6 +3913,129 @@ function DashboardPage({ projects, apiFetch }) {
                     )}
                   </div>
                 </div>
+              )}
+            </div>
+          </div>
+
+          <div className="crm-dash-row crm-dash-row--discipline">
+            <div className="crm-dash-panel crm-dash-panel--wide crm-dash-discipline">
+              <h4 className="crm-dash-panel__title">
+                <Search size={18} /> Tra cứu thu hồi SLA — bằng chứng
+                <span className="crm-dash-discipline__range">{slaAudit?.rangeLabel || rangeLabel}</span>
+              </h4>
+              <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 12px", lineHeight: 1.5 }}>
+                Quét tự động lịch sử thu hồi — kiểm tra sale đã cập nhật (trạng thái hoặc ghi chú) trước khi bị thu hồi hay chưa. Dùng khi sale khiếu nại.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12, alignItems: "center" }}>
+                <select value={auditSaleFilter} onChange={(e) => setAuditSaleFilter(e.target.value)}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13 }}>
+                  <option value="all">Tất cả sale</option>
+                  {auditSaleOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <select value={auditSlaType} onChange={(e) => setAuditSlaType(e.target.value)}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13 }}>
+                  <option value="all">Tất cả loại SLA</option>
+                  <option value="instant_10m">SLA 10 phút</option>
+                  <option value="scheduled_24h">SLA 24h đặt lịch</option>
+                </select>
+                <select value={auditVerdict} onChange={(e) => setAuditVerdict(e.target.value)}
+                  style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13 }}>
+                  <option value="all">Tất cả kết luận</option>
+                  <option value="valid">Thu hồi hợp lệ</option>
+                  <option value="disputed">Có cập nhật trước thu hồi</option>
+                </select>
+                <button type="button" onClick={loadSlaAudit} disabled={slaAuditLoading}
+                  style={{ ...btnSecondary, padding: "6px 12px", fontSize: 12, borderRadius: 8 }}>
+                  {slaAuditLoading ? "Đang quét..." : "Làm mới"}
+                </button>
+                <button type="button" onClick={exportSlaAuditCsv} disabled={slaAuditLoading || !auditItems.length}
+                  style={{ ...btnPrimary, padding: "6px 12px", fontSize: 12, borderRadius: 8, opacity: auditItems.length ? 1 : 0.5 }}>
+                  Xuất CSV
+                </button>
+              </div>
+              <div className="crm-dash-discipline__summary">
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value">{auditSummary.total || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">Lần thu hồi</span>
+                </div>
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value" style={{ color: "#16a34a" }}>{auditSummary.valid || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">Hợp lệ</span>
+                </div>
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value" style={{ color: "#dc2626" }}>{auditSummary.disputed || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">Cần kiểm tra</span>
+                </div>
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value">{auditSummary.instant10m || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">SLA 10p</span>
+                </div>
+                <div className="crm-dash-discipline__kpi">
+                  <span className="crm-dash-discipline__kpi-value">{auditSummary.scheduled24h || 0}</span>
+                  <span className="crm-dash-discipline__kpi-label">SLA 24h</span>
+                </div>
+              </div>
+              {slaAuditLoading ? (
+                <div className="crm-dash-empty">Đang quét lịch sử thu hồi…</div>
+              ) : auditItems.length ? (
+                <div className="crm-dash-table-wrap">
+                  <table style={tableStyle} className="crm-dash-discipline-table">
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Thu hồi</th>
+                        <th style={thStyle}>Sale</th>
+                        <th style={thStyle}>Lead</th>
+                        <th style={thStyle}>Loại</th>
+                        <th style={thStyle}>Nhận → Chờ</th>
+                        <th style={thStyle}>Kết luận</th>
+                        <th style={thStyle}>Bằng chứng feedback</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditItems.map((row) => (
+                        <tr key={row.id}>
+                          <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>{row.recalledAt || "—"}</td>
+                          <td style={{ ...tdStyle, fontWeight: 600 }}>{row.saleName}</td>
+                          <td style={tdStyle}>
+                            <div>{row.leadName || "—"}</div>
+                            {row.leadPhone && <div style={{ fontSize: 11, color: "#94a3b8" }}>{row.leadPhone}</div>}
+                            {row.projectName && <div style={{ fontSize: 11, color: "#64748b" }}>{row.projectName}</div>}
+                          </td>
+                          <td style={{ ...tdStyle, fontSize: 12 }}>{row.slaTypeLabel}</td>
+                          <td style={{ ...tdStyle, fontSize: 12, whiteSpace: "nowrap" }}>
+                            <div>{row.assignedAt || "—"}</div>
+                            {row.responseMinutes != null && <div style={{ color: "#64748b" }}>{row.responseMinutes} phút</div>}
+                            {row.toSale && <div style={{ color: "#2563eb", fontSize: 11 }}>→ {row.toSale}</div>}
+                          </td>
+                          <td style={tdStyle}>
+                            <span style={{
+                              fontSize: 11, fontWeight: 700, borderRadius: 999, padding: "3px 8px",
+                              background: row.hadFeedback ? "#fef2f2" : "#f0fdf4",
+                              color: row.hadFeedback ? "#dc2626" : "#16a34a",
+                            }}>
+                              {row.verdictLabel}
+                            </span>
+                          </td>
+                          <td style={{ ...tdStyle, fontSize: 12, maxWidth: 260, whiteSpace: "normal" }}>
+                            {row.hadFeedback ? (
+                              <>
+                                <div>{row.lastFeedbackAt || "—"} · {row.lastFeedbackStatusLabel || row.lastFeedbackStatus || "—"}</div>
+                                {row.lastFeedbackNote && <div style={{ color: "#64748b", marginTop: 4 }}>{row.lastFeedbackNote}</div>}
+                              </>
+                            ) : (
+                              <span style={{ color: "#94a3b8" }}>Không có cập nhật trong chu kỳ phụ trách</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {slaAudit?.hasMore && (
+                    <div style={{ fontSize: 12, color: "#64748b", padding: "8px 0" }}>Hiển thị 500 bản ghi đầu — thu hẹp bộ lọc hoặc xuất CSV để xem đủ.</div>
+                  )}
+                </div>
+              ) : (
+                <div className="crm-dash-empty crm-dash-discipline__empty">Không có lần thu hồi SLA trong khoảng thời gian này</div>
               )}
             </div>
           </div>

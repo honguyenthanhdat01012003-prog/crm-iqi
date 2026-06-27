@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-instant-sla-fresh-only";
+const BUILD_VERSION = "2026-06-10-sla-audit-report";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -5326,6 +5326,74 @@ app.get("/api/discipline/monthly-report", requireAuth, requireAdmin, async (req,
   }
 });
 
+/* GET /api/sla-audit/recalls — Tra cứu thu hồi SLA + bằng chứng feedback */
+app.get("/api/sla-audit/recalls", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const {
+      projectId = "all",
+      preset = "month",
+      startDate,
+      endDate,
+      saleName = "",
+      slaType = "all",
+      verdict = "all",
+      limit = "500",
+    } = req.query;
+
+    if (req.user.role === "manager" && projectId && projectId !== "all") {
+      const pids = await getUserProjectIds(req.user.userId);
+      if (!pids.includes(Number(projectId))) return res.status(403).json({ error: "Không có quyền" });
+    }
+
+    const range = preset && preset !== "all" ? resolveDashboardDateRange(preset, startDate, endDate) : null;
+    const data = await querySlaRecallAudit(db, req.user, {
+      range,
+      projectId,
+      saleName,
+      slaType,
+      verdict,
+      limit: Number(limit) || 500,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error("[GET /api/sla-audit/recalls]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* GET /api/sla-audit/recalls/export — Xuất CSV tra cứu thu hồi SLA */
+app.get("/api/sla-audit/recalls/export", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const {
+      projectId = "all",
+      preset = "month",
+      startDate,
+      endDate,
+      saleName = "",
+      slaType = "all",
+      verdict = "all",
+    } = req.query;
+
+    const range = preset && preset !== "all" ? resolveDashboardDateRange(preset, startDate, endDate) : null;
+    const { items } = await querySlaRecallAudit(db, req.user, {
+      range,
+      projectId,
+      saleName,
+      slaType,
+      verdict,
+      limit: 2000,
+    });
+    const csv = slaAuditItemsToCsv(items);
+    const fname = `sla-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error("[GET /api/sla-audit/recalls/export]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== LEAD QUALITY REPORT ==========
 app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -9201,6 +9269,181 @@ async function queryRecentSalePenalties(db, user, { range, projectId } = {}, lim
     reason: r.reason || "",
     createdAt: r.created_at || "",
   }));
+}
+
+function auditSlaRecallFromHistory(recallRow, historyRows, projectMap, rotateMap) {
+  const leadId = Number(recallRow.lead_id);
+  const saleName = (recallRow.sale_name || "").trim();
+  const recallSeq = Number(recallRow.seq ?? 0);
+  const recallAt = recallRow.contact_date || "";
+  const source = recallRow.source || "";
+  const slaType = source === "instant-sla-10m" ? "instant_10m" : source === "scheduled-sla" ? "scheduled_24h" : "other";
+  const saleKey = normalizePersonNameServer(saleName);
+
+  const sorted = [...historyRows].sort((a, b) => Number(a.seq ?? 0) - Number(b.seq ?? 0));
+  const chiaRows = sorted.filter(
+    (r) => r.action === "Chia lead" && normalizePersonNameServer(r.sale_name) === saleKey && Number(r.seq ?? 0) <= recallSeq
+  );
+  const chia = chiaRows.length ? chiaRows[chiaRows.length - 1] : null;
+  const chiaSeq = chia ? Number(chia.seq ?? -1) : -1;
+  const assignedAt = chia?.contact_date || "";
+
+  const feedbackRows = sorted.filter(
+    (r) =>
+      Number(r.seq ?? 0) > chiaSeq &&
+      Number(r.seq ?? 0) < recallSeq &&
+      normalizePersonNameServer(r.sale_name) === saleKey &&
+      r.action !== "Chia lead" &&
+      r.action !== "Thu hồi SLA"
+  );
+  const meaningful = feedbackRows.filter(isMeaningfulFeedbackHistoryRow);
+  const hadFeedback = meaningful.length > 0;
+  const lastFb = meaningful.length ? meaningful[meaningful.length - 1] : null;
+
+  let responseMinutes = null;
+  const assignDt = parseLeadDate(assignedAt);
+  const recallDt = parseLeadDate(recallAt);
+  if (assignDt && recallDt) {
+    responseMinutes = Math.round((recallDt.getTime() - assignDt.getTime()) / 60000);
+  }
+
+  const lastStatusKey = lastFb ? normalizeStatus(lastFb.status || "") : "";
+  const rotateKey = `${leadId}|${saleName}|${recallAt}`;
+  const toSale = rotateMap[rotateKey] || "";
+
+  return {
+    id: recallRow.id || `${leadId}-${recallSeq}`,
+    leadId,
+    leadName: recallRow.lead_name || "",
+    leadPhone: recallRow.lead_phone || "",
+    projectId: recallRow.project_id,
+    projectName: projectMap[Number(recallRow.project_id)] || "",
+    saleName,
+    slaType,
+    slaTypeLabel: slaType === "instant_10m" ? "SLA 10 phút" : slaType === "scheduled_24h" ? "SLA 24h" : source,
+    assignedAt,
+    recalledAt: recallAt,
+    responseMinutes,
+    hadFeedback,
+    verdict: hadFeedback ? "disputed" : "valid",
+    verdictLabel: hadFeedback ? "Có cập nhật trước thu hồi" : "Thu hồi hợp lệ",
+    feedbackCount: meaningful.length,
+    lastFeedbackAt: lastFb?.contact_date || "",
+    lastFeedbackStatus: lastStatusKey,
+    lastFeedbackStatusLabel: STATUS_LABELS_VI[lastStatusKey] || lastFb?.status || "",
+    lastFeedbackNote: String(lastFb?.feedback || lastFb?.note || "").slice(0, 300),
+    recallReason: recallRow.feedback || "",
+    toSale,
+  };
+}
+
+async function querySlaRecallAudit(db, user, filters = {}) {
+  const {
+    range = null,
+    projectId = "all",
+    saleName = "",
+    slaType = "all",
+    verdict = "all",
+    limit = 500,
+  } = filters;
+
+  let recallRows = await all(
+    db,
+    `SELECT lh.id, lh.lead_id, lh.sale_name, lh.contact_date, lh.feedback, lh.source, lh.seq,
+            l.name as lead_name, l.phone as lead_phone, l.project_id
+     FROM lead_history lh
+     INNER JOIN leads l ON l.id = lh.lead_id
+     WHERE lh.action = 'Thu hồi SLA' AND lh.source IN ('instant-sla-10m', 'scheduled-sla')
+     ORDER BY lh.id DESC`
+  );
+
+  if (user.role === "manager") {
+    const pids = new Set(await getUserProjectIds(user.userId));
+    recallRows = recallRows.filter((r) => pids.has(Number(r.project_id)));
+  }
+  if (projectId && projectId !== "all") {
+    const pid = Number(projectId);
+    recallRows = recallRows.filter((r) => Number(r.project_id) === pid);
+  }
+  if (saleName && saleName !== "all") {
+    const sk = normalizePersonNameServer(saleName);
+    recallRows = recallRows.filter((r) => normalizePersonNameServer(r.sale_name) === sk);
+  }
+  if (slaType === "instant_10m") {
+    recallRows = recallRows.filter((r) => r.source === "instant-sla-10m");
+  } else if (slaType === "scheduled_24h") {
+    recallRows = recallRows.filter((r) => r.source === "scheduled-sla");
+  }
+  if (range) {
+    recallRows = recallRows.filter((r) => eventInDateRange(r.contact_date, range));
+  }
+
+  const rotateRows = await all(
+    db,
+    `SELECT lead_id, from_sale, to_sale, source, rotated_at FROM auto_rotate_log
+     WHERE source IN ('instant-sla-10m', 'scheduled-sla')`
+  );
+  const rotateMap = {};
+  for (const r of rotateRows) {
+    rotateMap[`${r.lead_id}|${r.from_sale}|${r.rotated_at}`] = r.to_sale || "";
+  }
+
+  const projectRows = await all(db, "SELECT id, name FROM projects");
+  const projectMap = Object.fromEntries(projectRows.map((p) => [Number(p.id), p.name]));
+
+  const leadIds = [...new Set(recallRows.map((r) => Number(r.lead_id)).filter(Boolean))];
+  const historyMap = await loadHistoryForLeads(db, leadIds);
+
+  let items = recallRows.map((row) =>
+    auditSlaRecallFromHistory(row, historyMap[row.lead_id] || [], projectMap, rotateMap)
+  );
+
+  if (verdict === "valid") items = items.filter((i) => !i.hadFeedback);
+  else if (verdict === "disputed") items = items.filter((i) => i.hadFeedback);
+
+  const summary = {
+    total: items.length,
+    valid: items.filter((i) => !i.hadFeedback).length,
+    disputed: items.filter((i) => i.hadFeedback).length,
+    instant10m: items.filter((i) => i.slaType === "instant_10m").length,
+    scheduled24h: items.filter((i) => i.slaType === "scheduled_24h").length,
+    bySale: {},
+  };
+  for (const item of items) {
+    const n = item.saleName || "—";
+    if (!summary.bySale[n]) summary.bySale[n] = { name: n, total: 0, valid: 0, disputed: 0 };
+    summary.bySale[n].total += 1;
+    if (item.hadFeedback) summary.bySale[n].disputed += 1;
+    else summary.bySale[n].valid += 1;
+  }
+  summary.bySale = Object.values(summary.bySale).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "vi"));
+
+  const max = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+  const hasMore = items.length > max;
+  items = items.slice(0, max);
+
+  return { items, summary, hasMore, rangeLabel: range?.label || "Tất cả thời gian" };
+}
+
+function slaAuditItemsToCsv(items) {
+  const esc = (v) => {
+    const s = String(v ?? "").replace(/"/g, '""');
+    return /[",\n\r]/.test(s) ? `"${s}"` : s;
+  };
+  const headers = [
+    "Thời gian thu hồi", "Sale", "Lead", "SĐT", "Dự án", "Loại SLA", "Lúc nhận lead",
+    "Phút chờ", "Kết luận", "Số lần cập nhật", "Feedback cuối lúc", "Trạng thái cuối", "Ghi chú cuối", "Chuyển cho", "Lý do thu hồi",
+  ];
+  const lines = [headers.join(",")];
+  for (const r of items) {
+    lines.push([
+      r.recalledAt, r.saleName, r.leadName, r.leadPhone, r.projectName, r.slaTypeLabel,
+      r.assignedAt, r.responseMinutes ?? "", r.verdictLabel, r.feedbackCount,
+      r.lastFeedbackAt, r.lastFeedbackStatusLabel || r.lastFeedbackStatus, r.lastFeedbackNote,
+      r.toSale, r.recallReason,
+    ].map(esc).join(","));
+  }
+  return "\uFEFF" + lines.join("\r\n");
 }
 
 function buildSalePenaltyInsertStmt({ saleName, leadId, leadName, leadPhone, projectId, penaltyType, reason, createdAt }) {
