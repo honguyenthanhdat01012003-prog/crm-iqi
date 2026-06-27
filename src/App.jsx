@@ -5536,7 +5536,7 @@ const LeadsPage = (props) => {
                     style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
                   >
                     <option value="">— Chọn sale —</option>
-                    {saleNames.map((n) => (
+                    {allSaleUsers.map((n) => (
                       <option key={n} value={n}>{n}</option>
                     ))}
                   </select>
