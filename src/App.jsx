@@ -4616,6 +4616,13 @@ const LeadsPage = (props) => {
     return (Array.isArray(allUsers) ? allUsers : []).filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
   }, [allUsers]);
 
+  const saleFilterOptions = useMemo(() => {
+    const s = new Set([...saleNames, ...allSaleUsers]);
+    return [...s].filter(Boolean).sort((a, b) => a.localeCompare(b, "vi"));
+  }, [saleNames, allSaleUsers]);
+
+  const [restoreScopeLoading, setRestoreScopeLoading] = useState(false);
+
   const allManagerNames = useMemo(() => {
     return (Array.isArray(allUsers) ? allUsers : []).filter(u => (u.role === "manager" || u.role === "admin") && u.displayName).map(u => u.displayName).sort();
   }, [allUsers]);
@@ -4853,6 +4860,63 @@ const LeadsPage = (props) => {
       if (scheduleDetailId === scheduleId) handleViewScheduleDetail(scheduleId);
     } catch (e) {
       setShuffleMsg("[ERR] " + e.message);
+    }
+  };
+
+  const handleRestoreSaleScope = async () => {
+    if (!saleFilter || saleFilter === "all") {
+      showToast("Chọn sale trong bộ lọc trước", "warning");
+      return;
+    }
+    setRestoreScopeLoading(true);
+    try {
+      const params = new URLSearchParams({ saleName: saleFilter });
+      if (selectedProject && selectedProject !== "all") params.set("projectId", String(selectedProject));
+      const pr = await apiFetch(`${API}/leads/restore-sale-scope-preview?${params}`);
+      const preview = await pr.json();
+      if (!pr.ok) {
+        showToast(preview.error || "Lỗi xem trước", "error");
+        return;
+      }
+      if (!preview.restorable) {
+        showToast("Không có lead cần khôi phục — sale đã có đủ lead đúng trạng thái", "info");
+        return;
+      }
+      const scopeLabel = selectedProject && selectedProject !== "all"
+        ? (availableProjects.find((p) => Number(p.id) === Number(selectedProject))?.name || "dự án hiện tại")
+        : "tất cả dự án";
+      const ok = await showConfirm(
+        `Khôi phục lead về "${saleFilter}"?\n\n` +
+        `Phạm vi: ${scopeLabel}\n` +
+        `Sale từng nắm: ${preview.totalEverHeld} lead\n` +
+        `• ${preview.withoutFeedback} chưa feedback → trả về Chưa feedback\n` +
+        `• ${preview.withFeedback} đã cập nhật → trả đúng trạng thái của sale này\n` +
+        `Sẽ gán lại: ${preview.restorable} lead (đã đúng: ${preview.alreadyOk})\n\n` +
+        `Mỗi sale vẫn giữ feedback riêng — không ảnh hưởng sale khác.`
+      );
+      if (!ok) return;
+      const body = { saleName: saleFilter };
+      if (selectedProject && selectedProject !== "all") body.projectId = Number(selectedProject);
+      const r = await apiFetch(`${API}/leads/restore-sale-scope`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        showToast(data.error || "Khôi phục thất bại", "error");
+        return;
+      }
+      showToast(data.msg, "success");
+      if (onLeadsQueryChange) await onLeadsQueryChange({});
+      else {
+        const r2 = await apiFetch(`${API}/data?lite=1&skipTabCounts=1`);
+        if (r2.ok) applyApiData(await r2.json(), { suppressNotifications: true });
+      }
+    } catch (e) {
+      showToast("Lỗi: " + e.message, "error");
+    } finally {
+      setRestoreScopeLoading(false);
     }
   };
 
@@ -7613,11 +7677,12 @@ const LeadsPage = (props) => {
             {allManagerNames.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
         )}
-        {isAdmin && saleNames.length > 0 && (
+        {isAdmin && saleFilterOptions.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <div ref={saleFilterRef} style={{ position: "relative" }}>
             <div
               onClick={() => setSaleFilterOpen(!saleFilterOpen)}
-              style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 160, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+              style={{ padding: "8px 12px", borderRadius: 8, border: saleFilter !== "all" ? "2px solid #16a34a" : "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: saleFilter !== "all" ? "#f0fdf4" : "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 160, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
             >
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{saleFilter === "all" ? "Tất cả sale" : saleFilter}</span>
               <span style={{ fontSize: 10, color: "#9ca3af" }}>▼</span>
@@ -7643,7 +7708,7 @@ const LeadsPage = (props) => {
                   >
                     Tất cả sale
                   </div>
-                  {saleNames.filter(s => !saleFilterSearch || s.toLowerCase().includes(saleFilterSearch.toLowerCase())).map(s => (
+                  {saleFilterOptions.filter(s => !saleFilterSearch || s.toLowerCase().includes(saleFilterSearch.toLowerCase())).map(s => (
                     <div
                       key={s}
                       onClick={() => { setSaleFilter(s); setSaleFilterOpen(false); setSaleFilterSearch(""); setCurrentPage(1); }}
@@ -7657,6 +7722,33 @@ const LeadsPage = (props) => {
                 </div>
               </div>
             )}
+          </div>
+          {isAdminOnly && saleFilter && saleFilter !== "all" && (
+            <button
+              type="button"
+              disabled={restoreScopeLoading}
+              onClick={handleRestoreSaleScope}
+              title="Trả toàn bộ lead sale này từng nắm — chưa feedback và đã cập nhật"
+              style={{
+                padding: "8px 14px",
+                borderRadius: 8,
+                minHeight: 44,
+                border: "none",
+                background: restoreScopeLoading ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)",
+                color: "#fff",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: restoreScopeLoading ? "wait" : "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <RefreshCw size={14} />
+              {restoreScopeLoading ? "Đang khôi phục..." : "Khôi phục lead"}
+            </button>
+          )}
           </div>
         )}
       </div>
