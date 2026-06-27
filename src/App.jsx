@@ -1265,7 +1265,11 @@ function CRMApp({ user, updateUser, onLogout }) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 90000);
-      const r = await fetch(buildDataUrl({ lite: !isBoot }), {
+      const isSalePicker = user.role === "sale" && !selectedProject;
+      const url = isBoot && isSalePicker
+        ? `${API}/data?bootstrapOnly=1`
+        : buildDataUrl({ lite: !isBoot });
+      const r = await fetch(url, {
         headers: authHeaders(),
         signal: controller.signal,
       });
@@ -1306,7 +1310,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (isBoot || seq === fetchSeqRef.current) setLeadsFetching(false);
       if (isBoot) setDataLoadAttempted(true);
     }
-  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk]);
+  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk, user.role, selectedProject]);
 
   const runBootLoad = useCallback(async () => {
     if (bootDoneRef.current) return;
@@ -1354,12 +1358,23 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
+    if (user.role === "sale" && !selectedProject) return;
+
+    // Tránh hiển thị tab count cũ (tất cả dự án) khi đang load theo dự án vừa chọn
+    if (selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
+      const pid = Number(selectedProject);
+      const scoped = projectLeadCounts?.byProject?.[pid];
+      if (scoped != null) {
+        setServerTabCounts({ all: scoped });
+      }
+    }
+
     const t = setTimeout(() => {
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
       fetchCrmData({ isBoot: false });
     }, 400);
     return () => clearTimeout(t);
-  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData]);
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, user.role]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -4206,9 +4221,28 @@ const LeadsPage = (props) => {
 
   const tabCounts = serverTabCounts;
 
+  const displayTabCounts = useMemo(() => {
+    if (!leadsRefreshing) return tabCounts;
+    if (selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
+      const pid = Number(selectedProject);
+      const scoped = projectLeadCounts?.byProject?.[pid];
+      if (scoped != null) return { ...tabCounts, all: scoped };
+    }
+    return tabCounts;
+  }, [leadsRefreshing, tabCounts, selectedProject, projectLeadCounts]);
+
+  const displayLeadsTotal = useMemo(() => {
+    if (leadsRefreshing && selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
+      const pid = Number(selectedProject);
+      const scoped = projectLeadCounts?.byProject?.[pid];
+      if (scoped != null) return scoped;
+    }
+    return leadsTotal || 0;
+  }, [leadsRefreshing, selectedProject, projectLeadCounts, leadsTotal]);
+
   const mobilePrimaryTabs = useMemo(() => {
-    return LEAD_TABS.filter((t) => t.key === "all" || (tabCounts[t.key] || 0) > 0);
-  }, [LEAD_TABS, tabCounts]);
+    return LEAD_TABS.filter((t) => t.key === "all" || (displayTabCounts[t.key] || 0) > 0);
+  }, [LEAD_TABS, displayTabCounts]);
   const mobileVisibleTabs = useMemo(() => {
     const list = showMobileStatusMenu ? mobilePrimaryTabs : mobilePrimaryTabs.slice(0, 4);
     if (!showMobileStatusMenu && !list.some((t) => t.key === activeTab)) {
@@ -4238,8 +4272,8 @@ const LeadsPage = (props) => {
   const tabFiltered = processedLeads;
   const paginatedLeads = processedLeads;
 
-  const selectedProjectUpdatedPct = (tabCounts.all || leadsTotal)
-    ? ((((tabCounts.all || leadsTotal) - (tabCounts.new || 0)) / (tabCounts.all || leadsTotal)) * 100).toFixed(1)
+  const selectedProjectUpdatedPct = (displayTabCounts.all || leadsTotal)
+    ? ((((displayTabCounts.all || leadsTotal) - (displayTabCounts.new || 0)) / (displayTabCounts.all || leadsTotal)) * 100).toFixed(1)
     : "0.0";
 
   const totalPages = Math.max(1, Math.ceil((leadsTotal || 0) / pageSize));
@@ -4757,7 +4791,7 @@ const LeadsPage = (props) => {
               <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 2, WebkitOverflowScrolling: "touch" }}>
                 {mobileVisibleTabs.map((chip) => {
                   const active = activeTab === chip.key;
-                  const count = tabCounts[chip.key] || 0;
+                  const count = displayTabCounts[chip.key] || 0;
                   return (
                     <button key={chip.key} onClick={() => { setActiveTab(chip.key); setCurrentPage(1); }} style={{ flexShrink: 0, display: "inline-flex", gap: 6, alignItems: "center", padding: "7px 11px", borderRadius: 999, border: `1px solid ${active ? "#0f3d1e" : "#d9e2dc"}`, background: active ? "#f0faf1" : "#fff", color: active ? "#0f3d1e" : "#475569", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
                       {chip.label}<b style={{ fontSize: 11 }}>{count}</b>
@@ -6884,7 +6918,7 @@ const LeadsPage = (props) => {
       }}>
         {(isMobile ? mobileVisibleTabs : LEAD_TABS).map((t) => {
           const isActive = activeTab === t.key;
-          const count = tabCounts[t.key] || 0;
+          const count = displayTabCounts[t.key] || 0;
           return (
             <button key={t.key} onClick={() => { setActiveTab(t.key); setCurrentPage(1); }}
               style={{
@@ -6937,7 +6971,7 @@ const LeadsPage = (props) => {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", padding: "9px 12px", gap: 8 }}>
             {[
               { label: "Tất cả", value: leads.length, color: "#0f3d1e" },
-              { label: "Chưa FB", value: tabCounts.new || 0, color: "#d97706" },
+              { label: "Chưa FB", value: displayTabCounts.new || 0, color: "#d97706" },
               { label: "Cập nhật", value: `${selectedProjectUpdatedPct}%`, color: "#0284c7" },
             ].map((item) => (
               <div key={item.label} style={{ minWidth: 0 }}>
@@ -7194,7 +7228,7 @@ const LeadsPage = (props) => {
       </div>
 
       <div className={isMobile ? "crm-leads-toolbar crm-leads-toolbar--mobile" : "crm-leads-toolbar"}>
-        <span className="crm-leads-toolbar-count">Hiển thị {paginatedLeads.length} / {leadsTotal || 0} khách hàng</span>
+        <span className="crm-leads-toolbar-count">Hiển thị {paginatedLeads.length} / {displayLeadsTotal} khách hàng</span>
         <div className="crm-leads-toolbar-actions">
           {isAdmin && selectedProject && (() => {
             const isOn = autoRotateProjects[selectedProject] || false;

@@ -2465,6 +2465,55 @@ let leadTabIndexInflight = null;
 let leadTabIndexInflightKey = "";
 const LEAD_TAB_INDEX_CACHE_MS = 45_000;
 
+let saleScopeCache = { at: 0, key: "", data: null };
+let saleScopeInflight = null;
+let saleScopeInflightKey = "";
+const SALE_SCOPE_CACHE_MS = 30_000;
+
+async function getSaleLeadScopeIndex(db, user, filters = {}) {
+  const key = `sale|${leadTabIndexCacheKey(user, filters)}`;
+  const now = Date.now();
+  if (saleScopeCache.key === key && saleScopeCache.data && now - saleScopeCache.at < SALE_SCOPE_CACHE_MS) {
+    return saleScopeCache.data;
+  }
+  if (saleScopeInflight && saleScopeInflightKey === key) {
+    return saleScopeInflight;
+  }
+
+  saleScopeInflightKey = key;
+  saleScopeInflight = (async () => {
+    const baseFilters = { ...filters, statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
+    const leadRows = await all(db, `SELECT * FROM leads ${where}`, params);
+    if (!leadRows.length) {
+      const empty = { counts: { all: 0 }, leads: [], phoneRegistrations: {} };
+      saleScopeCache = { at: Date.now(), key, data: empty };
+      return empty;
+    }
+    const full = await finishLeadsPage(db, leadRows, leadRows.length, null, user);
+    const counts = { all: 0 };
+    for (const l of full.leads) {
+      counts.all += 1;
+      const st = l.status || "new";
+      counts[st] = (counts[st] || 0) + 1;
+    }
+    const data = { counts, leads: full.leads, phoneRegistrations: full.phoneRegistrations };
+    saleScopeCache = { at: Date.now(), key, data };
+    return data;
+  })();
+
+  try {
+    return await saleScopeInflight;
+  } finally {
+    saleScopeInflight = null;
+    saleScopeInflightKey = "";
+  }
+}
+
+function invalidateSaleScopeCache() {
+  saleScopeCache = { at: 0, key: "", data: null };
+}
+
 function leadTabIndexCacheKey(user, filters = {}) {
   return [
     user.role,
@@ -2702,19 +2751,7 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
 
 async function queryLeadsTabCounts(db, user, filters = {}) {
   if (user.role === "sale") {
-    const f = { ...filters, statusTab: "all", statusFilter: "all" };
-    const { where, params } = await buildLeadsSqlFilters(db, user, f);
-    const leadRows = await all(db, `SELECT id FROM leads ${where}`, params);
-    if (!leadRows.length) return { all: 0 };
-    const feedbackMap = await loadFeedbackSummariesForLeads(db, leadRows.map((r) => r.id));
-    const saleKey = normalizePersonNameServer(user.displayName || "");
-    const counts = { all: 0 };
-    for (const row of leadRows) {
-      const myFb = (feedbackMap[row.id]?.saleFeedbackStatus || {})[saleKey];
-      const tabStatus = myFb?.status || "new";
-      counts.all += 1;
-      counts[tabStatus] = (counts[tabStatus] || 0) + 1;
-    }
+    const { counts } = await getSaleLeadScopeIndex(db, user, filters);
     return counts;
   }
   if (user.role === "admin" || user.role === "manager") {
@@ -2799,19 +2836,15 @@ async function queryLeadsPage(db, user, filters, page, limit) {
 
   // Sale: status tab = feedback của chính sale đó, không phải leads.status chung
   if (user.role === "sale") {
-    const baseFilters = { ...filters, statusTab: "all" };
-    const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
-    const leadRows = await all(db, `SELECT * FROM leads ${where}`, params);
-    if (!leadRows.length) return { leads: [], leadsTotal: 0, phoneRegistrations: {} };
-    const full = await finishLeadsPage(db, leadRows, leadRows.length, null, user);
-    let scoped = full.leads;
+    const { leads: scopedLeads, phoneRegistrations } = await getSaleLeadScopeIndex(db, user, filters);
+    let scoped = scopedLeads;
     if (statusTab !== "all") scoped = scoped.filter((l) => l.status === statusTab);
     scoped = sortLeadObjectsList(scoped, sortKey, sortDir);
     const offset = (page - 1) * limit;
     return {
       leads: scoped.slice(offset, offset + limit),
       leadsTotal: scoped.length,
-      phoneRegistrations: full.phoneRegistrations,
+      phoneRegistrations,
     };
   }
 
@@ -5134,6 +5167,26 @@ app.get("/api/data", requireAuth, async (req, res) => {
       while (syncInProgress && Date.now() - waitStart < 3000) await new Promise(r => setTimeout(r, 100));
     }
 
+    // Lightweight boot: metadata only (sale project picker — no lead scan)
+    if (req.query.bootstrapOnly === "1") {
+      const [bootstrap, projectLeadCounts] = await Promise.all([
+        getBootstrapPayload(db, req.user),
+        queryProjectLeadCounts(db, req.user),
+      ]);
+      const payload = await buildDataPayloadExtras(db, req.user, {
+        ...bootstrap,
+        leads: [],
+        leadsTotal: 0,
+        leadsPage: 1,
+        leadsLimit: 15,
+        paginated: true,
+        tabCounts: { all: 0 },
+        projectLeadCounts,
+        phoneRegistrations: {},
+      });
+      return res.json(payload);
+    }
+
     const q = parseLeadsQuery(req);
     const filters = {
       projectId: q.projectId,
@@ -5248,11 +5301,20 @@ app.get("/api/projects/lead-counts", requireAuth, async (req, res) => {
   }
 });
 
+let schedulesResponseCache = { at: 0, data: null };
+const SCHEDULES_RESPONSE_CACHE_MS = 60_000;
+
 async function buildDataPayloadExtras(db, user, data) {
   let schedules = [];
   if (user.role === "admin" || user.role === "manager") {
-    const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
-    schedules = await enrichSchedulesForResponse(db, rows);
+    const now = Date.now();
+    if (schedulesResponseCache.data && now - schedulesResponseCache.at < SCHEDULES_RESPONSE_CACHE_MS) {
+      schedules = schedulesResponseCache.data;
+    } else {
+      const rows = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
+      schedules = await enrichSchedulesForResponse(db, rows);
+      schedulesResponseCache = { at: now, data: schedules };
+    }
   }
   if (!lastSyncHash) {
     try {
@@ -5316,6 +5378,8 @@ function emitDataChanged(reason) {
   invalidateLeadAuxCache();
   invalidateProjectCountsCache();
   invalidateLeadTabIndexCache();
+  invalidateSaleScopeCache();
+  schedulesResponseCache = { at: 0, data: null };
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
