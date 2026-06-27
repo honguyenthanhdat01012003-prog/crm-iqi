@@ -4069,6 +4069,7 @@ const LeadsPage = (props) => {
   const [redistributing, setRedistributing] = useState(false);
   const [recoverModal, setRecoverModal] = useState(null); // { backups: [], step: 1|2, selectedBackup, selectedProject, loading }
   const [restoreModal, setRestoreModal] = useState(null); // { step: 'pick'|'preview'|'done', projectId, preview, loading, result }
+  const [restoreFeedbackModal, setRestoreFeedbackModal] = useState(null); // { step: 'pick'|'preview'|'done', saleName, projectId, preview, loading, result }
   const [crossRefOpen, setCrossRefOpen] = useState(false);
   const [crossRefInput, setCrossRefInput] = useState("");
   const [crossRefResults, setCrossRefResults] = useState(null);
@@ -5344,6 +5345,22 @@ const LeadsPage = (props) => {
                   }}
                 />
                 <AdminToolbarMenuItem
+                  icon={ArrowLeftRight}
+                  title="Lead đã cập nhật về Sale"
+                  desc="Quét toàn bộ lead — trả về sale đã feedback (bỏ qua lead chỉ nhận chưa cập nhật)"
+                  onClick={() => {
+                    closeAdminDeskMenu();
+                    setRestoreFeedbackModal({
+                      step: "pick",
+                      saleName: "",
+                      projectId: selectedProject && selectedProject !== "all" ? Number(selectedProject) : null,
+                      preview: null,
+                      loading: false,
+                      result: null,
+                    });
+                  }}
+                />
+                <AdminToolbarMenuItem
                   icon={RefreshCw}
                   title="Từ backup dự án"
                   desc="Khôi phục sau sync lỗi (dự án hiện tại)"
@@ -5496,6 +5513,141 @@ const LeadsPage = (props) => {
                   </div>
                 </div>
                 <button onClick={() => setRestoreModal(null)}
+                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10 }}>
+                  Đóng
+                </button>
+              </>)}
+            </Modal>
+          )}
+
+          {/* Restore feedback leads modal */}
+          {restoreFeedbackModal && (
+            <Modal onClose={() => !restoreFeedbackModal.loading && setRestoreFeedbackModal(null)} title="Khôi phục lead đã cập nhật về Sale">
+              {restoreFeedbackModal.step === "pick" && (<>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
+                  Quét toàn bộ lead — chỉ trả về lead sale đã từng cập nhật feedback. Lead sale chỉ nhận (Chia lead) nhưng chưa cập nhật sẽ bỏ qua.
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Chọn Sale *</div>
+                  <select
+                    value={restoreFeedbackModal.saleName || ""}
+                    onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, saleName: e.target.value }))}
+                    style={{ ...gt, width: "100%", marginBottom: 0 }}
+                  >
+                    <option value="">— Chọn sale —</option>
+                    {saleNames.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Lọc dự án (tuỳ chọn)</div>
+                  <select
+                    value={restoreFeedbackModal.projectId ?? ""}
+                    onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, projectId: e.target.value ? Number(e.target.value) : null }))}
+                    style={{ ...gt, width: "100%", marginBottom: 0 }}
+                  >
+                    <option value="">Tất cả dự án</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  disabled={!restoreFeedbackModal.saleName || restoreFeedbackModal.loading}
+                  onClick={async () => {
+                    setRestoreFeedbackModal((prev) => ({ ...prev, loading: true }));
+                    try {
+                      const params = new URLSearchParams({ saleName: restoreFeedbackModal.saleName });
+                      if (restoreFeedbackModal.projectId) params.set("projectId", String(restoreFeedbackModal.projectId));
+                      const r = await apiFetch(`${API}/leads/restore-feedback-preview?${params}`);
+                      const data = await r.json();
+                      if (!r.ok) { showToast(data.error || "Lỗi", "error"); setRestoreFeedbackModal((prev) => ({ ...prev, loading: false })); return; }
+                      setRestoreFeedbackModal((prev) => ({ ...prev, step: "preview", preview: data, loading: false }));
+                    } catch (e) {
+                      showToast("Lỗi: " + e.message, "error");
+                      setRestoreFeedbackModal((prev) => ({ ...prev, loading: false }));
+                    }
+                  }}
+                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10, background: (!restoreFeedbackModal.saleName || restoreFeedbackModal.loading) ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}
+                >
+                  {restoreFeedbackModal.loading ? "Đang quét..." : "Quét & xem trước →"}
+                </button>
+              </>)}
+              {restoreFeedbackModal.step === "preview" && restoreFeedbackModal.preview && (<>
+                <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 13 }}>
+                  <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 6 }}>Sale: {restoreFeedbackModal.preview.saleName}</div>
+                  <div>Đã quét: <b>{restoreFeedbackModal.preview.totalScanned}</b> lead</div>
+                  <div>Sale đã từng cập nhật: <b>{restoreFeedbackModal.preview.leadsWithFeedback}</b> lead</div>
+                  <div>Cần khôi phục: <b style={{ color: "#16a34a" }}>{restoreFeedbackModal.preview.restorable}</b> lead</div>
+                  <div>Đã đúng sale/trạng thái: <b>{restoreFeedbackModal.preview.alreadyOk}</b></div>
+                  {restoreFeedbackModal.preview.hasMore && (
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Hiển thị 200 lead đầu trong danh sách bên dưới</div>
+                  )}
+                </div>
+                {(restoreFeedbackModal.preview.items || []).length > 0 && (
+                  <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12, fontSize: 12 }}>
+                    {restoreFeedbackModal.preview.items.map((item) => (
+                      <div key={item.leadId} style={{ padding: "8px 12px", borderBottom: "1px solid #f3f4f6" }}>
+                        <div style={{ fontWeight: 600 }}>{item.name || "—"} {item.phone ? `· ${item.phone}` : ""}</div>
+                        <div style={{ color: "#6b7280" }}>{item.projectName || "—"}</div>
+                        <div>{item.currentSale || "Chưa chia"} ({item.currentStatusLabel || item.currentStatus}) → <span style={{ color: "#16a34a", fontWeight: 600 }}>{item.targetSale}</span> ({item.targetStatusLabel || item.targetStatus})</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {restoreFeedbackModal.preview.restorable === 0 ? (
+                  <button onClick={() => setRestoreFeedbackModal((prev) => ({ ...prev, step: "pick", preview: null }))}
+                    style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10 }}>
+                    Quay lại
+                  </button>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setRestoreFeedbackModal((prev) => ({ ...prev, step: "pick", preview: null }))}
+                      style={{ ...btnPrimary, flex: 1, padding: "10px 16px", fontSize: 13, borderRadius: 10, background: "#6b7280" }}>
+                      Quay lại
+                    </button>
+                    <button
+                      disabled={restoreFeedbackModal.loading}
+                      onClick={async () => {
+                        if (!(await showConfirm(`Khôi phục ${restoreFeedbackModal.preview.restorable} lead về ${restoreFeedbackModal.preview.saleName}?\n\nChỉ lead sale đã từng cập nhật feedback. Lead hiện ở sale khác sẽ được chuyển lại.`))) return;
+                        setRestoreFeedbackModal((prev) => ({ ...prev, loading: true }));
+                        try {
+                          const r = await apiFetch(`${API}/leads/restore-feedback-to-sale`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              saleName: restoreFeedbackModal.saleName,
+                              projectId: restoreFeedbackModal.projectId || undefined,
+                            }),
+                          });
+                          const data = await r.json();
+                          if (!r.ok) { showToast(data.error || "Lỗi", "error"); setRestoreFeedbackModal((prev) => ({ ...prev, loading: false })); return; }
+                          setRestoreFeedbackModal((prev) => ({ ...prev, step: "done", result: data, loading: false }));
+                          showToast(data.msg, "success");
+                          const r2 = await apiFetch(`${API}/data`);
+                          applyApiData(await r2.json(), { suppressNotifications: true });
+                        } catch (e) {
+                          showToast("Lỗi: " + e.message, "error");
+                          setRestoreFeedbackModal((prev) => ({ ...prev, loading: false }));
+                        }
+                      }}
+                      style={{ ...btnPrimary, flex: 2, padding: "10px 16px", fontSize: 13, borderRadius: 10, background: restoreFeedbackModal.loading ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}
+                    >
+                      {restoreFeedbackModal.loading ? "Đang khôi phục..." : `✓ Khôi phục ${restoreFeedbackModal.preview.restorable} lead`}
+                    </button>
+                  </div>
+                )}
+              </>)}
+              {restoreFeedbackModal.step === "done" && restoreFeedbackModal.result && (<>
+                <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 16, marginBottom: 12 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a", marginBottom: 8 }}>Khôi phục thành công!</div>
+                  <div style={{ fontSize: 13 }}>
+                    <div>Lead khôi phục: <b>{restoreFeedbackModal.result.restored}</b></div>
+                    <div>Sale: <b>{restoreFeedbackModal.result.saleName}</b></div>
+                  </div>
+                </div>
+                <button onClick={() => setRestoreFeedbackModal(null)}
                   style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10 }}>
                   Đóng
                 </button>
