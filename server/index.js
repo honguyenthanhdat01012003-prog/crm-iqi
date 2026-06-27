@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tele-recall-batch";
+const BUILD_VERSION = "2026-06-10-instant-sla-datefix";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -1415,17 +1415,19 @@ function extractSaleHistory(rawCols, saleBlocks) {
 
 function parseLeadDate(createdAt) {
   if (!createdAt || createdAt === "-") return null;
-  // dd/mm/yyyy HH:MM:SS or dd/mm/yyyy
-  const m = createdAt.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);  if (m) {
-    const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]),
-      Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
+  // hh:mm:ss dd/mm/yyyy (Vietnamese locale — getAssignmentNowStr) — check BEFORE dd/mm/yyyy
+  // or "13:21:51 27/6/2026" wrongly parses as midnight via the date-only branch below.
+  const mTimeFirst = createdAt.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mTimeFirst) {
+    const dt = new Date(Number(mTimeFirst[6]), Number(mTimeFirst[5]) - 1, Number(mTimeFirst[4]),
+      Number(mTimeFirst[1]), Number(mTimeFirst[2]), Number(mTimeFirst[3] || 0));
     if (!isNaN(dt.getTime())) return dt;
   }
-  // hh:mm:ss dd/mm/yyyy (Vietnamese locale output)
-  const m2 = createdAt.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m2) {
-    const dt = new Date(Number(m2[6]), Number(m2[5]) - 1, Number(m2[4]),
-      Number(m2[1]), Number(m2[2]), Number(m2[3] || 0));
+  // dd/mm/yyyy HH:MM:SS or dd/mm/yyyy
+  const m = createdAt.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (m) {
+    const dt = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]),
+      Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
     if (!isNaN(dt.getTime())) return dt;
   }
   const iso = new Date(createdAt);
@@ -7281,6 +7283,41 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   return true;
 }
 
+/** Sale đã feedback sau lần Chia lead gần nhất → không thu hồi SLA Lead New. */
+async function hasInstantSlaFeedbackForCurrentSale(db, leadId, saleName) {
+  if (!leadId || !saleName) return false;
+  const chia = await get(db,
+    `SELECT seq FROM lead_history
+     WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+     ORDER BY seq DESC LIMIT 1`,
+    [leadId, saleName]
+  );
+  if (!chia) return false;
+  const fb = await get(db,
+    `SELECT id FROM lead_history
+     WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+       AND action NOT IN ('Chia lead', 'Thu hồi SLA')
+       AND TRIM(COALESCE(status, '')) != ''
+     LIMIT 1`,
+    [leadId, chia.seq, saleName]
+  );
+  return !!fb;
+}
+
+async function getInstantSlaAssignmentTime(db, lead) {
+  const fromCol = parseLeadDate(lead.assigned_at);
+  if (fromCol) return fromCol;
+  const saleName = (lead.sale_name || "").trim();
+  if (!saleName) return null;
+  const chia = await get(db,
+    `SELECT contact_date FROM lead_history
+     WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+     ORDER BY seq DESC LIMIT 1`,
+    [lead.id, saleName]
+  );
+  return parseLeadDate(chia?.contact_date);
+}
+
 /**
  * SLA Lead New (không phải đặt lịch): 8 phút nhắc, 10 phút đưa về rổ xáo.
  */
@@ -7306,10 +7343,12 @@ async function processInstantLeadSLA(db) {
   const recallBySale = new Map();
 
   for (const lead of candidates) {
-    const assignedAt = parseLeadDate(lead.assigned_at);
+    const saleName = (lead.sale_name || "").trim();
+    if (await hasInstantSlaFeedbackForCurrentSale(db, lead.id, saleName)) continue;
+
+    const assignedAt = await getInstantSlaAssignmentTime(db, lead);
     if (!assignedAt) continue;
     const ageMs = now - assignedAt.getTime();
-    const saleName = (lead.sale_name || "").trim();
 
     if (ageMs >= INSTANT_SLA_RECALL_MS) {
       const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
@@ -9187,7 +9226,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       }
       await run(
         db,
-        `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(newNorm) ? ", is_locked = 1" : ""} WHERE id = ?`,
+        `UPDATE leads SET status = ?, raw_status = ?, instant_sla_warned_at = ''${shouldAutoLockStatus(newNorm) ? ", is_locked = 1" : ""} WHERE id = ?`,
         [newNorm, statusText, leadId]
       );
 
