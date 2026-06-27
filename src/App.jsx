@@ -276,8 +276,40 @@ function parseLeadDate(str) {
   if (!str || str === "-") return null;
   const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
+  const m2 = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m2) return new Date(Number(m2[6]), Number(m2[5]) - 1, Number(m2[4]), Number(m2[1]), Number(m2[2]), Number(m2[3] || 0));
   const iso = new Date(str);
   return isNaN(iso.getTime()) ? null : iso;
+}
+
+const SCHEDULED_SLA_MS = 24 * 60 * 60 * 1000;
+const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
+
+function getScheduledSlaInfo(lead) {
+  if (!lead || lead.distributionKind !== "scheduled") return null;
+  const st = lead.status || "new";
+  if (st !== "new") return null;
+  const start = parseLeadDate(lead.assignedAt);
+  if (!start) return null;
+  const deadline = new Date(start.getTime() + SCHEDULED_SLA_MS);
+  const remain = deadline.getTime() - Date.now();
+  const pad = (n) => String(n).padStart(2, "0");
+  const deadlineLabel = `${pad(deadline.getDate())}/${pad(deadline.getMonth() + 1)}/${deadline.getFullYear()} ${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
+  if (remain <= 0) {
+    return { overdue: true, remainMs: remain, deadlineLabel, level: "overdue", text: "Quá hạn SLA 24h — sẽ thu hồi" };
+  }
+  const hours = Math.floor(remain / 3600000);
+  const mins = Math.floor((remain % 3600000) / 60000);
+  const level = remain <= SCHEDULED_SLA_WARN_MS ? "urgent" : "normal";
+  return {
+    overdue: false,
+    remainMs: remain,
+    deadlineLabel,
+    level,
+    text: level === "urgent"
+      ? `Còn ${hours}h${pad(mins)}m — hạn ${deadlineLabel}`
+      : `Hạn chót: ${deadlineLabel} (còn ${hours}h${pad(mins)}m)`,
+  };
 }
 
 function getTodayStr() {
@@ -3656,6 +3688,11 @@ const LeadsPage = (props) => {
   } = props;
   const isAdminOnly = user.role === "admin";
   const isMobile = useIsMobile();
+  const [, setSlaTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setSlaTick((x) => x + 1), 60000);
+    return () => clearInterval(t);
+  }, []);
   const [shufflePoolLeads, setShufflePoolLeads] = useState(null);
   const [shufflePoolLoading, setShufflePoolLoading] = useState(false);
   const leadsQuerySigRef = useRef("");
@@ -7130,12 +7167,25 @@ const LeadsPage = (props) => {
                       {isAdmin && l.managerName && <span style={{ display: "flex", alignItems: "center", gap: 2, color: "#2563eb" }}><Shield size={12} /> {l.managerName}</span>}
                       {isAdmin && <span style={{ fontSize: 11 }}>{getLeadProjectName(l)}</span>}
                     </div>
-                    {isSale && l.distributionKind === "scheduled" && l.assignedAt && (
-                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#f5f3ff", borderRadius: 6, border: "1px solid #ddd6fe", fontSize: 11, color: "#5b21b6", display: "flex", alignItems: "center", gap: 4 }}>
-                        <CalendarClock size={11} style={{ flexShrink: 0 }} />
-                        <span>Lead đặt lịch · Chia lúc: <strong>{l.assignedAt}</strong></span>
-                      </div>
-                    )}
+                    {(isSale || isAdmin) && l.distributionKind === "scheduled" && l.assignedAt && (() => {
+                      const sla = getScheduledSlaInfo(l);
+                      if (!sla) return (
+                        <div style={{ marginTop: 4, padding: "4px 8px", background: "#f5f3ff", borderRadius: 6, border: "1px solid #ddd6fe", fontSize: 11, color: "#5b21b6", display: "flex", alignItems: "center", gap: 4 }}>
+                          <CalendarClock size={11} style={{ flexShrink: 0 }} />
+                          <span>Lead đặt lịch · Chia lúc: <strong>{l.assignedAt}</strong></span>
+                        </div>
+                      );
+                      const bg = sla.level === "overdue" ? "#fef2f2" : sla.level === "urgent" ? "#fffbeb" : "#f5f3ff";
+                      const border = sla.level === "overdue" ? "#fecaca" : sla.level === "urgent" ? "#fde68a" : "#ddd6fe";
+                      const color = sla.level === "overdue" ? "#b91c1c" : sla.level === "urgent" ? "#b45309" : "#5b21b6";
+                      return (
+                        <div style={{ marginTop: 4, padding: "4px 8px", background: bg, borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, color, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                          <Timer size={11} style={{ flexShrink: 0 }} />
+                          <span><strong>{sla.text}</strong></span>
+                          <span style={{ opacity: 0.85 }}>· Chia lúc {l.assignedAt}</span>
+                        </div>
+                      );
+                    })()}
                     {isSale && l.lastSaleUpdate && (
                       <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                         <Clock size={11} style={{ flexShrink: 0 }} />

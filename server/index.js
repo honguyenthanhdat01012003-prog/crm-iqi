@@ -420,7 +420,10 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 32; // Bump this when adding new DDL/migrations
+const DB_VERSION = 33; // Bump this when adding new DDL/migrations
+
+const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
+const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
 
 const LEAD_DISTRIBUTION_KINDS = {
   scheduled: "scheduled",
@@ -436,7 +439,7 @@ function getAssignmentNowStr() {
 function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
   const ts = now || getAssignmentNowStr();
   return {
-    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ? WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '' WHERE id = ?",
     args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
     now: ts,
   };
@@ -444,9 +447,13 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
 
 function buildLeadUnassignUpdateStmt(leadId) {
   return {
-    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '' WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '' WHERE id = ?",
     args: [leadId],
   };
+}
+
+function getScheduledAssignmentTime(lead = {}, dbHistoryDate = null) {
+  return parseLeadDate(lead.assigned_at) || parseLeadDate(dbHistoryDate) || null;
 }
 
 function mapHistorySourceToDistributionKind(source = "") {
@@ -961,6 +968,11 @@ async function initDb() {
     } catch (e) {
       console.error("[DB] v32 backfill error:", e.message);
     }
+  }
+  if (dbVersion < 33) {
+    console.log("[DB] v33 migration: scheduled lead SLA tracking columns...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN sla_12h_warned_at TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN sla_recalled_at TEXT DEFAULT ''"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2525,6 +2537,8 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     dealValue: l.deal_value || 0,
     assignedAt: l.assigned_at || "",
     distributionKind: l.distribution_kind || "",
+    sla12hWarnedAt: l.sla_12h_warned_at || "",
+    slaRecalledAt: l.sla_recalled_at || "",
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
@@ -6265,6 +6279,166 @@ app.get("/api/auto-rotate/history", requireAuth, requireAdmin, async (req, res) 
 });
 
 // Process auto-rotate: unified flow — hot sales (24h) first, then normal sales (2 days), sprint mode (12h)
+async function deleteTelegramMsgsForLeadSale(db, leadId, saleName, projectId) {
+  try {
+    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    if (!saleUser?.telegram_id) return;
+    const activeBot = await getBotForProject(projectId);
+    if (!activeBot?.token) return;
+    const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+    for (const tm of trackedMsgs) {
+      try {
+        await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
+        });
+      } catch (_) {}
+    }
+    await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+    await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
+  } catch (err) {
+    console.error("[Telegram] deleteTelegramMsgsForLeadSale failed:", err.message);
+  }
+}
+
+async function notifySaleScheduledSlaRecall(db, lead, saleName) {
+  try {
+    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    if (!saleUser?.telegram_id) return;
+    const activeBot = await getBotForProject(lead.project_id);
+    if (!activeBot?.token) return;
+    const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
+    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: saleUser.telegram_id,
+        text: [
+          "🚫 *LEAD ĐẶT LỊCH BỊ THU HỒI (24H)*",
+          `Dự án: *${escMd(projectRow ? projectRow.name : "-")}*`,
+          "----------------------------------------------",
+          `👤 Khách: *${escMd(lead.name || "N/A")}*`,
+          `📞 SĐT: \`${lead.phone || "-"}\``,
+          "",
+          "❌ _Quá 24 giờ chưa cập nhật feedback._",
+          "_Lead đã được đưa về kho xáo — bạn không cần liên hệ khách này nữa._",
+        ].join("\n"),
+        parse_mode: "Markdown",
+      }),
+    });
+  } catch (err) {
+    console.error("[Telegram] SLA recall notify failed:", err.message);
+  }
+}
+
+async function recallScheduledLeadSLA(db, lead, nowStr) {
+  const saleName = (lead.sale_name || "").trim();
+  if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
+
+  await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
+
+  const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+  const nextSeq = (maxSeq?.m ?? -1) + 1;
+  const stmts = [
+    {
+      sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = ? WHERE id = ?",
+      args: [nowStr, lead.id],
+    },
+    {
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead đặt lịch quá 24h chưa feedback — đưa về kho xáo", nextSeq, "scheduled-sla"],
+    },
+    {
+      sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, "", nowStr, "scheduled-sla", "Lead đặt lịch quá 24h chưa feedback"],
+    },
+  ];
+  await db.batch(stmts, "write");
+
+  await notifySaleScheduledSlaRecall(db, lead, saleName);
+
+  sendPushToDisplayName(saleName, {
+    title: "Lead đặt lịch bị thu hồi",
+    body: `${lead.name || "Khách"} — quá 24h chưa feedback, đã đưa về kho xáo`,
+    tag: `scheduled-sla-recall-${lead.id}`,
+    sound: "sale",
+    data: { url: "/", type: "scheduled_sla_recall", leadId: lead.id },
+  }).catch((err) => console.error("[Push] SLA recall failed:", err.message));
+
+  return true;
+}
+
+/**
+ * SLA lead đặt lịch: 12h cảnh báo, 24h thu hồi về kho xáo (unassign).
+ * Chỉ áp dụng distribution_kind=scheduled + status=new.
+ */
+async function processScheduledLeadSLA(db) {
+  const now = Date.now();
+  const nowStr = getAssignmentNowStr();
+  const candidates = await all(db,
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, sla_12h_warned_at, sla_recalled_at
+     FROM leads
+     WHERE distribution_kind = ?
+       AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
+       AND COALESCE(is_locked, 0) = 0
+       AND TRIM(COALESCE(sale_name, '')) != ''
+       AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
+       AND COALESCE(sla_recalled_at, '') = ''`,
+    [LEAD_DISTRIBUTION_KINDS.scheduled]
+  );
+
+  const warnBySale = new Map();
+  let recalled = 0;
+  let warned = 0;
+
+  for (const lead of candidates) {
+    let assignedAt = getScheduledAssignmentTime(lead);
+    if (!assignedAt) {
+      const chia = await get(db,
+        `SELECT contact_date FROM lead_history
+         WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+         ORDER BY seq DESC LIMIT 1`,
+        [lead.id, lead.sale_name]
+      );
+      assignedAt = parseLeadDate(chia?.contact_date);
+    }
+    if (!assignedAt) continue;
+
+    const ageMs = now - assignedAt.getTime();
+    const saleName = (lead.sale_name || "").trim();
+
+    if (ageMs >= SCHEDULED_SLA_RECALL_MS) {
+      const ok = await recallScheduledLeadSLA(db, lead, nowStr);
+      if (ok) recalled += 1;
+      continue;
+    }
+
+    if (ageMs >= SCHEDULED_SLA_WARN_MS && !lead.sla_12h_warned_at) {
+      await run(db, "UPDATE leads SET sla_12h_warned_at = ? WHERE id = ?", [nowStr, lead.id]);
+      if (!warnBySale.has(saleName)) warnBySale.set(saleName, 0);
+      warnBySale.set(saleName, warnBySale.get(saleName) + 1);
+      warned += 1;
+    }
+  }
+
+  for (const [saleName, count] of warnBySale.entries()) {
+    sendPushToDisplayName(saleName, {
+      title: "Nhắc nhở lead đặt lịch",
+      body: `Bạn đang có ${count} lead đặt lịch chưa được xử lý. Thời hạn báo cáo còn 12 giờ.`,
+      tag: `scheduled-sla-warn-${saleName}-${nowStr.slice(0, 10)}`,
+      sound: "sale",
+      data: { url: "/", type: "scheduled_sla_warn", count },
+      requireInteraction: true,
+    }).catch((err) => console.error(`[Push] SLA 12h warn failed for ${saleName}:`, err.message));
+  }
+
+  if (recalled > 0 || warned > 0) {
+    lastSyncHash = "";
+    emitDataChanged("scheduled-sla");
+  }
+
+  return { recalled, warned };
+}
+
 async function processAutoRotate(db) {
   const enabledRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%' AND value = '1'");
   if (!enabledRows.length) return 0;
@@ -6291,12 +6465,14 @@ async function processAutoRotate(db) {
 
   // Get candidate leads (assigned, not locked/booked)
   const candidates = await all(db,
-    `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id
+    `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id, l.distribution_kind
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
        AND l.is_locked = 0
-     ORDER BY l.id ASC`
+       AND COALESCE(l.distribution_kind, '') != ?
+     ORDER BY l.id ASC`,
+    [LEAD_DISTRIBUTION_KINDS.scheduled]
   );
   const filtered = candidates.filter(l => enabledProjectIds.has(l.project_id));
 
@@ -7755,6 +7931,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           const assignNow = getAssignmentNowStr();
           sets.push("assigned_at = ?"); params.push(assignNow);
           sets.push("distribution_kind = ?"); params.push(LEAD_DISTRIBUTION_KINDS.manual);
+          sets.push("sla_12h_warned_at = ?"); params.push("");
+          sets.push("sla_recalled_at = ?"); params.push("");
         }
       }
       // Admin can directly reassign manager (without changing sale)
@@ -7787,6 +7965,9 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       sets.push("status = ?"); params.push(normalizedStatus);
       sets.push("raw_status = ?"); params.push(statusLabel);
       if (shouldAutoLockStatus(normalizedStatus)) { sets.push("is_locked = ?"); params.push(1); }
+      if (normalizedStatus !== "new") {
+        sets.push("sla_12h_warned_at = ?"); params.push("");
+      }
     }
     if (notes !== undefined) { sets.push("notes = ?"); params.push(notes); }
 
@@ -8532,7 +8713,7 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel2 = TELE_STATUS_LABELS[statusKey] || statusKey;
         await run(
           db,
-          `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(statusKey) ? ", is_locked = 1" : ""} WHERE id = ?`,
+          `UPDATE leads SET status = ?, raw_status = ?${shouldAutoLockStatus(statusKey) ? ", is_locked = 1" : ""}${statusKey !== "new" ? ", sla_12h_warned_at = ''" : ""} WHERE id = ?`,
           [statusKey, statusLabel2, leadId]
         );
 
@@ -12403,6 +12584,28 @@ if (!process.env.VERCEL) {
     }
   }, AUTO_ROTATE_INTERVAL);
   console.log(`[auto-rotate] Enabled, interval=30min`);
+
+  // Scheduled lead SLA: 12h warn, 24h recall to shuffle pool
+  const SCHEDULED_SLA_INTERVAL = 10 * 60 * 1000;
+  setTimeout(async () => {
+    if (!db) return;
+    try {
+      const r = await processScheduledLeadSLA(db);
+      if (r.recalled > 0 || r.warned > 0) console.log(`[scheduled-sla] Boot run: warned=${r.warned}, recalled=${r.recalled}`);
+    } catch (e) {
+      console.error("[scheduled-sla] Boot error:", e.message);
+    }
+  }, 45000);
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const r = await processScheduledLeadSLA(db);
+      if (r.recalled > 0 || r.warned > 0) console.log(`[scheduled-sla] warned=${r.warned}, recalled=${r.recalled}`);
+    } catch (e) {
+      console.error("[scheduled-sla] Error:", e.message);
+    }
+  }, SCHEDULED_SLA_INTERVAL);
+  console.log("[scheduled-sla] Enabled, interval=10min (12h warn / 24h recall)");
 
   // Auto-fetch daily BĐS news (check every 10 min, run once per day at configured time)
   let lastNewsFetchDate = "";
