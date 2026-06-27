@@ -4069,7 +4069,7 @@ const LeadsPage = (props) => {
   const [redistributing, setRedistributing] = useState(false);
   const [recoverModal, setRecoverModal] = useState(null); // { backups: [], step: 1|2, selectedBackup, selectedProject, loading }
   const [restoreModal, setRestoreModal] = useState(null); // { step: 'pick'|'preview'|'done', projectId, preview, loading, result }
-  const [restoreFeedbackModal, setRestoreFeedbackModal] = useState(null); // { step: 'pick'|'preview'|'done', saleName, projectId, preview, loading, result }
+  const [restoreFeedbackModal, setRestoreFeedbackModal] = useState(null); // { step, selectedSales[], preview, loading, result }
   const [crossRefOpen, setCrossRefOpen] = useState(false);
   const [crossRefInput, setCrossRefInput] = useState("");
   const [crossRefResults, setCrossRefResults] = useState(null);
@@ -5347,13 +5347,15 @@ const LeadsPage = (props) => {
                 <AdminToolbarMenuItem
                   icon={ArrowLeftRight}
                   title="Lead đã cập nhật về Sale"
-                  desc="Trả lead đã feedback về sale bị thu hồi SLA — sale khác vẫn giữ lead riêng"
+                  desc="Khôi phục hàng loạt — chọn nhiều/tất cả sale, mọi dự án"
                   onClick={() => {
                     closeAdminDeskMenu();
+                    const all = (Array.isArray(allUsers) ? allUsers : [])
+                      .filter((u) => u.role === "sale" && u.displayName)
+                      .map((u) => u.displayName);
                     setRestoreFeedbackModal({
                       step: "pick",
-                      saleName: "",
-                      projectId: selectedProject && selectedProject !== "all" ? Number(selectedProject) : null,
+                      selectedSales: all,
                       preview: null,
                       loading: false,
                       result: null,
@@ -5520,48 +5522,60 @@ const LeadsPage = (props) => {
             </Modal>
           )}
 
-          {/* Restore feedback leads modal */}
+          {/* Restore feedback leads modal — bulk multi-sale */}
           {restoreFeedbackModal && (
-            <Modal onClose={() => !restoreFeedbackModal.loading && setRestoreFeedbackModal(null)} title="Khôi phục lead đã cập nhật về Sale">
+            <Modal onClose={() => !restoreFeedbackModal.loading && setRestoreFeedbackModal(null)} title="Khôi phục lead đã cập nhật (hàng loạt)">
               {restoreFeedbackModal.step === "pick" && (<>
                 <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
-                  Quét lead sale đã từng cập nhật feedback (do lỗi thu hồi SLA) và trả về cho sale đó.
-                  Sale khác đã làm việc với lead vẫn thấy lead và feedback riêng — không bị mất.
+                  Quét <b>1 lần</b> toàn bộ lead — mọi dự án. Lead nào sale đã từng cập nhật feedback trong lịch sử sẽ được trả về sale đó.
+                  Sale chỉ nhận Chia lead chưa cập nhật sẽ bỏ qua.
                 </div>
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Chọn Sale *</div>
-                  <select
-                    value={restoreFeedbackModal.saleName || ""}
-                    onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, saleName: e.target.value }))}
-                    style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
-                  >
-                    <option value="">— Chọn sale —</option>
-                    {saleNames.map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                    Chọn Sale ({restoreFeedbackModal.selectedSales?.length || 0}/{allSaleUsers.length})
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" onClick={() => setRestoreFeedbackModal((prev) => ({ ...prev, selectedSales: [...allSaleUsers] }))}
+                      style={{ ...btnSecondary, padding: "4px 10px", fontSize: 12, borderRadius: 6 }}>Chọn tất cả</button>
+                    <button type="button" onClick={() => setRestoreFeedbackModal((prev) => ({ ...prev, selectedSales: [] }))}
+                      style={{ ...btnSecondary, padding: "4px 10px", fontSize: 12, borderRadius: 6 }}>Bỏ chọn</button>
+                  </div>
                 </div>
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Lọc dự án (tuỳ chọn)</div>
-                  <select
-                    value={restoreFeedbackModal.projectId ?? ""}
-                    onChange={(e) => setRestoreFeedbackModal((prev) => ({ ...prev, projectId: e.target.value ? Number(e.target.value) : null }))}
-                    style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
-                  >
-                    <option value="">Tất cả dự án</option>
-                    {projects.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select>
+                <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12 }}>
+                  {allSaleUsers.map((n) => {
+                    const checked = (restoreFeedbackModal.selectedSales || []).includes(n);
+                    return (
+                      <label key={n} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderBottom: "1px solid #f3f4f6", cursor: "pointer", fontSize: 13, background: checked ? "#f0fdf4" : "transparent" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setRestoreFeedbackModal((prev) => {
+                              const cur = new Set(prev.selectedSales || []);
+                              if (cur.has(n)) cur.delete(n); else cur.add(n);
+                              return { ...prev, selectedSales: [...cur] };
+                            });
+                          }}
+                        />
+                        {n}
+                      </label>
+                    );
+                  })}
+                  {!allSaleUsers.length && (
+                    <div style={{ padding: 16, color: "#9ca3af", fontSize: 13, textAlign: "center" }}>Chưa có sale trong hệ thống</div>
+                  )}
                 </div>
                 <button
-                  disabled={!restoreFeedbackModal.saleName || restoreFeedbackModal.loading}
+                  disabled={!(restoreFeedbackModal.selectedSales?.length) || restoreFeedbackModal.loading}
                   onClick={async () => {
                     setRestoreFeedbackModal((prev) => ({ ...prev, loading: true }));
                     try {
-                      const params = new URLSearchParams({ saleName: restoreFeedbackModal.saleName });
-                      if (restoreFeedbackModal.projectId) params.set("projectId", String(restoreFeedbackModal.projectId));
-                      const r = await apiFetch(`${API}/leads/restore-feedback-preview?${params}`);
+                      const selected = restoreFeedbackModal.selectedSales || [];
+                      const allSales = selected.length >= allSaleUsers.length && allSaleUsers.length > 0;
+                      const params = allSales
+                        ? new URLSearchParams({ allSales: "1" })
+                        : new URLSearchParams({ saleNames: selected.join(",") });
+                      const r = await apiFetch(`${API}/leads/restore-feedback-bulk-preview?${params}`);
                       const data = await r.json();
                       if (!r.ok) { showToast(data.error || "Lỗi", "error"); setRestoreFeedbackModal((prev) => ({ ...prev, loading: false })); return; }
                       setRestoreFeedbackModal((prev) => ({ ...prev, step: "preview", preview: data, loading: false }));
@@ -5570,29 +5584,41 @@ const LeadsPage = (props) => {
                       setRestoreFeedbackModal((prev) => ({ ...prev, loading: false }));
                     }
                   }}
-                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10, background: (!restoreFeedbackModal.saleName || restoreFeedbackModal.loading) ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}
+                  style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10, background: (!(restoreFeedbackModal.selectedSales?.length) || restoreFeedbackModal.loading) ? "#93c5fd" : "linear-gradient(135deg, #16a34a, #15803d)" }}
                 >
-                  {restoreFeedbackModal.loading ? "Đang quét..." : "Quét & xem trước →"}
+                  {restoreFeedbackModal.loading ? "Đang quét toàn bộ..." : "Quét & xem trước →"}
                 </button>
               </>)}
               {restoreFeedbackModal.step === "preview" && restoreFeedbackModal.preview && (<>
                 <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 13 }}>
-                  <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 6 }}>Sale: {restoreFeedbackModal.preview.saleName}</div>
+                  <div style={{ fontWeight: 700, color: "#15803d", marginBottom: 6 }}>
+                    {restoreFeedbackModal.preview.allSales ? "Tất cả sale" : `${restoreFeedbackModal.preview.saleNames?.length || 0} sale được chọn`} · Tất cả dự án
+                  </div>
                   <div>Đã quét: <b>{restoreFeedbackModal.preview.totalScanned}</b> lead</div>
-                  <div>Sale đã từng cập nhật: <b>{restoreFeedbackModal.preview.leadsWithFeedback}</b> lead</div>
+                  <div>Có feedback (sale đã chọn): <b>{restoreFeedbackModal.preview.leadsWithFeedback}</b> lead</div>
                   <div>Cần khôi phục: <b style={{ color: "#16a34a" }}>{restoreFeedbackModal.preview.restorable}</b> lead</div>
                   <div>Đã đúng sale/trạng thái: <b>{restoreFeedbackModal.preview.alreadyOk}</b></div>
                   {restoreFeedbackModal.preview.hasMore && (
-                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Hiển thị 200 lead đầu trong danh sách bên dưới</div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>Hiển thị 200 lead đầu trong danh sách</div>
                   )}
                 </div>
+                {Object.keys(restoreFeedbackModal.preview.salesBreakdown || {}).length > 0 && (
+                  <div style={{ maxHeight: 120, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12, fontSize: 12 }}>
+                    {Object.entries(restoreFeedbackModal.preview.salesBreakdown).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+                      <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 12px", borderBottom: "1px solid #f3f4f6" }}>
+                        <span>{name}</span>
+                        <b style={{ color: "#16a34a" }}>{count} lead</b>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {(restoreFeedbackModal.preview.items || []).length > 0 && (
-                  <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12, fontSize: 12 }}>
+                  <div style={{ maxHeight: 200, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 12, fontSize: 12 }}>
                     {restoreFeedbackModal.preview.items.map((item) => (
                       <div key={item.leadId} style={{ padding: "8px 12px", borderBottom: "1px solid #f3f4f6" }}>
                         <div style={{ fontWeight: 600 }}>{item.name || "—"} {item.phone ? `· ${item.phone}` : ""}</div>
                         <div style={{ color: "#6b7280" }}>{item.projectName || "—"}</div>
-                        <div>{item.currentSale || "Chưa chia"} ({item.currentStatusLabel || item.currentStatus}) → <span style={{ color: "#16a34a", fontWeight: 600 }}>{item.targetSale}</span> ({item.targetStatusLabel || item.targetStatus})</div>
+                        <div>{item.currentSale || "Chưa chia"} → <span style={{ color: "#16a34a", fontWeight: 600 }}>{item.targetSale}</span> ({item.targetStatusLabel || item.targetStatus})</div>
                       </div>
                     ))}
                   </div>
@@ -5611,16 +5637,16 @@ const LeadsPage = (props) => {
                     <button
                       disabled={restoreFeedbackModal.loading}
                       onClick={async () => {
-                        if (!(await showConfirm(`Khôi phục ${restoreFeedbackModal.preview.restorable} lead về ${restoreFeedbackModal.preview.saleName}?\n\nLead trả về sale đã cập nhật. Sale khác đã feedback vẫn giữ lead và lịch sử riêng.`))) return;
+                        const p = restoreFeedbackModal.preview;
+                        if (!(await showConfirm(`Khôi phục ${p.restorable} lead cho ${Object.keys(p.salesBreakdown || {}).length} sale?\n\nTất cả dự án — chỉ lead đã từng feedback.`))) return;
                         setRestoreFeedbackModal((prev) => ({ ...prev, loading: true }));
                         try {
-                          const r = await apiFetch(`${API}/leads/restore-feedback-to-sale`, {
+                          const selected = restoreFeedbackModal.selectedSales || [];
+                          const allSales = selected.length >= allSaleUsers.length && allSaleUsers.length > 0;
+                          const r = await apiFetch(`${API}/leads/restore-feedback-bulk`, {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              saleName: restoreFeedbackModal.saleName,
-                              projectId: restoreFeedbackModal.projectId || undefined,
-                            }),
+                            body: JSON.stringify(allSales ? { allSales: true } : { saleNames: selected }),
                           });
                           const data = await r.json();
                           if (!r.ok) { showToast(data.error || "Lỗi", "error"); setRestoreFeedbackModal((prev) => ({ ...prev, loading: false })); return; }
@@ -5645,8 +5671,17 @@ const LeadsPage = (props) => {
                   <div style={{ fontSize: 16, fontWeight: 700, color: "#16a34a", marginBottom: 8 }}>Khôi phục thành công!</div>
                   <div style={{ fontSize: 13 }}>
                     <div>Lead khôi phục: <b>{restoreFeedbackModal.result.restored}</b></div>
-                    <div>Sale: <b>{restoreFeedbackModal.result.saleName}</b></div>
+                    <div>Sale nhận lại lead: <b>{restoreFeedbackModal.result.saleCount ?? Object.keys(restoreFeedbackModal.result.salesBreakdown || {}).length}</b></div>
                   </div>
+                  {Object.keys(restoreFeedbackModal.result.salesBreakdown || {}).length > 0 && (
+                    <div style={{ marginTop: 10, fontSize: 12, maxHeight: 160, overflowY: "auto" }}>
+                      {Object.entries(restoreFeedbackModal.result.salesBreakdown).sort((a, b) => b[1] - a[1]).map(([name, count]) => (
+                        <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid #dcfce7" }}>
+                          <span>{name}</span><b>{count}</b>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => setRestoreFeedbackModal(null)}
                   style={{ ...btnPrimary, width: "100%", padding: "10px 16px", fontSize: 14, borderRadius: 10 }}>

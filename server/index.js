@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-restore-feedback-dual-view";
+const BUILD_VERSION = "2026-06-10-restore-feedback-bulk";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -8635,6 +8635,181 @@ app.get("/api/leads/restore-preview/:projectId", requireAuth, requireAdmin, asyn
   }
 });
 
+function saleMatchesAnyTarget(saleName, targetSales = []) {
+  const sn = String(saleName || "").trim();
+  if (!sn) return false;
+  return targetSales.some((t) => matchSaleName(sn, t) || matchSaleName(t, sn));
+}
+
+/** Quét 1 lần — khôi phục lead về sale (trong danh sách) đã feedback gần nhất trên lead đó. */
+async function collectBulkRestoreFeedbackCandidates(db, { saleNames, allSales = false } = {}) {
+  let targetSales = [];
+  if (allSales) {
+    const rows = await all(db, "SELECT display_name FROM users WHERE role = 'sale' AND TRIM(COALESCE(display_name, '')) != '' ORDER BY display_name");
+    targetSales = rows.map((r) => String(r.display_name).trim()).filter(Boolean);
+  } else {
+    targetSales = [...new Set((saleNames || []).map((s) => String(s).trim()).filter(Boolean))];
+  }
+  if (!targetSales.length) return { error: "Chưa chọn sale" };
+
+  const leads = await all(db,
+    "SELECT id, name, phone, sale_name, status, raw_status, project_id FROM leads WHERE COALESCE(is_locked, 0) = 0"
+  );
+  const leadMap = Object.fromEntries(leads.map((l) => [Number(l.id), l]));
+  if (!leads.length) {
+    return {
+      saleNames: targetSales,
+      allSales: !!allSales,
+      totalScanned: 0,
+      leadsWithFeedback: 0,
+      restorable: 0,
+      alreadyOk: 0,
+      salesBreakdown: {},
+      items: [],
+    };
+  }
+
+  const histRows = await all(db,
+    `SELECT lead_id, sale_name, status, seq, action FROM lead_history
+     WHERE action NOT IN ('Chia lead', 'Thu hồi SLA')
+       AND TRIM(COALESCE(sale_name, '')) != ''
+       AND TRIM(COALESCE(status, '')) != ''
+     ORDER BY lead_id, seq DESC`
+  );
+
+  const histByLead = new Map();
+  for (const row of histRows) {
+    const lid = Number(row.lead_id);
+    if (!histByLead.has(lid)) histByLead.set(lid, []);
+    histByLead.get(lid).push(row);
+  }
+
+  const projectRows = await all(db, "SELECT id, name FROM projects");
+  const projectMap = Object.fromEntries(projectRows.map((p) => [Number(p.id), p.name]));
+
+  const restorable = [];
+  const salesBreakdown = {};
+  let leadsWithFeedback = 0;
+  let alreadyOk = 0;
+
+  for (const lead of leads) {
+    const lid = Number(lead.id);
+    const rows = histByLead.get(lid) || [];
+    let best = null;
+    for (const row of rows) {
+      if (!isMeaningfulFeedbackHistoryRow(row)) continue;
+      if (!saleMatchesAnyTarget(row.sale_name, targetSales)) continue;
+      best = {
+        saleName: row.sale_name,
+        status: normalizeStatus(row.status),
+        rawStatus: row.status,
+        seq: row.seq,
+      };
+      break;
+    }
+    if (!best) continue;
+    leadsWithFeedback += 1;
+
+    const curStatus = normalizeStatus(lead.status || "new");
+    if (matchSaleName(lead.sale_name, best.saleName) && curStatus === best.status) {
+      alreadyOk += 1;
+      continue;
+    }
+
+    const saleKey = best.saleName;
+    salesBreakdown[saleKey] = (salesBreakdown[saleKey] || 0) + 1;
+    restorable.push({
+      leadId: lid,
+      name: lead.name || "",
+      phone: lead.phone || "",
+      projectId: lead.project_id,
+      projectName: projectMap[Number(lead.project_id)] || "",
+      currentSale: lead.sale_name || "",
+      currentStatus: curStatus,
+      currentStatusLabel: lead.raw_status || STATUS_LABELS_VI[curStatus] || curStatus,
+      targetSale: best.saleName,
+      targetStatus: best.status,
+      targetStatusLabel: best.rawStatus || STATUS_LABELS_VI[best.status] || best.status,
+    });
+  }
+
+  restorable.sort((a, b) => a.name.localeCompare(b.name, "vi"));
+
+  return {
+    saleNames: targetSales,
+    allSales: !!allSales,
+    totalScanned: leads.length,
+    leadsWithFeedback,
+    restorable: restorable.length,
+    alreadyOk,
+    salesBreakdown,
+    items: restorable,
+  };
+}
+
+async function executeBulkRestoreFeedback(db, { saleNames, allSales = false } = {}) {
+  const preview = await collectBulkRestoreFeedbackCandidates(db, { saleNames, allSales });
+  if (preview.error) return preview;
+
+  const allItems = preview.items || [];
+  if (!allItems.length) {
+    return {
+      msg: "Không có lead nào cần khôi phục (các sale đã chọn chưa có feedback hoặc lead đã đúng)",
+      restored: 0,
+      total: preview.totalScanned,
+      leadsWithFeedback: preview.leadsWithFeedback,
+      alreadyOk: preview.alreadyOk,
+      salesBreakdown: preview.salesBreakdown || {},
+      saleCount: preview.saleNames?.length || 0,
+    };
+  }
+
+  const now = getAssignmentNowStr();
+  const stmts = [];
+  const restoredLeadIds = allItems.map((i) => i.leadId);
+  const seqMap = {};
+  if (restoredLeadIds.length) {
+    const ph = restoredLeadIds.map(() => "?").join(",");
+    const seqRows = await all(db, `SELECT lead_id, MAX(seq) as m FROM lead_history WHERE lead_id IN (${ph}) GROUP BY lead_id`, restoredLeadIds);
+    for (const r of seqRows) seqMap[Number(r.lead_id)] = Number(r.m ?? -1);
+  }
+
+  for (const item of allItems) {
+    const rawStatus = item.targetStatusLabel || STATUS_LABELS_VI[item.targetStatus] || item.targetStatus;
+    stmts.push({
+      sql: `UPDATE leads SET sale_name = ?, status = ?, raw_status = ?, assigned_at = ?,
+            distribution_kind = ?, instant_sla_warned_at = '', sla_12h_warned_at = '', sla_recalled_at = ''
+            WHERE id = ?`,
+      args: [item.targetSale, item.targetStatus, rawStatus, now, LEAD_DISTRIBUTION_KINDS.manual, item.leadId],
+    });
+
+    const lid = Number(item.leadId);
+    const nextSeq = (seqMap[lid] ?? -1) + 1;
+    seqMap[lid] = nextSeq;
+    stmts.push({
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [item.leadId, item.targetSale, "Chia lead", now, rawStatus, "Khôi phục hàng loạt — trả về sale đã feedback", nextSeq, "restore-feedback-bulk"],
+    });
+  }
+
+  if (stmts.length) await db.batch(stmts, "write");
+  await refreshLeadTabDenormMany(db, restoredLeadIds);
+  lastSyncHash = "";
+  emitDataChanged("restore-feedback-bulk");
+
+  const saleCount = Object.keys(preview.salesBreakdown || {}).length;
+  return {
+    msg: `Khôi phục ${allItems.length} lead cho ${saleCount} sale (tất cả dự án, lead đã từng feedback)`,
+    restored: allItems.length,
+    total: preview.totalScanned,
+    leadsWithFeedback: preview.leadsWithFeedback,
+    alreadyOk: preview.alreadyOk,
+    salesBreakdown: preview.salesBreakdown,
+    saleCount,
+    saleNames: preview.saleNames,
+  };
+}
+
 /** Quét lead — tìm lead sale đã từng cập nhật feedback (không chỉ nhận Chia lead). */
 async function collectRestoreFeedbackCandidates(db, { saleName, projectId } = {}) {
   const targetSale = String(saleName || "").trim();
@@ -8802,6 +8977,41 @@ app.post("/api/leads/restore-feedback-to-sale", requireAuth, requireAdmin, async
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to restore feedback leads" });
+  }
+});
+
+/* GET /api/leads/restore-feedback-bulk-preview - Preview bulk restore nhiều sale, mọi dự án */
+app.get("/api/leads/restore-feedback-bulk-preview", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const allSales = req.query.allSales === "1" || req.query.allSales === "true";
+    const saleNames = String(req.query.saleNames || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!allSales && !saleNames.length) return res.status(400).json({ error: "Chọn ít nhất 1 sale hoặc allSales=1" });
+    const preview = await collectBulkRestoreFeedbackCandidates(db, { saleNames, allSales });
+    if (preview.error) return res.status(400).json({ error: preview.error });
+    res.json({
+      ...preview,
+      items: (preview.items || []).slice(0, 200),
+      hasMore: (preview.items || []).length > 200,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* POST /api/leads/restore-feedback-bulk - Khôi phục hàng loạt nhiều sale, tất cả dự án */
+app.post("/api/leads/restore-feedback-bulk", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { saleNames, allSales } = req.body || {};
+    const names = Array.isArray(saleNames) ? saleNames.map((s) => String(s).trim()).filter(Boolean) : [];
+    if (!allSales && !names.length) return res.status(400).json({ error: "Chọn ít nhất 1 sale" });
+    const result = await executeBulkRestoreFeedback(db, { saleNames: names, allSales: !!allSales });
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed bulk restore feedback leads" });
   }
 });
 
