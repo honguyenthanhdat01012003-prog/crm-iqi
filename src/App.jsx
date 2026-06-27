@@ -822,8 +822,6 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [serverSaleRanking, setServerSaleRanking] = useState([]);
   const [projectLeadCounts, setProjectLeadCounts] = useState({ byProject: {}, all: 0 });
   const [projectCountsLoading, setProjectCountsLoading] = useState(false);
-  const projectLeadCountsRef = useRef({ byProject: {}, all: 0 });
-  const projectCountsFetchTimerRef = useRef(null);
   const [leadsFetching, setLeadsFetching] = useState(false);
   const leadsQueryRef = useRef({
     page: 1,
@@ -1245,9 +1243,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
-      projectLeadCountsRef.current = data.projectLeadCounts;
-      setProjectLeadCounts(data.projectLeadCounts);
-      setProjectCountsLoading(false);
+      const pc = data.projectLeadCounts;
+      const hasData = (Number(pc.all) > 0) || Object.keys(pc.byProject || {}).length > 0;
+      if (hasData) setProjectLeadCounts(pc);
     }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
@@ -1405,24 +1403,13 @@ function CRMApp({ user, updateUser, onLogout }) {
     return fetchCrmData({ isBoot: false });
   }, [fetchCrmData]);
 
-  const fetchProjectLeadCounts = useCallback(async ({ soft = false } = {}) => {
-    const prev = projectLeadCountsRef.current;
-    const hadCounts = (Number(prev?.all) > 0) || Object.keys(prev?.byProject || {}).length > 0;
-    if (!soft || !hadCounts) setProjectCountsLoading(true);
+  const fetchProjectLeadCounts = useCallback(async () => {
+    setProjectCountsLoading(true);
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-      const r = await fetch(`${API}/projects/lead-counts`, {
-        headers: authHeaders(),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
+      const r = await apiFetch(`${API}/projects/lead-counts`);
       if (r.ok) {
         const d = await r.json();
-        if (d && typeof d === "object" && !d.error) {
-          projectLeadCountsRef.current = d;
-          setProjectLeadCounts(d);
-        }
+        if (d && typeof d === "object") setProjectLeadCounts(d);
       }
     } catch (err) {
       console.warn("[CRM] project lead counts failed:", err?.message || err);
@@ -1430,14 +1417,6 @@ function CRMApp({ user, updateUser, onLogout }) {
       setProjectCountsLoading(false);
     }
   }, []);
-
-  const scheduleProjectLeadCountsRefresh = useCallback((delayMs = 800) => {
-    if (projectCountsFetchTimerRef.current) clearTimeout(projectCountsFetchTimerRef.current);
-    projectCountsFetchTimerRef.current = setTimeout(() => {
-      projectCountsFetchTimerRef.current = null;
-      fetchProjectLeadCounts({ soft: true });
-    }, delayMs);
-  }, [fetchProjectLeadCounts]);
 
   const bootStartedRef = useRef(false);
   useEffect(() => {
@@ -1456,12 +1435,6 @@ function CRMApp({ user, updateUser, onLogout }) {
       fetchProjectLeadCounts();
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
-
-  useEffect(() => {
-    if (!projectCountsLoading) return;
-    const t = setTimeout(() => setProjectCountsLoading(false), 15000);
-    return () => clearTimeout(t);
-  }, [projectCountsLoading]);
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
@@ -1522,14 +1495,11 @@ function CRMApp({ user, updateUser, onLogout }) {
           fetchTabCounts();
         })
         .catch(() => markConnectivityFailure());
-      scheduleProjectLeadCountsRefresh();
+      fetchProjectLeadCounts();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
-    return () => {
-      if (projectCountsFetchTimerRef.current) clearTimeout(projectCountsFetchTimerRef.current);
-      socket.disconnect();
-    };
-  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, scheduleProjectLeadCountsRefresh, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+    return () => socket.disconnect();
+  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -4300,10 +4270,7 @@ const LeadsPage = (props) => {
   const totalLeadCount = hasProjectCounts
     ? Number(projectLeadCounts.all) || 0
     : (Number(serverTabCounts?.all) || Number(leadsTotal) || 0);
-  const fmtProjectCount = (n) => {
-    if (projectCountsLoading && !hasProjectCounts) return "…";
-    return (Number(n) || 0).toLocaleString("vi-VN");
-  };
+  const fmtProjectCount = (n) => (projectCountsLoading && !hasProjectCounts ? "…" : (Number(n) || 0).toLocaleString("vi-VN"));
 
   const recentLeadPreview = useMemo(() => {
     const list = Array.isArray(leads) ? [...leads] : [];
@@ -5569,7 +5536,7 @@ const LeadsPage = (props) => {
                     style={{ ...inputStyle, width: "100%", marginBottom: 0 }}
                   >
                     <option value="">— Chọn sale —</option>
-                    {allSaleUsers.map((n) => (
+                    {saleNames.map((n) => (
                       <option key={n} value={n}>{n}</option>
                     ))}
                   </select>

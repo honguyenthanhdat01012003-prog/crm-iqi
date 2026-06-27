@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-fix-sale-scope-union";
+const BUILD_VERSION = "2026-06-10-restore-feedback-dual-view";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -96,15 +96,6 @@ function normalizePersonNameServer(value = "") {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
-}
-
-function matchSaleName(leadSaleName, userDisplayName) {
-  const sn = (leadSaleName || "").toLowerCase().trim();
-  const dn = (userDisplayName || "").toLowerCase().trim();
-  if (!sn || sn === "chưa chia") return false;
-  if (sn === dn) return true;
-  const dnWords = dn.split(/\s+/).filter(Boolean);
-  return dnWords.every(w => sn.includes(w));
 }
 
 function findManagerByName(managers, managerName) {
@@ -2539,15 +2530,13 @@ async function querySaleTabCountsDenorm(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
   const saleName = user.displayName || "";
-  const saleIn = await buildSaleNameLowerInClause(db, saleName);
   const rows = await all(
     db,
     `SELECT ${tabStatusSqlExpr("s.sale_tab_status")} as tab_st, COUNT(*) as c
      FROM (SELECT id FROM leads ${where}) vis
-     LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id
-       AND LOWER(TRIM(COALESCE(s.sale_name, ''))) IN (${saleIn.inSql})
+     LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
      GROUP BY tab_st`,
-    [...params, ...saleIn.params]
+    [...params, saleName]
   );
   const counts = { all: 0 };
   for (const r of rows) {
@@ -2894,111 +2883,6 @@ function buildPhoneRegistrationsFromMap(phoneRegMap) {
   return phoneRegistrations;
 }
 
-async function resolveCanonicalSaleDisplayName(db, saleName) {
-  const input = String(saleName || "").trim();
-  if (!input) return "";
-  const exact = await get(db,
-    `SELECT display_name FROM users WHERE role = 'sale' AND LOWER(TRIM(display_name)) = LOWER(TRIM(?)) LIMIT 1`,
-    [input]
-  );
-  if (exact?.display_name) return String(exact.display_name).trim();
-  const sales = await all(db, `SELECT display_name FROM users WHERE role = 'sale' AND TRIM(COALESCE(display_name, '')) != ''`);
-  for (const s of sales) {
-    const dn = String(s.display_name || "").trim();
-    if (matchSaleName(dn, input) || matchSaleName(input, dn)) return dn;
-  }
-  return input;
-}
-
-async function getSaleNameMatchVariants(db, saleName) {
-  const input = String(saleName || "").trim();
-  const canonical = await resolveCanonicalSaleDisplayName(db, input);
-  const variants = new Set([input, canonical].filter(Boolean));
-
-  try {
-    const namePrefix = (canonical || input).split(/\s+/)[0] || canonical || input;
-    const histNames = await all(db,
-      `SELECT DISTINCT sale_name FROM lead_history
-       WHERE TRIM(COALESCE(sale_name, '')) != ''
-         AND (
-           LOWER(TRIM(sale_name)) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
-           OR LOWER(TRIM(sale_name)) LIKE LOWER(?) || '%'
-         )
-       LIMIT 50`,
-      [input, canonical, namePrefix]
-    );
-    for (const row of histNames) {
-      const sn = String(row.sale_name || "").trim();
-      if (sn && (matchSaleName(sn, canonical) || matchSaleName(sn, input))) variants.add(sn);
-    }
-  } catch (_) { /* ignore */ }
-
-  try {
-    const lowered = [...variants].map((v) => v.toLowerCase());
-    if (lowered.length) {
-      const ph = lowered.map(() => "?").join(",");
-      const summaryRows = await all(db,
-        `SELECT DISTINCT sale_name FROM lead_sale_summary WHERE LOWER(TRIM(sale_name)) IN (${ph})`,
-        lowered
-      );
-      for (const row of summaryRows) {
-        if (row.sale_name) variants.add(String(row.sale_name).trim());
-      }
-    }
-  } catch (_) { /* bảng chưa migrate */ }
-
-  return [...variants];
-}
-
-let saleNameInClauseCache = new Map();
-const SALE_NAME_IN_CLAUSE_MS = 60_000;
-
-async function buildSaleNameLowerInClause(db, displayName) {
-  const canonical = await resolveCanonicalSaleDisplayName(db, displayName);
-  const cacheKey = normalizePersonNameServer(canonical || displayName);
-  const cached = saleNameInClauseCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < SALE_NAME_IN_CLAUSE_MS) return cached.data;
-
-  const variants = await getSaleNameMatchVariants(db, displayName);
-  const lowered = [...new Set(variants.map((v) => String(v).trim().toLowerCase()).filter(Boolean))];
-  if (!lowered.length) lowered.push(String(displayName || "").trim().toLowerCase());
-  const data = {
-    inSql: lowered.map(() => "?").join(","),
-    params: lowered,
-    canonical,
-  };
-  saleNameInClauseCache.set(cacheKey, { at: Date.now(), data });
-  return data;
-}
-
-/** Phạm vi lead sale nhìn thấy — UNION 1 lần, tránh OR/EXISTS quét từng dòng. */
-async function buildSaleLeadIdScopeSql(db, displayName) {
-  const saleIn = await buildSaleNameLowerInClause(db, displayName);
-  const ph = saleIn.inSql;
-  const p = saleIn.params;
-  let summaryUnion = `SELECT lead_id FROM lead_sale_summary WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})`;
-  try {
-    const chk = await get(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='lead_sale_summary'");
-    if (!chk) summaryUnion = `SELECT NULL AS lead_id WHERE 0`;
-  } catch {
-    summaryUnion = `SELECT NULL AS lead_id WHERE 0`;
-  }
-  return {
-    sql: `id IN (
-      SELECT id FROM leads WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})
-      UNION
-      ${summaryUnion}
-      UNION
-      SELECT DISTINCT lead_id FROM lead_history
-      WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})
-        AND action NOT IN ('Chia lead', 'Thu hồi SLA')
-        AND TRIM(COALESCE(status, '')) != ''
-    )`,
-    params: [...p, ...p, ...p],
-    saleIn,
-  };
-}
-
 async function buildLeadsSqlFilters(db, user, filters = {}) {
   const parts = [];
   const params = [];
@@ -3009,9 +2893,24 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     parts.push(`project_id IN (${pids.map(() => "?").join(",")})`);
     params.push(...pids);
   } else if (user.role === "sale") {
-    const scope = await buildSaleLeadIdScopeSql(db, user.displayName || "");
-    parts.push(scope.sql);
-    params.push(...scope.params);
+    const dn = user.displayName || "";
+    // Lead đang phụ trách HOẶC sale đã từng cập nhật feedback — mỗi sale thấy trạng thái riêng (lead_sale_summary)
+    parts.push(`(
+      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+      OR EXISTS (
+        SELECT 1 FROM lead_sale_summary lss
+        WHERE lss.lead_id = leads.id
+          AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+      )
+      OR EXISTS (
+        SELECT 1 FROM lead_history h
+        WHERE h.lead_id = leads.id
+          AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
+          AND TRIM(COALESCE(h.status, '')) != ''
+      )
+    )`);
+    params.push(dn, dn, dn);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -3124,11 +3023,9 @@ async function queryProjectLeadCounts(db, user) {
     const ph = pids.map(() => "?").join(",");
     rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE project_id IN (${ph}) GROUP BY project_id`, pids);
   } else {
-    const t0 = Date.now();
-    const scope = await buildSaleLeadIdScopeSql(db, user.displayName || "");
-    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE ${scope.sql} GROUP BY project_id`, scope.params);
-    const ms = Date.now() - t0;
-    if (ms > 3000) console.warn(`[queryProjectLeadCounts] sale slow ${ms}ms user=${user.displayName}`);
+    const f = { statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, f);
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
   }
 
   const byProject = {};
@@ -3168,14 +3065,13 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
 
     if (v36DenormReady && statusTab && statusTab !== "all") {
-      const saleIn = await buildSaleNameLowerInClause(db, saleName);
       const tabExpr = tabStatusSqlExpr("s.sale_tab_status");
       const scopeSql = `
         FROM (SELECT * FROM leads ${where}) l
         LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
-          AND LOWER(TRIM(COALESCE(s.sale_name, ''))) IN (${saleIn.inSql})
+          AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
         WHERE ${tabExpr} = ?`;
-      const scopeParams = [...params, ...saleIn.params, statusTab];
+      const scopeParams = [...params, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
@@ -5799,7 +5695,6 @@ function emitDataChanged(reason) {
   invalidateProjectCountsCache();
   invalidateLeadTabIndexCache();
   invalidateSaleScopeCache();
-  saleNameInClauseCache = new Map();
   schedulesResponseCache = { at: 0, data: null };
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
@@ -8742,7 +8637,7 @@ app.get("/api/leads/restore-preview/:projectId", requireAuth, requireAdmin, asyn
 
 /** Quét lead — tìm lead sale đã từng cập nhật feedback (không chỉ nhận Chia lead). */
 async function collectRestoreFeedbackCandidates(db, { saleName, projectId } = {}) {
-  const targetSale = await resolveCanonicalSaleDisplayName(db, String(saleName || "").trim());
+  const targetSale = String(saleName || "").trim();
   if (!targetSale) return { error: "Thiếu tên sale" };
 
   let leadFilter = "COALESCE(is_locked, 0) = 0";
@@ -8828,8 +8723,7 @@ async function collectRestoreFeedbackCandidates(db, { saleName, projectId } = {}
 }
 
 async function executeRestoreFeedbackToSale(db, { saleName, projectId } = {}) {
-  const canonicalSale = await resolveCanonicalSaleDisplayName(db, String(saleName || "").trim());
-  const preview = await collectRestoreFeedbackCandidates(db, { saleName: canonicalSale, projectId });
+  const preview = await collectRestoreFeedbackCandidates(db, { saleName, projectId });
   if (preview.error) return preview;
 
   const allItems = preview.items || [];
@@ -8840,7 +8734,6 @@ async function executeRestoreFeedbackToSale(db, { saleName, projectId } = {}) {
       total: preview.totalScanned,
       leadsWithFeedback: preview.leadsWithFeedback,
       alreadyOk: preview.alreadyOk,
-      saleName: canonicalSale,
     };
   }
 
@@ -8854,14 +8747,14 @@ async function executeRestoreFeedbackToSale(db, { saleName, projectId } = {}) {
       sql: `UPDATE leads SET sale_name = ?, status = ?, raw_status = ?, assigned_at = ?,
             distribution_kind = ?, instant_sla_warned_at = '', sla_12h_warned_at = '', sla_recalled_at = ''
             WHERE id = ?`,
-      args: [canonicalSale, item.targetStatus, rawStatus, now, LEAD_DISTRIBUTION_KINDS.manual, item.leadId],
+      args: [item.targetSale, item.targetStatus, rawStatus, now, LEAD_DISTRIBUTION_KINDS.manual, item.leadId],
     });
 
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [item.leadId]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     stmts.push({
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [item.leadId, canonicalSale, "Chia lead", now, rawStatus, "Khôi phục lead đã cập nhật — trả về sale có feedback", nextSeq, "restore-feedback"],
+      args: [item.leadId, item.targetSale, "Chia lead", now, rawStatus, "Khôi phục lead đã cập nhật — trả về sale có feedback", nextSeq, "restore-feedback"],
     });
     restoredLeadIds.push(item.leadId);
   }
@@ -8872,12 +8765,12 @@ async function executeRestoreFeedbackToSale(db, { saleName, projectId } = {}) {
   emitDataChanged("restore-feedback");
 
   return {
-    msg: `Khôi phục ${allItems.length} lead về ${canonicalSale} (lead đã từng cập nhật feedback)`,
+    msg: `Khôi phục ${allItems.length} lead về ${String(saleName).trim()} (lead đã từng cập nhật feedback)`,
     restored: allItems.length,
     total: preview.totalScanned,
     leadsWithFeedback: preview.leadsWithFeedback,
     alreadyOk: preview.alreadyOk,
-    saleName: canonicalSale,
+    saleName: String(saleName).trim(),
   };
 }
 
@@ -9098,6 +8991,15 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
 });
 
 /* ===== Lead updates ===== */
+function matchSaleName(leadSaleName, userDisplayName) {
+  const sn = (leadSaleName || "").toLowerCase().trim();
+  const dn = (userDisplayName || "").toLowerCase().trim();
+  if (!sn || sn === "chưa chia") return false;
+  if (sn === dn) return true;
+  const dnWords = dn.split(/\s+/).filter(Boolean);
+  return dnWords.every(w => sn.includes(w));
+}
+
 function applySaleLeadView(lead, displayName) {
   const saleKey = normalizePersonNameServer(displayName);
   const fbMap = lead.saleFeedbackStatus || {};
