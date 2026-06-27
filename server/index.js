@@ -252,6 +252,7 @@ function stringifyFcmData(data = {}) {
 }
 
 function getNativeNotificationSound(sound) {
+  if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v1", soundName: "lead_recall" };
   if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale" };
   if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager" };
   return { channelId: "lead_notifications", soundName: "default" };
@@ -420,7 +421,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 34; // Bump this when adding new DDL/migrations
+const DB_VERSION = 35; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -428,12 +429,15 @@ const SALE_PENALTY_TYPES = {
 
 const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
+const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
+const INSTANT_SLA_RECALL_MS = 10 * 60 * 1000;
 
 const LEAD_DISTRIBUTION_KINDS = {
   scheduled: "scheduled",
   manual: "manual",
   shuffle: "shuffle",
   rotate: "rotate",
+  slaShuffle: "sla_shuffle",
 };
 
 function getAssignmentNowStr() {
@@ -443,7 +447,7 @@ function getAssignmentNowStr() {
 function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
   const ts = now || getAssignmentNowStr();
   return {
-    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '' WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '' WHERE id = ?",
     args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
     now: ts,
   };
@@ -451,8 +455,15 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
 
 function buildLeadUnassignUpdateStmt(leadId) {
   return {
-    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '' WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '' WHERE id = ?",
     args: [leadId],
+  };
+}
+
+function buildLeadEnterShufflePoolStmt(leadId, nowStr, { markRecalled = false } = {}) {
+  return {
+    sql: `UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = ?, shuffle_pool_at = ?, sla_12h_warned_at = '', instant_sla_warned_at = '', sla_recalled_at = ? WHERE id = ?`,
+    args: [LEAD_DISTRIBUTION_KINDS.slaShuffle, nowStr, markRecalled ? nowStr : "", leadId],
   };
 }
 
@@ -1023,6 +1034,11 @@ async function initDb() {
     } catch (e) {
       console.error("[DB] v34 backfill error:", e.message);
     }
+  }
+  if (dbVersion < 35) {
+    console.log("[DB] v35 migration: shuffle pool + instant SLA columns...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN shuffle_pool_at TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN instant_sla_warned_at TEXT DEFAULT ''"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2589,6 +2605,8 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     distributionKind: l.distribution_kind || "",
     sla12hWarnedAt: l.sla_12h_warned_at || "",
     slaRecalledAt: l.sla_recalled_at || "",
+    shufflePoolAt: l.shuffle_pool_at || "",
+    instantSlaWarnedAt: l.instant_sla_warned_at || "",
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
@@ -4876,6 +4894,26 @@ app.get("/api/sale-penalties", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+app.get("/api/discipline/monthly-report", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const now = new Date();
+    const year = Number(req.query.year) || now.getFullYear();
+    const month = Number(req.query.month) || (now.getMonth() + 1);
+    const { projectId = "all" } = req.query;
+
+    if (req.user.role === "manager" && projectId && projectId !== "all") {
+      const pids = await getUserProjectIds(req.user.userId);
+      if (!pids.includes(Number(projectId))) return res.status(403).json({ error: "Không có quyền" });
+    }
+
+    const report = await queryMonthlyDisciplineReport(db, req.user, year, month, projectId);
+    res.json(report);
+  } catch (err) {
+    console.error("[GET /api/discipline/monthly-report]", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ========== LEAD QUALITY REPORT ==========
 app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -5243,6 +5281,21 @@ function emitLeadNotification(userId, payload = {}) {
     body: payload.body || "Ban co thong bao moi",
     sound: payload.sound || "manager",
     leadId: payload.data?.leadId || payload.leadId || null,
+    ts: Date.now(),
+  });
+}
+
+async function emitLeadSlaRecallEvent(db, lead, saleName, reason = "") {
+  if (!saleName) return;
+  const user = await get(db, "SELECT id FROM users WHERE display_name = ? LIMIT 1", [saleName]);
+  if (!user?.id || !io) return;
+  io.to(`user-${user.id}`).emit("lead-sla-recall", {
+    leadId: lead.id,
+    leadName: lead.name || "",
+    leadPhone: lead.phone || "",
+    saleName,
+    projectId: lead.project_id,
+    reason: reason || "Lead quá hạn chưa feedback",
     ts: Date.now(),
   });
 }
@@ -6389,6 +6442,30 @@ async function deleteTelegramMsgsForLeadSale(db, leadId, saleName, projectId) {
   }
 }
 
+async function notifySaleScheduledSlaWarnTelegram(db, saleName, count) {
+  try {
+    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    if (!saleUser?.telegram_id) return;
+    const activeBot = await getBotForProject(null);
+    if (!activeBot?.token) return;
+    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: saleUser.telegram_id,
+        text: [
+          "⚠️ *NHẮC NHỞ LEAD ĐẶT LỊCH (12H)*",
+          "",
+          `Bạn đang có *${count}* lead đặt lịch chưa được xử lý.`,
+          "_Thời hạn báo cáo còn 12 giờ — vui lòng cập nhật trạng thái lead._",
+        ].join("\n"),
+        parse_mode: "Markdown",
+      }),
+    });
+  } catch (err) {
+    console.error("[Telegram] SLA 12h warn failed:", err.message);
+  }
+}
+
 async function notifySaleScheduledSlaRecall(db, lead, saleName) {
   try {
     const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
@@ -6427,13 +6504,10 @@ async function recallScheduledLeadSLA(db, lead, nowStr) {
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
   const stmts = [
-    {
-      sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = ? WHERE id = ?",
-      args: [nowStr, lead.id],
-    },
+    buildLeadEnterShufflePoolStmt(lead.id, nowStr, { markRecalled: true }),
     {
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead đặt lịch quá 24h chưa feedback — đưa về kho xáo", nextSeq, "scheduled-sla"],
+      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead đặt lịch quá 24h chưa feedback — đưa về rổ xáo 24h", nextSeq, "scheduled-sla"],
     },
     {
       sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -6451,13 +6525,15 @@ async function recallScheduledLeadSLA(db, lead, nowStr) {
   ];
   await db.batch(stmts, "write");
 
+  await emitLeadSlaRecallEvent(db, lead, saleName, "Lead đặt lịch quá 24h chưa feedback");
+
   await notifySaleScheduledSlaRecall(db, lead, saleName);
 
   sendPushToDisplayName(saleName, {
     title: "Lead đặt lịch bị thu hồi",
-    body: `${lead.name || "Khách"} — quá 24h chưa feedback, đã đưa về kho xáo`,
+    body: `${lead.name || "Khách"} — quá 24h chưa feedback, đã đưa về rổ xáo 24h`,
     tag: `scheduled-sla-recall-${lead.id}`,
-    sound: "sale",
+    sound: "sla_recall",
     data: { url: "/", type: "scheduled_sla_recall", leadId: lead.id },
   }).catch((err) => console.error("[Push] SLA recall failed:", err.message));
 
@@ -6526,6 +6602,9 @@ async function processScheduledLeadSLA(db) {
       data: { url: "/", type: "scheduled_sla_warn", count },
       requireInteraction: true,
     }).catch((err) => console.error(`[Push] SLA 12h warn failed for ${saleName}:`, err.message));
+    notifySaleScheduledSlaWarnTelegram(db, saleName, count).catch((err) => {
+      console.error(`[Telegram] SLA 12h warn failed for ${saleName}:`, err.message);
+    });
   }
 
   if (recalled > 0 || warned > 0) {
@@ -6534,6 +6613,264 @@ async function processScheduledLeadSLA(db) {
   }
 
   return { recalled, warned };
+}
+
+async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
+  if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
+
+  await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
+
+  const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+  const nextSeq = (maxSeq?.m ?? -1) + 1;
+  const stmts = [
+    buildLeadEnterShufflePoolStmt(lead.id, nowStr, { markRecalled: false }),
+    {
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead New quá 10 phút chưa feedback — đưa về rổ xáo 24h", nextSeq, "instant-sla-10m"],
+    },
+    {
+      sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, "", nowStr, "instant-sla-10m", "Lead New quá 10 phút chưa feedback"],
+    },
+  ];
+  await db.batch(stmts, "write");
+
+  await emitLeadSlaRecallEvent(db, lead, saleName, "Lead New quá 10 phút chưa feedback");
+
+  sendPushToDisplayName(saleName, {
+    title: "Lead bị thu hồi (10 phút)",
+    body: `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã đưa về rổ xáo`,
+    tag: `instant-sla-recall-${lead.id}`,
+    sound: "sla_recall",
+    data: { url: "/", type: "instant_sla_recall", leadId: lead.id },
+  }).catch((err) => console.error("[Push] Instant SLA recall failed:", err.message));
+
+  return true;
+}
+
+/**
+ * SLA Lead New (không phải đặt lịch): 8 phút nhắc, 10 phút đưa về rổ xáo.
+ */
+async function processInstantLeadSLA(db) {
+  const now = Date.now();
+  const nowStr = getAssignmentNowStr();
+  const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.shuffle, LEAD_DISTRIBUTION_KINDS.rotate];
+  const placeholders = instantKinds.map(() => "?").join(",");
+  const candidates = await all(db,
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at
+     FROM leads
+     WHERE distribution_kind IN (${placeholders})
+       AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
+       AND COALESCE(is_locked, 0) = 0
+       AND TRIM(COALESCE(sale_name, '')) != ''
+       AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
+       AND TRIM(COALESCE(assigned_at, '')) != ''`,
+    instantKinds
+  );
+
+  let recalled = 0;
+  let warned = 0;
+
+  for (const lead of candidates) {
+    const assignedAt = parseLeadDate(lead.assigned_at);
+    if (!assignedAt) continue;
+    const ageMs = now - assignedAt.getTime();
+    const saleName = (lead.sale_name || "").trim();
+
+    if (ageMs >= INSTANT_SLA_RECALL_MS) {
+      const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
+      if (ok) recalled += 1;
+      continue;
+    }
+
+    if (ageMs >= INSTANT_SLA_WARN_MS && !lead.instant_sla_warned_at) {
+      await run(db, "UPDATE leads SET instant_sla_warned_at = ? WHERE id = ?", [nowStr, lead.id]);
+      sendPushToDisplayName(saleName, {
+        title: "Nhắc nhanh Lead New",
+        body: `${lead.name || "Khách"} — còn 2 phút để cập nhật feedback (hạn 10 phút)`,
+        tag: `instant-sla-warn-${lead.id}`,
+        sound: "sale",
+        data: { url: "/", type: "instant_sla_warn", leadId: lead.id },
+      }).catch((err) => console.error(`[Push] Instant SLA warn failed for ${saleName}:`, err.message));
+      warned += 1;
+    }
+  }
+
+  if (recalled > 0 || warned > 0) {
+    lastSyncHash = "";
+    emitDataChanged("instant-sla");
+  }
+
+  return { recalled, warned };
+}
+
+/**
+ * Rổ xáo 24h: gán lead thu hồi cho sale hot (khát số) trước, sau đó các sale khác.
+ */
+async function processSlaShufflePool(db) {
+  const poolLeads = await all(db,
+    `SELECT id, name, phone, project_id, shuffle_pool_at FROM leads
+     WHERE distribution_kind = ?
+       AND LOWER(TRIM(COALESCE(sale_name, ''))) IN ('', 'chưa chia', 'chua chia')
+       AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
+       AND COALESCE(is_locked, 0) = 0
+     ORDER BY shuffle_pool_at ASC, id ASC
+     LIMIT 80`,
+    [LEAD_DISTRIBUTION_KINDS.slaShuffle]
+  );
+  if (!poolLeads.length) return { assigned: 0 };
+
+  const hotLeadRows = await all(db,
+    `SELECT u.display_name, up.project_id FROM user_projects up
+     INNER JOIN users u ON u.id = up.user_id
+     WHERE up.hot_lead = 1 AND u.role = 'sale'`
+  );
+  const hotSalesByProject = {};
+  for (const r of hotLeadRows) {
+    if (!hotSalesByProject[r.project_id]) hotSalesByProject[r.project_id] = new Set();
+    hotSalesByProject[r.project_id].add(r.display_name);
+  }
+
+  const byProject = {};
+  for (const lead of poolLeads) {
+    if (!byProject[lead.project_id]) byProject[lead.project_id] = [];
+    byProject[lead.project_id].push(lead);
+  }
+
+  const nowStr = getAssignmentNowStr();
+  const stmts = [];
+  const notifyBySale = new Map();
+  let assigned = 0;
+
+  for (const [pidStr, leads] of Object.entries(byProject)) {
+    const pid = Number(pidStr);
+    const salesRows = await all(db,
+      `SELECT u.display_name FROM users u
+       INNER JOIN user_projects up ON up.user_id = u.id
+       WHERE up.project_id = ? AND u.role = 'sale'
+       ORDER BY u.display_name ASC`,
+      [pid]
+    );
+    const allSales = salesRows.map((r) => r.display_name).filter(Boolean);
+    if (!allSales.length) continue;
+
+    const hotSet = hotSalesByProject[pid] || new Set();
+    const loadRows = await all(db,
+      `SELECT sale_name, COUNT(*) AS c FROM leads
+       WHERE project_id = ?
+         AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
+         AND TRIM(COALESCE(sale_name, '')) != ''
+         AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
+       GROUP BY sale_name`,
+      [pid]
+    );
+    const loadMap = Object.fromEntries(loadRows.map((r) => [r.sale_name, Number(r.c) || 0]));
+    const byLoad = (a, b) => (loadMap[a] || 0) - (loadMap[b] || 0) || a.localeCompare(b, "vi");
+    const orderedSales = [
+      ...allSales.filter((s) => hotSet.has(s)).sort(byLoad),
+      ...allSales.filter((s) => !hotSet.has(s)).sort(byLoad),
+    ];
+
+    let saleIdx = 0;
+    for (const lead of leads) {
+      const saleName = orderedSales[saleIdx % orderedSales.length];
+      saleIdx += 1;
+
+      const assign = buildLeadAssignUpdateStmt(saleName, lead.id, LEAD_DISTRIBUTION_KINDS.shuffle, nowStr);
+      stmts.push({ sql: assign.sql, args: assign.args });
+
+      const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+      const nextSeq = (maxSeqRow?.m ?? -1) + 1;
+      stmts.push({
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [lead.id, saleName, "Chia lead", nowStr, "", "Lead từ rổ xáo 24h (SLA)", nextSeq, "sla-shuffle-pool"],
+      });
+
+      if (!notifyBySale.has(saleName)) notifyBySale.set(saleName, []);
+      notifyBySale.get(saleName).push(lead);
+      assigned += 1;
+    }
+  }
+
+  if (stmts.length) await db.batch(stmts, "write");
+
+  for (const [saleName, leadList] of notifyBySale.entries()) {
+    const count = leadList.length;
+    const names = leadList.slice(0, 3).map((l) => l.name || "Khách").join(", ");
+    sendPushToDisplayName(saleName, {
+      title: count > 1 ? `${count} lead từ rổ xáo 24h` : "Lead từ rổ xáo 24h",
+      body: count > 1 ? `${names}${count > 3 ? "…" : ""} — vui lòng xử lý ngay` : `${names} — vui lòng xử lý ngay`,
+      tag: `sla-shuffle-pool-${saleName}-${Date.now()}`,
+      sound: "sale",
+      data: { url: "/", type: "sla_shuffle_pool", leadIds: leadList.map((l) => l.id).join(",") },
+    }).catch((err) => console.error(`[Push] SLA shuffle pool notify failed for ${saleName}:`, err.message));
+  }
+
+  if (assigned > 0) {
+    lastSyncHash = "";
+    emitDataChanged("sla-shuffle-pool");
+  }
+
+  return { assigned };
+}
+
+async function queryMonthlyDisciplineReport(db, user, year, month, projectId = "all") {
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0, 23, 59, 59, 999);
+  const range = { start, end, label: `Tháng ${month}/${year}` };
+  const penaltyCountMap = await querySalePenaltyCounts(db, user, { range, projectId });
+  const recent = await queryRecentSalePenalties(db, user, { range, projectId }, 100);
+  const bySale = Object.values(penaltyCountMap)
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "vi"));
+  const totalPenalties = bySale.reduce((s, r) => s + r.count, 0);
+  return { year, month, label: range.label, totalPenalties, bySale, recent };
+}
+
+async function runMonthlyDisciplineReportIfDue(db) {
+  const now = new Date();
+  const day = now.getDate();
+  if (day !== 1) return;
+  const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  if (hhmm < "08:00" || hhmm > "08:20") return;
+
+  const prevMonth = now.getMonth() === 0 ? 12 : now.getMonth();
+  const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const sentKey = `discipline_report_sent_${prevYear}-${String(prevMonth).padStart(2, "0")}`;
+  const sent = await get(db, "SELECT value FROM settings WHERE key = ?", [sentKey]);
+  if (sent?.value === "1") return;
+
+  const adminUser = { role: "admin", userId: 0 };
+  const report = await queryMonthlyDisciplineReport(db, adminUser, prevYear, prevMonth, "all");
+  const lines = [
+    `📋 *BÁO CÁO KỶ LUẬT LEAD ĐẶT LỊCH*`,
+    `_${report.label}_`,
+    "",
+    `Tổng vi phạm SLA 24h: *${report.totalPenalties}*`,
+  ];
+  if (report.bySale.length) {
+    lines.push("", "*Theo sale:*");
+    report.bySale.slice(0, 15).forEach((row, i) => {
+      lines.push(`${i + 1}. ${row.name}: *${row.count}* lần`);
+    });
+  } else {
+    lines.push("", "_Không có vi phạm trong tháng._");
+  }
+
+  const bots = await all(db, "SELECT token, group_chat_id FROM telegram_bots WHERE is_active = 1 AND group_chat_id != ''");
+  for (const bot of bots) {
+    try {
+      await fetch(`https://api.telegram.org/bot${bot.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: bot.group_chat_id, text: lines.join("\n"), parse_mode: "Markdown" }),
+      });
+    } catch (err) {
+      console.error("[Telegram] Monthly discipline report failed:", err.message);
+    }
+  }
+
+  await upsertSetting(db, sentKey, "1");
+  console.log(`[discipline] Monthly report sent for ${report.label}`);
 }
 
 async function processAutoRotate(db) {
@@ -12775,6 +13112,38 @@ if (!process.env.VERCEL) {
     }
   }, SCHEDULED_SLA_INTERVAL);
   console.log("[scheduled-sla] Enabled, interval=10min (12h warn / 24h recall)");
+
+  const INSTANT_SLA_INTERVAL = 2 * 60 * 1000;
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const r = await processInstantLeadSLA(db);
+      if (r.recalled > 0 || r.warned > 0) console.log(`[instant-sla] warned=${r.warned}, recalled=${r.recalled}`);
+    } catch (e) {
+      console.error("[instant-sla] Error:", e.message);
+    }
+  }, INSTANT_SLA_INTERVAL);
+  console.log("[instant-sla] Enabled, interval=2min (8m warn / 10m recall to shuffle pool)");
+
+  const SLA_SHUFFLE_POOL_INTERVAL = 5 * 60 * 1000;
+  setInterval(async () => {
+    if (!db) return;
+    try {
+      const r = await processSlaShufflePool(db);
+      if (r.assigned > 0) console.log(`[sla-shuffle-pool] assigned=${r.assigned}`);
+    } catch (e) {
+      console.error("[sla-shuffle-pool] Error:", e.message);
+    }
+  }, SLA_SHUFFLE_POOL_INTERVAL);
+  console.log("[sla-shuffle-pool] Enabled, interval=5min");
+
+  setInterval(async () => {
+    if (!db) return;
+    try { await runMonthlyDisciplineReportIfDue(db); } catch (e) {
+      console.error("[discipline] Monthly report error:", e.message);
+    }
+  }, 10 * 60 * 1000);
+  console.log("[discipline] Monthly report check enabled (ngày 1, 08:00)");
 
   // Auto-fetch daily BĐS news (check every 10 min, run once per day at configured time)
   let lastNewsFetchDate = "";

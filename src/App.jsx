@@ -284,6 +284,8 @@ function parseLeadDate(str) {
 
 const SCHEDULED_SLA_MS = 24 * 60 * 60 * 1000;
 const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
+const INSTANT_SLA_MS = 10 * 60 * 1000;
+const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
 
 function getScheduledSlaInfo(lead) {
   if (!lead || lead.distributionKind !== "scheduled") return null;
@@ -309,6 +311,33 @@ function getScheduledSlaInfo(lead) {
     text: level === "urgent"
       ? `Còn ${hours}h${pad(mins)}m — hạn ${deadlineLabel}`
       : `Hạn chót: ${deadlineLabel} (còn ${hours}h${pad(mins)}m)`,
+  };
+}
+
+function getInstantSlaInfo(lead) {
+  if (!lead || lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
+  const st = lead.status || "new";
+  if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
+  const start = parseLeadDate(lead.assignedAt);
+  if (!start) return null;
+  const deadline = new Date(start.getTime() + INSTANT_SLA_MS);
+  const remain = deadline.getTime() - Date.now();
+  const pad = (n) => String(n).padStart(2, "0");
+  const deadlineLabel = `${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
+  if (remain <= 0) {
+    return { overdue: true, remainMs: remain, deadlineLabel, level: "overdue", text: "Quá hạn 10 phút — sẽ thu hồi" };
+  }
+  const mins = Math.floor(remain / 60000);
+  const secs = Math.floor((remain % 60000) / 1000);
+  const level = remain <= (INSTANT_SLA_MS - INSTANT_SLA_WARN_MS) ? "urgent" : "normal";
+  return {
+    overdue: false,
+    remainMs: remain,
+    deadlineLabel,
+    level,
+    text: level === "urgent"
+      ? `Lead New: còn ${mins}p${pad(secs)}s`
+      : `Lead New: hạn ${deadlineLabel} (còn ${mins}p)`,
   };
 }
 
@@ -818,6 +847,29 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, []);
 
+  const playRecallSound = useCallback(() => {
+    const now = Date.now();
+    if (lastLeadSoundRef.current.kind === "recall" && now - lastLeadSoundRef.current.at < 1800) return;
+    lastLeadSoundRef.current = { kind: "recall", at: now };
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const playTone = (freq, startAt, duration) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        gain.gain.value = 0.22;
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(startAt);
+        osc.stop(startAt + duration);
+      };
+      playTone(520, ctx.currentTime, 0.18);
+      playTone(380, ctx.currentTime + 0.22, 0.28);
+      setTimeout(() => ctx.close(), 600);
+    } catch (_) {}
+  }, []);
+
   const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null } = {}) => {
     const items = (pushItem ? [pushItem] : notifyLeads).filter(Boolean);
     if (!items.length) return;
@@ -1049,13 +1101,17 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!("serviceWorker" in navigator)) return;
     const onMessage = (event) => {
       if (event.data?.type !== "CRM_PUSH_SOUND") return;
+      if (event.data.sound === "sla_recall") {
+        playRecallSound();
+        return;
+      }
       if (event.data.sound !== "sale" && event.data.sound !== "manager") return;
       const soundKind = event.data.sound;
       playLeadSound(soundKind);
     };
     navigator.serviceWorker.addEventListener("message", onMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onMessage);
-  }, [playLeadSound, user.role, nativePushSupported]);
+  }, [playLeadSound, playRecallSound, user.role, nativePushSupported]);
 
   useEffect(() => {
     if (!nativePushSupported) return;
@@ -1064,6 +1120,11 @@ function CRMApp({ user, updateUser, onLogout }) {
     setupNativePushListeners({
       onNotification: (notification) => {
         const data = notification?.data || {};
+        if (data.sound === "sla_recall" || data.type === "scheduled_sla_recall" || data.type === "instant_sla_recall") {
+          playRecallSound();
+          showToast(data.body || notification?.body || "Lead bị thu hồi do quá hạn SLA", "warning");
+          return;
+        }
         const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale" : "manager";
         triggerLeadAlerts({
           soundKind,
@@ -1085,7 +1146,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       },
     }).then((fn) => { if (alive) cleanup = fn; else fn?.(); }).catch(() => {});
     return () => { alive = false; cleanup?.(); };
-  }, [nativePushSupported, triggerLeadAlerts]);
+  }, [nativePushSupported, triggerLeadAlerts, playRecallSound]);
 
   const applyApiData = useCallback((data, options = {}) => {
     const suppressNotifications = !!options.suppressNotifications;
@@ -1303,8 +1364,22 @@ function CRMApp({ user, updateUser, onLogout }) {
       markSocketDisconnected();
     });
     socket.on("lead-notification", (payload) => {
+      if (payload?.sound === "sla_recall") {
+        playRecallSound();
+        showToast(payload.body || "Lead bị thu hồi do quá hạn SLA", "warning");
+        return;
+      }
       const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale" : "manager";
       triggerLeadAlerts({ soundKind, pushItem: leadFromPushPayload(payload) });
+    });
+    socket.on("lead-sla-recall", (payload) => {
+      playRecallSound();
+      const leadId = Number(payload?.leadId || 0);
+      if (user.role === "sale" && leadId) {
+        setLeads((prev) => (Array.isArray(prev) ? prev : []).filter((l) => l.id !== leadId));
+        if (leadsRef.current) leadsRef.current = leadsRef.current.filter((l) => l.id !== leadId);
+      }
+      showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
       fetch(buildDataUrl({ lite: true }), { headers: authHeaders() })
@@ -1319,7 +1394,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, buildDataUrl, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, buildDataUrl, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -3325,6 +3400,7 @@ function DashboardPage({ projects, apiFetch }) {
   const [customTo, setCustomTo] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [monthlyReport, setMonthlyReport] = useState(null);
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -3345,6 +3421,19 @@ function DashboardPage({ projects, apiFetch }) {
   }, [apiFetch, preset, projectId, customFrom, customTo]);
 
   useEffect(() => { loadDashboard(); }, [loadDashboard]);
+
+  useEffect(() => {
+    const prev = new Date();
+    prev.setDate(1);
+    prev.setMonth(prev.getMonth() - 1);
+    const year = prev.getFullYear();
+    const month = prev.getMonth() + 1;
+    const qs = new URLSearchParams({ year: String(year), month: String(month), projectId });
+    apiFetch(`${API}/discipline/monthly-report?${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMonthlyReport(d))
+      .catch(() => setMonthlyReport(null));
+  }, [apiFetch, projectId]);
 
   const kpis = data?.kpis;
   const funnel = data?.funnel || [];
@@ -3636,6 +3725,24 @@ function DashboardPage({ projects, apiFetch }) {
                 </div>
               ) : (
                 <div className="crm-dash-empty crm-dash-discipline__empty">Chưa có vi phạm SLA trong khoảng thời gian này</div>
+              )}
+              {monthlyReport && (
+                <div className="crm-dash-discipline__monthly">
+                  <h5 className="crm-dash-discipline__monthly-title">Báo cáo tháng trước ({monthlyReport.label})</h5>
+                  <div className="crm-dash-discipline__monthly-summary">
+                    <span>Tổng vi phạm SLA 24h: <strong>{monthlyReport.totalPenalties || 0}</strong></span>
+                    {monthlyReport.bySale?.length > 0 && (
+                      <div className="crm-dash-discipline__by-sale">
+                        {monthlyReport.bySale.slice(0, 6).map((row) => (
+                          <div key={`m-${row.name}`} className="crm-dash-discipline__sale-chip">
+                            <span>{row.name}</span>
+                            <strong>{row.count}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -7248,6 +7355,24 @@ const LeadsPage = (props) => {
                         </div>
                       );
                     })()}
+                    {(isSale || isAdmin) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
+                      const sla = getInstantSlaInfo(l);
+                      if (!sla) return null;
+                      const bg = sla.level === "overdue" ? "#fef2f2" : sla.level === "urgent" ? "#fff7ed" : "#f0fdf4";
+                      const border = sla.level === "overdue" ? "#fecaca" : sla.level === "urgent" ? "#fed7aa" : "#bbf7d0";
+                      const color = sla.level === "overdue" ? "#b91c1c" : sla.level === "urgent" ? "#c2410c" : "#15803d";
+                      return (
+                        <div style={{ marginTop: 4, padding: "4px 8px", background: bg, borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, color, display: "flex", alignItems: "center", gap: 4 }}>
+                          <Zap size={11} style={{ flexShrink: 0 }} />
+                          <span><strong>{sla.text}</strong></span>
+                        </div>
+                      );
+                    })()}
+                    {isAdmin && l.distributionKind === "sla_shuffle" && (!l.saleName || l.saleName === "Chưa chia") && (
+                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca", fontSize: 11, color: "#b91c1c", display: "flex", alignItems: "center", gap: 4 }}>
+                        <Shuffle size={11} /> Rổ xáo 24h — chờ chia lại
+                      </div>
+                    )}
                     {isSale && l.lastSaleUpdate && (
                       <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                         <Clock size={11} style={{ flexShrink: 0 }} />

@@ -2190,6 +2190,32 @@
   vertical-align: top;
 }
 
+.crm-dash-discipline__monthly {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.crm-dash-discipline__monthly-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.crm-dash-discipline__monthly-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.crm-dash-discipline__monthly-summary strong {
+  color: #dc2626;
+}
+
 @media (max-width: 1100px) {
   .crm-dash-row--kpis {
     grid-template-columns: 1fr;

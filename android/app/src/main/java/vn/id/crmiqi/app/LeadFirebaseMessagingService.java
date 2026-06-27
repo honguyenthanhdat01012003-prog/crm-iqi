@@ -54,7 +54,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         String body = valueOrDefault(data.get("body"), "Ban co lead moi");
         String channelId = getChannelId(sound);
 
-        createLeadChannel(channelId, getChannelName(sound));
+        createLeadChannel(channelId, getChannelName(sound), sound);
 
         Intent intent = new Intent(this, MainActivity.class);
         intent.setAction("OPEN_LEAD");
@@ -82,7 +82,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent);
 
-        Uri soundUri = getSoundUri();
+        Uri soundUri = getSoundUri(sound);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundUri != null) {
             builder.setSound(soundUri);
         }
@@ -106,12 +106,12 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         }
     }
 
-    private void createLeadChannel(String id, String name) {
+    private void createLeadChannel(String id, String name, String sound) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null || manager.getNotificationChannel(id) != null) return;
 
-        Uri soundUri = getSoundUri();
+        Uri soundUri = getSoundUri(sound);
         AudioAttributes attrs = new AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_NOTIFICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -126,18 +126,23 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         manager.createNotificationChannel(channel);
     }
 
-    private Uri getSoundUri() {
-        return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-    }
-
     private String getChannelId(String sound) {
+        if ("sla_recall".equals(sound)) return "lead_notifications_recall_v1";
         if ("sale".equals(sound)) return "lead_notifications_sale_v4";
         return "lead_notifications_manager_v4";
     }
 
     private String getChannelName(String sound) {
+        if ("sla_recall".equals(sound)) return "Thu hoi SLA lead";
         if ("sale".equals(sound)) return "Lead moi sale";
         return "Lead moi quan ly";
+    }
+
+    private Uri getSoundUri(String sound) {
+        if ("sla_recall".equals(sound)) {
+            return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+        }
+        return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
     }
 
     private String valueOrDefault(String value, String fallback) {
