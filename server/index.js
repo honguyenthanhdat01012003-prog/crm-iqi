@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tele-sla-10m";
+const BUILD_VERSION = "2026-06-10-sla-instant-reassign";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -7157,6 +7157,49 @@ async function processScheduledLeadSLA(db) {
   return { recalled, warned };
 }
 
+/** Gán lead (từ rổ xáo / thu hồi SLA) cho sale hiệu suất tốt nhất — CRM hiện người phụ trách mới ngay. */
+async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
+  excludeSales = [],
+  source = "sla-shuffle-pool",
+  historyNote = "Lead từ rổ xáo 24h (SLA) — ưu tiên sale hiệu suất",
+  telegramExtraLines = ["🔄 _Lead từ rổ xáo — vui lòng cập nhật trong 10 phút!_"],
+  pushTitle = "Lead từ rổ xáo 24h",
+} = {}) {
+  const excluded = [...new Set([...(await getLeadPoolExcludedSales(db, lead.id)), ...excludeSales].filter(Boolean))];
+  const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
+  if (!ranked.length) return null;
+
+  const saleName = ranked[0];
+  const assign = buildLeadAssignUpdateStmt(saleName, lead.id, LEAD_DISTRIBUTION_KINDS.shuffle, nowStr);
+  const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+  const nextSeq = (maxSeqRow?.m ?? -1) + 1;
+  await db.batch([
+    { sql: assign.sql, args: assign.args },
+    {
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, saleName, "Chia lead", nowStr, "", historyNote, nextSeq, source],
+    },
+  ], "write");
+
+  const updated = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+  await sendTelegramNewLeadNotification(db, {
+    leadId: lead.id,
+    saleName,
+    lead: updated,
+    extraLines: telegramExtraLines,
+  });
+  sendPushToDisplayName(saleName, {
+    title: pushTitle,
+    body: `${updated?.name || "Khách"} — vui lòng xử lý ngay (10 phút)`,
+    tag: `sla-shuffle-pool-${saleName}-${lead.id}-${Date.now()}`,
+    sound: "sale",
+    data: { url: "/", type: "sla_shuffle_pool", leadIds: String(lead.id) },
+    requireInteraction: true,
+  }).catch((err) => console.error(`[Push] SLA pool assign failed for ${saleName}:`, err.message));
+  await refreshLeadTabDenorm(db, lead.id);
+  return saleName;
+}
+
 async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
 
@@ -7165,28 +7208,42 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
 
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
-  const stmts = [
-    buildLeadEnterShufflePoolStmt(lead.id, nowStr, { markRecalled: false }),
+  await db.batch([
     {
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead New quá 10 phút chưa feedback — đưa về rổ xáo 24h", nextSeq, "instant-sla-10m"],
+      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead New quá 10 phút chưa feedback — chuyển sale khác", nextSeq, "instant-sla-10m"],
     },
-    {
-      sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, "", nowStr, "instant-sla-10m", "Lead New quá 10 phút chưa feedback"],
-    },
-  ];
-  await db.batch(stmts, "write");
+  ], "write");
 
   await emitLeadSlaRecallEvent(db, lead, saleName, "Lead New quá 10 phút chưa feedback");
 
   sendPushToDisplayName(saleName, {
     title: "Lead bị thu hồi (10 phút)",
-    body: `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã đưa về rổ xáo`,
+    body: `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`,
     tag: `instant-sla-recall-${lead.id}`,
     sound: "sla_recall",
     data: { url: "/", type: "instant_sla_recall", leadId: lead.id },
   }).catch((err) => console.error("[Push] Instant SLA recall failed:", err.message));
+
+  const newSale = await assignSlaPoolLeadToNextSale(db, lead, nowStr, {
+    excludeSales: [saleName],
+    source: "instant-sla-10m",
+    historyNote: "Lead chuyển từ sale khác (quá 10 phút chưa feedback)",
+    telegramExtraLines: ["🔄 _Lead chuyển từ sale khác — vui lòng cập nhật trong 10 phút!_"],
+    pushTitle: "Lead mới chuyển giao (SLA 10p)",
+  });
+
+  await run(
+    db,
+    `INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, newSale || "", nowStr, "instant-sla-10m", newSale ? "Lead New quá 10 phút — chuyển sale khác ngay" : "Lead New quá 10 phút — chờ rổ xáo (hết sale khả dụng)"]
+  );
+
+  if (!newSale) {
+    const poolStmt = buildLeadEnterShufflePoolStmt(lead.id, nowStr, { markRecalled: false });
+    await run(db, poolStmt.sql, poolStmt.args);
+    console.warn(`[instant-sla] Lead#${lead.id} — không còn sale khả dụng, giữ trong rổ xáo`);
+  }
 
   return true;
 }
@@ -7274,63 +7331,14 @@ async function processSlaShufflePool(db) {
   }
 
   const nowStr = getAssignmentNowStr();
-  const stmts = [];
-  const telegramAssigns = [];
   let assigned = 0;
 
   for (const [pidStr, leads] of Object.entries(byProject)) {
-    const pid = Number(pidStr);
-
     for (const lead of leads) {
-      const excluded = await getLeadPoolExcludedSales(db, lead.id);
-      const ranked = await rankSalesByPerformanceForProject(db, pid, excluded);
-      if (!ranked.length) {
-        console.warn(`[sla-shuffle-pool] Lead#${lead.id} — không còn sale khả dụng (đã thử: ${excluded.join(", ") || "none"})`);
-        continue;
-      }
-      const saleName = ranked[0];
-
-      const assign = buildLeadAssignUpdateStmt(saleName, lead.id, LEAD_DISTRIBUTION_KINDS.shuffle, nowStr);
-      stmts.push({ sql: assign.sql, args: assign.args });
-
-      const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
-      const nextSeq = (maxSeqRow?.m ?? -1) + 1;
-      stmts.push({
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        args: [lead.id, saleName, "Chia lead", nowStr, "", `Lead từ rổ xáo 24h (SLA) — ưu tiên sale hiệu suất`, nextSeq, "sla-shuffle-pool"],
-      });
-
-      telegramAssigns.push({ leadId: lead.id, saleName, fromPool: true });
-      assigned += 1;
+      const newSale = await assignSlaPoolLeadToNextSale(db, lead, nowStr);
+      if (newSale) assigned += 1;
+      else console.warn(`[sla-shuffle-pool] Lead#${lead.id} — không còn sale khả dụng`);
     }
-  }
-
-  if (stmts.length) await db.batch(stmts, "write");
-
-  const notifyBySale = new Map();
-  for (const { leadId, saleName } of telegramAssigns) {
-    const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
-    if (!lead) continue;
-    await sendTelegramNewLeadNotification(db, {
-      leadId,
-      saleName,
-      lead,
-      extraLines: ["🔄 _Lead từ rổ xáo — vui lòng cập nhật trong 10 phút!_"],
-    });
-    if (!notifyBySale.has(saleName)) notifyBySale.set(saleName, []);
-    notifyBySale.get(saleName).push(lead);
-  }
-
-  for (const [saleName, leadList] of notifyBySale.entries()) {
-    const count = leadList.length;
-    const names = leadList.slice(0, 3).map((l) => l.name || "Khách").join(", ");
-    sendPushToDisplayName(saleName, {
-      title: count > 1 ? `${count} lead từ rổ xáo 24h` : "Lead từ rổ xáo 24h",
-      body: count > 1 ? `${names}${count > 3 ? "…" : ""} — vui lòng xử lý ngay (10 phút)` : `${names} — vui lòng xử lý ngay (10 phút)`,
-      tag: `sla-shuffle-pool-${saleName}-${Date.now()}`,
-      sound: "sale",
-      data: { url: "/", type: "sla_shuffle_pool", leadIds: leadList.map((l) => l.id).join(",") },
-    }).catch((err) => console.error(`[Push] SLA shuffle pool notify failed for ${saleName}:`, err.message));
   }
 
   if (assigned > 0) {
