@@ -446,6 +446,7 @@
 
 .crm-data-grid {
   width: 100%;
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -471,6 +472,8 @@
   padding: 9px 12px;
   border-bottom: 1px solid var(--crm-border-light);
   vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .crm-data-grid-row {
@@ -502,14 +505,25 @@
 .crm-data-grid-name {
   font-weight: 600;
   color: var(--crm-text);
-  max-width: 200px;
+  max-width: 180px;
+  overflow: hidden;
 }
 
 .crm-data-grid-name-inner {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.crm-data-grid-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .crm-data-grid-muted {
@@ -518,7 +532,7 @@
 }
 
 .crm-data-grid-truncate {
-  max-width: 160px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-restore-sale-scope";
+const BUILD_VERSION = "2026-06-10-fix-restore-note-overflow";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -430,7 +430,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 37; // Bump this when adding new DDL/migrations
+const DB_VERSION = 38; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1147,6 +1147,12 @@ async function initDb() {
     } catch (e) {
       console.warn("[DB] v37 backfill skipped:", e.message);
     }
+  }
+  if (dbVersion < 38) {
+    console.log("[DB] v38 migration: lead_history.note column (legacy ghi chú riêng)");
+    try { await run(db, "ALTER TABLE lead_history ADD COLUMN note TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE lead_history ADD COLUMN user_name TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "ALTER TABLE lead_history ADD COLUMN created_at TEXT DEFAULT ''"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -7517,7 +7523,7 @@ async function hasSlaFeedbackForCurrentSale(db, leadId, saleName) {
   );
   const minSeq = chia ? chia.seq : -1;
   const rows = await all(db,
-    `SELECT action, status, feedback, note FROM lead_history
+    `SELECT action, status, feedback FROM lead_history
      WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
        AND action NOT IN ('Chia lead', 'Thu hồi SLA')
      ORDER BY seq DESC`,
@@ -9178,7 +9184,7 @@ async function collectRestoreSaleScopeCandidates(db, { saleName, projectId } = {
   const ph2 = scopedIds.map(() => "?").join(",");
   const histRows = await all(
     db,
-    `SELECT lead_id, sale_name, status, seq, action, feedback, note FROM lead_history
+    `SELECT lead_id, sale_name, status, seq, action, feedback FROM lead_history
      WHERE lead_id IN (${ph2})
        AND action NOT IN ('Chia lead', 'Thu hồi SLA')
      ORDER BY lead_id, seq DESC`,

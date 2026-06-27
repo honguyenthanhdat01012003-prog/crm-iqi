@@ -73,10 +73,10 @@ export function LeadDataGrid({
                       {isAdmin && lead.regCount > 1 && (
                         <span className="crm-status-badge crm-status-badge--reg">ĐK {lead.regIndex}</span>
                       )}
-                      <span>{lead.name}</span>
+                      <span className="crm-data-grid-name-text" title={lead.name || ""}>{lead.name}</span>
                     </div>
                   </td>
-                  <td>{lead.phone || "—"}</td>
+                  <td className="crm-data-grid-truncate" title={lead.phone || ""}>{lead.phone || "—"}</td>
                   <td className="crm-data-grid-truncate" title={lead.product || ""}>{lead.product || "—"}</td>
                   <td><StatusBadge status={lead.status} size="sm" /></td>
                   <td className="crm-data-grid-muted">{lead.managerName || "—"}</td>
