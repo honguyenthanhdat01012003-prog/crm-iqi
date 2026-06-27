@@ -317,6 +317,18 @@ const ElapsedTimer = ({ estimatedTime }) => {
   );
 };
 
+function resetCrmNavigationForRole(role) {
+  try {
+    if (role === "admin" || role === "manager") {
+      localStorage.setItem("crm_page", "dashboard");
+      localStorage.setItem("crm_selected_project", "all");
+    } else {
+      localStorage.setItem("crm_page", "leads");
+      localStorage.removeItem("crm_selected_project");
+    }
+  } catch {}
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
@@ -366,6 +378,8 @@ export default function App() {
     return <ErrorBoundary><ForceChangePasswordPage user={user} onChanged={(u, t) => updateUser(u, t)} onLogout={() => {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
+      localStorage.removeItem("crm_page");
+      localStorage.removeItem("crm_selected_project");
       setUser(null);
       setToken("");
     }} /></ErrorBoundary>;
@@ -376,6 +390,8 @@ export default function App() {
     apiFetch(`${API}/logout`, { method: "POST" }).catch(() => {});
     localStorage.removeItem("crm_token");
     localStorage.removeItem("crm_user");
+    localStorage.removeItem("crm_page");
+    localStorage.removeItem("crm_selected_project");
     setUser(null);
     setToken("");
   }} /></ErrorBoundary>;
@@ -402,6 +418,7 @@ function LoginPage({ onLogin }) {
       if (!res.ok) { setError(String(data.error || "Đăng nhập thất bại")); return; }
       localStorage.setItem("crm_token", data.token);
       localStorage.setItem("crm_user", JSON.stringify(data.user));
+      resetCrmNavigationForRole(data.user.role);
       onLogin(data.user, data.token);
     } catch (err) {
       setError("Lỗi kết nối server");
@@ -647,19 +664,21 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [lastSync, setLastSync] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [selectedProject, setSelectedProject] = useState(() => {
+    if (user.role === "sale") return null;
     try {
       const saved = localStorage.getItem("crm_selected_project");
       if (saved) return saved;
-      const u = JSON.parse(localStorage.getItem("crm_user") || "null");
-      if (u?.role === "admin" || u?.role === "manager") return "all";
+      if (user.role === "admin" || user.role === "manager") return "all";
     } catch {}
     return null;
   });
   useEffect(() => {
     try {
+      if (user.role === "sale") return;
       if (selectedProject) localStorage.setItem("crm_selected_project", selectedProject);
+      else localStorage.removeItem("crm_selected_project");
     } catch {}
-  }, [selectedProject]);
+  }, [selectedProject, user.role]);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
