@@ -430,7 +430,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 35; // Bump this when adding new DDL/migrations
+const DB_VERSION = 36; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1048,6 +1048,41 @@ async function initDb() {
     console.log("[DB] v35 migration: shuffle pool + instant SLA columns...");
     try { await run(db, "ALTER TABLE leads ADD COLUMN shuffle_pool_at TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE leads ADD COLUMN instant_sla_warned_at TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 36) {
+    console.log("[DB] v36 migration: tab status denormalization (admin_tab_status + lead_sale_summary)...");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN admin_tab_status TEXT DEFAULT 'new'"); } catch (_) {}
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS lead_sale_summary (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        lead_id INTEGER NOT NULL,
+        sale_name TEXT NOT NULL DEFAULT '',
+        sale_tab_status TEXT NOT NULL DEFAULT 'new',
+        sale_raw_status TEXT DEFAULT '',
+        updated_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(lead_id, sale_name)
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_leads_admin_tab ON leads(admin_tab_status)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lss_lead ON lead_sale_summary(lead_id)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lss_sale_tab ON lead_sale_summary(sale_name, sale_tab_status)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lh_sale_name ON lead_history(sale_name)"); } catch (_) {}
+    try {
+      const allIds = await all(db, "SELECT id FROM leads ORDER BY id ASC");
+      const t0 = Date.now();
+      for (let i = 0; i < allIds.length; i += 100) {
+        const batch = allIds.slice(i, i + 100);
+        for (const { id } of batch) {
+          await refreshLeadTabDenorm(db, id);
+        }
+        if (allIds.length > 200) {
+          console.log(`[DB] v36 backfill ${Math.min(i + 100, allIds.length)}/${allIds.length}`);
+        }
+      }
+      console.log(`[DB] v36 backfill done: ${allIds.length} leads in ${Date.now() - t0}ms`);
+    } catch (e) {
+      console.error("[DB] v36 backfill error:", e.message);
+    }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2346,6 +2381,87 @@ function buildLeadHistorySummary(saleHistory) {
   };
 }
 
+/** Recompute admin_tab_status + lead_sale_summary from lead_history (write-time denorm). */
+async function refreshLeadTabDenorm(db, leadId) {
+  const id = Number(leadId);
+  if (!id) return;
+  const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [id]);
+  if (!lead) return;
+
+  const historyRows = await all(db, "SELECT * FROM lead_history WHERE lead_id = ? ORDER BY seq ASC, id ASC", [id]);
+  const adminTab = getAdminLeadTabStatus(lead, historyRows);
+  await run(db, "UPDATE leads SET admin_tab_status = ? WHERE id = ?", [adminTab, id]);
+
+  const entries = sortSaleHistoryEntries(historyRows.map(formatHistoryRow));
+  const summary = buildLeadHistorySummary(entries);
+  const saleNameByKey = {};
+  for (const h of entries) {
+    if (!h.saleName || h.saleName === "Chưa chia") continue;
+    const key = normalizePersonNameServer(h.saleName);
+    if (key) saleNameByKey[key] = h.saleName;
+  }
+
+  await run(db, "DELETE FROM lead_sale_summary WHERE lead_id = ?", [id]);
+  for (const [key, fb] of Object.entries(summary.saleFeedbackStatus || {})) {
+    const saleName = saleNameByKey[key] || key;
+    await run(
+      db,
+      `INSERT INTO lead_sale_summary(lead_id, sale_name, sale_tab_status, sale_raw_status, updated_at)
+       VALUES(?, ?, ?, ?, datetime('now'))`,
+      [id, saleName, fb.status || "new", fb.rawStatus || fb.status || ""]
+    );
+  }
+}
+
+async function refreshLeadTabDenormMany(db, leadIds = []) {
+  const unique = [...new Set((leadIds || []).map(Number).filter(Boolean))];
+  for (const id of unique) {
+    await refreshLeadTabDenorm(db, id);
+  }
+}
+
+function tabStatusSqlExpr(col = "admin_tab_status") {
+  return `COALESCE(NULLIF(TRIM(${col}), ''), 'new')`;
+}
+
+async function queryAdminTabCountsDenorm(db, user, filters = {}) {
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const rows = await all(
+    db,
+    `SELECT ${tabStatusSqlExpr("admin_tab_status")} as tab_st, COUNT(*) as c FROM leads ${where} GROUP BY tab_st`,
+    params
+  );
+  const counts = { all: 0 };
+  for (const r of rows) {
+    const k = normalizeStatus(r.tab_st) || "new";
+    counts[k] = (counts[k] || 0) + Number(r.c) || 0;
+    counts.all += Number(r.c) || 0;
+  }
+  return counts;
+}
+
+async function querySaleTabCountsDenorm(db, user, filters = {}) {
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const saleName = user.displayName || "";
+  const rows = await all(
+    db,
+    `SELECT ${tabStatusSqlExpr("s.sale_tab_status")} as tab_st, COUNT(*) as c
+     FROM (SELECT id FROM leads ${where}) vis
+     LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
+     GROUP BY tab_st`,
+    [...params, saleName]
+  );
+  const counts = { all: 0 };
+  for (const r of rows) {
+    const k = normalizeStatus(r.tab_st) || "new";
+    counts[k] = (counts[k] || 0) + Number(r.c) || 0;
+    counts.all += Number(r.c) || 0;
+  }
+  return counts;
+}
+
 function stripLeadsForClient(data) {
   if (!Array.isArray(data?.leads)) return data;
   for (const l of data.leads) {
@@ -2751,12 +2867,10 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
 
 async function queryLeadsTabCounts(db, user, filters = {}) {
   if (user.role === "sale") {
-    const { counts } = await getSaleLeadScopeIndex(db, user, filters);
-    return counts;
+    return querySaleTabCountsDenorm(db, user, filters);
   }
   if (user.role === "admin" || user.role === "manager") {
-    const { counts } = await computeLeadTabIndex(db, user, filters);
-    return counts;
+    return queryAdminTabCountsDenorm(db, user, filters);
   }
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
@@ -2848,7 +2962,34 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     };
   }
 
-  // Admin/manager tab filter uses feedback history (first updater), not raw leads.status
+  // Admin/manager tab filter — use denormalized admin_tab_status (same rules, fast SQL)
+  if (statusTab && statusTab !== "all" && (user.role === "admin" || user.role === "manager")) {
+    const baseFilters = { ...filters, statusTab: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
+    const tabClause = `${tabStatusSqlExpr("admin_tab_status")} = ?`;
+    const tabWhere = where ? `${where} AND ${tabClause}` : `WHERE ${tabClause}`;
+    const tabParams = [...params, statusTab];
+    const sortCol = {
+      name: "name",
+      phone: "phone",
+      product: "product",
+      status: "status",
+      saleName: "sale_name",
+      managerName: "manager_name",
+      createdAt: "created_at",
+      id: "id",
+    }[sortKey] || "id";
+    const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
+    const offset = (page - 1) * limit;
+    const [countRow, leadRows, projectRows] = await Promise.all([
+      get(db, `SELECT COUNT(*) as c FROM leads ${tabWhere}`, tabParams),
+      all(db, `SELECT * FROM leads ${tabWhere} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...tabParams, limit, offset]),
+      all(db, "SELECT * FROM projects ORDER BY id ASC"),
+    ]);
+    return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+  }
+
+  // Legacy path kept for non-admin roles if needed
   if (statusTab && statusTab !== "all") {
     const { indexed } = await computeLeadTabIndex(db, user, filters);
     const matched = indexed.filter((r) => r.tabStatus === statusTab);
@@ -6335,6 +6476,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
     }
 
     lastSyncHash = ""; // invalidate so next poll re-fetches
+    await refreshLeadTabDenormMany(db, leadIds);
     emitDataChanged("chia-lead");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
@@ -6394,6 +6536,7 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     }
 
     lastSyncHash = "";
+    await refreshLeadTabDenormMany(db, leads.map((l) => l.id));
     emitDataChanged("shuffle-leads");
 
     const data = await readData(db);
@@ -8760,6 +8903,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     lastSyncHash = ""; // invalidate hash after any lead change
+    await refreshLeadTabDenorm(db, actualLeadId);
     emitDataChanged("update-lead");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
@@ -8844,6 +8988,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     }
 
     lastSyncHash = "";
+    await refreshLeadTabDenorm(db, leadId);
     emitDataChanged("lead-history-update");
 
     const data = await readData(db);
@@ -8944,6 +9089,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
 
     await run(db, "DELETE FROM lead_history WHERE id = ? AND lead_id = ?", [histId, leadId]);
 
+    await refreshLeadTabDenorm(db, leadId);
     lastSyncHash = "";
     emitDataChanged("lead-history-delete");
 
@@ -8980,6 +9126,7 @@ app.put("/api/leads/:id/deal-value", requireAuth, requireAdmin, async (req, res)
     );
 
     lastSyncHash = "";
+    await refreshLeadTabDenorm(db, leadId);
     emitDataChanged("deal-value-update");
     const data = await readData(db);
     await filterDataForRole(data, req.user);
@@ -9360,6 +9507,7 @@ async function handleTelegramWebhook(req, res) {
 
         // Notify web clients about the change
         lastSyncHash = "";
+        await refreshLeadTabDenorm(db, leadId);
         emitDataChanged("telegram-feedback");
         const escMd = (s) => String(s || "").replace(/([_*`\[\]])/g, "\\$1");
         await sendTg(chatId, [
