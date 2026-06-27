@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-tab-counts-sale-filter-fix";
+const BUILD_VERSION = "2026-06-10-instant-sla-fresh-only";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -430,7 +430,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 36; // Bump this when adding new DDL/migrations
+const DB_VERSION = 37; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -455,13 +455,19 @@ function isFreshMarketingLead(lead) {
   return Date.now() - created.getTime() <= INSTANT_SLA_FRESH_LEAD_MAX_AGE_MS;
 }
 
-/** SLA 10p Lead New: không áp dụng lead cũ treo "Chưa feedback" từ tháng trước (auto-rotate 2 ngày xử lý). */
+/** SLA 10p Lead New: chỉ lead MKT mới (≤7 ngày), lần chia đầu hoặc chuyển tiếp instant A→B — không áp dụng lead cũ từ rổ xáo/xáo/rotate. */
 async function isInstantSlaEligibleLead(db, lead, assignedAt) {
-  if (isFreshMarketingLead(lead)) return true;
   if (!assignedAt) return false;
-  if (getVnCalendarDay(assignedAt) !== getVnCalendarDay(new Date())) return false;
   const saleName = (lead.sale_name || lead.saleName || "").trim();
   if (!saleName) return false;
+
+  if (!isFreshMarketingLead(lead)) return false;
+
+  const kind = String(lead.distribution_kind || "").trim();
+  if (kind !== LEAD_DISTRIBUTION_KINDS.manual && kind !== LEAD_DISTRIBUTION_KINDS.instantChain) {
+    return false;
+  }
+
   const chia = await get(db,
     `SELECT source FROM lead_history
      WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
@@ -469,7 +475,28 @@ async function isInstantSlaEligibleLead(db, lead, assignedAt) {
     [lead.id, saleName]
   );
   const src = String(chia?.source || "").toLowerCase();
+
+  if (kind === LEAD_DISTRIBUTION_KINDS.instantChain) {
+    return src.includes("instant-sla");
+  }
+
   if (src.includes("rotate") || src === "auto-rotate" || src === "sprint-rotate") return false;
+  if (src.includes("shuffle") || src.includes("sla-shuffle") || src === "sla-shuffle-pool") return false;
+  if (src.includes("scheduled-sla") || src === "schedule") return false;
+  if (src.includes("instant-sla")) return false;
+
+  const priorScheduledRecall = await get(db,
+    `SELECT 1 FROM lead_history WHERE lead_id = ? AND action = 'Thu hồi SLA' AND source = 'scheduled-sla' LIMIT 1`,
+    [lead.id]
+  );
+  if (priorScheduledRecall) return false;
+
+  const priorPoolAssign = await get(db,
+    `SELECT 1 FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND source = 'sla-shuffle-pool' LIMIT 1`,
+    [lead.id]
+  );
+  if (priorPoolAssign) return false;
+
   return true;
 }
 
@@ -479,6 +506,8 @@ const LEAD_DISTRIBUTION_KINDS = {
   shuffle: "shuffle",
   rotate: "rotate",
   slaShuffle: "sla_shuffle",
+  /** Lead MKT mới — chuyển sale B sau thu hồi 10p (vẫn trong chuỗi instant, không phải rổ xáo 24h) */
+  instantChain: "instant_chain",
 };
 
 function getAssignmentNowStr() {
@@ -1101,6 +1130,23 @@ async function initDb() {
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lss_sale_tab ON lead_sale_summary(sale_name, sale_tab_status)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lh_sale_name ON lead_history(sale_name)"); } catch (_) {}
     console.log("[DB] v36 schema ready — lead backfill runs in background after server starts");
+  }
+  if (dbVersion < 37) {
+    console.log("[DB] v37 migration: instant_chain backfill — lead chuyển từ SLA 10p không còn coi là shuffle/xáo");
+    try {
+      const r = await run(db,
+        `UPDATE leads SET distribution_kind = 'instant_chain'
+         WHERE distribution_kind = 'shuffle'
+           AND id IN (
+             SELECT lh.lead_id FROM lead_history lh
+             WHERE lh.action = 'Chia lead' AND lh.source = 'instant-sla-10m'
+               AND lh.seq = (SELECT MAX(seq) FROM lead_history h2 WHERE h2.lead_id = lh.lead_id AND h2.action = 'Chia lead')
+           )`
+      );
+      console.log(`[DB] v37 backfill instant_chain rows affected: ${r?.rowsAffected ?? "?"}`);
+    } catch (e) {
+      console.warn("[DB] v37 backfill skipped:", e.message);
+    }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -7277,16 +7323,18 @@ async function processScheduledLeadSLA(db) {
 async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   excludeSales = [],
   source = "sla-shuffle-pool",
+  distributionKind = LEAD_DISTRIBUTION_KINDS.shuffle,
   historyNote = "Lead từ rổ xáo 24h (SLA) — ưu tiên sale hiệu suất",
-  telegramExtraLines = ["🔄 _Lead từ rổ xáo — vui lòng cập nhật trong 10 phút!_"],
+  telegramExtraLines = ["🔄 _Lead từ rổ xáo 24h — vui lòng cập nhật feedback._"],
   pushTitle = "Lead từ rổ xáo 24h",
+  pushBodySuffix = " — vui lòng cập nhật feedback",
 } = {}) {
   const excluded = [...new Set([...(await getLeadPoolExcludedSales(db, lead.id)), ...excludeSales].filter(Boolean))];
   const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
   if (!ranked.length) return null;
 
   const saleName = ranked[0];
-  const assign = buildLeadAssignUpdateStmt(saleName, lead.id, LEAD_DISTRIBUTION_KINDS.shuffle, nowStr);
+  const assign = buildLeadAssignUpdateStmt(saleName, lead.id, distributionKind, nowStr);
   const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeqRow?.m ?? -1) + 1;
   await db.batch([
@@ -7306,7 +7354,7 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   });
   sendPushToDisplayName(saleName, {
     title: pushTitle,
-    body: `${updated?.name || "Khách"} — vui lòng xử lý ngay (10 phút)`,
+    body: `${updated?.name || "Khách"}${pushBodySuffix}`,
     tag: `sla-shuffle-pool-${saleName}-${lead.id}-${Date.now()}`,
     sound: "sale",
     data: { url: "/", type: "sla_shuffle_pool", leadIds: String(lead.id) },
@@ -7343,9 +7391,11 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   const newSale = await assignSlaPoolLeadToNextSale(db, lead, nowStr, {
     excludeSales: [saleName],
     source: "instant-sla-10m",
+    distributionKind: LEAD_DISTRIBUTION_KINDS.instantChain,
     historyNote: "Lead chuyển từ sale khác (quá 10 phút chưa feedback)",
-    telegramExtraLines: ["🔄 _Lead chuyển từ sale khác — vui lòng cập nhật trong 10 phút!_"],
+    telegramExtraLines: ["🔄 _Lead MKT mới chuyển giao — vui lòng cập nhật trong 10 phút!_"],
     pushTitle: "Lead mới chuyển giao (SLA 10p)",
+    pushBodySuffix: " — vui lòng cập nhật trong 10 phút",
   });
 
   await run(
@@ -7363,12 +7413,29 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   return true;
 }
 
+function isSystemGeneratedFeedbackText(text = "") {
+  const t = String(text || "").trim();
+  if (!t) return true;
+  const lower = t.toLowerCase();
+  const patterns = [
+    "admin ", "chia lead", "khôi phục", "khoi phuc", "lead new quá", "lead new qua",
+    "lead đặt lịch", "lead dat lich", "lead chuyển từ", "lead chuyen tu",
+    "lead từ rổ", "lead tu ro", "lịch chia tự động", "lich chia tu dong",
+    "quá 10 phút", "qua 10 phut", "quá 24h", "qua 24h",
+  ];
+  return patterns.some((p) => lower.includes(p));
+}
+
 function isMeaningfulFeedbackHistoryRow(row = {}) {
   if (!row || !row.sale_name) return false;
   const action = String(row.action || "").trim();
   if (action === "Chia lead" || action === "Thu hồi SLA") return false;
   const norm = normalizeStatus(row.status || "");
-  return norm && norm !== "new";
+  if (norm && norm !== "new") return true;
+  // Legacy: trước đây sale có thể chỉ lưu ghi chú hoặc chỉ trạng thái — một trong hai đều tính đã cập nhật
+  const noteText = String(row.feedback || row.note || "").trim();
+  if (noteText && !isSystemGeneratedFeedbackText(noteText)) return true;
+  return false;
 }
 
 /** Sale đã cập nhật feedback trong chu kỳ phụ trách hiện tại → không thu hồi SLA. */
@@ -7382,10 +7449,9 @@ async function hasSlaFeedbackForCurrentSale(db, leadId, saleName) {
   );
   const minSeq = chia ? chia.seq : -1;
   const rows = await all(db,
-    `SELECT action, status FROM lead_history
+    `SELECT action, status, feedback, note FROM lead_history
      WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
        AND action NOT IN ('Chia lead', 'Thu hồi SLA')
-       AND TRIM(COALESCE(status, '')) != ''
      ORDER BY seq DESC`,
     [leadId, minSeq, saleName]
   );
@@ -7411,12 +7477,14 @@ async function getInstantSlaAssignmentTime(db, lead) {
 }
 
 /**
- * SLA Lead New (không phải đặt lịch): 8 phút nhắc, 10 phút đưa về rổ xáo.
+ * SLA Lead New (MKT mới): 8 phút nhắc, 10 phút chuyển sale khác.
+ * Chỉ distribution_kind manual (chia lần đầu) hoặc instant_chain (A→B trong chuỗi MKT mới).
+ * Lead cũ từ rổ xáo 24h / xáo / rotate → không áp dụng (chỉ luân chuyển qua nút xáo).
  */
 async function processInstantLeadSLA(db) {
   const now = Date.now();
   const nowStr = getAssignmentNowStr();
-  const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.shuffle, LEAD_DISTRIBUTION_KINDS.rotate];
+  const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain];
   const placeholders = instantKinds.map(() => "?").join(",");
   const candidates = await all(db,
     `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, created_at
