@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-restore-feedback-name-match";
+const BUILD_VERSION = "2026-06-10-fix-sale-counts-perf";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -96,6 +96,15 @@ function normalizePersonNameServer(value = "") {
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+}
+
+function matchSaleName(leadSaleName, userDisplayName) {
+  const sn = (leadSaleName || "").toLowerCase().trim();
+  const dn = (userDisplayName || "").toLowerCase().trim();
+  if (!sn || sn === "chưa chia") return false;
+  if (sn === dn) return true;
+  const dnWords = dn.split(/\s+/).filter(Boolean);
+  return dnWords.every(w => sn.includes(w));
 }
 
 function findManagerByName(managers, managerName) {
@@ -2905,27 +2914,57 @@ async function getSaleNameMatchVariants(db, saleName) {
   const input = String(saleName || "").trim();
   const canonical = await resolveCanonicalSaleDisplayName(db, input);
   const variants = new Set([input, canonical].filter(Boolean));
-  const [histRows, summaryRows] = await Promise.all([
-    all(db, `SELECT DISTINCT sale_name FROM lead_history WHERE TRIM(COALESCE(sale_name, '')) != ''`),
-    all(db, `SELECT DISTINCT sale_name FROM lead_sale_summary WHERE TRIM(COALESCE(sale_name, '')) != ''`),
-  ]);
-  for (const row of [...histRows, ...summaryRows]) {
+
+  const linkedNames = await all(db,
+    `SELECT DISTINCT sale_name FROM lead_history
+     WHERE TRIM(COALESCE(sale_name, '')) != ''
+       AND lead_id IN (
+         SELECT DISTINCT lead_id FROM lead_history
+         WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
+       )`,
+    [input, canonical]
+  );
+  for (const row of linkedNames) {
     const sn = String(row.sale_name || "").trim();
-    if (!sn) continue;
-    if (matchSaleName(sn, canonical) || matchSaleName(sn, input)) variants.add(sn);
+    if (sn && (matchSaleName(sn, canonical) || matchSaleName(sn, input))) variants.add(sn);
   }
+
+  try {
+    const lowered = [...variants].map((v) => v.toLowerCase());
+    if (lowered.length) {
+      const ph = lowered.map(() => "?").join(",");
+      const summaryRows = await all(db,
+        `SELECT DISTINCT sale_name FROM lead_sale_summary WHERE LOWER(TRIM(sale_name)) IN (${ph})`,
+        lowered
+      );
+      for (const row of summaryRows) {
+        if (row.sale_name) variants.add(String(row.sale_name).trim());
+      }
+    }
+  } catch (_) { /* bảng chưa migrate */ }
+
   return [...variants];
 }
 
+let saleNameInClauseCache = new Map();
+const SALE_NAME_IN_CLAUSE_MS = 60_000;
+
 async function buildSaleNameLowerInClause(db, displayName) {
+  const canonical = await resolveCanonicalSaleDisplayName(db, displayName);
+  const cacheKey = normalizePersonNameServer(canonical || displayName);
+  const cached = saleNameInClauseCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < SALE_NAME_IN_CLAUSE_MS) return cached.data;
+
   const variants = await getSaleNameMatchVariants(db, displayName);
   const lowered = [...new Set(variants.map((v) => String(v).trim().toLowerCase()).filter(Boolean))];
   if (!lowered.length) lowered.push(String(displayName || "").trim().toLowerCase());
-  return {
+  const data = {
     inSql: lowered.map(() => "?").join(","),
     params: lowered,
-    canonical: await resolveCanonicalSaleDisplayName(db, displayName),
+    canonical,
   };
+  saleNameInClauseCache.set(cacheKey, { at: Date.now(), data });
+  return data;
 }
 
 async function buildLeadsSqlFilters(db, user, filters = {}) {
@@ -2940,7 +2979,7 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
     const saleIn = await buildSaleNameLowerInClause(db, dn);
-    // Lead đang phụ trách HOẶC sale đã từng cập nhật feedback — khớp mọi biến thể tên sale
+    // Lead đang phụ trách HOẶC sale đã feedback (lead_sale_summary) — không quét lead_history từng dòng
     parts.push(`(
       LOWER(TRIM(COALESCE(sale_name, ''))) IN (${saleIn.inSql})
       OR EXISTS (
@@ -2948,15 +2987,8 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
         WHERE lss.lead_id = leads.id
           AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) IN (${saleIn.inSql})
       )
-      OR EXISTS (
-        SELECT 1 FROM lead_history h
-        WHERE h.lead_id = leads.id
-          AND LOWER(TRIM(COALESCE(h.sale_name, ''))) IN (${saleIn.inSql})
-          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
-          AND TRIM(COALESCE(h.status, '')) != ''
-      )
     )`);
-    params.push(...saleIn.params, ...saleIn.params, ...saleIn.params);
+    params.push(...saleIn.params, ...saleIn.params);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -5742,6 +5774,7 @@ function emitDataChanged(reason) {
   invalidateProjectCountsCache();
   invalidateLeadTabIndexCache();
   invalidateSaleScopeCache();
+  saleNameInClauseCache = new Map();
   schedulesResponseCache = { at: 0, data: null };
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
@@ -9040,15 +9073,6 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
 });
 
 /* ===== Lead updates ===== */
-function matchSaleName(leadSaleName, userDisplayName) {
-  const sn = (leadSaleName || "").toLowerCase().trim();
-  const dn = (userDisplayName || "").toLowerCase().trim();
-  if (!sn || sn === "chưa chia") return false;
-  if (sn === dn) return true;
-  const dnWords = dn.split(/\s+/).filter(Boolean);
-  return dnWords.every(w => sn.includes(w));
-}
-
 function applySaleLeadView(lead, displayName) {
   const saleKey = normalizePersonNameServer(displayName);
   const fbMap = lead.saleFeedbackStatus || {};
