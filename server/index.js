@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-20-sale-own-status";
+const BUILD_VERSION = "2026-06-10-tab-perf";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -514,6 +514,7 @@ async function initDb() {
 
   if (dbVersion >= DB_VERSION) {
     console.log(`[DB] Already at version ${dbVersion}, skipping migrations`);
+    await loadV36DenormReady(db);
     return db;
   }
 
@@ -1067,26 +1068,12 @@ async function initDb() {
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lss_lead ON lead_sale_summary(lead_id)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lss_sale_tab ON lead_sale_summary(sale_name, sale_tab_status)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lh_sale_name ON lead_history(sale_name)"); } catch (_) {}
-    try {
-      const allIds = await all(db, "SELECT id FROM leads ORDER BY id ASC");
-      const t0 = Date.now();
-      for (let i = 0; i < allIds.length; i += 100) {
-        const batch = allIds.slice(i, i + 100);
-        for (const { id } of batch) {
-          await refreshLeadTabDenorm(db, id);
-        }
-        if (allIds.length > 200) {
-          console.log(`[DB] v36 backfill ${Math.min(i + 100, allIds.length)}/${allIds.length}`);
-        }
-      }
-      console.log(`[DB] v36 backfill done: ${allIds.length} leads in ${Date.now() - t0}ms`);
-    } catch (e) {
-      console.error("[DB] v36 backfill error:", e.message);
-    }
+    console.log("[DB] v36 schema ready — lead backfill runs in background after server starts");
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
   console.log(`[DB] Migrations complete, version=${DB_VERSION}`);
+  await loadV36DenormReady(db);
 
   return db;
 }
@@ -2382,6 +2369,70 @@ function buildLeadHistorySummary(saleHistory) {
 }
 
 /** Recompute admin_tab_status + lead_sale_summary from lead_history (write-time denorm). */
+let v36DenormReady = false;
+let v36BackfillRunning = false;
+
+async function loadV36DenormReady(db) {
+  if (!db) {
+    v36DenormReady = false;
+    return;
+  }
+  try {
+    const row = await get(db, "SELECT value FROM settings WHERE key = 'v36_backfill_done'");
+    if (row?.value === "1") {
+      v36DenormReady = true;
+      return;
+    }
+    // Deploy cũ chạy backfill đồng bộ trước khi có flag — coi như xong nếu đã có dữ liệu denorm
+    const lss = await get(db, "SELECT COUNT(*) as c FROM lead_sale_summary");
+    if (Number(lss?.c) > 0) {
+      await upsertSetting(db, "v36_backfill_done", "1");
+      v36DenormReady = true;
+      return;
+    }
+    v36DenormReady = false;
+  } catch {
+    v36DenormReady = false;
+  }
+}
+
+async function runV36BackfillBackground(db) {
+  if (!db || v36BackfillRunning || v36DenormReady) return;
+  v36BackfillRunning = true;
+  try {
+    await loadV36DenormReady(db);
+    if (v36DenormReady) return;
+
+    const allIds = await all(db, "SELECT id FROM leads ORDER BY id ASC");
+    if (!allIds.length) {
+      await upsertSetting(db, "v36_backfill_done", "1");
+      v36DenormReady = true;
+      return;
+    }
+
+    console.log(`[DB] v36 background backfill starting (${allIds.length} leads)...`);
+    const t0 = Date.now();
+    for (let i = 0; i < allIds.length; i += 100) {
+      const batch = allIds.slice(i, i + 100);
+      for (const { id } of batch) {
+        await refreshLeadTabDenorm(db, id);
+      }
+      if (allIds.length > 200) {
+        console.log(`[DB] v36 backfill ${Math.min(i + 100, allIds.length)}/${allIds.length}`);
+      }
+    }
+    await upsertSetting(db, "v36_backfill_done", "1");
+    v36DenormReady = true;
+    invalidateLeadTabIndexCache();
+    invalidateSaleScopeCache();
+    console.log(`[DB] v36 backfill done: ${allIds.length} leads in ${Date.now() - t0}ms`);
+  } catch (e) {
+    console.error("[DB] v36 background backfill error:", e.message);
+  } finally {
+    v36BackfillRunning = false;
+  }
+}
+
 async function refreshLeadTabDenorm(db, leadId) {
   const id = Number(leadId);
   if (!id) return;
@@ -2866,6 +2917,10 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
 }
 
 async function queryLeadsTabCounts(db, user, filters = {}) {
+  if (!v36DenormReady) {
+    const { counts } = await computeLeadTabIndex(db, user, filters);
+    return counts;
+  }
   if (user.role === "sale") {
     return querySaleTabCountsDenorm(db, user, filters);
   }
@@ -2947,14 +3002,55 @@ async function queryLeadsPage(db, user, filters, page, limit) {
   const sortKey = filters.sortKey || "id";
   const sortDir = filters.sortDir || "desc";
   const statusTab = filters.statusTab || "all";
+  const sortCol = {
+    name: "name",
+    phone: "phone",
+    product: "product",
+    status: "status",
+    saleName: "sale_name",
+    managerName: "manager_name",
+    createdAt: "created_at",
+    id: "id",
+  }[sortKey] || "id";
+  const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
+  const offset = (page - 1) * limit;
 
-  // Sale: status tab = feedback của chính sale đó, không phải leads.status chung
+  // Sale: tab = feedback của chính sale — dùng SQL phân trang thay vì load toàn bộ lead vào RAM
   if (user.role === "sale") {
+    const saleName = user.displayName || "";
+    const baseFilters = { ...filters, statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
+
+    if (v36DenormReady && statusTab && statusTab !== "all") {
+      const tabExpr = tabStatusSqlExpr("s.sale_tab_status");
+      const scopeSql = `
+        FROM (SELECT * FROM leads ${where}) l
+        LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
+          AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
+        WHERE ${tabExpr} = ?`;
+      const scopeParams = [...params, saleName, statusTab];
+      const [countRow, leadRows, projectRows] = await Promise.all([
+        get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
+        all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
+        all(db, "SELECT * FROM projects ORDER BY id ASC"),
+      ]);
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+    }
+
+    if (statusTab === "all") {
+      const [countRow, leadRows, projectRows] = await Promise.all([
+        get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
+        all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
+        all(db, "SELECT * FROM projects ORDER BY id ASC"),
+      ]);
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+    }
+
+    // Chưa backfill xong denorm — fallback cache 30s
     const { leads: scopedLeads, phoneRegistrations } = await getSaleLeadScopeIndex(db, user, filters);
     let scoped = scopedLeads;
-    if (statusTab !== "all") scoped = scoped.filter((l) => l.status === statusTab);
+    scoped = scoped.filter((l) => l.status === statusTab);
     scoped = sortLeadObjectsList(scoped, sortKey, sortDir);
-    const offset = (page - 1) * limit;
     return {
       leads: scoped.slice(offset, offset + limit),
       leadsTotal: scoped.length,
@@ -2962,25 +3058,13 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     };
   }
 
-  // Admin/manager tab filter — use denormalized admin_tab_status (same rules, fast SQL)
-  if (statusTab && statusTab !== "all" && (user.role === "admin" || user.role === "manager")) {
+  // Admin/manager tab filter — denormalized admin_tab_status when backfill done
+  if (v36DenormReady && statusTab && statusTab !== "all" && (user.role === "admin" || user.role === "manager")) {
     const baseFilters = { ...filters, statusTab: "all" };
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
     const tabClause = `${tabStatusSqlExpr("admin_tab_status")} = ?`;
     const tabWhere = where ? `${where} AND ${tabClause}` : `WHERE ${tabClause}`;
     const tabParams = [...params, statusTab];
-    const sortCol = {
-      name: "name",
-      phone: "phone",
-      product: "product",
-      status: "status",
-      saleName: "sale_name",
-      managerName: "manager_name",
-      createdAt: "created_at",
-      id: "id",
-    }[sortKey] || "id";
-    const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
-    const offset = (page - 1) * limit;
     const [countRow, leadRows, projectRows] = await Promise.all([
       get(db, `SELECT COUNT(*) as c FROM leads ${tabWhere}`, tabParams),
       all(db, `SELECT * FROM leads ${tabWhere} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...tabParams, limit, offset]),
@@ -2994,7 +3078,6 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { indexed } = await computeLeadTabIndex(db, user, filters);
     const matched = indexed.filter((r) => r.tabStatus === statusTab);
     const sorted = sortIndexedLeads(matched, sortKey, sortDir);
-    const offset = (page - 1) * limit;
     const pageSlice = sorted.slice(offset, offset + limit);
     if (!pageSlice.length) {
       return { leads: [], leadsTotal: sorted.length, phoneRegistrations: {} };
@@ -3008,18 +3091,6 @@ async function queryLeadsPage(db, user, filters, page, limit) {
 
   const saleSafeFilters = user.role === "sale" ? { ...filters, statusTab: "all" } : filters;
   const { where, params } = await buildLeadsSqlFilters(db, user, saleSafeFilters);
-  const offset = (page - 1) * limit;
-  const sortCol = {
-    name: "name",
-    phone: "phone",
-    product: "product",
-    status: "status",
-    saleName: "sale_name",
-    managerName: "manager_name",
-    createdAt: "created_at",
-    id: "id",
-  }[sortKey] || "id";
-  const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
 
   const [countRow, leadRows, projectRows] = await Promise.all([
     get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
@@ -5260,7 +5331,9 @@ app.get("/api/health", async (_req, res) => {
     dbType: process.env.TURSO_URL ? 'turso' : 'sqlite-local',
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
-    build: "2026-03-19-v8",
+    build: BUILD_VERSION,
+    v36DenormReady,
+    v36BackfillRunning,
     counts,
   });
 });
@@ -13299,6 +13372,14 @@ if (!process.env.VERCEL) {
       console.log(`[dist] OK — ${distCheck.jsBundle}${distCheck.cssBundle ? ` + ${distCheck.cssBundle}` : ""}`);
     } else {
       console.error(`[dist] ⚠️ WHITE SCREEN RISK: ${distCheck.error}`);
+    }
+
+    if (db) {
+      setTimeout(() => {
+        runV36BackfillBackground(db).catch((e) => {
+          console.error("[DB] v36 backfill scheduler error:", e.message);
+        });
+      }, 2000);
     }
 
     // Auto-register Telegram webhooks on startup (ensures secret always matches after restart)

@@ -792,6 +792,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [phoneRegistrations, setPhoneRegistrations] = useState({});
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [serverTabCounts, setServerTabCounts] = useState({ all: 0 });
+  const stableTabCountsRef = useRef({ all: 0 });
   const [serverSaleRanking, setServerSaleRanking] = useState([]);
   const [projectLeadCounts, setProjectLeadCounts] = useState({ byProject: {}, all: 0 });
   const [projectCountsLoading, setProjectCountsLoading] = useState(false);
@@ -1210,7 +1211,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPhoneRegistrations(data.phoneRegistrations);
     }
     if (data.leadsTotal != null) setLeadsTotal(Number(data.leadsTotal) || 0);
-    if (data.tabCounts && typeof data.tabCounts === "object") setServerTabCounts(data.tabCounts);
+    if (data.tabCounts && typeof data.tabCounts === "object") {
+      stableTabCountsRef.current = data.tabCounts;
+      setServerTabCounts(data.tabCounts);
+    }
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
       const pc = data.projectLeadCounts;
@@ -1260,14 +1264,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
   const buildTabCountsUrl = useCallback(() => {
-    const q = leadsQueryRef.current;
     const p = new URLSearchParams();
-    if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
     if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
     if (searchText.trim()) p.set("search", searchText.trim());
     if (statusFilter && statusFilter !== "all") p.set("statusFilter", statusFilter);
     if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
     if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
+    const q = leadsQueryRef.current;
     if (q.products) p.set("products", q.products);
     return `${API}/data/tab-counts?${p}`;
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
@@ -1278,6 +1281,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (!r.ok) return;
       const data = await r.json();
       if (data.tabCounts && typeof data.tabCounts === "object") {
+        stableTabCountsRef.current = data.tabCounts;
         setServerTabCounts(data.tabCounts);
       }
     } catch (err) {
@@ -1297,7 +1301,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [user.role, applyApiData]);
 
-  const fetchCrmData = useCallback(async ({ isBoot = false, skipTabCounts = true } = {}) => {
+  const fetchCrmData = useCallback(async ({ isBoot = false, skipTabCounts = true, refreshTabCounts = false } = {}) => {
     const seq = isBoot ? 0 : ++fetchSeqRef.current;
     if (!isBoot) fetchSeqRef.current = seq;
     setLeadsFetching(true);
@@ -1339,7 +1343,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
       applyApiData(data, { suppressNotifications: true });
       if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-      if (!isBoot && skipTabCounts) fetchTabCounts();
+      if (!isBoot && refreshTabCounts) fetchTabCounts();
       markApiOk();
       return data;
     } catch (err) {
@@ -1362,8 +1366,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Phase 2: first lead page (admin/manager — sale waits until project picked)
     if (user.role !== "sale") {
-      await fetchCrmData({ isBoot: false, skipTabCounts: true });
-      fetchTabCounts();
+      await fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
     }
     // Phase 3: schedules, ranking, rotate settings — không chặn UI
     fetchDataExtras();
@@ -1411,19 +1414,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!bootDoneRef.current) return;
     if (user.role === "sale" && !selectedProject) return;
 
-    // Tránh hiển thị tab count cũ (tất cả dự án) khi đang load theo dự án vừa chọn
-    if (selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
-      const pid = Number(selectedProject);
-      const scoped = projectLeadCounts?.byProject?.[pid];
-      if (scoped != null) {
-        setServerTabCounts({ all: scoped });
-      }
-    }
-
     const t = setTimeout(async () => {
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
-      await fetchCrmData({ isBoot: false, skipTabCounts: true });
-      fetchTabCounts();
+      await fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
     }, 400);
     return () => clearTimeout(t);
   }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, fetchTabCounts, user.role]);
@@ -4275,28 +4268,12 @@ const LeadsPage = (props) => {
 
   const tabCounts = serverTabCounts;
 
-  const displayTabCounts = useMemo(() => {
-    if (!leadsRefreshing) return tabCounts;
-    if (selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
-      const pid = Number(selectedProject);
-      const scoped = projectLeadCounts?.byProject?.[pid];
-      if (scoped != null) return { ...tabCounts, all: scoped };
-    }
-    return tabCounts;
-  }, [leadsRefreshing, tabCounts, selectedProject, projectLeadCounts]);
+  // Giữ số tab ổn định khi đang fetch — tránh giật nút "Tất cả / Chưa feedback..."
+  const displayTabCounts = tabCounts;
 
-  const displayLeadsTotal = useMemo(() => {
-    if (leadsRefreshing && selectedProject && selectedProject !== "all" && selectedProject !== "personal") {
-      const pid = Number(selectedProject);
-      const scoped = projectLeadCounts?.byProject?.[pid];
-      if (scoped != null) return scoped;
-    }
-    return leadsTotal || 0;
-  }, [leadsRefreshing, selectedProject, projectLeadCounts, leadsTotal]);
+  const displayLeadsTotal = leadsTotal || 0;
 
-  const mobilePrimaryTabs = useMemo(() => {
-    return LEAD_TABS.filter((t) => t.key === "all" || (displayTabCounts[t.key] || 0) > 0);
-  }, [LEAD_TABS, displayTabCounts]);
+  const mobilePrimaryTabs = LEAD_TABS;
   const mobileVisibleTabs = useMemo(() => {
     const list = showMobileStatusMenu ? mobilePrimaryTabs : mobilePrimaryTabs.slice(0, 4);
     if (!showMobileStatusMenu && !list.some((t) => t.key === activeTab)) {
@@ -4362,14 +4339,17 @@ const LeadsPage = (props) => {
     }
     if (sig === leadsQuerySigRef.current) return;
     leadsQuerySigRef.current = sig;
-    onLeadsQueryChange({
-      statusTab: activeTab,
-      page: currentPage,
-      limit: pageSize,
-      products: productFilter.length ? productFilter.join(",") : "",
-      sortKey: sortConfig.key || "id",
-      sortDir: sortConfig.direction || "desc",
-    });
+    const t = setTimeout(() => {
+      onLeadsQueryChange({
+        statusTab: activeTab,
+        page: currentPage,
+        limit: pageSize,
+        products: productFilter.length ? productFilter.join(",") : "",
+        sortKey: sortConfig.key || "id",
+        sortDir: sortConfig.direction || "desc",
+      });
+    }, 100);
+    return () => clearTimeout(t);
   }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange]);
 
   useEffect(() => {
@@ -6987,7 +6967,8 @@ const LeadsPage = (props) => {
               <span>{t.label}</span>
               <span style={{
                 background: isActive ? "#0f3d1e" : "#e5e7eb", color: isActive ? "#fff" : "#6b7280",
-                borderRadius: 10, padding: "0 6px", fontSize: isMobile ? 10 : 11, fontWeight: 800, minWidth: 18, textAlign: "center",
+                borderRadius: 10, padding: "0 6px", fontSize: isMobile ? 10 : 11, fontWeight: 800,
+                minWidth: 22, textAlign: "center", display: "inline-block", fontVariantNumeric: "tabular-nums",
               }}>{count}</span>
             </button>
           );
