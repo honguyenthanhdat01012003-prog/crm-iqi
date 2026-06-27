@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-restore-feedback-sla";
+const BUILD_VERSION = "2026-06-10-restore-feedback-dual-view";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2894,9 +2894,23 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     params.push(...pids);
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
-    // Chỉ lead đang phụ trách — lead bị thu hồi SLA/chuyển sale biến khỏi list ngay
-    parts.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
-    params.push(dn);
+    // Lead đang phụ trách HOẶC sale đã từng cập nhật feedback — mỗi sale thấy trạng thái riêng (lead_sale_summary)
+    parts.push(`(
+      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+      OR EXISTS (
+        SELECT 1 FROM lead_sale_summary lss
+        WHERE lss.lead_id = leads.id
+          AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+      )
+      OR EXISTS (
+        SELECT 1 FROM lead_history h
+        WHERE h.lead_id = leads.id
+          AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
+          AND TRIM(COALESCE(h.status, '')) != ''
+      )
+    )`);
+    params.push(dn, dn, dn);
   }
 
   if (filters.projectId && filters.projectId !== "all") {

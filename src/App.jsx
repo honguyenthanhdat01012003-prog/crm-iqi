@@ -5347,7 +5347,7 @@ const LeadsPage = (props) => {
                 <AdminToolbarMenuItem
                   icon={ArrowLeftRight}
                   title="Lead đã cập nhật về Sale"
-                  desc="Quét toàn bộ lead — trả về sale đã feedback (bỏ qua lead chỉ nhận chưa cập nhật)"
+                  desc="Trả lead đã feedback về sale bị thu hồi SLA — sale khác vẫn giữ lead riêng"
                   onClick={() => {
                     closeAdminDeskMenu();
                     setRestoreFeedbackModal({
@@ -5525,7 +5525,8 @@ const LeadsPage = (props) => {
             <Modal onClose={() => !restoreFeedbackModal.loading && setRestoreFeedbackModal(null)} title="Khôi phục lead đã cập nhật về Sale">
               {restoreFeedbackModal.step === "pick" && (<>
                 <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>
-                  Quét toàn bộ lead — chỉ trả về lead sale đã từng cập nhật feedback. Lead sale chỉ nhận (Chia lead) nhưng chưa cập nhật sẽ bỏ qua.
+                  Quét lead sale đã từng cập nhật feedback (do lỗi thu hồi SLA) và trả về cho sale đó.
+                  Sale khác đã làm việc với lead vẫn thấy lead và feedback riêng — không bị mất.
                 </div>
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>Chọn Sale *</div>
@@ -5610,7 +5611,7 @@ const LeadsPage = (props) => {
                     <button
                       disabled={restoreFeedbackModal.loading}
                       onClick={async () => {
-                        if (!(await showConfirm(`Khôi phục ${restoreFeedbackModal.preview.restorable} lead về ${restoreFeedbackModal.preview.saleName}?\n\nChỉ lead sale đã từng cập nhật feedback. Lead hiện ở sale khác sẽ được chuyển lại.`))) return;
+                        if (!(await showConfirm(`Khôi phục ${restoreFeedbackModal.preview.restorable} lead về ${restoreFeedbackModal.preview.saleName}?\n\nLead trả về sale đã cập nhật. Sale khác đã feedback vẫn giữ lead và lịch sử riêng.`))) return;
                         setRestoreFeedbackModal((prev) => ({ ...prev, loading: true }));
                         try {
                           const r = await apiFetch(`${API}/leads/restore-feedback-to-sale`, {
