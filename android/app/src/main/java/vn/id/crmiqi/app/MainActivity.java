@@ -34,8 +34,11 @@ public class MainActivity extends BridgeActivity {
         createLeadChannel(manager, attrs, "lead_notifications_manager_v4", "Lead moi quan ly", defaultSound);
         createLeadChannel(manager, attrs, "lead_notifications_sale_v4", "Lead moi sale", defaultSound);
         createLeadChannel(manager, attrs, "lead_notifications", "Lead moi", defaultSound);
-        Uri alarmSound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
-        createLeadChannel(manager, attrs, "lead_notifications_recall_v1", "Thu hoi SLA lead", alarmSound);
+        createLeadChannel(manager, attrs, "lead_notifications_recall_v2", "Thu hoi lead", getRecallSoundUri());
+    }
+
+    private Uri getRecallSoundUri() {
+        return Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.lead_recall);
     }
 
     private void createLeadChannel(NotificationManager manager, AudioAttributes attrs, String id, String name, Uri soundUri) {

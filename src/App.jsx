@@ -20,7 +20,7 @@ import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requ
 import { isCapacitorNativeApp } from "./nativeStartup.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext, shouldShowNativeNotificationPrompt } from "./nativeNotificationPermission.js";
 import { NativeNotificationPermissionPrompt } from "./NativeNotificationPermissionPrompt.jsx";
-import { detectLeadNotifications, leadFromPushPayload, leadKey } from "./leadNotify.js";
+import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
@@ -717,6 +717,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const [leads, setLeads] = useState([]);
   const leadsRef = useRef([]);
+  const knownLeadIdsRef = useRef(new Set());
   const [campaigns, setCampaigns] = useState([]);
   const [projects, setProjects] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -778,6 +779,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
+  const recallLeadAudioRef = useRef(null);
   const lastLeadSoundRef = useRef({ kind: "", at: 0 });
   const nativePushAutoTriedRef = useRef(false);
 
@@ -814,8 +816,10 @@ function CRMApp({ user, updateUser, onLogout }) {
   useEffect(() => {
     managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
     saleLeadAudioRef.current = new Audio("/sounds/lead-sale.mp3");
+    recallLeadAudioRef.current = new Audio("/sounds/lead-recall.mp3");
     managerLeadAudioRef.current.preload = "auto";
     saleLeadAudioRef.current.preload = "auto";
+    recallLeadAudioRef.current.preload = "auto";
   }, []);
 
   const playLeadSound = useCallback((kind) => {
@@ -851,23 +855,33 @@ function CRMApp({ user, updateUser, onLogout }) {
     const now = Date.now();
     if (lastLeadSoundRef.current.kind === "recall" && now - lastLeadSoundRef.current.at < 1800) return;
     lastLeadSoundRef.current = { kind: "recall", at: now };
+    const playBeep = () => {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const playTone = (freq, startAt, duration) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = "triangle";
+          osc.frequency.value = freq;
+          gain.gain.value = 0.22;
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(startAt);
+          osc.stop(startAt + duration);
+        };
+        playTone(520, ctx.currentTime, 0.18);
+        playTone(380, ctx.currentTime + 0.22, 0.28);
+        setTimeout(() => ctx.close(), 600);
+      } catch (_) {}
+    };
+    const audio = recallLeadAudioRef.current;
+    if (!audio) { playBeep(); return; }
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const playTone = (freq, startAt, duration) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "triangle";
-        osc.frequency.value = freq;
-        gain.gain.value = 0.22;
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(startAt);
-        osc.stop(startAt + duration);
-      };
-      playTone(520, ctx.currentTime, 0.18);
-      playTone(380, ctx.currentTime + 0.22, 0.28);
-      setTimeout(() => ctx.close(), 600);
-    } catch (_) {}
+      audio.currentTime = 0;
+      audio.play().catch(playBeep);
+    } catch (_) {
+      playBeep();
+    }
   }, []);
 
   const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null } = {}) => {
@@ -1158,6 +1172,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Targeted single-lead update (e.g. manager change)
     if (data.updatedLead) {
+      const updatedId = Number(data.updatedLead.id);
+      if (updatedId) knownLeadIdsRef.current.add(updatedId);
       setLeads(prev => (Array.isArray(prev) ? prev : []).map(l =>
         (l.id === data.updatedLead.id || (data.updatedLead.name && l.name === data.updatedLead.name && l.phone === data.updatedLead.phone))
           ? { ...l, ...data.updatedLead }
@@ -1174,11 +1190,13 @@ function CRMApp({ user, updateUser, onLogout }) {
           role: user.role,
           displayName: user.displayName,
           seenLeadKeys,
+          knownLeadIds: knownLeadIdsRef.current,
         });
         if (notifyLeads.length > 0) {
           triggerLeadAlerts({ notifyLeads, soundKind });
         }
       }
+      registerKnownLeadIds(data.leads, knownLeadIdsRef.current);
       leadsRef.current = data.leads;
       setLeads(data.leads);
     }
@@ -1510,7 +1528,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         return;
       }
       const data = await r.json();
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       setShowProjectModal(false);
 
       const projectId = data.newProjectId || (editingProject && editingProject.id);
@@ -1540,7 +1558,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     try {
       const r = await apiFetch(`${API}/projects/${id}`, { method: "DELETE" });
       const data = await r.json();
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
     } catch (e) {
       console.error("Delete project failed", e);
     }
@@ -2449,7 +2467,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                   });
                   const data = await r.json();
                   if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
-                  applyApiData(data);
+                  applyApiData(data, { suppressNotifications: true });
                   showToast(`Import thành công: ${data.imported} khách hàng cũ`, "success");
                   setShowLegacyModal(false);
                   setLegacyDraft({ name: "", sheetUrl: "" });
@@ -4508,7 +4526,7 @@ const LeadsPage = (props) => {
       if (data.error) { setShuffleMsg("[ERR] " + data.error); }
       else {
         setShuffleMsg("[OK] " + data.msg);
-        applyApiData(data);
+        applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.schedules)) setSchedules(data.schedules);
         setShuffleSelected(new Set());
       }
@@ -4625,7 +4643,7 @@ const LeadsPage = (props) => {
       const distStr = Object.entries(data.distribution).map(([k, v]) => `${k}: ${v}`).join(", ");
       showToast(`Đã phân chia ${data.total} lead cho ${data.managers} quản lý (${distStr})`, "success");
       const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json());
+      applyApiData(await r2.json(), { suppressNotifications: true });
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     } finally {
@@ -4641,7 +4659,7 @@ const LeadsPage = (props) => {
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục xong: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái (${data.total} lead)`, "success");
       const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json());
+      applyApiData(await r2.json(), { suppressNotifications: true });
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -4656,7 +4674,7 @@ const LeadsPage = (props) => {
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục từ backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử (${data.total} lead)`, "success");
       const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json());
+      applyApiData(await r2.json(), { suppressNotifications: true });
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -4670,7 +4688,7 @@ const LeadsPage = (props) => {
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử`, "success");
       const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json());
+      applyApiData(await r2.json(), { suppressNotifications: true });
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -5359,7 +5377,7 @@ const LeadsPage = (props) => {
                           setRestoreModal(prev => ({ ...prev, step: 'done', result: data, loading: false }));
                           const r2 = await apiFetch(`${API}/data`);
                           const d2 = await r2.json();
-                          applyApiData(d2);
+                          applyApiData(d2, { suppressNotifications: true });
                         } catch (e) {
                           showToast("Lỗi: " + e.message, "error");
                           setRestoreModal(prev => ({ ...prev, loading: false }));
@@ -5461,7 +5479,7 @@ const LeadsPage = (props) => {
                           setRecoverModal(null);
                           const r2 = await apiFetch(`${API}/data`);
                           const d2 = await r2.json();
-                          applyApiData(d2);
+                          applyApiData(d2, { suppressNotifications: true });
                         } catch (e) { showToast("Lỗi: " + e.message, "error"); setRecoverModal(prev => ({ ...prev, loading: false })); }
                       }}
                       style={{ ...btnPrimary, padding: "8px 20px", borderRadius: 8, background: "linear-gradient(135deg, #d97706, #b45309)", opacity: recoverModal.selectedBackup && !recoverModal.loading ? 1 : 0.5 }}>
@@ -7730,7 +7748,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/history/${histId}`, { method: "DELETE" });
-      if (r.ok) applyApiData(await r.json());
+      if (r.ok) applyApiData(await r.json(), { suppressNotifications: true });
       else showToast("Xóa thất bại", "error");
     } catch (e) { console.error(e); }
   };
@@ -7768,7 +7786,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast(data.error || "Không thể lưu cập nhật khách hàng", "error");
         return;
       }
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       setHistStatus("");
       setHistFeedback("");
       setShowForm(false);
@@ -7793,7 +7811,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showAlert(msg, "error");
         return;
       }
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       showToast("Đã cập nhật trạng thái khách hàng", "success");
     } catch (e) {
       console.error(e);
@@ -7816,7 +7834,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast(data.error || "Lưu link Facebook thất bại", "error");
         return;
       }
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       showToast("Đã lưu link Facebook khách", "success");
     } catch (e) {
       showToast("Lỗi kết nối: " + e.message, "error");
@@ -7844,7 +7862,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         showToast(data.error || "Lưu thông tin liên hệ thất bại", "error");
         return;
       }
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       showToast("Đã lưu SĐT bổ sung & ghi chú", "success");
     } catch (e) {
       showToast("Lỗi kết nối: " + e.message, "error");
@@ -7867,7 +7885,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         body: JSON.stringify({ saleName: editSale, phone: lead.phone }),
       });
       const data = await r.json();
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
     } catch (e) {
       console.error(e);
     } finally {
@@ -8157,7 +8175,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           setSavingDealValue(true);
           try {
             const r = await apiFetch(`${API}/leads/${lead.id}/deal-value`, { method: "PUT", body: JSON.stringify({ dealValue: val }) });
-            if (r.ok) { const d = await r.json(); applyApiData(d); }
+            if (r.ok) { const d = await r.json(); applyApiData(d, { suppressNotifications: true }); }
           } catch {}
           setSavingDealValue(false);
         };
@@ -8247,7 +8265,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <button onClick={async () => {
               try {
                 const r = await apiFetch(`${API}/leads/${lead.id}/lock`, { method: "PUT", body: JSON.stringify({ locked: !lead.isLocked }) });
-                if (r.ok) { const d = await r.json(); applyApiData(d); }
+                if (r.ok) { const d = await r.json(); applyApiData(d, { suppressNotifications: true }); }
               } catch {}
             }}
               style={{
@@ -8893,7 +8911,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
         return;
       }
       const data = await r.json();
-      applyApiData(data);
+      applyApiData(data, { suppressNotifications: true });
       setShowMktProjectModal(false);
       setMktProjectName("");
       showToast("Đã tạo kho Data MKT Cũ (Xáo)", "success");
@@ -8914,7 +8932,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
         showToast("Đồng bộ thất bại: " + (err.error || r.statusText), "error");
       } else {
         const data = await r.json();
-        applyApiData(data);
+        applyApiData(data, { suppressNotifications: true });
       }
     } catch (e) {
       showToast("Đồng bộ thất bại: " + e.message, "error");
@@ -12180,7 +12198,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
       const res = await apiFetch(`/api/leads/${dragId}`, { method: "PUT", body: JSON.stringify({ status: newStatus }) });
       if (res.ok) {
         const r2 = await apiFetch("/api/data");
-        if (r2.ok) { const d = await r2.json(); applyApiData(d); }
+        if (r2.ok) { const d = await r2.json(); applyApiData(d, { suppressNotifications: true }); }
       }
     } catch {}
     setDragId(null);
@@ -12405,7 +12423,7 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
     setSavingDeal(true);
     try {
       const res = await apiFetch(`/api/leads/${dealModal.leadId}/deal-value`, { method: "PUT", body: JSON.stringify({ dealValue: val }) });
-      if (res.ok) { const d = await res.json(); applyApiData(d); }
+      if (res.ok) { const d = await res.json(); applyApiData(d, { suppressNotifications: true }); }
     } catch {}
     setSavingDeal(false);
     setDealModal(null);

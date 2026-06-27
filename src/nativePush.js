@@ -50,7 +50,7 @@ async function ensureNativePushChannels(PushNotifications) {
   const channels = [
     { id: "lead_notifications_manager_v4", name: "Lead moi quan ly", sound: "default" },
     { id: "lead_notifications_sale_v4", name: "Lead moi sale", sound: "default" },
-    { id: "lead_notifications_recall_v1", name: "Thu hoi SLA lead", sound: "default" },
+    { id: "lead_notifications_recall_v2", name: "Thu hoi lead", sound: "lead_recall" },
     { id: "lead_notifications", name: "Lead moi", sound: "default" },
   ];
   for (const channel of channels) {

@@ -127,20 +127,24 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     private String getChannelId(String sound) {
-        if ("sla_recall".equals(sound)) return "lead_notifications_recall_v1";
+        if ("sla_recall".equals(sound)) return "lead_notifications_recall_v2";
         if ("sale".equals(sound)) return "lead_notifications_sale_v4";
         return "lead_notifications_manager_v4";
     }
 
     private String getChannelName(String sound) {
-        if ("sla_recall".equals(sound)) return "Thu hoi SLA lead";
+        if ("sla_recall".equals(sound)) return "Thu hoi lead";
         if ("sale".equals(sound)) return "Lead moi sale";
         return "Lead moi quan ly";
     }
 
+    private Uri getRecallSoundUri() {
+        return Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.lead_recall);
+    }
+
     private Uri getSoundUri(String sound) {
         if ("sla_recall".equals(sound)) {
-            return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+            return getRecallSoundUri();
         }
         return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
     }

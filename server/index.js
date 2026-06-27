@@ -252,7 +252,7 @@ function stringifyFcmData(data = {}) {
 }
 
 function getNativeNotificationSound(sound) {
-  if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v1", soundName: "lead_recall" };
+  if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v2", soundName: "lead_recall" };
   if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale" };
   if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager" };
   return { channelId: "lead_notifications", soundName: "default" };
@@ -290,13 +290,22 @@ async function sendNativePushToUser(userId, payload) {
     // data giữ để LeadFirebaseMessagingService xử lý khi app đang mở.
     if (isAndroid) {
       message.notification = { title, body };
-      message.android.notification = {
-        channel_id: notificationSound.channelId,
-        sound: "default",
-        priority: "HIGH",
-        default_vibrate_timings: true,
-        default_sound: true,
-      };
+      if (payload.sound === "sla_recall") {
+        message.android.notification = {
+          channel_id: notificationSound.channelId,
+          priority: "HIGH",
+          default_vibrate_timings: true,
+          default_sound: false,
+        };
+      } else {
+        message.android.notification = {
+          channel_id: notificationSound.channelId,
+          sound: "default",
+          priority: "HIGH",
+          default_vibrate_timings: true,
+          default_sound: true,
+        };
+      }
     } else {
       message.notification = { title, body: payload.body || "Bạn có thông báo mới" };
     }
