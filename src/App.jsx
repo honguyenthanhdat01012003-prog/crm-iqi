@@ -1245,12 +1245,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
-      const pc = data.projectLeadCounts;
-      const hasData = (Number(pc.all) > 0) || Object.keys(pc.byProject || {}).length > 0;
-      if (hasData) {
-        projectLeadCountsRef.current = pc;
-        setProjectLeadCounts(pc);
-      }
+      projectLeadCountsRef.current = data.projectLeadCounts;
+      setProjectLeadCounts(data.projectLeadCounts);
+      setProjectCountsLoading(false);
     }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
@@ -1413,15 +1410,18 @@ function CRMApp({ user, updateUser, onLogout }) {
     const hadCounts = (Number(prev?.all) > 0) || Object.keys(prev?.byProject || {}).length > 0;
     if (!soft || !hadCounts) setProjectCountsLoading(true);
     try {
-      const r = await apiFetch(`${API}/projects/lead-counts`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      const r = await fetch(`${API}/projects/lead-counts`, {
+        headers: authHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
       if (r.ok) {
         const d = await r.json();
-        if (d && typeof d === "object") {
-          const hasData = (Number(d.all) > 0) || Object.keys(d.byProject || {}).length > 0;
-          if (hasData || !hadCounts) {
-            projectLeadCountsRef.current = d;
-            setProjectLeadCounts(d);
-          }
+        if (d && typeof d === "object" && !d.error) {
+          projectLeadCountsRef.current = d;
+          setProjectLeadCounts(d);
         }
       }
     } catch (err) {
@@ -1456,6 +1456,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       fetchProjectLeadCounts();
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
+
+  useEffect(() => {
+    if (!projectCountsLoading) return;
+    const t = setTimeout(() => setProjectCountsLoading(false), 15000);
+    return () => clearTimeout(t);
+  }, [projectCountsLoading]);
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
@@ -4294,7 +4300,10 @@ const LeadsPage = (props) => {
   const totalLeadCount = hasProjectCounts
     ? Number(projectLeadCounts.all) || 0
     : (Number(serverTabCounts?.all) || Number(leadsTotal) || 0);
-  const fmtProjectCount = (n) => (projectCountsLoading && !hasProjectCounts ? "…" : (Number(n) || 0).toLocaleString("vi-VN"));
+  const fmtProjectCount = (n) => {
+    if (projectCountsLoading && !hasProjectCounts) return "…";
+    return (Number(n) || 0).toLocaleString("vi-VN");
+  };
 
   const recentLeadPreview = useMemo(() => {
     const list = Array.isArray(leads) ? [...leads] : [];

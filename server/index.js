@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-fix-sale-zero-flicker";
+const BUILD_VERSION = "2026-06-10-fix-sale-scope-union";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2915,19 +2915,23 @@ async function getSaleNameMatchVariants(db, saleName) {
   const canonical = await resolveCanonicalSaleDisplayName(db, input);
   const variants = new Set([input, canonical].filter(Boolean));
 
-  const linkedNames = await all(db,
-    `SELECT DISTINCT sale_name FROM lead_history
-     WHERE TRIM(COALESCE(sale_name, '')) != ''
-       AND lead_id IN (
-         SELECT DISTINCT lead_id FROM lead_history
-         WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
-       )`,
-    [input, canonical]
-  );
-  for (const row of linkedNames) {
-    const sn = String(row.sale_name || "").trim();
-    if (sn && (matchSaleName(sn, canonical) || matchSaleName(sn, input))) variants.add(sn);
-  }
+  try {
+    const namePrefix = (canonical || input).split(/\s+/)[0] || canonical || input;
+    const histNames = await all(db,
+      `SELECT DISTINCT sale_name FROM lead_history
+       WHERE TRIM(COALESCE(sale_name, '')) != ''
+         AND (
+           LOWER(TRIM(sale_name)) IN (LOWER(TRIM(?)), LOWER(TRIM(?)))
+           OR LOWER(TRIM(sale_name)) LIKE LOWER(?) || '%'
+         )
+       LIMIT 50`,
+      [input, canonical, namePrefix]
+    );
+    for (const row of histNames) {
+      const sn = String(row.sale_name || "").trim();
+      if (sn && (matchSaleName(sn, canonical) || matchSaleName(sn, input))) variants.add(sn);
+    }
+  } catch (_) { /* ignore */ }
 
   try {
     const lowered = [...variants].map((v) => v.toLowerCase());
@@ -2967,6 +2971,34 @@ async function buildSaleNameLowerInClause(db, displayName) {
   return data;
 }
 
+/** Phạm vi lead sale nhìn thấy — UNION 1 lần, tránh OR/EXISTS quét từng dòng. */
+async function buildSaleLeadIdScopeSql(db, displayName) {
+  const saleIn = await buildSaleNameLowerInClause(db, displayName);
+  const ph = saleIn.inSql;
+  const p = saleIn.params;
+  let summaryUnion = `SELECT lead_id FROM lead_sale_summary WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})`;
+  try {
+    const chk = await get(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='lead_sale_summary'");
+    if (!chk) summaryUnion = `SELECT NULL AS lead_id WHERE 0`;
+  } catch {
+    summaryUnion = `SELECT NULL AS lead_id WHERE 0`;
+  }
+  return {
+    sql: `id IN (
+      SELECT id FROM leads WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})
+      UNION
+      ${summaryUnion}
+      UNION
+      SELECT DISTINCT lead_id FROM lead_history
+      WHERE LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})
+        AND action NOT IN ('Chia lead', 'Thu hồi SLA')
+        AND TRIM(COALESCE(status, '')) != ''
+    )`,
+    params: [...p, ...p, ...p],
+    saleIn,
+  };
+}
+
 async function buildLeadsSqlFilters(db, user, filters = {}) {
   const parts = [];
   const params = [];
@@ -2977,23 +3009,9 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     parts.push(`project_id IN (${pids.map(() => "?").join(",")})`);
     params.push(...pids);
   } else if (user.role === "sale") {
-    const dn = user.displayName || "";
-    const saleIn = await buildSaleNameLowerInClause(db, dn);
-    // Lead đang phụ trách HOẶC đã feedback — IN subquery (1 lần), không EXISTS từng dòng
-    parts.push(`(
-      LOWER(TRIM(COALESCE(sale_name, ''))) IN (${saleIn.inSql})
-      OR id IN (
-        SELECT lss.lead_id FROM lead_sale_summary lss
-        WHERE LOWER(TRIM(COALESCE(lss.sale_name, ''))) IN (${saleIn.inSql})
-      )
-      OR id IN (
-        SELECT DISTINCT h.lead_id FROM lead_history h
-        WHERE LOWER(TRIM(COALESCE(h.sale_name, ''))) IN (${saleIn.inSql})
-          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
-          AND TRIM(COALESCE(h.status, '')) != ''
-      )
-    )`);
-    params.push(...saleIn.params, ...saleIn.params, ...saleIn.params);
+    const scope = await buildSaleLeadIdScopeSql(db, user.displayName || "");
+    parts.push(scope.sql);
+    params.push(...scope.params);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -3106,9 +3124,11 @@ async function queryProjectLeadCounts(db, user) {
     const ph = pids.map(() => "?").join(",");
     rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE project_id IN (${ph}) GROUP BY project_id`, pids);
   } else {
-    const f = { statusTab: "all", statusFilter: "all" };
-    const { where, params } = await buildLeadsSqlFilters(db, user, f);
-    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
+    const t0 = Date.now();
+    const scope = await buildSaleLeadIdScopeSql(db, user.displayName || "");
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE ${scope.sql} GROUP BY project_id`, scope.params);
+    const ms = Date.now() - t0;
+    if (ms > 3000) console.warn(`[queryProjectLeadCounts] sale slow ${ms}ms user=${user.displayName}`);
   }
 
   const byProject = {};
