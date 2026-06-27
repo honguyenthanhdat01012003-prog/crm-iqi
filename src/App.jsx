@@ -1439,16 +1439,45 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
 
+  const prevSelectedProjectRef = useRef(undefined);
+  useEffect(() => {
+    if (prevSelectedProjectRef.current === undefined) {
+      prevSelectedProjectRef.current = selectedProject;
+      return;
+    }
+    if (prevSelectedProjectRef.current === selectedProject) return;
+    prevSelectedProjectRef.current = selectedProject;
+
+    ++fetchSeqRef.current;
+    ++tabCountsSeqRef.current;
+    setLeads([]);
+    leadsRef.current = [];
+    setLeadsTotal(0);
+    setServerTabCounts({ all: 0 });
+    stableTabCountsRef.current = { all: 0 };
+    setLeadsFetching(true);
+  }, [selectedProject]);
+
   useEffect(() => {
     if (!bootDoneRef.current) return;
     if (user.role === "sale" && !selectedProject) return;
+    if (selectedProject === "personal") return;
+
+    leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
+    fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
+  }, [selectedProject, user.role, fetchCrmData]);
+
+  useEffect(() => {
+    if (!bootDoneRef.current) return;
+    if (user.role === "sale" && !selectedProject) return;
+    if (selectedProject === "personal") return;
 
     const t = setTimeout(async () => {
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
       await fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
     }, 400);
     return () => clearTimeout(t);
-  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, fetchTabCounts, user.role]);
+  }, [searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, user.role]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -4182,11 +4211,13 @@ const LeadsPage = (props) => {
     }
   }, [leads]);
 
-  // Collapse expanded lead when switching projects
+  // Collapse expanded lead + reset tab/page when switching projects
   React.useEffect(() => {
     setExpandedId(null);
     setMobileDetailId(null);
     expandedPhoneRef.current = null;
+    setActiveTab("all");
+    setCurrentPage(1);
   }, [selectedProject]);
 
   const [activeTab, setActiveTab] = useState("all");
@@ -4467,7 +4498,13 @@ const LeadsPage = (props) => {
   }, [leads]);
 
   // Product/sort handled server-side via onLeadsQueryChange
-  const processedLeads = useMemo(() => (Array.isArray(leads) ? [...leads] : []), [leads]);
+  const processedLeads = useMemo(() => {
+    const list = Array.isArray(leads) ? leads : [];
+    if (!selectedProject || selectedProject === "all" || selectedProject === "personal") return list;
+    const pid = Number(selectedProject);
+    if (!pid) return list;
+    return list.filter((l) => Number(l.projectId) === pid);
+  }, [leads, selectedProject]);
 
   const tabCounts = serverTabCounts;
   const displayTabCounts = tabCounts;
