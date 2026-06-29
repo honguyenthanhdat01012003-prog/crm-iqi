@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-project-scope-fetch";
+const BUILD_VERSION = "2026-06-10-instant-sla-lock-revoked-sale";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2962,23 +2962,17 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     params.push(...pids);
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
-    // Lead đang phụ trách HOẶC sale đã từng cập nhật feedback — mỗi sale thấy trạng thái riêng (lead_sale_summary)
+    // Sale đang phụ trách HOẶC đã feedback thật (không còn tab "new") — sale bị thu hồi SLA không thấy lead
     parts.push(`(
       LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
       OR EXISTS (
         SELECT 1 FROM lead_sale_summary lss
         WHERE lss.lead_id = leads.id
           AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
-      )
-      OR EXISTS (
-        SELECT 1 FROM lead_history h
-        WHERE h.lead_id = leads.id
-          AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-          AND h.action NOT IN ('Chia lead', 'Thu hồi SLA')
-          AND TRIM(COALESCE(h.status, '')) != ''
+          AND LOWER(TRIM(COALESCE(lss.sale_tab_status, ''))) NOT IN ('', 'new')
       )
     )`);
-    params.push(dn, dn, dn);
+    params.push(dn, dn);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -7440,6 +7434,12 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
 
   await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
+  try {
+    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    if (saleUser?.telegram_id) {
+      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
+    }
+  } catch (_) {}
 
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
@@ -9808,6 +9808,19 @@ function matchSaleName(leadSaleName, userDisplayName) {
   return dnWords.every(w => sn.includes(w));
 }
 
+/** Chỉ sale đang phụ trách (sale_name hiện tại) mới được cập nhật — sale bị thu hồi SLA bị chặn. */
+function assertCurrentSaleOwnsLead(leadRow, displayName) {
+  if (!leadRow) return { ok: false, status: 404, error: "Lead không tồn tại" };
+  if (!matchSaleName(leadRow.sale_name, displayName)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Lead đã được chuyển sale khác hoặc bị thu hồi — bạn không thể cập nhật.",
+    };
+  }
+  return { ok: true };
+}
+
 function applySaleLeadView(lead, displayName) {
   const saleKey = normalizePersonNameServer(displayName);
   const fbMap = lead.saleFeedbackStatus || {};
@@ -9854,11 +9867,13 @@ function sortLeadObjectsList(leads, sortKey, sortDir) {
 }
 
 function filterLeadsForSale(data, displayName) {
+  const saleKey = normalizePersonNameServer(displayName);
   data.leads = data.leads
-    .filter((l) =>
-      matchSaleName(l.saleName, displayName) ||
-      (l.pastSaleNames && l.pastSaleNames.some((n) => matchSaleName(n, displayName)))
-    )
+    .filter((l) => {
+      if (matchSaleName(l.saleName, displayName)) return true;
+      const fb = l.saleFeedbackStatus?.[saleKey];
+      return !!(fb && fb.status && fb.status !== "new");
+    })
     .map((l) => applySaleLeadView(l, displayName));
   return data;
 }
@@ -10008,18 +10023,10 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId})` });
     }
 
-    // Sale can only update leads assigned to them (current or ever assigned via history)
     if (req.user.role === "sale") {
       const lead = existCheck || await get(db, "SELECT sale_name FROM leads WHERE id = ?", [actualLeadId]);
-      const currentMatch = lead && matchSaleName(lead.sale_name, req.user.displayName);
-      let historyMatch = false;
-      if (!currentMatch) {
-        const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [actualLeadId, req.user.displayName]);
-        historyMatch = !!hist;
-      }
-      if (!currentMatch && !historyMatch) {
-        return res.status(403).json({ error: "You can only update your own leads" });
-      }
+      const own = assertCurrentSaleOwnsLead(lead, req.user.displayName);
+      if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
 
@@ -10216,10 +10223,9 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
-    // Sale can only add history to their own leads (current or ever assigned)
-    if (req.user.role === "sale" && !matchSaleName(lead.sale_name, req.user.displayName)) {
-      const hist = await get(db, "SELECT id FROM lead_history WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?)) LIMIT 1", [leadId, req.user.displayName]);
-      if (!hist) return res.status(403).json({ error: "You can only update your own leads" });
+    if (req.user.role === "sale") {
+      const own = assertCurrentSaleOwnsLead(lead, req.user.displayName);
+      if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
 
@@ -10623,6 +10629,15 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
+        const leadRow = await get(db, "SELECT id, sale_name FROM leads WHERE id = ?", [leadId]);
+        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const own = assertCurrentSaleOwnsLead(leadRow, saleUser?.display_name || "");
+        if (!own.ok) {
+          await answerCb(callback_query.id, "Lead đã chuyển sale khác");
+          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+          return res.json({ ok: true });
+        }
+
         // Update pending with chosen status
         // Preserve message_id and phone from original notification
         const existingPending = await get(db, "SELECT message_id, phone FROM telegram_pending WHERE telegram_id = ?", [chatId]);
@@ -10767,12 +10782,14 @@ async function handleTelegramWebhook(req, res) {
           }
         }
 
-        // Attribute feedback to the lead's assigned sale, not the Telegram sender
-        let saleName = lead?.sale_name || "";
-        if (!saleName) {
-          const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
-          saleName = saleUser ? saleUser.display_name : "Sale";
+        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const own = assertCurrentSaleOwnsLead(lead, saleUser?.display_name || "");
+        if (!own.ok) {
+          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+          await sendTg(chatId, "⚠️ Lead đã được chuyển sale khác hoặc bị thu hồi — không thể cập nhật feedback.");
+          return res.json({ ok: true });
         }
+        const saleName = saleUser?.display_name || lead?.sale_name || "Sale";
         console.log(`[telegram-webhook] Saving feedback: leadId=${leadId}, saleName="${saleName}", status=${statusKey}, feedback="${feedbackText.slice(0, 50)}"`);
 
         // Save to lead_history
