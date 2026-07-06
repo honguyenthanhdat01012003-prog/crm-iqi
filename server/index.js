@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-06-10-instant-sla-lock-revoked-sale";
+const BUILD_VERSION = "2026-07-07-hybrid-scope-cache";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2649,6 +2649,24 @@ function invalidateLeadAuxCache() {
 function invalidateProjectCountsCache() {
   projectCountsCache = { at: 0, key: "", data: null };
   invalidateLeadTabIndexCache();
+  invalidateScopeResponseCache();
+}
+
+let scopeResponseCache = { at: 0, key: "", data: null };
+const SCOPE_RESPONSE_CACHE_MS = 90_000;
+
+function scopeCacheKey(user, filters = {}) {
+  return [
+    user.role,
+    user.userId || user.displayName,
+    filters.projectId || "all",
+    filters.managerFilter || "all",
+    filters.saleFilter || "all",
+  ].join("|");
+}
+
+function invalidateScopeResponseCache() {
+  scopeResponseCache = { at: 0, key: "", data: null };
 }
 
 function safeJsonParse(raw, fallback = {}) {
@@ -2940,6 +2958,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     pastSaleNames,
     feedbackHistorySummary,
     saleFeedbackStatus,
+    adminTabStatus: normalizeStatus(l.admin_tab_status || l.status || "new"),
   };
 }
 
@@ -3223,16 +3242,66 @@ async function queryLeadsPage(db, user, filters, page, limit) {
   return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName });
 }
 
+async function loadSaleSummariesForLeads(db, leadIds, saleName) {
+  if (!leadIds.length || !saleName) return {};
+  const ph = leadIds.map(() => "?").join(",");
+  const rows = await all(
+    db,
+    `SELECT lead_id, sale_name, sale_tab_status, sale_raw_status FROM lead_sale_summary
+     WHERE lead_id IN (${ph})`,
+    leadIds
+  );
+  const map = {};
+  for (const r of rows) {
+    if (!map[r.lead_id]) map[r.lead_id] = {};
+    const key = normalizePersonNameServer(r.sale_name);
+    map[r.lead_id][key] = {
+      status: normalizeStatus(r.sale_tab_status || "new"),
+      rawStatus: r.sale_raw_status || r.sale_tab_status || "",
+    };
+  }
+  return map;
+}
+
 async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null, user = null, viewOpts = {}) {
+  const skipHistory = !!viewOpts.skipHistory;
   const projectRows = projectRowsCached || await all(db, "SELECT * FROM projects ORDER BY id ASC");
   const projectLegacyMap = Object.fromEntries(projectRows.map((p) => [p.id, Boolean(p.is_legacy)]));
   const projectMap = Object.fromEntries(projectRows.map((p) => [p.id, p.name]));
   const leadIds = leadRows.map((l) => l.id);
 
-  const [feedbackMap, phoneRegMap] = await Promise.all([
-    loadFeedbackSummariesForLeads(db, leadIds),
-    buildPhoneRegMapForPage(db, leadRows, projectMap),
-  ]);
+  let feedbackMap = {};
+  let phoneRegMap = {};
+
+  if (skipHistory) {
+    const aux = await loadLeadAuxData(db);
+    for (const id of leadIds) {
+      feedbackMap[id] = {
+        historyCount: aux.historyCountMap[id] || 0,
+        pastSaleNames: [],
+        feedbackHistorySummary: [],
+        saleFeedbackStatus: {},
+      };
+    }
+    const saleNames = new Set();
+    if (user?.role === "sale" && user.displayName) saleNames.add(user.displayName);
+    if (viewOpts.salePerspectiveName) saleNames.add(viewOpts.salePerspectiveName);
+    for (const sn of saleNames) {
+      const sm = await loadSaleSummariesForLeads(db, leadIds, sn);
+      for (const [lid, fb] of Object.entries(sm)) {
+        if (!feedbackMap[lid]) feedbackMap[lid] = { historyCount: 0, pastSaleNames: [], feedbackHistorySummary: [], saleFeedbackStatus: {} };
+        feedbackMap[lid].saleFeedbackStatus = { ...feedbackMap[lid].saleFeedbackStatus, ...fb };
+      }
+    }
+    phoneRegMap = await buildPhoneRegMapForPage(db, leadRows, projectMap);
+  } else {
+    const loaded = await Promise.all([
+      loadFeedbackSummariesForLeads(db, leadIds),
+      buildPhoneRegMapForPage(db, leadRows, projectMap),
+    ]);
+    feedbackMap = loaded[0];
+    phoneRegMap = loaded[1];
+  }
 
   let leads = leadRows.map((l) => {
     const fb = feedbackMap[l.id] || {};
@@ -3254,11 +3323,35 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
     leads = leads.map((l) => applySaleLeadView(l, viewOpts.salePerspectiveName));
   }
 
+  leads = leads.map((l) => ({
+    ...l,
+    tabStatus: user?.role === "sale" || viewOpts.salePerspectiveName
+      ? (l.status || "new")
+      : (l.adminTabStatus || l.status || "new"),
+  }));
+
   return {
     leads,
     leadsTotal,
     phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
   };
+}
+
+/** Load toàn bộ lead trong scope (1 dự án / filter) — không history, dùng hybrid cache client. */
+async function queryLeadsScope(db, user, filters = {}) {
+  const f = { ...filters, statusTab: "all", statusFilter: "all" };
+  const { where, params } = await buildLeadsSqlFilters(db, user, f);
+  const salePerspectiveName = isAdminSalePerspective(f) ? f.saleFilter : null;
+  const [leadRows, projectRows, tabCounts] = await Promise.all([
+    all(db, `SELECT * FROM leads ${where} ORDER BY id DESC`, params),
+    all(db, "SELECT * FROM projects ORDER BY id ASC"),
+    queryLeadsTabCounts(db, user, f).catch(() => ({ all: 0 })),
+  ]);
+  const pageData = await finishLeadsPage(db, leadRows, leadRows.length, projectRows, user, {
+    salePerspectiveName,
+    skipHistory: true,
+  });
+  return { ...pageData, tabCounts };
 }
 
 async function getBootstrapPayload(db, user) {
@@ -5744,6 +5837,46 @@ app.get("/api/data/tab-counts", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[GET /api/data/tab-counts]", err?.message || err);
     res.status(500).json({ error: err.message || "Could not read tab counts" });
+  }
+});
+
+/** Hybrid scope: toàn bộ lead trong dự án/filter — không history, client lọc tab/trang local. */
+app.get("/api/data/scope", requireAuth, async (req, res) => {
+  try {
+    const t0 = Date.now();
+    if (syncInProgress) {
+      const waitStart = Date.now();
+      while (syncInProgress && Date.now() - waitStart < 3000) await new Promise((r) => setTimeout(r, 100));
+    }
+    const { filters } = parseLeadsFilters(req);
+    const f = { ...filters, statusTab: "all", statusFilter: "all" };
+    const cacheKey = scopeCacheKey(req.user, f);
+    const now = Date.now();
+    if (scopeResponseCache.key === cacheKey && scopeResponseCache.data && now - scopeResponseCache.at < SCOPE_RESPONSE_CACHE_MS) {
+      return res.json({ ...scopeResponseCache.data, cached: true });
+    }
+    const scopeData = await queryLeadsScope(db, req.user, f);
+    const payload = {
+      leads: scopeData.leads,
+      leadsTotal: scopeData.leadsTotal,
+      tabCounts: scopeData.tabCounts,
+      phoneRegistrations: scopeData.phoneRegistrations,
+      paginated: false,
+      scope: true,
+      hash: String(dataVersion),
+      version: dataVersion,
+      noChange: false,
+    };
+    stripLeadsForClient(payload);
+    scopeResponseCache = { at: now, key: cacheKey, data: payload };
+    res.json(payload);
+    const totalMs = Date.now() - t0;
+    if (totalMs > 800) {
+      console.log(`[GET /api/data/scope] ${totalMs}ms — ${scopeData.leadsTotal} leads (user=${req.user?.displayName})`);
+    }
+  } catch (err) {
+    console.error("[GET /api/data/scope]", err?.message || err, err?.stack);
+    res.status(500).json({ error: err.message || "Could not read scope data" });
   }
 });
 

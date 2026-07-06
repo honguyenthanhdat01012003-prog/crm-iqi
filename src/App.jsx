@@ -33,6 +33,13 @@ import {
   getLeadTabStatus,
   labelToStatusKey,
 } from "./utils/leadStatusUtils.js";
+import {
+  buildScopeCacheKey,
+  computeTabCountsFromLeads,
+  filterLeadsScope,
+  paginateLeadsScope,
+  sortLeadsScope,
+} from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
 
 const API = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -1271,25 +1278,16 @@ function CRMApp({ user, updateUser, onLogout }) {
   const tabCountsSeqRef = useRef(0);
   const bootDoneRef = useRef(false);
   const bootRetryTimerRef = useRef(null);
+  const scopeCacheKeyRef = useRef("");
+  const [leadsScopeMode, setLeadsScopeMode] = useState(false);
 
-  const buildDataUrl = useCallback(({ lite = true, skipTabCounts = false } = {}) => {
-    const q = leadsQueryRef.current;
+  const buildScopeUrl = useCallback(() => {
     const p = new URLSearchParams();
-    p.set("page", String(q.page));
-    p.set("limit", String(q.limit));
-    if (lite) p.set("lite", "1");
-    if (skipTabCounts) p.set("skipTabCounts", "1");
-    if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
     if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
-    if (searchText.trim()) p.set("search", searchText.trim());
-    if (statusFilter && statusFilter !== "all") p.set("statusFilter", statusFilter);
     if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
     if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
-    if (q.products) p.set("products", q.products);
-    if (q.sortKey) p.set("sortKey", q.sortKey);
-    if (q.sortDir) p.set("sortDir", q.sortDir);
-    return `${API}/data?${p}`;
-  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
+    return `${API}/data/scope?${p}`;
+  }, [selectedProject, managerFilter, saleFilter]);
 
   const buildTabCountsUrl = useCallback(() => {
     const p = new URLSearchParams();
@@ -1318,6 +1316,62 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [buildTabCountsUrl]);
 
+  const fetchLeadScope = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
+    const cacheKey = buildScopeCacheKey({
+      selectedProject,
+      managerFilter,
+      saleFilter,
+      userRole: user.role,
+    });
+    setLeadsFetching(true);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      const r = await fetch(buildScopeUrl(), {
+        headers: authHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (r.status === 401) {
+        localStorage.removeItem("crm_token");
+        localStorage.removeItem("crm_user");
+        window.location.reload();
+        return null;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (seq !== fetchSeqRef.current) return data;
+      markInitialDataLoaded();
+      bootDoneRef.current = true;
+      scopeCacheKeyRef.current = cacheKey;
+      setLeadsScopeMode(true);
+      if (data.leads) {
+        setSeenLeadKeys((prev) => {
+          if (prev.size === 0) {
+            const keys = new Set(data.leads.map(leadKey).filter(Boolean));
+            localStorage.setItem("crm_seen_keys", JSON.stringify([...keys]));
+            return keys;
+          }
+          return prev;
+        });
+      }
+      applyApiData(data, { suppressNotifications: true });
+      if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+      if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
+        stableTabCountsRef.current = data.tabCounts;
+        setServerTabCounts(data.tabCounts);
+      }
+      markApiOk();
+      return data;
+    } catch (err) {
+      console.warn("[CRM] scope load failed:", err?.message || err);
+      return null;
+    } finally {
+      if (seq === fetchSeqRef.current) setLeadsFetching(false);
+    }
+  }, [applyApiData, buildScopeUrl, selectedProject, managerFilter, saleFilter, user.role, markInitialDataLoaded, markApiOk]);
+
   const fetchDataExtras = useCallback(async () => {
     if (user.role !== "admin" && user.role !== "manager") return;
     try {
@@ -1329,6 +1383,25 @@ function CRMApp({ user, updateUser, onLogout }) {
       console.warn("[CRM] data extras failed:", err?.message || err);
     }
   }, [user.role, applyApiData]);
+
+  const buildDataUrl = useCallback(({ lite = true, skipTabCounts = false } = {}) => {
+    const q = leadsQueryRef.current;
+    const p = new URLSearchParams();
+    p.set("page", String(q.page));
+    p.set("limit", String(q.limit));
+    if (lite) p.set("lite", "1");
+    if (skipTabCounts) p.set("skipTabCounts", "1");
+    if (q.statusTab && q.statusTab !== "all") p.set("statusTab", q.statusTab);
+    if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
+    if (searchText.trim()) p.set("search", searchText.trim());
+    if (statusFilter && statusFilter !== "all") p.set("statusFilter", statusFilter);
+    if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
+    if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
+    if (q.products) p.set("products", q.products);
+    if (q.sortKey) p.set("sortKey", q.sortKey);
+    if (q.sortDir) p.set("sortDir", q.sortDir);
+    return `${API}/data?${p}`;
+  }, [selectedProject, searchText, statusFilter, managerFilter, saleFilter]);
 
   const fetchCrmData = useCallback(async ({ isBoot = false, skipTabCounts = true, refreshTabCounts = false } = {}) => {
     const seq = isBoot ? 0 : ++fetchSeqRef.current;
@@ -1393,18 +1466,18 @@ function CRMApp({ user, updateUser, onLogout }) {
       bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 3000);
       return;
     }
-    // Phase 2: first lead page (admin/manager — sale waits until project picked)
+    // Phase 2: load scope (admin/manager — sale waits until project picked)
     if (user.role !== "sale") {
-      await fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
+      await fetchLeadScope();
     }
     // Phase 3: schedules, ranking, rotate settings — không chặn UI
     fetchDataExtras();
-  }, [fetchCrmData, fetchTabCounts, fetchDataExtras, clearBootFailed, user.role]);
+  }, [fetchCrmData, fetchLeadScope, fetchDataExtras, clearBootFailed, user.role]);
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
-    return fetchCrmData({ isBoot: false });
-  }, [fetchCrmData]);
+    return Promise.resolve();
+  }, []);
 
   const fetchProjectLeadCounts = useCallback(async () => {
     setProjectCountsLoading(true);
@@ -1456,6 +1529,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     setServerTabCounts({ all: 0 });
     stableTabCountsRef.current = { all: 0 };
     setLeadsFetching(true);
+    setLeadsScopeMode(false);
   }, [selectedProject]);
 
   useEffect(() => {
@@ -1463,21 +1537,17 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (user.role === "sale" && !selectedProject) return;
     if (selectedProject === "personal") return;
 
+    const cacheKey = buildScopeCacheKey({
+      selectedProject,
+      managerFilter,
+      saleFilter,
+      userRole: user.role,
+    });
+    if (scopeCacheKeyRef.current === cacheKey && leadsScopeMode) return;
+
     leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
-    fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
-  }, [selectedProject, user.role, fetchCrmData]);
-
-  useEffect(() => {
-    if (!bootDoneRef.current) return;
-    if (user.role === "sale" && !selectedProject) return;
-    if (selectedProject === "personal") return;
-
-    const t = setTimeout(async () => {
-      leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
-      await fetchCrmData({ isBoot: false, skipTabCounts: true, refreshTabCounts: true });
-    }, 400);
-    return () => clearTimeout(t);
-  }, [searchText, statusFilter, managerFilter, saleFilter, fetchCrmData, user.role]);
+    fetchLeadScope();
+  }, [selectedProject, managerFilter, saleFilter, user.role, fetchLeadScope, leadsScopeMode]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -1518,20 +1588,14 @@ function CRMApp({ user, updateUser, onLogout }) {
       showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
-      fetch(buildDataUrl({ lite: true, skipTabCounts: true }), { headers: authHeaders() })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then((data) => {
-          markApiOk();
-          applyApiData(data, { suppressNotifications: true });
-          if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-          fetchTabCounts();
-        })
-        .catch(() => markConnectivityFailure());
+      if (user.role === "sale" && !selectedProject) return;
+      if (selectedProject === "personal") return;
+      fetchLeadScope();
       fetchProjectLeadCounts();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => socket.disconnect();
-  }, [applyApiData, buildDataUrl, fetchTabCounts, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, selectedProject, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -1551,21 +1615,9 @@ function CRMApp({ user, updateUser, onLogout }) {
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
-            return fetch(buildDataUrl({ lite: true, skipTabCounts: true }), { headers: authHeaders() })
-              .then(r => {
-                if (!r.ok) {
-                  markConnectivityFailure();
-                  return Promise.reject();
-                }
-                return r.json();
-              })
-              .then((data) => {
-                markApiOk();
-                applyApiData(data, { suppressNotifications: true });
-                if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-                fetchTabCounts();
-              })
-              .catch(() => markConnectivityFailure());
+            if (user.role !== "sale" || selectedProject) {
+              if (selectedProject !== "personal") fetchLeadScope();
+            }
           }
         })
         .catch(() => markConnectivityFailure());
@@ -1578,7 +1630,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, buildDataUrl, fetchTabCounts]);
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, user.role, selectedProject]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
@@ -2284,6 +2336,8 @@ function CRMApp({ user, updateUser, onLogout }) {
             projectLeadCounts={projectLeadCounts}
             projectCountsLoading={projectCountsLoading}
             onLeadsQueryChange={updateLeadsQuery}
+            onRefreshLeadScope={fetchLeadScope}
+            leadsScopeMode={leadsScopeMode}
             leadsFetching={leadsFetching}
             searchText={searchText}
             setSearchText={setSearchText}
@@ -4141,6 +4195,8 @@ const LeadsPage = (props) => {
     projectLeadCounts = { byProject: {}, all: 0 },
     projectCountsLoading = false,
     onLeadsQueryChange,
+    onRefreshLeadScope,
+    leadsScopeMode = false,
     leadsFetching = false,
     searchText,
     setSearchText,
@@ -4497,19 +4553,55 @@ const LeadsPage = (props) => {
     return [...set].sort((a, b) => a.localeCompare(b, "vi"));
   }, [leads]);
 
-  // Product/sort handled server-side via onLeadsQueryChange
-  const processedLeads = useMemo(() => {
-    const list = Array.isArray(leads) ? leads : [];
-    if (!selectedProject || selectedProject === "all" || selectedProject === "personal") return list;
-    const pid = Number(selectedProject);
-    if (!pid) return list;
-    return list.filter((l) => Number(l.projectId) === pid);
-  }, [leads, selectedProject]);
+  // Scope cache: lọc/tab/trang local — không gọi API mỗi lần đổi tab
+  const scopeFilterOpts = useMemo(() => ({
+    selectedProject,
+    searchText,
+    statusFilter,
+    managerFilter,
+    saleFilter,
+    productFilter,
+    dateFrom,
+    dateTo,
+    isSale,
+  }), [selectedProject, searchText, statusFilter, managerFilter, saleFilter, productFilter, dateFrom, dateTo, isSale]);
 
-  const tabCounts = serverTabCounts;
-  const displayTabCounts = tabCounts;
+  const filteredBeforeTab = useMemo(() => {
+    if (!leadsScopeMode) {
+      const list = Array.isArray(leads) ? leads : [];
+      if (!selectedProject || selectedProject === "all" || selectedProject === "personal") return list;
+      const pid = Number(selectedProject);
+      if (!pid) return list;
+      return list.filter((l) => Number(l.projectId) === pid);
+    }
+    return filterLeadsScope(leads, { ...scopeFilterOpts, activeTab: "all" });
+  }, [leads, leadsScopeMode, scopeFilterOpts, selectedProject]);
 
-  const displayLeadsTotal = leadsTotal || 0;
+  const displayTabCounts = useMemo(() => {
+    if (leadsScopeMode) return computeTabCountsFromLeads(filteredBeforeTab, isSale);
+    return serverTabCounts;
+  }, [leadsScopeMode, filteredBeforeTab, isSale, serverTabCounts]);
+
+  const tabFiltered = useMemo(() => {
+    if (!leadsScopeMode) return filteredBeforeTab;
+    return filterLeadsScope(leads, { ...scopeFilterOpts, activeTab });
+  }, [leads, leadsScopeMode, scopeFilterOpts, activeTab, filteredBeforeTab]);
+
+  const sortedLeads = useMemo(() => {
+    if (!leadsScopeMode) return tabFiltered;
+    return sortLeadsScope(tabFiltered, sortConfig);
+  }, [tabFiltered, leadsScopeMode, sortConfig]);
+
+  const displayLeadsTotal = leadsScopeMode ? sortedLeads.length : (leadsTotal || 0);
+  const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
+  const safePage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const paginatedLeads = useMemo(() => {
+    if (!leadsScopeMode) return sortedLeads;
+    return paginateLeadsScope(sortedLeads, safePage, pageSize);
+  }, [sortedLeads, leadsScopeMode, safePage, pageSize]);
+
+  const processedLeads = paginatedLeads;
 
   const mobilePrimaryTabs = LEAD_TABS;
   const mobileVisibleTabs = useMemo(() => {
@@ -4538,15 +4630,10 @@ const LeadsPage = (props) => {
     return d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
   };
 
-  const tabFiltered = processedLeads;
-  const paginatedLeads = processedLeads;
-
-  const selectedProjectUpdatedPct = (displayTabCounts.all || leadsTotal)
-    ? ((((displayTabCounts.all || leadsTotal) - (displayTabCounts.new || 0)) / (displayTabCounts.all || leadsTotal)) * 100).toFixed(1)
+  const selectedProjectUpdatedPct = (displayTabCounts.all || displayLeadsTotal)
+    ? ((((displayTabCounts.all || displayLeadsTotal) - (displayTabCounts.new || 0)) / (displayTabCounts.all || displayLeadsTotal)) * 100).toFixed(1)
     : "0.0";
 
-  const totalPages = Math.max(1, Math.ceil((leadsTotal || 0) / pageSize));
-  const safePage = Math.min(Math.max(1, currentPage), totalPages);
   const mobileDetailLead = useMemo(
     () => (mobileDetailId ? tabFiltered.find((l) => l.id === mobileDetailId) || leads.find((l) => l.id === mobileDetailId) : null),
     [mobileDetailId, tabFiltered, leads]
@@ -4558,11 +4645,12 @@ const LeadsPage = (props) => {
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
-  }, [leadsTotal, pageSize, currentPage, totalPages]);
+  }, [displayLeadsTotal, pageSize, currentPage, totalPages]);
 
+  // Scope mode: tab/trang/sort local — không gọi server qua onLeadsQueryChange
   const leadsQueryBootRef = useRef(false);
   useEffect(() => {
-    if (!onLeadsQueryChange) return;
+    if (leadsScopeMode || !onLeadsQueryChange) return;
     const sig = JSON.stringify({
       activeTab,
       currentPage,
@@ -4588,7 +4676,11 @@ const LeadsPage = (props) => {
       });
     }, 100);
     return () => clearTimeout(t);
-  }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange]);
+  }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange, leadsScopeMode]);
+
+  useEffect(() => {
+    if (leadsScopeMode) setCurrentPage(1);
+  }, [activeTab, searchText, statusFilter, managerFilter, saleFilter, productFilter, dateFrom, dateTo, leadsScopeMode]);
 
   useEffect(() => {
     if (!shuffleOpen || !shuffleProject || !isAdminOnly) return;
@@ -4934,7 +5026,8 @@ const LeadsPage = (props) => {
         return;
       }
       showToast(data.msg, "success");
-      if (onLeadsQueryChange) await onLeadsQueryChange({});
+      if (onRefreshLeadScope) await onRefreshLeadScope();
+      else if (onLeadsQueryChange) await onLeadsQueryChange({});
       else {
         const r2 = await apiFetch(`${API}/data?lite=1&skipTabCounts=1`);
         if (r2.ok) applyApiData(await r2.json(), { suppressNotifications: true });
