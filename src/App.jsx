@@ -37,7 +37,10 @@ import {
   buildScopeCacheKey,
   computeTabCountsFromLeads,
   filterLeadsScope,
+  getClientScopeCacheEntry,
+  invalidateClientScopeCache,
   paginateLeadsScope,
+  setClientScopeCacheEntry,
   sortLeadsScope,
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
@@ -1279,7 +1282,19 @@ function CRMApp({ user, updateUser, onLogout }) {
   const bootDoneRef = useRef(false);
   const bootRetryTimerRef = useRef(null);
   const scopeCacheKeyRef = useRef("");
+  const clientScopeCacheRef = useRef(new Map());
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
+
+  const applyScopePayload = useCallback((data, cacheKey) => {
+    scopeCacheKeyRef.current = cacheKey;
+    setLeadsScopeMode(true);
+    applyApiData(data, { suppressNotifications: true });
+    if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+    if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
+      stableTabCountsRef.current = data.tabCounts;
+      setServerTabCounts(data.tabCounts);
+    }
+  }, [applyApiData]);
 
   const buildScopeUrl = useCallback(() => {
     const p = new URLSearchParams();
@@ -1316,15 +1331,32 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [buildTabCountsUrl]);
 
-  const fetchLeadScope = useCallback(async () => {
-    const seq = ++fetchSeqRef.current;
+  const fetchLeadScope = useCallback(async ({ background = false, skipCacheRead = false } = {}) => {
     const cacheKey = buildScopeCacheKey({
       selectedProject,
       managerFilter,
       saleFilter,
       userRole: user.role,
     });
-    setLeadsFetching(true);
+    const requestKey = cacheKey;
+
+    if (!background && !skipCacheRead) {
+      const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey);
+      if (cached?.data) {
+        applyScopePayload(cached.data, cacheKey);
+        markInitialDataLoaded();
+        bootDoneRef.current = true;
+        markApiOk();
+        void fetchLeadScope({ background: true, skipCacheRead: true });
+        return cached.data;
+      }
+    }
+
+    const seq = background ? fetchSeqRef.current : ++fetchSeqRef.current;
+    if (!background) {
+      fetchSeqRef.current = seq;
+      setLeadsFetching(true);
+    }
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120000);
@@ -1341,11 +1373,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      if (seq !== fetchSeqRef.current) return data;
+      if (!background && seq !== fetchSeqRef.current) return data;
+      if (background && scopeCacheKeyRef.current !== requestKey) return data;
       markInitialDataLoaded();
       bootDoneRef.current = true;
-      scopeCacheKeyRef.current = cacheKey;
-      setLeadsScopeMode(true);
+      setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data);
+      applyScopePayload(data, cacheKey);
       if (data.leads) {
         setSeenLeadKeys((prev) => {
           if (prev.size === 0) {
@@ -1356,21 +1389,15 @@ function CRMApp({ user, updateUser, onLogout }) {
           return prev;
         });
       }
-      applyApiData(data, { suppressNotifications: true });
-      if (Array.isArray(data.leads)) leadsRef.current = data.leads;
-      if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
-        stableTabCountsRef.current = data.tabCounts;
-        setServerTabCounts(data.tabCounts);
-      }
       markApiOk();
       return data;
     } catch (err) {
       console.warn("[CRM] scope load failed:", err?.message || err);
       return null;
     } finally {
-      if (seq === fetchSeqRef.current) setLeadsFetching(false);
+      if (!background && seq === fetchSeqRef.current) setLeadsFetching(false);
     }
-  }, [applyApiData, buildScopeUrl, selectedProject, managerFilter, saleFilter, user.role, markInitialDataLoaded, markApiOk]);
+  }, [applyScopePayload, buildScopeUrl, selectedProject, managerFilter, saleFilter, user.role, markInitialDataLoaded, markApiOk]);
 
   const fetchDataExtras = useCallback(async () => {
     if (user.role !== "admin" && user.role !== "manager") return;
@@ -1523,6 +1550,21 @@ function CRMApp({ user, updateUser, onLogout }) {
 
     ++fetchSeqRef.current;
     ++tabCountsSeqRef.current;
+
+    const cacheKey = buildScopeCacheKey({
+      selectedProject,
+      managerFilter,
+      saleFilter,
+      userRole: user.role,
+    });
+    const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey);
+    if (cached?.data) {
+      applyScopePayload(cached.data, cacheKey);
+      setLeadsFetching(false);
+      void fetchLeadScope({ background: true, skipCacheRead: true });
+      return;
+    }
+
     setLeads([]);
     leadsRef.current = [];
     setLeadsTotal(0);
@@ -1530,7 +1572,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     stableTabCountsRef.current = { all: 0 };
     setLeadsFetching(true);
     setLeadsScopeMode(false);
-  }, [selectedProject]);
+  }, [selectedProject, managerFilter, saleFilter, user.role, applyScopePayload, fetchLeadScope]);
 
   useEffect(() => {
     if (!bootDoneRef.current) return;
@@ -1590,7 +1632,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     socket.on("data-changed", () => {
       if (user.role === "sale" && !selectedProject) return;
       if (selectedProject === "personal") return;
-      fetchLeadScope();
+      invalidateClientScopeCache(clientScopeCacheRef.current);
+      fetchLeadScope({ background: true, skipCacheRead: true });
       fetchProjectLeadCounts();
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
@@ -1616,7 +1659,10 @@ function CRMApp({ user, updateUser, onLogout }) {
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
             if (user.role !== "sale" || selectedProject) {
-              if (selectedProject !== "personal") fetchLeadScope();
+              if (selectedProject !== "personal") {
+                invalidateClientScopeCache(clientScopeCacheRef.current);
+                fetchLeadScope({ background: true, skipCacheRead: true });
+              }
             }
           }
         })

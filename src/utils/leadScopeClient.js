@@ -143,3 +143,33 @@ export function paginateLeadsScope(leads, page, pageSize) {
 export function buildScopeCacheKey({ selectedProject, managerFilter, saleFilter, userRole }) {
   return [userRole || "", selectedProject || "", managerFilter || "all", saleFilter || "all"].join("|");
 }
+
+/** Client-side scope cache — hiện data ngay khi đổi dự án đã xem, refresh nền. */
+export const CLIENT_SCOPE_CACHE_MS = 10 * 60 * 1000;
+export const CLIENT_SCOPE_CACHE_MAX = 15;
+export const CLIENT_SCOPE_FRESH_MS = 45_000;
+
+export function getClientScopeCacheEntry(cache, cacheKey) {
+  if (!cache || !cacheKey) return null;
+  const entry = cache.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() - entry.at > CLIENT_SCOPE_CACHE_MS) {
+    cache.delete(cacheKey);
+    return null;
+  }
+  return entry;
+}
+
+export function setClientScopeCacheEntry(cache, cacheKey, data) {
+  if (!cache || !cacheKey || !data) return;
+  cache.set(cacheKey, { at: Date.now(), data });
+  if (cache.size <= CLIENT_SCOPE_CACHE_MAX) return;
+  const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+  if (oldest) cache.delete(oldest[0]);
+}
+
+export function invalidateClientScopeCache(cache, cacheKey = null) {
+  if (!cache) return;
+  if (cacheKey) cache.delete(cacheKey);
+  else cache.clear();
+}
