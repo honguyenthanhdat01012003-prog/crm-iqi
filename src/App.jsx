@@ -1287,6 +1287,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   const bootRetryTimerRef = useRef(null);
   const scopeCacheKeyRef = useRef("");
   const clientScopeCacheRef = useRef(new Map());
+  const scopeInflightRef = useRef(new Map());
+  const prefetchStartedRef = useRef(false);
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
 
   const applyScopePayload = useCallback((data, cacheKey) => {
@@ -1301,13 +1303,48 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [applyApiData]);
 
-  const buildScopeUrl = useCallback(() => {
+  const buildScopeUrlFor = useCallback((projectId, mgr = managerFilter, sale = saleFilter) => {
     const p = new URLSearchParams();
-    if (selectedProject && selectedProject !== "all") p.set("projectId", String(selectedProject));
-    if (managerFilter && managerFilter !== "all") p.set("managerFilter", managerFilter);
-    if (saleFilter && saleFilter !== "all") p.set("saleFilter", saleFilter);
+    if (projectId && projectId !== "all") p.set("projectId", String(projectId));
+    if (mgr && mgr !== "all") p.set("managerFilter", mgr);
+    if (sale && sale !== "all") p.set("saleFilter", sale);
     return `${API}/data/scope?${p}`;
-  }, [selectedProject, managerFilter, saleFilter]);
+  }, [managerFilter, saleFilter]);
+
+  const buildScopeUrl = useCallback(() => {
+    return buildScopeUrlFor(selectedProject, managerFilter, saleFilter);
+  }, [buildScopeUrlFor, selectedProject, managerFilter, saleFilter]);
+
+  /** Fetch scope + ghi cache; dedupe request cùng key (prefetch + click). */
+  const fetchAndCacheScope = useCallback(async (cacheKey, url, userKey) => {
+    const inflight = scopeInflightRef.current.get(cacheKey);
+    if (inflight) return inflight;
+
+    const job = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000);
+      try {
+        const r = await fetch(url, { headers: authHeaders(), signal: controller.signal });
+        clearTimeout(timeout);
+        if (r.status === 401) {
+          localStorage.removeItem("crm_token");
+          localStorage.removeItem("crm_user");
+          window.location.reload();
+          return null;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data, { userKey });
+        return data;
+      } finally {
+        clearTimeout(timeout);
+        scopeInflightRef.current.delete(cacheKey);
+      }
+    })();
+
+    scopeInflightRef.current.set(cacheKey, job);
+    return job;
+  }, []);
 
   const buildTabCountsUrl = useCallback(() => {
     const p = new URLSearchParams();
@@ -1357,7 +1394,6 @@ function CRMApp({ user, updateUser, onLogout }) {
         void fetchLeadScope({ background: true, skipCacheRead: true });
         return cached.data;
       }
-      // Disk cache: mở app / đổi dự án đã xem → hiện ngay, refresh nền
       const disk = await readScopeDiskCache(userKey, cacheKey);
       if (disk?.data) {
         setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, disk.data, {
@@ -1379,26 +1415,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeadsFetching(true);
     }
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 120000);
-      const r = await fetch(buildScopeUrl(), {
-        headers: authHeaders(),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      if (r.status === 401) {
-        localStorage.removeItem("crm_token");
-        localStorage.removeItem("crm_user");
-        window.location.reload();
-        return null;
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
+      const data = await fetchAndCacheScope(cacheKey, buildScopeUrl(), userKey);
+      if (!data) return null;
       if (!background && seq !== fetchSeqRef.current) return data;
       if (background && scopeCacheKeyRef.current !== requestKey) return data;
       markInitialDataLoaded();
       bootDoneRef.current = true;
-      setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data, { userKey });
       applyScopePayload(data, cacheKey);
       if (data.leads) {
         setSeenLeadKeys((prev) => {
@@ -1418,7 +1440,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     } finally {
       if (!background && seq === fetchSeqRef.current) setLeadsFetching(false);
     }
-  }, [applyScopePayload, buildScopeUrl, selectedProject, managerFilter, saleFilter, user, markInitialDataLoaded, markApiOk]);
+  }, [applyScopePayload, buildScopeUrl, fetchAndCacheScope, selectedProject, managerFilter, saleFilter, user, markInitialDataLoaded, markApiOk]);
 
   const fetchDataExtras = useCallback(async () => {
     if (user.role !== "admin" && user.role !== "manager") return;
@@ -1614,6 +1636,44 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, []);
 
+  /** Prefetch scope mọi dự án lúc đang ở màn chọn → ấn vào là có cache. */
+  const prefetchAllProjectScopes = useCallback(async () => {
+    const list = Array.isArray(projects) ? projects : [];
+    if (!list.length) return;
+    const userKey = scopeUserKey(user);
+    const counts = projectLeadCounts?.byProject || {};
+    // Dự án nhỏ trước — cache đầy nhanh hơn
+    const ordered = [...list].sort(
+      (a, b) => (Number(counts[a.id]) || 0) - (Number(counts[b.id]) || 0)
+    );
+
+    for (const proj of ordered) {
+      const pid = String(proj.id);
+      const cacheKey = buildScopeCacheKey({
+        selectedProject: pid,
+        managerFilter: "all",
+        saleFilter: "all",
+        userRole: user.role,
+        userId: userKey,
+      });
+      if (getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey)) continue;
+      try {
+        const disk = await readScopeDiskCache(userKey, cacheKey);
+        if (disk?.data) {
+          setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, disk.data, {
+            userKey,
+            persist: false,
+          });
+          continue;
+        }
+        await fetchAndCacheScope(cacheKey, buildScopeUrlFor(pid, "all", "all"), userKey);
+      } catch (err) {
+        console.warn("[CRM] prefetch scope failed:", pid, err?.message || err);
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }, [projects, projectLeadCounts, user, fetchAndCacheScope, buildScopeUrlFor]);
+
   const bootStartedRef = useRef(false);
   useEffect(() => {
     if (bootStartedRef.current) return;
@@ -1626,11 +1686,22 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   useEffect(() => {
     if (!initialDataLoaded) return;
-    // bootstrapOnly đã trả projectLeadCounts — bỏ qua nếu đã có
     if (Object.keys(projectLeadCounts?.byProject || {}).length === 0 && !(Number(projectLeadCounts?.all) > 0)) {
       fetchProjectLeadCounts();
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
+
+  // Sau khi có danh sách dự án: prefetch nền (ưu tiên khi đang ở màn chọn)
+  useEffect(() => {
+    if (!initialDataLoaded || !projects.length) return;
+    if (prefetchStartedRef.current) return;
+    prefetchStartedRef.current = true;
+    const delay = selectedProject ? 2500 : 600;
+    const t = setTimeout(() => {
+      void prefetchAllProjectScopes();
+    }, delay);
+    return () => clearTimeout(t);
+  }, [initialDataLoaded, projects, selectedProject, prefetchAllProjectScopes]);
 
   const prevScopeKeyRef = useRef("");
   const projectLoadSeqRef = useRef(0);
@@ -1685,6 +1756,22 @@ function CRMApp({ user, updateUser, onLogout }) {
         return;
       }
 
+      // Prefetch đang chạy cho dự án này → chờ chung request, hiện ngay khi xong
+      const inflight = scopeInflightRef.current.get(cacheKey);
+      if (inflight) {
+        try {
+          const data = await inflight;
+          if (projectLoadSeqRef.current !== seq) return;
+          if (data) {
+            applyScopePayload(data, cacheKey);
+            setLeadsFetching(false);
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+
       setLeads([]);
       leadsRef.current = [];
       setLeadsTotal(0);
@@ -1694,16 +1781,24 @@ function CRMApp({ user, updateUser, onLogout }) {
       leadsScopeModeRef.current = false;
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
 
-      // Phase A: trang đầu (15 lead) — paint ngay
-      const lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+      // Lite + scope song song — lite paint trước, scope thay khi xong
+      const liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+      const scopeP = fetchAndCacheScope(cacheKey, buildScopeUrlFor(selectedProject), userKey);
+
+      const lite = await liteP;
       if (projectLoadSeqRef.current !== seq) return;
-      // Luôn tắt overlay sau lite — kể cả lỗi; scope chạy nền
       setLeadsFetching(false);
 
-      // Phase B: full scope nền (tab/filter/trang local)
-      if (lite) void fetchLeadScope({ background: true, skipCacheRead: true });
+      try {
+        const scopeData = await scopeP;
+        if (projectLoadSeqRef.current !== seq) return;
+        if (scopeData) applyScopePayload(scopeData, cacheKey);
+      } catch (err) {
+        console.warn("[CRM] scope after lite failed:", err?.message || err);
+        if (lite) void fetchLeadScope({ background: true, skipCacheRead: true });
+      }
     })();
-  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData]);
+  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -2526,7 +2621,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
             isDataLoading={!initialDataLoaded}
-            leadsRefreshing={leadsFetching && initialDataLoaded && leads.length === 0}
+            leadsRefreshing={leadsFetching && initialDataLoaded}
             phoneRegistrations={phoneRegistrations}
           />
         )}
@@ -8113,9 +8208,9 @@ const LeadsPage = (props) => {
       </div>
 
       {/* Lead cards - card layout for all on mobile, data grid + drawer for admin desktop */}
-      <div style={{ position: "relative", minHeight: isDataLoading ? 200 : 0 }}>
+      <div style={{ position: "relative", minHeight: (isDataLoading || (leadsRefreshing && !paginatedLeads.length)) ? 200 : 0 }}>
         <style>{`@keyframes crmLeadSpin { to { transform: rotate(360deg); } }`}</style>
-        {leadsRefreshing && (
+        {leadsRefreshing && paginatedLeads.length > 0 && (
           <div style={{
             position: "absolute", inset: 0, zIndex: 5, pointerEvents: "none",
             background: "rgba(255,255,255,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 12,
@@ -8133,7 +8228,7 @@ const LeadsPage = (props) => {
             </div>
           </div>
         )}
-      {isDataLoading ? (
+      {(isDataLoading || (leadsRefreshing && !paginatedLeads.length)) ? (
         isAdmin && !isMobile ? <LeadGridSkeleton rows={pageSize} /> : <LeadCardsSkeleton count={5} />
       ) : (!isAdmin || isMobile) ? (
         <div className={isMobile ? "crm-lead-cards-mobile-shell" : "crm-lead-cards-stack"}>
