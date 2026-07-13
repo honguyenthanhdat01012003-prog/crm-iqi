@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-07-client-scope-cache-a";
+const BUILD_VERSION = "2026-07-13-fast-project-open-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2679,13 +2679,19 @@ function safeJsonParse(raw, fallback = {}) {
 
 async function getHistoryCountsForLeadIds(db, leadIds) {
   if (!leadIds.length) return {};
-  const ph = leadIds.map(() => "?").join(",");
-  const rows = await all(
-    db,
-    `SELECT lead_id, COUNT(*) as c FROM lead_history WHERE lead_id IN (${ph}) GROUP BY lead_id`,
-    leadIds
-  );
-  return Object.fromEntries(rows.map((r) => [r.lead_id, r.c]));
+  const out = {};
+  const BATCH = 400;
+  for (let i = 0; i < leadIds.length; i += BATCH) {
+    const batch = leadIds.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    const rows = await all(
+      db,
+      `SELECT lead_id, COUNT(*) as c FROM lead_history WHERE lead_id IN (${ph}) GROUP BY lead_id`,
+      batch
+    );
+    for (const r of rows) out[r.lead_id] = r.c;
+  }
+  return out;
 }
 
 async function buildPhoneRegMapForPage(db, leadRows, projectMap) {
@@ -3244,21 +3250,27 @@ async function queryLeadsPage(db, user, filters, page, limit) {
 
 async function loadSaleSummariesForLeads(db, leadIds, saleName) {
   if (!leadIds.length || !saleName) return {};
-  const ph = leadIds.map(() => "?").join(",");
-  const rows = await all(
-    db,
-    `SELECT lead_id, sale_name, sale_tab_status, sale_raw_status FROM lead_sale_summary
-     WHERE lead_id IN (${ph})`,
-    leadIds
-  );
   const map = {};
-  for (const r of rows) {
-    if (!map[r.lead_id]) map[r.lead_id] = {};
-    const key = normalizePersonNameServer(r.sale_name);
-    map[r.lead_id][key] = {
-      status: normalizeStatus(r.sale_tab_status || "new"),
-      rawStatus: r.sale_raw_status || r.sale_tab_status || "",
-    };
+  const wantKey = normalizePersonNameServer(saleName);
+  const BATCH = 400;
+  for (let i = 0; i < leadIds.length; i += BATCH) {
+    const batch = leadIds.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    const rows = await all(
+      db,
+      `SELECT lead_id, sale_name, sale_tab_status, sale_raw_status FROM lead_sale_summary
+       WHERE lead_id IN (${ph})`,
+      batch
+    );
+    for (const r of rows) {
+      const key = normalizePersonNameServer(r.sale_name);
+      if (wantKey && key !== wantKey) continue;
+      if (!map[r.lead_id]) map[r.lead_id] = {};
+      map[r.lead_id][key] = {
+        status: normalizeStatus(r.sale_tab_status || "new"),
+        rawStatus: r.sale_raw_status || r.sale_tab_status || "",
+      };
+    }
   }
   return map;
 }
@@ -3274,10 +3286,11 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
   let phoneRegMap = {};
 
   if (skipHistory) {
-    const aux = await loadLeadAuxData(db);
+    // Chỉ đếm history theo lead trong page/scope — không full-scan lead_history (rất chậm khi mở dự án)
+    const historyCountMap = await getHistoryCountsForLeadIds(db, leadIds);
     for (const id of leadIds) {
       feedbackMap[id] = {
-        historyCount: aux.historyCountMap[id] || 0,
+        historyCount: historyCountMap[id] || 0,
         pastSaleNames: [],
         feedbackHistorySummary: [],
         saleFeedbackStatus: {},
@@ -3286,8 +3299,9 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
     const saleNames = new Set();
     if (user?.role === "sale" && user.displayName) saleNames.add(user.displayName);
     if (viewOpts.salePerspectiveName) saleNames.add(viewOpts.salePerspectiveName);
-    for (const sn of saleNames) {
-      const sm = await loadSaleSummariesForLeads(db, leadIds, sn);
+    const saleJobs = [...saleNames].map((sn) => loadSaleSummariesForLeads(db, leadIds, sn));
+    const saleResults = await Promise.all(saleJobs);
+    for (const sm of saleResults) {
       for (const [lid, fb] of Object.entries(sm)) {
         if (!feedbackMap[lid]) feedbackMap[lid] = { historyCount: 0, pastSaleNames: [], feedbackHistorySummary: [], saleFeedbackStatus: {} };
         feedbackMap[lid].saleFeedbackStatus = { ...feedbackMap[lid].saleFeedbackStatus, ...fb };
@@ -3342,16 +3356,17 @@ async function queryLeadsScope(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
   const salePerspectiveName = isAdminSalePerspective(f) ? f.saleFilter : null;
-  const [leadRows, projectRows, tabCounts] = await Promise.all([
-    all(db, `SELECT * FROM leads ${where} ORDER BY id DESC`, params),
-    all(db, "SELECT * FROM projects ORDER BY id ASC"),
-    queryLeadsTabCounts(db, user, f).catch(() => ({ all: 0 })),
-  ]);
+  // Leads trước — tabCounts song song nhưng không chặn nếu chậm
+  const leadRowsP = all(db, `SELECT * FROM leads ${where} ORDER BY id DESC`, params);
+  const projectRowsP = all(db, "SELECT * FROM projects ORDER BY id ASC");
+  const tabCountsP = queryLeadsTabCounts(db, user, f).catch(() => ({ all: 0 }));
+  const [leadRows, projectRows] = await Promise.all([leadRowsP, projectRowsP]);
   const pageData = await finishLeadsPage(db, leadRows, leadRows.length, projectRows, user, {
     salePerspectiveName,
     skipHistory: true,
   });
-  return { ...pageData, tabCounts };
+  const tabCounts = await tabCountsP;
+  return { ...pageData, tabCounts: tabCounts?.all != null ? tabCounts : { all: pageData.leadsTotal || 0 } };
 }
 
 async function getBootstrapPayload(db, user) {
