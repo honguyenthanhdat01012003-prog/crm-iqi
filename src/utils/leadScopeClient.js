@@ -1,4 +1,4 @@
-import { getLeadTabStatus, normalizeLeadStatusKey } from "./leadStatusUtils.js";
+import { getLeadTabStatus } from "./leadStatusUtils.js";
 
 export function getScopeTabStatus(lead, isSale) {
   if (lead?.tabStatus) return lead.tabStatus;
@@ -140,14 +140,32 @@ export function paginateLeadsScope(leads, page, pageSize) {
   return leads.slice(offset, offset + size);
 }
 
-export function buildScopeCacheKey({ selectedProject, managerFilter, saleFilter, userRole }) {
-  return [userRole || "", selectedProject || "", managerFilter || "all", saleFilter || "all"].join("|");
+export function scopeUserKey(user) {
+  return String(user?.userId || user?.username || user?.displayName || "anon");
+}
+
+export function buildScopeCacheKey({ selectedProject, managerFilter, saleFilter, userRole, userId }) {
+  return [
+    userId || "",
+    userRole || "",
+    selectedProject || "",
+    managerFilter || "all",
+    saleFilter || "all",
+  ].join("|");
 }
 
 /** Client-side scope cache — hiện data ngay khi đổi dự án đã xem, refresh nền. */
 export const CLIENT_SCOPE_CACHE_MS = 10 * 60 * 1000;
 export const CLIENT_SCOPE_CACHE_MAX = 15;
 export const CLIENT_SCOPE_FRESH_MS = 45_000;
+
+/** Disk cache: mở app vẫn hiện được data lần trước (stale-while-revalidate). */
+export const DISK_SCOPE_CACHE_MS = 7 * 24 * 60 * 60 * 1000;
+const DISK_SCOPE_MAX = 12;
+const DISK_SCOPE_MAX_BYTES = 6 * 1024 * 1024;
+const DISK_DB_NAME = "crm-iqi-cache";
+const DISK_DB_VERSION = 1;
+const DISK_STORE = "scope";
 
 export function getClientScopeCacheEntry(cache, cacheKey) {
   if (!cache || !cacheKey) return null;
@@ -160,16 +178,165 @@ export function getClientScopeCacheEntry(cache, cacheKey) {
   return entry;
 }
 
-export function setClientScopeCacheEntry(cache, cacheKey, data) {
+export function setClientScopeCacheEntry(cache, cacheKey, data, opts = {}) {
   if (!cache || !cacheKey || !data) return;
   cache.set(cacheKey, { at: Date.now(), data });
-  if (cache.size <= CLIENT_SCOPE_CACHE_MAX) return;
-  const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
-  if (oldest) cache.delete(oldest[0]);
+  if (cache.size > CLIENT_SCOPE_CACHE_MAX) {
+    const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) cache.delete(oldest[0]);
+  }
+  if (opts.persist !== false && opts.userKey) {
+    void writeScopeDiskCache(opts.userKey, cacheKey, data);
+  }
 }
 
 export function invalidateClientScopeCache(cache, cacheKey = null) {
   if (!cache) return;
   if (cacheKey) cache.delete(cacheKey);
   else cache.clear();
+}
+
+function openScopeDiskDb() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("indexedDB unavailable"));
+      return;
+    }
+    const req = indexedDB.open(DISK_DB_NAME, DISK_DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DISK_STORE)) {
+        const store = db.createObjectStore(DISK_STORE, { keyPath: "id" });
+        store.createIndex("userKey", "userKey", { unique: false });
+        store.createIndex("at", "at", { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("idb open failed"));
+  });
+}
+
+function diskEntryId(userKey, cacheKey) {
+  return `${userKey}::${cacheKey}`;
+}
+
+async function pruneScopeDiskCache(db, userKey) {
+  const rows = await new Promise((resolve, reject) => {
+    const tx = db.transaction(DISK_STORE, "readonly");
+    const idx = tx.objectStore(DISK_STORE).index("userKey");
+    const req = idx.getAll(userKey);
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+  if (rows.length <= DISK_SCOPE_MAX) return;
+  const sorted = [...rows].sort((a, b) => (a.at || 0) - (b.at || 0));
+  const remove = sorted.slice(0, Math.max(0, sorted.length - DISK_SCOPE_MAX));
+  if (!remove.length) return;
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(DISK_STORE, "readwrite");
+    const store = tx.objectStore(DISK_STORE);
+    for (const row of remove) store.delete(row.id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function readScopeDiskCache(userKey, cacheKey) {
+  if (!userKey || !cacheKey) return null;
+  try {
+    const db = await openScopeDiskDb();
+    const entry = await new Promise((resolve, reject) => {
+      const tx = db.transaction(DISK_STORE, "readonly");
+      const req = tx.objectStore(DISK_STORE).get(diskEntryId(userKey, cacheKey));
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+    if (!entry?.data) return null;
+    if (Date.now() - (entry.at || 0) > DISK_SCOPE_CACHE_MS) {
+      void deleteScopeDiskCache(userKey, cacheKey);
+      return null;
+    }
+    return { at: entry.at, data: entry.data };
+  } catch {
+    return null;
+  }
+}
+
+export async function writeScopeDiskCache(userKey, cacheKey, data) {
+  if (!userKey || !cacheKey || !data || !Array.isArray(data.leads)) return;
+  try {
+    let size = 0;
+    try {
+      size = JSON.stringify(data).length;
+    } catch {
+      return;
+    }
+    if (size > DISK_SCOPE_MAX_BYTES) return;
+
+    const db = await openScopeDiskDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DISK_STORE, "readwrite");
+      tx.objectStore(DISK_STORE).put({
+        id: diskEntryId(userKey, cacheKey),
+        userKey,
+        cacheKey,
+        at: Date.now(),
+        data,
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    await pruneScopeDiskCache(db, userKey);
+  } catch (err) {
+    console.warn("[scope-disk] write failed:", err?.message || err);
+  }
+}
+
+export async function deleteScopeDiskCache(userKey, cacheKey = null) {
+  try {
+    const db = await openScopeDiskDb();
+    if (cacheKey) {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(DISK_STORE, "readwrite");
+        tx.objectStore(DISK_STORE).delete(diskEntryId(userKey, cacheKey));
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      return;
+    }
+    if (!userKey) {
+      await clearAllScopeDiskCache();
+      return;
+    }
+    const rows = await new Promise((resolve, reject) => {
+      const tx = db.transaction(DISK_STORE, "readonly");
+      const req = tx.objectStore(DISK_STORE).index("userKey").getAllKeys(userKey);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+    if (!rows.length) return;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DISK_STORE, "readwrite");
+      const store = tx.objectStore(DISK_STORE);
+      for (const id of rows) store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function clearAllScopeDiskCache() {
+  try {
+    const db = await openScopeDiskDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(DISK_STORE, "readwrite");
+      tx.objectStore(DISK_STORE).clear();
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* ignore */
+  }
 }
