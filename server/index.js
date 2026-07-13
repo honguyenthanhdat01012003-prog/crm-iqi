@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-13-fast-project-open-a";
+const BUILD_VERSION = "2026-07-13-pagination-session-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -4116,7 +4116,7 @@ app.post("/api/login", loginLimiter, async (req, res) => {
     }
     const projectIds = await getUserProjectIds(user.id);
     const payload = { userId: user.id, username: user.username, role: user.role, displayName: user.display_name, mustChangePassword: !!user.must_change_password, projectIds };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "30d" });
     res.json({ token, user: payload });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -4504,7 +4504,7 @@ app.put("/api/change-password", requireAuth, async (req, res) => {
     // Generate new token with updated info
     const updated = await get(db, "SELECT * FROM users WHERE id = ?", [id]);
     const payload = { userId: updated.id, username: updated.username, role: updated.role, displayName: updated.display_name, mustChangePassword: false };
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "24h" });
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: "30d" });
 
     res.json({ ok: true, token, user: payload });
   } catch (err) {

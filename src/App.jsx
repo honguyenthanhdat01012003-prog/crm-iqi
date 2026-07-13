@@ -839,12 +839,13 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [leadsFetching, setLeadsFetching] = useState(false);
   const leadsQueryRef = useRef({
     page: 1,
-    limit: 50,
+    limit: 15,
     statusTab: "all",
     sortKey: "id",
     sortDir: "desc",
     products: "",
   });
+  const leadsScopeModeRef = useRef(false);
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
@@ -1291,6 +1292,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const applyScopePayload = useCallback((data, cacheKey) => {
     scopeCacheKeyRef.current = cacheKey;
     setLeadsScopeMode(true);
+    leadsScopeModeRef.current = true;
     applyApiData(data, { suppressNotifications: true });
     if (Array.isArray(data.leads)) leadsRef.current = data.leads;
     if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
@@ -1590,8 +1592,12 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
+    // Chưa vào scope mode: đổi trang/tab phải gọi lại API lite
+    if (!leadsScopeModeRef.current) {
+      return fetchCrmData({ skipTabCounts: true });
+    }
     return Promise.resolve();
-  }, []);
+  }, [fetchCrmData]);
 
   const fetchProjectLeadCounts = useCallback(async () => {
     setProjectCountsLoading(true);
@@ -1685,15 +1691,17 @@ function CRMApp({ user, updateUser, onLogout }) {
       setServerTabCounts({ all: 0 });
       stableTabCountsRef.current = { all: 0 };
       setLeadsScopeMode(false);
-      leadsQueryRef.current = { ...leadsQueryRef.current, page: 1 };
+      leadsScopeModeRef.current = false;
+      leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
 
-      // Phase A: ~50 lead đầu hiện ngay để gọi được
+      // Phase A: trang đầu (15 lead) — paint ngay
       const lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
       if (projectLoadSeqRef.current !== seq) return;
-      if (lite) setLeadsFetching(false);
+      // Luôn tắt overlay sau lite — kể cả lỗi; scope chạy nền
+      setLeadsFetching(false);
 
-      // Phase B: full scope nền (tab/filter local)
-      void fetchLeadScope({ background: true, skipCacheRead: true });
+      // Phase B: full scope nền (tab/filter/trang local)
+      if (lite) void fetchLeadScope({ background: true, skipCacheRead: true });
     })();
   }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData]);
 
@@ -2518,7 +2526,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             sprintRotateProjects={sprintRotateProjects}
             setSprintRotateProjects={setSprintRotateProjects}
             isDataLoading={!initialDataLoaded}
-            leadsRefreshing={leadsFetching && initialDataLoaded}
+            leadsRefreshing={leadsFetching && initialDataLoaded && leads.length === 0}
             phoneRegistrations={phoneRegistrations}
           />
         )}
@@ -4748,6 +4756,7 @@ const LeadsPage = (props) => {
   const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
+  // Scope: cắt local. Lite/server-page: server đã trả đúng 1 trang → hiện nguyên list
   const paginatedLeads = useMemo(() => {
     if (!leadsScopeMode) return sortedLeads;
     return paginateLeadsScope(sortedLeads, safePage, pageSize);
@@ -4831,7 +4840,11 @@ const LeadsPage = (props) => {
   }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange, leadsScopeMode]);
 
   useEffect(() => {
-    if (leadsScopeMode) setCurrentPage(1);
+    setCurrentPage(1);
+  }, [selectedProject]);
+
+  useEffect(() => {
+    setCurrentPage(1);
   }, [activeTab, searchText, statusFilter, managerFilter, saleFilter, productFilter, dateFrom, dateTo, leadsScopeMode]);
 
   useEffect(() => {
