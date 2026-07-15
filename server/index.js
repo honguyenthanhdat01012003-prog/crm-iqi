@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-project-switch-empty-fix-b";
+const BUILD_VERSION = "2026-07-15-push-auto-rotate-c";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -372,9 +372,22 @@ async function sendPushToUser(userId, payload) {
 }
 
 async function sendPushToDisplayName(displayName, payload) {
-  if (!displayName) return { sent: 0 };
-  const user = await get(db, "SELECT id FROM users WHERE display_name = ? LIMIT 1", [displayName]);
-  if (!user?.id) return { sent: 0 };
+  if (!displayName) return { sent: 0, skipped: true, reason: "empty_name" };
+  const name = String(displayName).trim();
+  if (!name) return { sent: 0, skipped: true, reason: "empty_name" };
+  // Exact match trước, rồi fallback LOWER/TRIM — tránh sale lệch hoa thường / khoảng trắng → không có tray
+  let user = await get(db, "SELECT id, display_name FROM users WHERE display_name = ? LIMIT 1", [name]);
+  if (!user?.id) {
+    user = await get(
+      db,
+      "SELECT id, display_name FROM users WHERE LOWER(TRIM(display_name)) = LOWER(TRIM(?)) LIMIT 1",
+      [name]
+    );
+  }
+  if (!user?.id) {
+    console.warn(`[Push] No user found for display_name="${name}" — phone tray skipped`);
+    return { sent: 0, skipped: true, reason: "user_not_found" };
+  }
   return sendPushToUser(user.id, payload);
 }
 
@@ -8084,6 +8097,7 @@ async function processAutoRotate(db) {
 
   let rotated = 0;
   const stmts = [];
+  const rotatedLeads = []; // { leadId, saleName, name, phone, projectId, isSprint }
 
   // Helper: parse date from VN or ISO format (includes time)
   const parseDate = (dateStr) => {
@@ -8264,6 +8278,14 @@ async function processAutoRotate(db) {
       sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
       args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, lead.sale_name || "", nextSale, nowStr, source, reason],
     });
+    rotatedLeads.push({
+      leadId: lead.id,
+      saleName: nextSale,
+      name: lead.name || "",
+      phone: lead.phone || "",
+      projectId: lead.project_id,
+      isSprint: !!isSprint,
+    });
     rotated++;
   }
 
@@ -8272,6 +8294,37 @@ async function processAutoRotate(db) {
     lastSyncHash = "";
     emitDataChanged("auto-rotate");
     console.log(`[auto-rotate] Rotated ${rotated} leads`);
+
+    // Push / socket cho sale nhận lead xáo — trước đây chỉ emitDataChanged → điện thoại im
+    try {
+      const bySale = new Map();
+      for (const item of rotatedLeads) {
+        if (!bySale.has(item.saleName)) bySale.set(item.saleName, []);
+        bySale.get(item.saleName).push(item);
+      }
+      for (const [saleName, items] of bySale.entries()) {
+        const first = items[0];
+        const projectRow = first?.projectId
+          ? await get(db, "SELECT name FROM projects WHERE id = ?", [first.projectId])
+          : null;
+        const extra = items.length > 1 ? ` và ${items.length - 1} lead khác` : "";
+        const kindLabel = first.isSprint ? "nước rút" : "tự động xáo";
+        sendPushToDisplayName(saleName, {
+          title: `Bạn có ${items.length} lead ${kindLabel}`,
+          body: `${projectRow ? projectRow.name : "-"}: ${first.name || "N/A"}${first.phone ? ` • ${first.phone}` : ""}${extra}`,
+          tag: `sale-rotate-${saleName}-${Date.now()}`,
+          sound: "sale",
+          data: {
+            url: "/",
+            type: first.isSprint ? "sale_sprint_rotate" : "sale_auto_rotate",
+            leadIds: items.map((i) => i.leadId),
+          },
+          requireInteraction: true,
+        }).catch((err) => console.error(`[Push] Auto-rotate notify failed for ${saleName}:`, err.message));
+      }
+    } catch (pushErr) {
+      console.error("[Push auto-rotate] Send failed:", pushErr.message);
+    }
   }
 
   return rotated;
@@ -8810,8 +8863,12 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
       ]
     );
 
-    // Don't process immediately - let the scheduled time control when leads are distributed
-    // processSchedules will run on next API call when the time is right
+    // Chạy slot đến hạn ngay (nếu khung giờ đã qua) — sale nhận lead + push, không chờ cron 60s
+    try {
+      await processSchedules(db);
+    } catch (e) {
+      console.warn("[schedule-distribution] immediate process failed:", e.message);
+    }
 
     lastSyncHash = "";
     emitDataChanged("schedule-distribution");
