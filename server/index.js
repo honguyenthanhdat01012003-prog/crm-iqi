@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-keeper-autorestart-a";
+const BUILD_VERSION = "2026-07-15-fast-assign-sale-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -6077,6 +6077,22 @@ let lastSyncHash = "";
 let dataVersion = 0;
 let syncInProgress = false; // Lock to prevent PUT/sync race condition
 
+/** Chờ sync ngắn — không block chia lead tới 15s như trước. */
+async function waitForSyncBrief(label = "api", maxMs = 800) {
+  if (!syncInProgress) return 0;
+  const t0 = Date.now();
+  while (syncInProgress && Date.now() - t0 < maxMs) {
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  const waited = Date.now() - t0;
+  if (syncInProgress) {
+    console.warn(`[${label}] continue while sync running (waited ${waited}ms)`);
+  } else if (waited > 80) {
+    console.log(`[${label}] waited ${waited}ms for sync`);
+  }
+  return waited;
+}
+
 function emitLeadNotification(userId, payload = {}) {
   if (!io || !userId) return;
   io.to(`user-${userId}`).emit("lead-notification", {
@@ -10192,11 +10208,7 @@ async function filterDataForRole(data, user) {
 /* ===== Dedicated Manager Change endpoint (clean, verified write) ===== */
 app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) => {
   try {
-    // Wait for sync to finish to avoid race condition (max 15s)
-    if (syncInProgress) {
-      const t0 = Date.now();
-      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
-    }
+    await waitForSyncBrief("POST manager", 1200);
     const leadId = Number(req.params.id);
     const { managerName, phone, name } = req.body || {};
     console.log(`[POST /api/leads/${leadId}/manager] managerName=${managerName} name=${name} phone=${phone} user=${req.user.displayName} role=${req.user.role}`);
@@ -10283,13 +10295,12 @@ app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
     console.log(`[PUT /api/leads] version=${BUILD_VERSION} body=${JSON.stringify(req.body)} user=${req.user?.displayName} role=${req.user?.role}`);
-    // Wait for sync to finish to avoid race condition (max 15s)
-    if (syncInProgress) {
-      console.log(`[PUT /api/leads] Waiting for sync to finish...`);
-      const t0 = Date.now();
-      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
-      console.log(`[PUT /api/leads] Sync wait done (${Date.now() - t0}ms)`);
-    }
+    // Chia lead chỉ chờ sync rất ngắn — trước đây max 15s làm nút "Chia lead" đơ
+    const assignHotPath = (req.user.role === "admin" || req.user.role === "manager")
+      && req.body?.saleName
+      && req.body?.status === undefined
+      && req.body?.notes === undefined;
+    await waitForSyncBrief("PUT leads", assignHotPath ? 400 : 1500);
     const leadId = Number(req.params.id);
     const phone = req.body?.phone;
     const name = req.body?.name;
@@ -10488,9 +10499,21 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     lastSyncHash = ""; // invalidate hash after any lead change
-    await refreshLeadTabDenorm(db, actualLeadId);
     emitDataChanged("update-lead");
-    // Không trả full DB — chỉ lead vừa sửa (sale/admin lưu trạng thái nhanh)
+
+    // Chia lead: trả response ngay — denorm chạy nền (tránh đơ  nút 10s)
+    if (reassigning && saleName) {
+      const updatedLead = await buildUpdatedLeadPayload(db, actualLeadId, req.user);
+      res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
+      setImmediate(() => {
+        refreshLeadTabDenorm(db, actualLeadId).catch((e) =>
+          console.error("[assign] refreshLeadTabDenorm:", e.message)
+        );
+      });
+      return;
+    }
+
+    await refreshLeadTabDenorm(db, actualLeadId);
     const updatedLead = await buildUpdatedLeadPayload(db, actualLeadId, req.user);
     res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
   } catch (err) {
@@ -10501,11 +10524,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 /* ===== Lead history (manual entry) ===== */
 app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
   try {
-    // Wait for any running sync to finish to avoid race condition (sync overwrites status)
-    if (syncInProgress) {
-      const t0 = Date.now();
-      while (syncInProgress && Date.now() - t0 < 15000) await new Promise(r => setTimeout(r, 200));
-    }
+    await waitForSyncBrief("POST history", 1200);
     const leadId = Number(req.params.id);
     const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });

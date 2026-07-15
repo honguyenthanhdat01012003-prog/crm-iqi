@@ -8907,17 +8907,56 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const handleAssignSale = async () => {
     if (!editSale) return;
     setSavingSale(true);
+    const prevSale = lead.saleName || "";
+    const prevStatus = lead.status || "new";
+    const prevRaw = lead.rawStatus || "";
+    const prevAssigned = lead.assignedAt || "";
+    // Optimistic — UI đổi ngay, không chờ API
+    applyApiData({
+      updatedLead: {
+        id: lead.id,
+        name: lead.name,
+        phone: lead.phone,
+        saleName: editSale,
+        status: "new",
+        rawStatus: "",
+        tabStatus: "new",
+        assignedAt: new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }),
+      },
+    }, { suppressNotifications: true });
+    showToast(`Đã chia cho ${editSale}`, "success");
+    setSavingSale(false);
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
         body: JSON.stringify({ saleName: editSale, phone: lead.phone }),
       });
-      const data = await r.json();
-      applyApiData(data, { suppressNotifications: true });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        applyApiData({
+          updatedLead: {
+            id: lead.id,
+            saleName: prevSale,
+            status: prevStatus,
+            rawStatus: prevRaw,
+            assignedAt: prevAssigned,
+          },
+        }, { suppressNotifications: true });
+        showToast(data.error || "Chia lead thất bại", "error");
+        return;
+      }
+      if (data.updatedLead) applyApiData(data, { suppressNotifications: true });
     } catch (e) {
-      console.error(e);
-    } finally {
-      setSavingSale(false);
+      applyApiData({
+        updatedLead: {
+          id: lead.id,
+          saleName: prevSale,
+          status: prevStatus,
+          rawStatus: prevRaw,
+          assignedAt: prevAssigned,
+        },
+      }, { suppressNotifications: true });
+      showToast("Lỗi kết nối: " + e.message, "error");
     }
   };
 
