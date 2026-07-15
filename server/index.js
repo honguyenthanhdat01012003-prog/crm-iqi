@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-push-auto-rotate-c";
+const BUILD_VERSION = "2026-07-15-pwa-nav-dash-d";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -5205,7 +5205,7 @@ function buildTrendSeries(range, leadsByDay, dailyCostMap) {
 }
 
 let dashboardCache = { at: 0, key: "", data: null };
-const DASHBOARD_CACHE_MS = 45_000;
+const DASHBOARD_CACHE_MS = 120_000;
 
 app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
   try {
@@ -5225,8 +5225,11 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       return res.json({ ...dashboardCache.data, cached: true });
     }
 
-    // Chỉ SELECT project cần thiết — tránh kéo cả DB rồi filter JS
-    let leadSql = "SELECT * FROM leads";
+    // Chỉ lấy cột cần cho KPI — SELECT * làm dashboard PWA chậm 1–2 phút
+    let leadSql = `SELECT id, project_id, name, phone, status, raw_status, admin_tab_status,
+      created_at, sale_name, manager_name, source, campaign, campaign_id, ads_id,
+      adset_name, ad_name, form_name, product, budget, deal_value
+      FROM leads`;
     const leadParams = [];
     const where = [];
     if (req.user.role === "manager") {

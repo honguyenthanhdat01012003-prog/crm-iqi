@@ -1751,6 +1751,31 @@ function CRMApp({ user, updateUser, onLogout }) {
     prefetchPausedRef.current = page === "dashboard";
   }, [page]);
 
+  // Ủ ấm cache dashboard sau boot — lần chuyển Tổng quan không phải cold-load 1–2 phút
+  useEffect(() => {
+    if (!isAdmin || !initialDataLoaded) return;
+    const key = "crm_dash_v1_month_all__";
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.at && Date.now() - parsed.at < 5 * 60 * 1000) return;
+      }
+    } catch { /* ignore */ }
+    const t = setTimeout(() => {
+      apiFetch(`${API}/dashboard?preset=month&projectId=all`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          if (!json) return;
+          try {
+            sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), data: json }));
+          } catch { /* quota */ }
+        })
+        .catch(() => {});
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [isAdmin, initialDataLoaded]);
+
   /** Prefetch scope dự án nhỏ lúc đang ở màn chọn — bỏ dự án lớn để khỏi đè chết backend. */
   const prefetchAllProjectScopes = useCallback(async () => {
     const list = Array.isArray(projects) ? projects : [];
@@ -2355,6 +2380,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     { key: "profile", label: "Tài khoản", icon: User },
   ].filter(Boolean);
 
+  const [mountedPages, setMountedPages] = useState(() => new Set([page || "leads"]));
+  useEffect(() => {
+    setMountedPages((prev) => {
+      if (prev.has(page)) return prev;
+      const next = new Set(prev);
+      next.add(page);
+      return next;
+    });
+  }, [page]);
+
   const handleMobileBottomTab = (tab) => {
     if (tab.key === "notifications") {
       setShowMobileNotif(true);
@@ -2501,7 +2536,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   return (
     <div className="crm-app-shell">
-      {!initialDataLoaded && (
+      {!initialDataLoaded && page !== "profile" && (
         <div style={{
           position: "fixed", inset: 0, zIndex: 9999,
           display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
@@ -2817,8 +2852,10 @@ function CRMApp({ user, updateUser, onLogout }) {
         {announcements.length > 0 && <AnnouncementMarquee announcements={announcements} />}
 
         <div className={`crm-content${isMobile ? " crm-content--mobile" : ""}`}>
-        {page === "dashboard" && (
-          <DashboardPage projects={projects} apiFetch={apiFetch} />
+        {mountedPages.has("dashboard") && (
+          <div style={{ display: page === "dashboard" ? undefined : "none" }} aria-hidden={page !== "dashboard"}>
+            <DashboardPage projects={projects} apiFetch={apiFetch} />
+          </div>
         )}
         {page === "leads" && (
           <LeadsPage
@@ -2878,7 +2915,11 @@ function CRMApp({ user, updateUser, onLogout }) {
         {page === "campaigns" && isAdmin && <CampaignsPage leads={leads} projects={projects} isManager={isManager} isAdminOnly={isAdminOnly} />}
         {page === "sales" && isAdmin && <SalesPage ranking={saleRanking} leads={leads} projects={projects} isAdmin={isAdminOnly} apiFetch={apiFetch} applyApiData={applyApiData} />}
         {page === "users" && isAdmin && <UsersPage projects={projects} leads={leads} isManager={isManager} isAdminOnly={isAdminOnly} />}
-        {page === "profile" && <ProfilePage user={user} updateUser={updateUser} />}
+        {mountedPages.has("profile") && (
+          <div style={{ display: page === "profile" ? undefined : "none" }} aria-hidden={page !== "profile"}>
+            <ProfilePage user={user} updateUser={updateUser} />
+          </div>
+        )}
 
         {page === "posts" && isAdmin && <PostsPage projects={projects} />}
         {page === "calendar" && isAdmin && <CalendarPage projects={projects} />}
@@ -4083,8 +4124,34 @@ function DashboardPage({ projects, apiFetch }) {
   const [projectId, setProjectId] = useState("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `crm_dash_v1_${preset}_${projectId}_${customFrom}_${customTo}`;
+  const readCache = useCallback(() => {
+    try {
+      const raw = sessionStorage.getItem(cacheKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.data || !parsed?.at) return null;
+      if (Date.now() - parsed.at > 10 * 60 * 1000) return null;
+      return parsed.data;
+    } catch {
+      return null;
+    }
+  }, [cacheKey]);
+  const [data, setData] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem(`crm_dash_v1_month_all__`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.data || Date.now() - parsed.at > 10 * 60 * 1000) return null;
+      return parsed.data;
+    } catch {
+      return null;
+    }
+  });
+  const dataRef = useRef(data);
+  dataRef.current = data;
+  const [loading, setLoading] = useState(() => !data);
+  const [refreshing, setRefreshing] = useState(false);
   const [monthlyReport, setMonthlyReport] = useState(null);
   const [slaAudit, setSlaAudit] = useState(null);
   const [slaAuditLoading, setSlaAuditLoading] = useState(false);
@@ -4093,24 +4160,43 @@ function DashboardPage({ projects, apiFetch }) {
   const [auditVerdict, setAuditVerdict] = useState("all");
 
   const loadDashboard = useCallback(async () => {
-    setLoading(true);
+    const hasData = !!dataRef.current;
+    if (hasData) setRefreshing(true);
+    else setLoading(true);
     try {
       const qs = new URLSearchParams({ preset, projectId });
       if (preset === "custom") {
         if (customFrom) qs.set("startDate", customFrom);
         if (customTo) qs.set("endDate", customTo);
       }
-      const res = await apiFetch(`${API}/dashboard?${qs}`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 45000);
+      const res = await apiFetch(`${API}/dashboard?${qs}`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (!res.ok) throw new Error("Không tải được dashboard");
-      setData(await res.json());
+      const json = await res.json();
+      setData(json);
+      try {
+        sessionStorage.setItem(cacheKey, JSON.stringify({ at: Date.now(), data: json }));
+      } catch { /* quota */ }
     } catch {
-      setData(null);
+      if (!dataRef.current) setData(null);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  }, [apiFetch, preset, projectId, customFrom, customTo]);
+  }, [apiFetch, preset, projectId, customFrom, customTo, cacheKey]);
 
-  useEffect(() => { loadDashboard(); }, [loadDashboard]);
+  useEffect(() => {
+    const cached = readCache();
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+    } else if (!dataRef.current) {
+      setLoading(true);
+    }
+    loadDashboard();
+  }, [loadDashboard, readCache]);
 
   const buildAuditQuery = useCallback(() => {
     const qs = new URLSearchParams({ preset, projectId, slaType: auditSlaType, verdict: auditVerdict });
@@ -4204,11 +4290,11 @@ function DashboardPage({ projects, apiFetch }) {
   ];
 
   return (
-    <div className="crm-dashboard">
-      {loading && (
-        <div className="crm-dash-loading">
-          <RefreshCw size={40} className="crm-dash-loading__icon" />
-          <span>Đang tải dữ liệu…</span>
+    <div className="crm-dashboard" style={{ position: "relative", minHeight: 240 }}>
+      {(loading || refreshing) && (
+        <div className={`crm-dash-loading${data && refreshing ? " crm-dash-loading--soft" : ""}`}>
+          <RefreshCw size={data ? 22 : 40} className="crm-dash-loading__icon" />
+          <span>{data ? "Đang cập nhật…" : "Đang tải dữ liệu…"}</span>
         </div>
       )}
 
@@ -5810,7 +5896,7 @@ const LeadsPage = (props) => {
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, color: "#64748b", fontSize: 11, fontWeight: 600 }}>
                       <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{lead.phone || "-"} • {projectMap[lead.projectId] || "-"}</span>
-                      <span>{lead.createdAt || "-"}</span>
+                      {!isSale && <span>{lead.createdAt || "-"}</span>}
                     </div>
                   </div>
                 )) : (
@@ -8498,10 +8584,10 @@ const LeadsPage = (props) => {
       ) : (!isAdmin || isMobile) ? (
         <div className={isMobile ? "crm-lead-cards-mobile-shell" : "crm-lead-cards-stack"}>
           {isMobile && (
-            <div className="crm-lead-cards-mobile-header">
+            <div className="crm-lead-cards-mobile-header" style={!isSale ? undefined : { gridTemplateColumns: "1fr 76px" }}>
               <span>Khách hàng</span>
               <span>Trạng thái</span>
-              <span style={{ textAlign: "right" }}>Giờ</span>
+              {!isSale && <span style={{ textAlign: "right" }}>Giờ</span>}
             </div>
           )}
           {paginatedLeads.map((l) => {
@@ -8516,7 +8602,7 @@ const LeadsPage = (props) => {
               ].filter(Boolean).join(" ")} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : undefined}>
                 {isMobile ? (
                   <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
-                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
+                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: isSale ? "1fr 76px 28px" : "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
                     <span style={{ minWidth: 0 }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
@@ -8533,7 +8619,7 @@ const LeadsPage = (props) => {
                       <StatusBadge status={l.status} size="sm" />
                     </span>
                     <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
-                      {formatMobileLeadTime(l.createdAt)}
+                      {!isSale && formatMobileLeadTime(l.createdAt)}
                       {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                     </span>
                   </button>
@@ -8628,6 +8714,7 @@ const LeadsPage = (props) => {
                     <MobileLeadSummary
                       lead={l}
                       isAdmin={isAdmin}
+                      isSale={isSale}
                       onCall={(e) => {
                         e.stopPropagation();
                         const href = telHref(l.phone);
@@ -8761,10 +8848,10 @@ const LeadsPage = (props) => {
   );
 }
 
-function MobileLeadSummary({ lead, isAdmin, onCall, onZalo, onToggleDetail }) {
+function MobileLeadSummary({ lead, isAdmin, isSale, onCall, onZalo, onToggleDetail }) {
   const summaryRows = [
     { label: "Nhu cầu", value: lead.product || "-" },
-    { label: "Thời gian nhận lead", value: lead.createdAt || "-" },
+    ...(!isSale ? [{ label: "Thời gian nhận lead", value: lead.createdAt || "-" }] : []),
     ...(lead.phone2 ? [{ label: "SĐT phụ 1", value: lead.phone2 }] : []),
     ...(lead.phone3 ? [{ label: "SĐT phụ 2", value: lead.phone3 }] : []),
     ...(lead.adminNote ? [{ label: "Ghi chú Admin", value: lead.adminNote }] : []),
@@ -10388,28 +10475,28 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
                     <Building2 size={18} color="#64748b" style={{ flexShrink: 0 }} />
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1.35fr .65fr .75fr 1fr", border: "1px solid #eef2f7", borderRadius: 9, overflow: "hidden", marginBottom: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                     {metricItems.map((item) => (
-                      <div key={item.label} style={{ background: "#f8fafc", borderRight: item.label === "CPL" ? "none" : "1px solid #eef2f7", padding: "7px 6px", minWidth: 0, textAlign: "center" }}>
-                        <div style={{ fontSize: 8, color: "#64748b", fontWeight: 900, textTransform: "uppercase", marginBottom: 4, whiteSpace: "nowrap" }}>{item.label}</div>
-                        <div style={{ fontSize: 10, color: "#0f172a", fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
+                      <div key={item.label} style={{ background: "#f8fafc", border: "1px solid #eef2f7", borderRadius: 10, padding: "10px 12px", minWidth: 0 }}>
+                        <div style={{ fontSize: 11, color: "#64748b", fontWeight: 750, marginBottom: 4 }}>{item.label}</div>
+                        <div style={{ fontSize: 14, color: "#0f172a", fontWeight: 850, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.value}</div>
                       </div>
                     ))}
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: isAdminOnly ? (p.isLegacy ? "1fr 1fr" : "1fr 1fr 1fr") : "1fr", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, overflowX: "auto", WebkitOverflowScrolling: "touch", paddingBottom: 2 }}>
                     {!p.isLegacy && (
                       <button
                         onClick={() => syncOne(p.id)}
                         disabled={!!syncingId}
-                        style={{ ...mobileActionBtn, color: "#fff", background: "#d97706", borderColor: "#d97706", opacity: syncingId ? 0.65 : 1 }}
+                        style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 96, color: "#fff", background: "#d97706", borderColor: "#d97706", opacity: syncingId ? 0.65 : 1 }}
                       >
                         {isSyncing ? <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> : <RefreshCw size={13} />}
                         {isSyncing ? "Đang sync" : "Sync"}
                       </button>
                     )}
-                    {isAdminOnly && <button onClick={() => openEditProject(p)} style={mobileActionBtn}><Pencil size={13} /> Sửa</button>}
-                    {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...mobileActionBtn, color: "#dc2626", background: "#fff7f7", borderColor: "#fecaca" }}><Trash2 size={13} /> Xóa</button>}
+                    {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 84 }}><Pencil size={13} /> Sửa</button>}
+                    {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 84, color: "#dc2626", background: "#fff7f7", borderColor: "#fecaca" }}><Trash2 size={13} /> Xóa</button>}
                   </div>
                 </div>
               </article>
@@ -14423,7 +14510,12 @@ function ProfilePage({ user, updateUser }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
-  const [draft, setDraft] = useState({ avatarUrl: "", email: "", phone: "", telegramId: "" });
+  const [draft, setDraft] = useState({
+    avatarUrl: user?.avatarUrl || "",
+    email: user?.email || "",
+    phone: user?.phone || "",
+    telegramId: user?.telegramId || "",
+  });
   const [cropSrc, setCropSrc] = useState(null);
   const [showLightbox, setShowLightbox] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -14451,15 +14543,32 @@ function ProfilePage({ user, updateUser }) {
   const allPwdValid = Object.values(pwdValid).every(Boolean);
 
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
     (async () => {
       try {
-        const r = await apiFetch(`${API}/profile`);
+        const r = await apiFetch(`${API}/profile`, { signal: controller.signal });
         const data = await r.json();
+        if (cancelled) return;
         setProfile(data);
-        setDraft({ avatarUrl: data.avatarUrl || "", email: data.email || "", phone: data.phone || "", telegramId: data.telegramId || "" });
-      } catch { }
-      setLoading(false);
+        setDraft({
+          avatarUrl: data.avatarUrl || "",
+          email: data.email || "",
+          phone: data.phone || "",
+          telegramId: data.telegramId || "",
+        });
+      } catch { /* giữ shell từ user prop */ }
+      finally {
+        clearTimeout(timeout);
+        if (!cancelled) setLoading(false);
+      }
     })();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   const handleAvatarFile = (file) => {
@@ -14517,7 +14626,8 @@ function ProfilePage({ user, updateUser }) {
     </div>
   );
 
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải...</div>;
+  // Hiện shell từ user ngay — không xoay trắng đợi /api/profile
+  if (loading && !user) return <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>Đang tải...</div>;
 
   return (
     <div style={{ maxWidth: 600, margin: "0 auto" }}>
