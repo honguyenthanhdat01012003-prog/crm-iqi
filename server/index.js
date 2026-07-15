@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-sale-empty-cache-fix-a";
+const BUILD_VERSION = "2026-07-15-scope-oom-guard-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3366,14 +3366,47 @@ async function buildUpdatedLeadPayload(db, leadId, user = null) {
 }
 
 /** Load toàn bộ lead trong scope (1 dự án / filter) — không history, dùng hybrid cache client. */
+/** Giới hạn lead/scope — tránh OOM làm Node chết (aaPanel hiện Stopped). */
+const SCOPE_HARD_MAX = Math.max(200, Number(process.env.SCOPE_HARD_MAX) || 2000);
+let scopeInflightCount = 0;
+const SCOPE_MAX_CONCURRENT = Math.max(1, Number(process.env.SCOPE_MAX_CONCURRENT) || 2);
+
 async function queryLeadsScope(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
   const salePerspectiveName = isAdminSalePerspective(f) ? f.saleFilter : null;
-  // Leads trước — tabCounts song song nhưng không chặn nếu chậm
-  const leadRowsP = all(db, `SELECT * FROM leads ${where} ORDER BY id DESC`, params);
+
+  const countRow = await get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params);
+  const total = Number(countRow?.c) || 0;
   const projectRowsP = all(db, "SELECT * FROM projects ORDER BY id ASC");
   const tabCountsP = queryLeadsTabCounts(db, user, f).catch(() => ({ all: 0 }));
+
+  // Quá lớn: trả page đầu + cờ truncated → client dùng phân trang server, không dump hết RAM
+  if (total > SCOPE_HARD_MAX) {
+    const leadRows = await all(
+      db,
+      `SELECT * FROM leads ${where} ORDER BY id DESC LIMIT ?`,
+      [...params, Math.min(100, SCOPE_HARD_MAX)]
+    );
+    const projectRows = await projectRowsP;
+    const pageData = await finishLeadsPage(db, leadRows, total, projectRows, user, {
+      salePerspectiveName,
+      skipHistory: true,
+    });
+    const tabCounts = await tabCountsP;
+    console.warn(
+      `[scope] truncated ${total}→${leadRows.length} (max=${SCOPE_HARD_MAX}) user=${user?.displayName} project=${f.projectId || "all"}`
+    );
+    return {
+      ...pageData,
+      leadsTotal: total,
+      tabCounts: tabCounts?.all != null ? tabCounts : { all: total },
+      scopeTooLarge: true,
+      paginated: true,
+    };
+  }
+
+  const leadRowsP = all(db, `SELECT * FROM leads ${where} ORDER BY id DESC`, params);
   const [leadRows, projectRows] = await Promise.all([leadRowsP, projectRowsP]);
   const pageData = await finishLeadsPage(db, leadRows, leadRows.length, projectRows, user, {
     salePerspectiveName,
@@ -5911,6 +5944,12 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
       const waitStart = Date.now();
       while (syncInProgress && Date.now() - waitStart < 3000) await new Promise((r) => setTimeout(r, 100));
     }
+    if (scopeInflightCount >= SCOPE_MAX_CONCURRENT) {
+      return res.status(503).json({
+        error: "Server đang tải danh sách lead — thử lại sau vài giây",
+        retry: true,
+      });
+    }
     const { filters } = parseLeadsFilters(req);
     const f = { ...filters, statusTab: "all", statusFilter: "all" };
     const cacheKey = scopeCacheKey(req.user, f);
@@ -5918,24 +5957,38 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     if (scopeResponseCache.key === cacheKey && scopeResponseCache.data && now - scopeResponseCache.at < SCOPE_RESPONSE_CACHE_MS) {
       return res.json({ ...scopeResponseCache.data, cached: true });
     }
-    const scopeData = await queryLeadsScope(db, req.user, f);
+    scopeInflightCount += 1;
+    let scopeData;
+    try {
+      scopeData = await queryLeadsScope(db, req.user, f);
+    } finally {
+      scopeInflightCount = Math.max(0, scopeInflightCount - 1);
+    }
+    const tooLarge = !!scopeData.scopeTooLarge;
     const payload = {
       leads: scopeData.leads,
       leadsTotal: scopeData.leadsTotal,
       tabCounts: scopeData.tabCounts,
       phoneRegistrations: scopeData.phoneRegistrations,
-      paginated: false,
-      scope: true,
+      paginated: tooLarge || !!scopeData.paginated,
+      scope: !tooLarge,
+      scopeTooLarge: tooLarge,
       hash: String(dataVersion),
       version: dataVersion,
       noChange: false,
     };
     stripLeadsForClient(payload);
-    scopeResponseCache = { at: now, key: cacheKey, data: payload };
+    // Không cache bản truncated/huge — tránh giữ payload lớn trong RAM lâu
+    if (!tooLarge) {
+      scopeResponseCache = { at: now, key: cacheKey, data: payload };
+    }
     res.json(payload);
     const totalMs = Date.now() - t0;
-    if (totalMs > 800) {
-      console.log(`[GET /api/data/scope] ${totalMs}ms — ${scopeData.leadsTotal} leads (user=${req.user?.displayName})`);
+    if (totalMs > 800 || tooLarge) {
+      console.log(
+        `[GET /api/data/scope] ${totalMs}ms — ${scopeData.leadsTotal} leads` +
+          `${tooLarge ? " (truncated)" : ""} (user=${req.user?.displayName})`
+      );
     }
   } catch (err) {
     console.error("[GET /api/data/scope]", err?.message || err, err?.stack);
@@ -14821,6 +14874,7 @@ if (!process.env.VERCEL) {
 
   server.listen(PORT, () => {
     console.log(`CRM API running at http://localhost:${PORT} [BUILD ${BUILD_VERSION}]`);
+    console.log(`[scope] hard max=${SCOPE_HARD_MAX} concurrent=${SCOPE_MAX_CONCURRENT}`);
     const distCheck = verifyDistBundle();
     if (distCheck.ok) {
       console.log(`[dist] OK — ${distCheck.jsBundle}${distCheck.cssBundle ? ` + ${distCheck.cssBundle}` : ""}`);

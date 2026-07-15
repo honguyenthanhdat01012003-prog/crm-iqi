@@ -1310,11 +1310,30 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
 
   const applyScopePayload = useCallback((data, cacheKey) => {
+    if (!data || !Array.isArray(data.leads)) return;
+    // Scope rỗng nhưng leadsTotal > 0 = response lỗi/đứt — không ghi đè list
+    if (data.leads.length === 0 && Number(data.leadsTotal) > 0) return;
+    // Scope rỗng trong khi list đang có data và total không xác nhận 0 — giữ lite/cache
+    if (data.leads.length === 0 && (leadsRef.current?.length || 0) > 0 && Number(data.leadsTotal) !== 0) {
+      return;
+    }
+    // Dự án quá lớn: dùng phân trang server, không bật local scope mode
+    if (data.leads.length > 0 && (data.scopeTooLarge || data.paginated === true || data.scope === false)) {
+      applyApiData(data, { suppressNotifications: true });
+      leadsRef.current = data.leads;
+      setLeadsScopeMode(false);
+      leadsScopeModeRef.current = false;
+      if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
+        stableTabCountsRef.current = data.tabCounts;
+        setServerTabCounts(data.tabCounts);
+      }
+      return;
+    }
     scopeCacheKeyRef.current = cacheKey;
     setLeadsScopeMode(true);
     leadsScopeModeRef.current = true;
     applyApiData(data, { suppressNotifications: true });
-    if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+    leadsRef.current = data.leads;
     if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
       stableTabCountsRef.current = data.tabCounts;
       setServerTabCounts(data.tabCounts);
@@ -1350,8 +1369,14 @@ function CRMApp({ user, updateUser, onLogout }) {
           window.location.reload();
           return null;
         }
+        // 503 = server đang bận scope khác — không coi là list rỗng
+        if (r.status === 503) return null;
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
+        // Scope truncated / paginated: không vào full-scope cache
+        if (data?.scopeTooLarge || data?.paginated === true || data?.scope === false) {
+          return data;
+        }
         setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data, { userKey });
         return data;
       } finally {
@@ -1659,15 +1684,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     prefetchPausedRef.current = page === "dashboard";
   }, [page]);
 
-  /** Prefetch scope mọi dự án lúc đang ở màn chọn → ấn vào là có cache. */
+  /** Prefetch scope dự án nhỏ lúc đang ở màn chọn — bỏ dự án lớn để khỏi đè chết backend. */
   const prefetchAllProjectScopes = useCallback(async () => {
     const list = Array.isArray(projects) ? projects : [];
     if (!list.length) return;
     const userKey = scopeUserKey(user);
     const counts = projectLeadCounts?.byProject || {};
-    const ordered = [...list].sort(
-      (a, b) => (Number(counts[a.id]) || 0) - (Number(counts[b.id]) || 0)
-    );
+    const PREFETCH_MAX_LEADS = 800;
+    const ordered = [...list]
+      .filter((p) => (Number(counts[p.id]) || 0) > 0 && (Number(counts[p.id]) || 0) <= PREFETCH_MAX_LEADS)
+      .sort((a, b) => (Number(counts[a.id]) || 0) - (Number(counts[b.id]) || 0));
 
     for (const proj of ordered) {
       while (prefetchPausedRef.current) {
@@ -1695,7 +1721,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       } catch (err) {
         console.warn("[CRM] prefetch scope failed:", pid, err?.message || err);
       }
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 700));
     }
   }, [projects, projectLeadCounts, user, fetchAndCacheScope, buildScopeUrlFor]);
 
@@ -1797,16 +1823,15 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       }
 
+      // Đổi dự án: tắt scope mode cũ (tránh lọc nhầm lead dự án khác thành 0)
+      setLeadsScopeMode(false);
+      leadsScopeModeRef.current = false;
       setLeads([]);
       leadsRef.current = [];
       setLeadsTotal(0);
-      setServerTabCounts({ all: 0 });
-      stableTabCountsRef.current = { all: 0 };
-      setLeadsScopeMode(false);
-      leadsScopeModeRef.current = false;
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
 
-      // Lite + scope song song — lite paint trước, scope thay khi xong
+      // Lite + scope song song — lite paint trước, scope chỉ thay khi có lead thật
       const liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
       const scopeP = fetchAndCacheScope(cacheKey, buildScopeUrlFor(selectedProject), userKey);
 
@@ -1818,9 +1843,13 @@ function CRMApp({ user, updateUser, onLogout }) {
         const scopeData = await scopeP;
         if (projectLoadSeqRef.current !== seq) return;
         if (scopeData) applyScopePayload(scopeData, cacheKey);
+        else if (!lite?.leads?.length) {
+          showToast("Không tải được danh sách khách — backend có thể đang tắt. Thử refresh hoặc bật lại Node.", "error");
+        }
       } catch (err) {
         console.warn("[CRM] scope after lite failed:", err?.message || err);
-        if (lite) void fetchLeadScope({ background: true, skipCacheRead: true });
+        if (lite?.leads?.length) void fetchLeadScope({ background: true, skipCacheRead: true });
+        else showToast("Không tải được danh sách khách — kiểm tra backend đang chạy.", "error");
       }
     })();
   }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor]);
