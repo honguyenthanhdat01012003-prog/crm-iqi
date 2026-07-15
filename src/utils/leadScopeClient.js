@@ -175,11 +175,22 @@ export function getClientScopeCacheEntry(cache, cacheKey) {
     cache.delete(cacheKey);
     return null;
   }
+  // Cache rỗng không dùng — tránh sale mở dự án thấy 0 vì prefetch lúc chưa có lead
+  if (!Array.isArray(entry.data?.leads) || entry.data.leads.length === 0) {
+    cache.delete(cacheKey);
+    return null;
+  }
   return entry;
 }
 
 export function setClientScopeCacheEntry(cache, cacheKey, data, opts = {}) {
   if (!cache || !cacheKey || !data) return;
+  // Không persist/cache scope trống
+  if (!Array.isArray(data.leads) || data.leads.length === 0) {
+    cache.delete(cacheKey);
+    if (opts.userKey) void deleteScopeDiskCache(opts.userKey, cacheKey);
+    return;
+  }
   cache.set(cacheKey, { at: Date.now(), data });
   if (cache.size > CLIENT_SCOPE_CACHE_MAX) {
     const oldest = [...cache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
@@ -256,6 +267,11 @@ export async function readScopeDiskCache(userKey, cacheKey) {
       void deleteScopeDiskCache(userKey, cacheKey);
       return null;
     }
+    // Bỏ qua cache rỗng đã lưu trước đó
+    if (!Array.isArray(entry.data.leads) || entry.data.leads.length === 0) {
+      void deleteScopeDiskCache(userKey, cacheKey);
+      return null;
+    }
     return { at: entry.at, data: entry.data };
   } catch {
     return null;
@@ -263,7 +279,7 @@ export async function readScopeDiskCache(userKey, cacheKey) {
 }
 
 export async function writeScopeDiskCache(userKey, cacheKey, data) {
-  if (!userKey || !cacheKey || !data || !Array.isArray(data.leads)) return;
+  if (!userKey || !cacheKey || !data || !Array.isArray(data.leads) || data.leads.length === 0) return;
   try {
     let size = 0;
     try {

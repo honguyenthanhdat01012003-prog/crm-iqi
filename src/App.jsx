@@ -36,6 +36,7 @@ import {
 import {
   buildScopeCacheKey,
   clearAllScopeDiskCache,
+  deleteScopeDiskCache,
   computeTabCountsFromLeads,
   filterLeadsScope,
   getClientScopeCacheEntry,
@@ -1212,15 +1213,30 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (data.lastSync) setLastSync(data.lastSync);
       return;
     }
-    // Targeted single-lead update (e.g. manager change)
+    // Targeted single-lead update (e.g. manager change / sale lưu trạng thái)
     if (data.updatedLead) {
       const updatedId = Number(data.updatedLead.id);
       if (updatedId) knownLeadIdsRef.current.add(updatedId);
-      setLeads(prev => (Array.isArray(prev) ? prev : []).map(l =>
-        (l.id === data.updatedLead.id || (data.updatedLead.name && l.name === data.updatedLead.name && l.phone === data.updatedLead.phone))
-          ? { ...l, ...data.updatedLead }
-          : l
-      ));
+      setLeads((prev) => {
+        const list = Array.isArray(prev) ? prev : [];
+        const idx = list.findIndex((l) =>
+          l.id === data.updatedLead.id
+          || (data.updatedLead.name && l.name === data.updatedLead.name && l.phone === data.updatedLead.phone)
+        );
+        if (idx >= 0) {
+          const next = list.slice();
+          next[idx] = { ...next[idx], ...data.updatedLead };
+          leadsRef.current = next;
+          return next;
+        }
+        // Lead mới vừa được chia cho sale đang xem — thêm vào list
+        const next = [data.updatedLead, ...list];
+        leadsRef.current = next;
+        return next;
+      });
+      if (data.updatedLead.tabStatus || data.updatedLead.status) {
+        setLeadsTotal((t) => Math.max(Number(t) || 0, (leadsRef.current || []).length));
+      }
       return;
     }
     if (data.hash) setSyncHash(String(data.hash));
@@ -1848,15 +1864,16 @@ function CRMApp({ user, updateUser, onLogout }) {
       showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
-      if (user.role === "sale" && !selectedProject) return;
-      if (selectedProject === "personal") return;
-      // Debounce — tránh nhiều lần lưu/chia liên tiếp spamming full scope refresh
+      // Luôn xóa cache RAM + disk của user — sale đứng màn chọn cũng phải nhận lead mới
+      invalidateClientScopeCache(clientScopeCacheRef.current);
+      void deleteScopeDiskCache(scopeUserKey(user));
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       dataChangedTimerRef.current = setTimeout(() => {
-        invalidateClientScopeCache(clientScopeCacheRef.current);
-        fetchLeadScope({ background: true, skipCacheRead: true });
         fetchProjectLeadCounts();
-      }, 1200);
+        if (user.role === "sale" && !selectedProject) return;
+        if (selectedProject === "personal") return;
+        fetchLeadScope({ background: true, skipCacheRead: true });
+      }, 600);
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => {
@@ -1883,12 +1900,12 @@ function CRMApp({ user, updateUser, onLogout }) {
           markApiOk();
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
-            if (user.role !== "sale" || selectedProject) {
-              if (selectedProject !== "personal") {
-                invalidateClientScopeCache(clientScopeCacheRef.current);
-                fetchLeadScope({ background: true, skipCacheRead: true });
-              }
-            }
+            if (selectedProject === "personal") return;
+            invalidateClientScopeCache(clientScopeCacheRef.current);
+            void deleteScopeDiskCache(scopeUserKey(user));
+            fetchProjectLeadCounts();
+            if (user.role === "sale" && !selectedProject) return;
+            fetchLeadScope({ background: true, skipCacheRead: true });
           }
         })
         .catch(() => markConnectivityFailure());
@@ -8588,7 +8605,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [messengerConvs, setMessengerConvs] = useState([]);
   const [messengerLoading, setMessengerLoading] = useState(false);
   const [messengerError, setMessengerError] = useState("");
-  const [messengerOpen, setMessengerOpen] = useState(true);
+  const [messengerOpen, setMessengerOpen] = useState(false);
   const [activeMessengerConv, setActiveMessengerConv] = useState(null);
   const [messengerMsgs, setMessengerMsgs] = useState([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);

@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-fast-mutations-dash-a";
+const BUILD_VERSION = "2026-07-15-sale-empty-cache-fix-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -10014,12 +10014,14 @@ app.get("/api/leads/schedules/:id/detail", requireAuth, requireAdmin, async (req
 
 /* ===== Lead updates ===== */
 function matchSaleName(leadSaleName, userDisplayName) {
-  const sn = (leadSaleName || "").toLowerCase().trim();
-  const dn = (userDisplayName || "").toLowerCase().trim();
-  if (!sn || sn === "chưa chia") return false;
+  const sn = normalizePersonNameServer(leadSaleName);
+  const dn = normalizePersonNameServer(userDisplayName);
+  if (!sn || sn === "chua chia") return false;
+  if (!dn) return false;
   if (sn === dn) return true;
+  // Cho phép khớp gần: mọi từ trong tên user đều nằm trong sale_name
   const dnWords = dn.split(/\s+/).filter(Boolean);
-  return dnWords.every(w => sn.includes(w));
+  return dnWords.length > 0 && dnWords.every((w) => sn.includes(w));
 }
 
 /** Chỉ sale đang phụ trách (sale_name hiện tại) mới được cập nhật — sale bị thu hồi SLA bị chặn. */
