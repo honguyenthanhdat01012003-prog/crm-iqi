@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-scope-oom-guard-a";
+const BUILD_VERSION = "2026-07-15-sale-picker-load-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3367,9 +3367,9 @@ async function buildUpdatedLeadPayload(db, leadId, user = null) {
 
 /** Load toàn bộ lead trong scope (1 dự án / filter) — không history, dùng hybrid cache client. */
 /** Giới hạn lead/scope — tránh OOM làm Node chết (aaPanel hiện Stopped). */
-const SCOPE_HARD_MAX = Math.max(200, Number(process.env.SCOPE_HARD_MAX) || 2000);
+const SCOPE_HARD_MAX = Math.max(200, Number(process.env.SCOPE_HARD_MAX) || 1200);
 let scopeInflightCount = 0;
-const SCOPE_MAX_CONCURRENT = Math.max(1, Number(process.env.SCOPE_MAX_CONCURRENT) || 2);
+const SCOPE_MAX_CONCURRENT = Math.max(1, Number(process.env.SCOPE_MAX_CONCURRENT) || 1);
 
 async function queryLeadsScope(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
@@ -5948,6 +5948,16 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
       return res.status(503).json({
         error: "Server đang tải danh sách lead — thử lại sau vài giây",
         retry: true,
+      });
+    }
+    // Tránh OOM: nếu Node đã ngốn RAM lớn, trả lite-friendly 503 thay vì SELECT * dump
+    const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
+    if (heapMb > 450) {
+      console.warn(`[GET /api/data/scope] skip heap=${heapMb}MB`);
+      return res.status(503).json({
+        error: "Server đang quá tải bộ nhớ — dùng phân trang / thử lại",
+        retry: true,
+        heapMb,
       });
     }
     const { filters } = parseLeadsFilters(req);
@@ -14845,6 +14855,14 @@ if (fs.existsSync(distPath)) {
 
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
+  // Không để lỗi nền (sync/SLA) làm Node thoát → aaPanel hiện Stopped
+  process.on("uncaughtException", (err) => {
+    console.error("[FATAL] uncaughtException:", err?.stack || err);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[FATAL] unhandledRejection:", reason);
+  });
+
   const server = http.createServer(app);
   io = new SocketIOServer(server, { cors: corsOptions });
 
@@ -14913,11 +14931,15 @@ if (!process.env.VERCEL) {
     }, 3000);
   });
 
-  // Auto-sync Google Sheets (default 30s, configurable via SYNC_INTERVAL_MS)
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 30 * 1000;
+  // Auto-sync Google Sheets (default 90s — 30s quá dày dễ OOM/khóa DB trên VPS nhỏ)
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 90 * 1000;
   let isSyncing = false;
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
+    if (scopeInflightCount > 0) {
+      console.log(`[${label}] Skip — scope đang chạy`);
+      return;
+    }
     isSyncing = true;
     try {
       console.log(`[${label}] Starting...`);
@@ -14929,9 +14951,9 @@ if (!process.env.VERCEL) {
       isSyncing = false;
     }
   };
-  setTimeout(() => runAutoSync("auto-sync-boot"), 15000);
+  setTimeout(() => runAutoSync("auto-sync-boot"), 45000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 15s`);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 45s`);
 
   // Lịch chia lead — chạy nền, không block GET /api/data
   setInterval(async () => {

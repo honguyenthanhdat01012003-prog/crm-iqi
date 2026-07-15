@@ -1690,7 +1690,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!list.length) return;
     const userKey = scopeUserKey(user);
     const counts = projectLeadCounts?.byProject || {};
-    const PREFETCH_MAX_LEADS = 800;
+    const PREFETCH_MAX_LEADS = 400;
     const ordered = [...list]
       .filter((p) => (Number(counts[p.id]) || 0) > 0 && (Number(counts[p.id]) || 0) <= PREFETCH_MAX_LEADS)
       .sort((a, b) => (Number(counts[a.id]) || 0) - (Number(counts[b.id]) || 0));
@@ -1742,15 +1742,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
 
-  // Sau khi có danh sách dự án: prefetch nền (ưu tiên khi đang ở màn chọn)
+  // Prefetch nhẹ — chỉ khi đã vào 1 dự án (không prefetch lúc sale còn ở màn card ngoài)
   useEffect(() => {
     if (!initialDataLoaded || !projects.length) return;
+    if (!selectedProject || selectedProject === "personal") return;
     if (prefetchStartedRef.current) return;
     prefetchStartedRef.current = true;
-    const delay = selectedProject ? 2500 : 600;
     const t = setTimeout(() => {
       void prefetchAllProjectScopes();
-    }, delay);
+    }, 8000);
     return () => clearTimeout(t);
   }, [initialDataLoaded, projects, selectedProject, prefetchAllProjectScopes]);
 
@@ -1772,13 +1772,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       userId: userKey,
     });
 
-    // Mount lần đầu: runBootLoad lo; chỉ ghi key
+    // Mount lần đầu: boot chỉ load nếu đã có selectedProject sẵn (admin/"all" hoặc sale nhớ dự án).
+    // Sale click card ngoài từ màn picker: prev rỗng → PHẢI load (trước đây return sớm → list trắng).
     if (!prevScopeKeyRef.current) {
       prevScopeKeyRef.current = cacheKey;
+      const saleFirstPick = user.role === "sale" && !!selectedProject && selectedProject !== "personal";
+      const emptyNeedsLoad = (leadsRef.current?.length || 0) === 0 && !!selectedProject && selectedProject !== "personal";
+      if (!saleFirstPick && !emptyNeedsLoad) return;
+      // fall through → load dự án vừa chọn
+    } else if (prevScopeKeyRef.current === cacheKey) {
       return;
+    } else {
+      prevScopeKeyRef.current = cacheKey;
     }
-    if (prevScopeKeyRef.current === cacheKey) return;
-    prevScopeKeyRef.current = cacheKey;
 
     ++fetchSeqRef.current;
     ++tabCountsSeqRef.current;
@@ -1831,25 +1837,36 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeadsTotal(0);
       leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
 
-      // Lite + scope song song — lite paint trước, scope chỉ thay khi có lead thật
-      const liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
-      const scopeP = fetchAndCacheScope(cacheKey, buildScopeUrlFor(selectedProject), userKey);
-
-      const lite = await liteP;
+      // Lite trước (nhẹ) → mới scope nền. Không đụng song song để khỏi đè chết backend.
+      let lite = null;
+      try {
+        lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+      } catch (err) {
+        console.warn("[CRM] lite after project change failed:", err?.message || err);
+      }
       if (projectLoadSeqRef.current !== seq) return;
       setLeadsFetching(false);
 
+      if (!lite?.leads?.length) {
+        // Thử lại lite 1 lần — thường là lúc Node vừa restart
+        await new Promise((r) => setTimeout(r, 800));
+        if (projectLoadSeqRef.current !== seq) return;
+        lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+        if (projectLoadSeqRef.current !== seq) return;
+      }
+
+      if (!lite?.leads?.length) {
+        showToast("Không tải được danh sách khách — kiểm tra backend đang chạy trên aaPanel.", "error");
+        return;
+      }
+
+      // Scope full nền (không chặn UI). Lỗi/503 thì giữ lite.
       try {
-        const scopeData = await scopeP;
+        const scopeData = await fetchAndCacheScope(cacheKey, buildScopeUrlFor(selectedProject), userKey);
         if (projectLoadSeqRef.current !== seq) return;
         if (scopeData) applyScopePayload(scopeData, cacheKey);
-        else if (!lite?.leads?.length) {
-          showToast("Không tải được danh sách khách — backend có thể đang tắt. Thử refresh hoặc bật lại Node.", "error");
-        }
       } catch (err) {
         console.warn("[CRM] scope after lite failed:", err?.message || err);
-        if (lite?.leads?.length) void fetchLeadScope({ background: true, skipCacheRead: true });
-        else showToast("Không tải được danh sách khách — kiểm tra backend đang chạy.", "error");
       }
     })();
   }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor]);
@@ -7912,7 +7929,7 @@ const LeadsPage = (props) => {
               </button>
               <select value={selectedProject || "all"} onChange={(e) => { setSelectedProject(e.target.value); setCurrentPage(1); }} style={{ minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: 14, color: "#0f172a", fontWeight: 850 }}>
                 {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
-                {availableProjects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                {availableProjects.map((p) => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
               </select>
               <span style={{ fontSize: 13, color: "#0f3d1e", fontWeight: 900 }}>{leads.length} khách</span>
             </div>
@@ -8113,7 +8130,7 @@ const LeadsPage = (props) => {
             >
               {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
               {availableProjects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+                <option key={p.id} value={String(p.id)}>{p.name}</option>
               ))}
             </select>
           </div>
