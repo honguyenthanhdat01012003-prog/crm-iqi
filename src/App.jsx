@@ -8407,7 +8407,7 @@ const LeadsPage = (props) => {
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <NewLeadBadge />}
-                        {isShuffleLead(l) && <ShuffleLeadBadge />}
+                        {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                         {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
@@ -8430,7 +8430,7 @@ const LeadsPage = (props) => {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <NewLeadBadge />}
-                      {isShuffleLead(l) && <ShuffleLeadBadge />}
+                      {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
