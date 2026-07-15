@@ -1421,24 +1421,35 @@ function CRMApp({ user, updateUser, onLogout }) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 120000);
       try {
-        const r = await fetch(url, { headers: authHeaders(), signal: controller.signal });
-        clearTimeout(timeout);
-        if (r.status === 401) {
-          localStorage.removeItem("crm_token");
-          localStorage.removeItem("crm_user");
-          window.location.reload();
-          return null;
-        }
-        // 503 = server đang bận scope khác — không coi là list rỗng
-        if (r.status === 503) return null;
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const data = await r.json();
-        // Scope truncated / paginated: không vào full-scope cache
-        if (data?.scopeTooLarge || data?.paginated === true || data?.scope === false) {
+        let lastStatus = 0;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const r = await fetch(url, { headers: authHeaders(), signal: controller.signal });
+          lastStatus = r.status;
+          if (r.status === 401) {
+            localStorage.removeItem("crm_token");
+            localStorage.removeItem("crm_user");
+            window.location.reload();
+            return null;
+          }
+          // 503 = server đang bận scope khác / heap cao — retry backoff
+          if (r.status === 503) {
+            await new Promise((res) => setTimeout(res, 600 + attempt * 700));
+            continue;
+          }
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          // Scope truncated / paginated: không vào full-scope cache
+          if (data?.scopeTooLarge || data?.paginated === true || data?.scope === false) {
+            return data;
+          }
+          setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data, { userKey });
           return data;
         }
-        setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, data, { userKey });
-        return data;
+        if (lastStatus === 503) {
+          console.warn("[CRM] scope still busy after retries:", cacheKey);
+          return null;
+        }
+        return null;
       } finally {
         clearTimeout(timeout);
         scopeInflightRef.current.delete(cacheKey);
@@ -1747,13 +1758,14 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, []);
 
   useEffect(() => {
-    // Dashboard/sync nặng — tạm dừng prefetch để khỏi tranh DB
-    prefetchPausedRef.current = page === "dashboard";
-  }, [page]);
+    // Pause khi đang fetch lead hoặc đang trên dashboard (tránh tranh SQLite)
+    prefetchPausedRef.current = page === "dashboard" || !!leadsFetching;
+  }, [page, leadsFetching]);
 
-  // Ủ ấm cache dashboard sau boot — lần chuyển Tổng quan không phải cold-load 1–2 phút
+  // Dashboard warm chỉ khi đang ở Tổng quan và list lead đã xong — không chạy lúc đang xem khách
   useEffect(() => {
     if (!isAdmin || !initialDataLoaded) return;
+    if (page !== "dashboard" || leadsFetching) return;
     const key = "crm_dash_v1_month_all__";
     try {
       const raw = sessionStorage.getItem(key);
@@ -1772,9 +1784,9 @@ function CRMApp({ user, updateUser, onLogout }) {
           } catch { /* quota */ }
         })
         .catch(() => {});
-    }, 2500);
+    }, 8000);
     return () => clearTimeout(t);
-  }, [isAdmin, initialDataLoaded]);
+  }, [isAdmin, initialDataLoaded, page, leadsFetching]);
 
   /** Prefetch scope dự án nhỏ lúc đang ở màn chọn — bỏ dự án lớn để khỏi đè chết backend. */
   const prefetchAllProjectScopes = useCallback(async () => {
@@ -1841,7 +1853,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     const onPicker = user.role === "sale" && !selectedProject;
     if (!onPicker && (!selectedProject || selectedProject === "personal")) return;
     prefetchStartedRef.current = true;
-    const delay = onPicker ? 600 : 3500;
+    const delay = onPicker ? 8000 : 20000;
     const t = setTimeout(() => {
       void prefetchAllProjectScopes();
     }, delay);

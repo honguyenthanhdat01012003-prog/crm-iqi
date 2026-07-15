@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-pwa-nav-dash-d";
+const BUILD_VERSION = "2026-07-15-lite-skip-history-e";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3145,6 +3145,8 @@ async function queryLeadsPage(db, user, filters, page, limit) {
   const sortKey = filters.sortKey || "id";
   const sortDir = filters.sortDir || "desc";
   const statusTab = filters.statusTab || "all";
+  // List/lite không cần full lead_history — timeline load khi mở chi tiết
+  const liteOpts = { skipHistory: true };
   const sortCol = {
     name: "name",
     phone: "phone",
@@ -3177,7 +3179,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
-      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
     }
 
     if (statusTab === "all") {
@@ -3186,7 +3188,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
         all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
-      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
     }
 
     // Chưa backfill xong denorm — fallback cache 30s
@@ -3219,7 +3221,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
-      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName: saleName });
+      return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName: saleName, ...liteOpts });
     }
     const tabClause = `${tabStatusSqlExpr("admin_tab_status")} = ?`;
     const tabWhere = where ? `${where} AND ${tabClause}` : `WHERE ${tabClause}`;
@@ -3229,7 +3231,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
       all(db, `SELECT * FROM leads ${tabWhere} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...tabParams, limit, offset]),
       all(db, "SELECT * FROM projects ORDER BY id ASC"),
     ]);
-    return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user);
+    return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
   }
 
   // Legacy path kept for non-admin roles if needed
@@ -3245,7 +3247,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const leadRows = await all(db, `SELECT * FROM leads WHERE id IN (${ph})`, pageSlice.map((r) => r.id));
     const rowMap = Object.fromEntries(leadRows.map((r) => [r.id, r]));
     const orderedRows = pageSlice.map((r) => rowMap[r.id]).filter(Boolean);
-    return finishLeadsPage(db, orderedRows, sorted.length, null, user);
+    return finishLeadsPage(db, orderedRows, sorted.length, null, user, liteOpts);
   }
 
   const saleSafeFilters = user.role === "sale" ? { ...filters, statusTab: "all" } : filters;
@@ -3258,7 +3260,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
   ]);
 
   const salePerspectiveName = isAdminSalePerspective(filters) ? filters.saleFilter : null;
-  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName });
+  return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName, ...liteOpts });
 }
 
 async function loadSaleSummariesForLeads(db, leadIds, saleName) {
