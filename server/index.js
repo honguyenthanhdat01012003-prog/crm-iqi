@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-sale-picker-load-a";
+const BUILD_VERSION = "2026-07-15-keeper-autorestart-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3776,29 +3776,30 @@ async function syncProject(db, projectId) {
 async function syncAllProjects(db) {
   syncInProgress = true;
   try {
-  const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
-  const errors = [];
-  // Sync all projects in parallel for speed
-  await Promise.allSettled(projects.map(async (p) => {
-    try {
-      await syncProject(db, p.id);
-    } catch (e) {
-      console.error("Sync project", p.id, "failed:", e.message, e.stack);
-      errors.push(`${p.name}: ${e.message}`);
+    const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
+    const errors = [];
+    // Tuần tự — sync song song dễ OOM khiến aaPanel hiện Stopped
+    for (const p of projects) {
+      try {
+        await syncProject(db, p.id);
+      } catch (e) {
+        console.error("Sync project", p.id, "failed:", e.message, e.stack);
+        errors.push(`${p.name}: ${e.message}`);
+      }
+      // nhường event loop / GC giữa các sheet
+      await new Promise((r) => setTimeout(r, 150));
     }
-  }));
-  if (errors.length) console.error("Sync errors:", errors);
-  const lastSync = new Date().toISOString();
-  await upsertSetting(db, "lastSync", lastSync);
-  // Update global hash so poll clients detect the change
-  try {
-    const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
-    const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
-    const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
-    lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
-  } catch {}
-  emitDataChanged("sync");
-  return { lastSync, syncErrors: errors };
+    if (errors.length) console.error("Sync errors:", errors);
+    const lastSync = new Date().toISOString();
+    await upsertSetting(db, "lastSync", lastSync);
+    try {
+      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
+      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+    } catch {}
+    emitDataChanged("sync");
+    return { lastSync, syncErrors: errors };
   } finally {
     syncInProgress = false;
   }
@@ -5713,6 +5714,13 @@ app.get("/api/health", async (_req, res) => {
     tursoConfigured: !!process.env.TURSO_URL,
     nodeVersion: process.version,
     build: BUILD_VERSION,
+    uptime: process.uptime(),
+    pid: process.pid,
+    memoryMb: {
+      rss: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+      heapUsed: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
+      heapTotal: Math.round(process.memoryUsage().heapTotal / (1024 * 1024)),
+    },
     v36DenormReady,
     v36BackfillRunning,
     counts,
@@ -14855,9 +14863,10 @@ if (fs.existsSync(distPath)) {
 
 // Only listen when running directly (not on Vercel)
 if (!process.env.VERCEL) {
-  // Không để lỗi nền (sync/SLA) làm Node thoát → aaPanel hiện Stopped
+  // Crash có kiểm soát → keeper.js restart (đừng treo process “zombie”)
   process.on("uncaughtException", (err) => {
     console.error("[FATAL] uncaughtException:", err?.stack || err);
+    setTimeout(() => process.exit(1), 300);
   });
   process.on("unhandledRejection", (reason) => {
     console.error("[FATAL] unhandledRejection:", reason);

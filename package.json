@@ -8,8 +8,9 @@
     "build": "vite build",
     "build:mobile": "vite build --mode capacitor",
     "preview": "vite preview",
-    "server": "node server/index.js",
-    "start": "node server/index.js",
+    "server": "node server/keeper.js",
+    "start": "node server/keeper.js",
+    "start:raw": "node server/index.js",
     "cap:sync": "npm run build:mobile && cap sync",
     "cap:open:android": "cap open android",
     "cap:open:ios": "cap open ios"

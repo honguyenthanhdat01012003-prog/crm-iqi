@@ -7,7 +7,7 @@ cd "$ROOT"
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
 rm -f dist/assets/index-*.js dist/assets/index-*.css dist/assets/web-*.js 2>/dev/null || true
-rm -f scripts/clean-backups.sh scripts/start-server.sh scripts/stop-server.sh
+# Không xóa start/stop scripts — cần cho aaPanel keeper
 
 echo "==> Pull latest code"
 git pull origin main
@@ -38,4 +38,7 @@ fi
 echo "OK: dist/assets/$JS ($(du -h "dist/assets/$JS" | cut -f1))"
 echo "OK: dist/index.html points to $JS"
 
-echo "Done. Restart Node app in aaPanel, then hard-refresh browser (Ctrl+F5)."
+echo "Done."
+echo "→ aaPanel: đặt Project File = server/keeper.js (auto-restart), rồi Start."
+echo "→ Hard-refresh browser (Ctrl+F5)."
+echo "→ Check: curl -s https://YOUR_DOMAIN/api/version"

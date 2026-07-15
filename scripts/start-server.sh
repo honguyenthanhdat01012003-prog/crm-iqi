@@ -1,7 +1,7 @@
 #!/bin/bash
-# aaPanel Start: tự dọn port 4000 rồi chạy Node (1 process duy nhất để Stop hoạt động)
-set -e
-cd /www/wwwroot/crm-iqi
+# aaPanel Start script — hoặc dùng server/keeper.js làm Project File.
+# Tự dọn port rồi chạy keeper (auto-restart khi crash/OOM).
+cd /www/wwwroot/crm-iqi || cd "$(dirname "$0")/.."
 
 PORT="${PORT:-4000}"
 
@@ -13,4 +13,5 @@ else
 fi
 
 sleep 1
-exec node server/index.js
+export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-768}"
+exec node server/keeper.js
