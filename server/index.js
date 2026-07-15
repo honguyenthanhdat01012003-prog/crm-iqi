@@ -5375,7 +5375,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     const disciplineBySale = Object.values(penaltyCountMap)
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "vi"));
 
-    res.json({
+    const payload = {
       range: {
         preset,
         startDate: startIso,
