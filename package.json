@@ -19,11 +19,11 @@
     "cap:open:ios": "cap open ios"
   },
   "dependencies": {
-    "@capacitor/android": "^8.4.0",
-    "@capacitor/core": "^8.4.0",
-    "@capacitor/ios": "^8.4.0",
-    "@capacitor/local-notifications": "^8.0.0",
-    "@capacitor/push-notifications": "^8.0.0",
+    "@capacitor/android": "5.7.8",
+    "@capacitor/core": "5.7.8",
+    "@capacitor/ios": "5.7.8",
+    "@capacitor/local-notifications": "5.0.8",
+    "@capacitor/push-notifications": "5.1.2",
     "@libsql/client": "^0.17.0",
     "@sparticuz/chromium": "^143.0.4",
     "cors": "^2.8.5",
@@ -41,7 +41,7 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.4.0",
+    "@capacitor/cli": "5.7.8",
     "@vitejs/plugin-react": "^4.5.2",
     "vite": "^7.3.1"
   }
