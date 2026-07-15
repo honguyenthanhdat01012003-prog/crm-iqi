@@ -8427,10 +8427,18 @@ const LeadsPage = (props) => {
                         {l.lastSaleUpdate.feedback && <span style={{ color: "#475569", fontStyle: "italic", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>"{l.lastSaleUpdate.feedback}"</span>}
                       </div>
                     )}
-                    {isSale && !l.lastSaleUpdate && (
+                    {isSale && !l.lastSaleUpdate && getLeadTabStatus(l, true) === "new" && (
                       <div style={{ marginTop: 4, padding: "4px 8px", background: "#fef3c7", borderRadius: 6, border: "1px solid #fcd34d", fontSize: 11, color: "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
                         <AlertCircle size={11} style={{ flexShrink: 0 }} />
                         <span>Chưa cập nhật feedback</span>
+                      </div>
+                    )}
+                    {isSale && !l.lastSaleUpdate && getLeadTabStatus(l, true) !== "new" && (
+                      <div style={{ marginTop: 4, padding: "4px 8px", background: "#f0f9ff", borderRadius: 6, border: "1px solid #bae6fd", fontSize: 11, color: "#0369a1", display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                        <Clock size={11} style={{ flexShrink: 0 }} />
+                        <span style={{ padding: "1px 6px", borderRadius: 8, fontSize: 10, fontWeight: 600, background: (STATUS_COLORS[getLeadTabStatus(l, true)] || "#6b7280") + "18", color: STATUS_COLORS[getLeadTabStatus(l, true)] || "#6b7280" }}>
+                          {STATUS_LABELS[getLeadTabStatus(l, true)] || getLeadTabStatus(l, true)}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -8804,22 +8812,76 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       return;
     }
     setSaving(true);
+    const savedStatus = histStatus;
+    const savedFeedback = feedbackText;
+    const nowStr = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+    // Optimistic — hiện lịch sử + trạng thái ngay, không chờ F5
+    const optimisticEntry = {
+      id: `tmp-${Date.now()}`,
+      saleName: user.displayName,
+      action: "Cập nhật",
+      date: nowStr,
+      status: savedStatus,
+      feedback: savedFeedback,
+      source: isSale ? "sale" : "admin",
+    };
+    setHistory((prev) => [...(Array.isArray(prev) ? prev : []), optimisticEntry]);
+    applyApiData({
+      updatedLead: {
+        id: lead.id,
+        status: savedStatus,
+        rawStatus: STATUS_LABELS[savedStatus] || savedStatus,
+        tabStatus: savedStatus,
+        historyCount: (Number(lead.historyCount) || history.length || 0) + 1,
+        lastSaleUpdate: { date: nowStr, status: savedStatus, feedback: savedFeedback },
+      },
+    }, { suppressNotifications: true });
+    setHistStatus("");
+    setHistFeedback("");
+    setShowForm(false);
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/history`, {
         method: "POST",
-        body: JSON.stringify({ status: histStatus, feedback: feedbackText }),
+        body: JSON.stringify({ status: savedStatus, feedback: savedFeedback }),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok) {
         showToast(data.error || "Không thể lưu cập nhật khách hàng", "error");
+        // Rollback timeline: refetch
+        const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
+        if (hr.ok) {
+          const hd = await hr.json();
+          setHistory(hd.history || []);
+        }
         return;
       }
-      applyApiData(data, { suppressNotifications: true });
-      setHistStatus("");
-      setHistFeedback("");
-      setShowForm(false);
+      if (data.updatedLead) {
+        applyApiData({
+          ...data,
+          updatedLead: {
+            ...data.updatedLead,
+            historyCount: Math.max(
+              Number(data.updatedLead.historyCount) || 0,
+              (Number(lead.historyCount) || 0) + 1
+            ),
+            lastSaleUpdate: data.updatedLead.lastSaleUpdate || {
+              date: nowStr,
+              status: savedStatus,
+              feedback: savedFeedback,
+            },
+          },
+        }, { suppressNotifications: true });
+      }
+      // Refetch history thật từ server (đổi temp id → id DB)
+      const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
+      if (hr.ok) {
+        const hd = await hr.json();
+        setHistory(hd.history || []);
+      }
+      showToast("Đã lưu cập nhật khách hàng", "success");
     } catch (e) {
       console.error(e);
+      showToast("Lỗi kết nối: " + (e.message || "Không thể lưu"), "error");
     } finally {
       setSaving(false);
     }

@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-fast-assign-sale-a";
+const BUILD_VERSION = "2026-07-15-sale-history-realtime-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3359,9 +3359,35 @@ async function buildUpdatedLeadPayload(db, leadId, user = null) {
     salePerspectiveName: user?.role === "sale" ? null : null,
     skipHistory: true,
   });
-  const lead = page.leads[0] || null;
+  let lead = page.leads[0] || null;
   if (!lead) return null;
-  // Đảm bảo historyCount tăng để client refetch timeline
+
+  // Lần cập nhật mới nhất của sale (card + timeline realtime)
+  try {
+    const saleName = user?.role === "sale" ? (user.displayName || "") : (row.sale_name || "");
+    if (saleName) {
+      const last = await get(
+        db,
+        `SELECT contact_date, status, feedback, action FROM lead_history
+         WHERE lead_id = ? AND LOWER(TRIM(COALESCE(sale_name,''))) = LOWER(TRIM(?))
+           AND action != 'Chia lead' AND TRIM(COALESCE(status,'')) != ''
+         ORDER BY seq DESC, id DESC LIMIT 1`,
+        [leadId, saleName]
+      );
+      if (last) {
+        lead = {
+          ...lead,
+          lastSaleUpdate: {
+            date: last.contact_date || "",
+            status: normalizeStatus(last.status) || last.status || "",
+            feedback: last.feedback || "",
+          },
+        };
+      }
+    }
+  } catch (e) {
+    console.warn("[buildUpdatedLeadPayload] lastSaleUpdate:", e.message);
+  }
   return lead;
 }
 
@@ -10129,21 +10155,41 @@ function applySaleLeadView(lead, displayName) {
   const fbMap = lead.saleFeedbackStatus || {};
   const myFb = fbMap[saleKey];
 
-  const myHistory = (lead.feedbackHistorySummary || []).filter((h) => {
-    if (!h || h.action === "Chia lead" || !h.status) return false;
-    return matchSaleName(h.saleName || h.source || "", displayName);
-  });
+  const summary = Array.isArray(lead.feedbackHistorySummary) ? lead.feedbackHistorySummary : [];
+  const hasSummary = summary.length > 0;
+  const myHistory = hasSummary
+    ? summary.filter((h) => {
+        if (!h || h.action === "Chia lead" || !h.status) return false;
+        return matchSaleName(h.saleName || h.source || "", displayName);
+      })
+    : [];
 
-  const status = myFb?.status || "new";
-  const rawStatus = myFb?.rawStatus || myFb?.status || "";
+  const status = myFb?.status || (hasSummary ? "new" : (lead.status || "new"));
+  const rawStatus = myFb?.rawStatus || myFb?.status || lead.rawStatus || status;
+
+  // skipHistory: summary rỗng — KHÔNG đè historyCount = 0 (làm client không refetch timeline)
+  const historyCount = hasSummary
+    ? myHistory.length
+    : (Number(lead.historyCount) || 0);
+
+  let lastSaleUpdate = lead.lastSaleUpdate || null;
+  if (!lastSaleUpdate && myFb && myFb.status && myFb.status !== "new") {
+    lastSaleUpdate = {
+      status: myFb.status,
+      rawStatus: myFb.rawStatus || myFb.status,
+      date: "",
+      feedback: "",
+    };
+  }
 
   return {
     ...lead,
-    status,
+    status: normalizeStatus(status) || "new",
     rawStatus: rawStatus || status,
-    feedbackHistorySummary: myHistory,
-    saleFeedbackStatus: myFb ? { [saleKey]: myFb } : {},
-    historyCount: myHistory.length,
+    feedbackHistorySummary: hasSummary ? myHistory : summary,
+    saleFeedbackStatus: myFb ? { [saleKey]: myFb } : fbMap,
+    historyCount,
+    lastSaleUpdate,
   };
 }
 
