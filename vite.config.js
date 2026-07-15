@@ -8,9 +8,11 @@ const hasFirebaseConfig = fs.existsSync(path.resolve("android/app/google-service
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const nativePushEnabled = hasFirebaseConfig && env.VITE_NATIVE_PUSH_ENABLED !== "false";
+  const isCapacitor = mode === "capacitor";
 
   return {
   plugins: [react()],
+  base: isCapacitor ? "./" : "/",
   define: {
     "import.meta.env.VITE_NATIVE_PUSH_ENABLED": JSON.stringify(nativePushEnabled ? "true" : "false"),
   },

@@ -48,9 +48,10 @@ import {
   sortLeadsScope,
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
+import { apiFetch, authHeaders, getApiBase, getSocketUrl, isNativePlatform } from "./httpClient.js";
 
-const API = import.meta.env.VITE_API_BASE_URL || "/api";
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (typeof window !== "undefined" ? window.location.origin : "");
+const API = getApiBase();
+const SOCKET_URL = getSocketUrl();
 
 /* ===== Error Boundary ===== */
 class ErrorBoundary extends React.Component {
@@ -150,7 +151,7 @@ function ConfirmModal_() {
 
 /* ===== Mobile detection hook ===== */
 function isCapacitorNativeRuntime() {
-  return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+  return isNativePlatform();
 }
 
 function AlertModal_() {
@@ -274,22 +275,6 @@ function getLeadTemp(createdAt) {
   if (hours <= 72) return { label: "Nóng", bg: "#fff7ed", color: "#ea580c", icon: "hot" };
   if (hours <= 168) return { label: "Ấm", bg: "#fffbeb", color: "#d97706", icon: "warm" };
   return { label: "Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "cold" };
-}
-
-function authHeaders() {
-  const token = localStorage.getItem("crm_token");
-  return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
-}
-
-async function apiFetch(url, opts = {}) {
-  const res = await fetch(url, { ...opts, headers: { ...authHeaders(), ...opts.headers } });
-  if (res.status === 401) {
-    localStorage.removeItem("crm_token");
-    localStorage.removeItem("crm_user");
-    window.location.reload();
-    throw new Error("Unauthorized");
-  }
-  return res;
 }
 
 function parseLeadDate(str) {
@@ -572,9 +557,11 @@ function LoginPage({ onLogin }) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch(`${API}/login`, {
+      localStorage.removeItem("crm_token");
+      localStorage.removeItem("crm_user");
+      const res = await apiFetch(`${API}/login`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        skipAuth: true,
         body: JSON.stringify({ username, password }),
       });
       const data = await res.json();
@@ -1423,7 +1410,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       try {
         let lastStatus = 0;
         for (let attempt = 0; attempt < 3; attempt++) {
-          const r = await fetch(url, { headers: authHeaders(), signal: controller.signal });
+          const r = await apiFetch(url, { signal: controller.signal, timeoutMs: 120000 });
           lastStatus = r.status;
           if (r.status === 401) {
             localStorage.removeItem("crm_token");
@@ -1603,9 +1590,9 @@ function CRMApp({ user, updateUser, onLogout }) {
       const url = isBoot
         ? `${API}/data?bootstrapOnly=1`
         : buildDataUrl({ lite: true, skipTabCounts });
-      const r = await fetch(url, {
-        headers: authHeaders(),
+      const r = await apiFetch(url, {
         signal: controller.signal,
+        timeoutMs,
       });
       clearTimeout(timeout);
       if (r.status === 401) {
@@ -4986,13 +4973,13 @@ const LeadsPage = (props) => {
   const fetchPlLeads = async () => {
     setPlLoading(true);
     try {
-      const r = await fetch("/api/personal-leads", { headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads`);
       if (r.ok) setPlLeads(await r.json());
     } catch {} finally { setPlLoading(false); }
   };
   useEffect(() => { if (selectedProject === "personal") fetchPlLeads(); }, [selectedProject]);
   // Also fetch PL count for the card on mount
-  useEffect(() => { fetch("/api/personal-leads", { headers: plHeaders() }).then(r => r.ok ? r.json() : []).then(d => setPlLeads(d)).catch(() => {}); }, []);
+  useEffect(() => { apiFetch(`${API}/personal-leads`).then(r => r.ok ? r.json() : []).then(d => setPlLeads(d)).catch(() => {}); }, []);
 
   const plFiltered = useMemo(() => {
     let list = plLeads;
@@ -5011,9 +4998,9 @@ const LeadsPage = (props) => {
     if (!plDraft.name.trim() || !plDraft.phone.trim()) return;
     setPlSaving(true);
     try {
-      const url = plEditing ? `/api/personal-leads/${plEditing.id}` : "/api/personal-leads";
+      const url = plEditing ? `${API}/personal-leads/${plEditing.id}` : `${API}/personal-leads`;
       const method = plEditing ? "PUT" : "POST";
-      const r = await fetch(url, { method, headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify(plDraft) });
+      const r = await apiFetch(url, { method, body: JSON.stringify(plDraft) });
       if (r.ok) { setPlShowForm(false); setPlEditing(null); setPlDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchPlLeads(); showToast(plEditing ? "Đã cập nhật" : "Đã thêm khách hàng mới", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi lưu", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); } finally { setPlSaving(false); }
@@ -5022,7 +5009,7 @@ const LeadsPage = (props) => {
   const plHandleDelete = async (id) => {
     if (!(await showConfirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)"))) return;
     try {
-      const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads/${id}`, { method: "DELETE" });
       if (r.ok) { fetchPlLeads(); showToast("Đã xóa", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi xóa", "error"); }
     } catch (e) { showToast("Lỗi kết nối", "error"); }
@@ -5030,7 +5017,7 @@ const LeadsPage = (props) => {
 
   const plHandleUpdateField = async (id, field, value) => {
     try {
-      const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
+      const r = await apiFetch(`${API}/personal-leads/${id}`, { method: "PUT", body: JSON.stringify({ [field]: value }) });
       if (r.ok) { fetchPlLeads(); showToast("Đã cập nhật", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi", "error"); }
     } catch { showToast("Lỗi kết nối", "error"); }
@@ -5038,7 +5025,7 @@ const LeadsPage = (props) => {
 
   const fetchPlHistory = async (leadId) => {
     try {
-      const r = await fetch(`/api/personal-leads/${leadId}/history`, { headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads/${leadId}/history`);
       if (r.ok) { const rows = await r.json(); setPlHistory(prev => ({ ...prev, [leadId]: rows })); }
     } catch {}
   };
@@ -5067,8 +5054,8 @@ const LeadsPage = (props) => {
     }
     setPlSavingHist(true);
     try {
-      const r = await fetch(`/api/personal-leads/${leadId}/history`, {
-        method: "POST", headers: { "Content-Type": "application/json", ...plHeaders() },
+      const r = await apiFetch(`${API}/personal-leads/${leadId}/history`, {
+        method: "POST",
         body: JSON.stringify({ status: plHistStatus, feedback: feedbackText }),
       });
       if (r.ok) {
@@ -5084,7 +5071,7 @@ const LeadsPage = (props) => {
   const plHandleDeleteHistory = async (leadId, histId) => {
     if (!(await showConfirm("Xóa lịch sử liên hệ này?"))) return;
     try {
-      const r = await fetch(`/api/personal-leads/${leadId}/history/${histId}`, { method: "DELETE", headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads/${leadId}/history/${histId}`, { method: "DELETE" });
       if (r.ok) { const data = await r.json(); setPlHistory(prev => ({ ...prev, [leadId]: data.history })); showToast("Đã xóa", "success"); }
       else showToast("Xóa thất bại", "error");
     } catch { showToast("Lỗi kết nối", "error"); }
@@ -14308,7 +14295,7 @@ function PersonalLeadsPage({ user }) {
   const plHeaders = () => ({ Authorization: `Bearer ${localStorage.getItem("crm_token")}` });
   const fetchLeads = async () => {
     try {
-      const r = await fetch("/api/personal-leads", { headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads`);
       if (r.ok) setLeads(await r.json());
     } catch {} finally { setLoading(false); }
   };
@@ -14331,9 +14318,9 @@ function PersonalLeadsPage({ user }) {
     if (!draft.name.trim() || !draft.phone.trim()) return;
     setSaving(true);
     try {
-      const url = editingLead ? `/api/personal-leads/${editingLead.id}` : "/api/personal-leads";
+      const url = editingLead ? `${API}/personal-leads/${editingLead.id}` : `${API}/personal-leads`;
       const method = editingLead ? "PUT" : "POST";
-      const r = await fetch(url, { method, headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify(draft) });
+      const r = await apiFetch(url, { method, body: JSON.stringify(draft) });
       if (r.ok) { setShowForm(false); setEditingLead(null); setDraft({ name: "", phone: "", product: "", status: "new", note: "" }); fetchLeads(); showToast(editingLead ? "Đã cập nhật khách hàng" : "Đã thêm khách hàng mới", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi lưu khách hàng", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); } finally { setSaving(false); }
@@ -14342,7 +14329,7 @@ function PersonalLeadsPage({ user }) {
   const handleDelete = async (id) => {
     if (!(await showConfirm(isAdmin ? "Xóa vĩnh viễn khách hàng này?" : "Xóa khách hàng này? (Admin vẫn có thể xem)"))) return;
     try {
-      const r = await fetch(`/api/personal-leads/${id}`, { method: "DELETE", headers: plHeaders() });
+      const r = await apiFetch(`${API}/personal-leads/${id}`, { method: "DELETE" });
       if (r.ok) { fetchLeads(); showToast("Đã xóa khách hàng", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi khi xóa", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
@@ -14350,7 +14337,7 @@ function PersonalLeadsPage({ user }) {
 
   const handleUpdateField = async (id, field, value) => {
     try {
-      const r = await fetch(`/api/personal-leads/${id}`, { method: "PUT", headers: { "Content-Type": "application/json", ...plHeaders() }, body: JSON.stringify({ [field]: value }) });
+      const r = await apiFetch(`${API}/personal-leads/${id}`, { method: "PUT", body: JSON.stringify({ [field]: value }) });
       if (r.ok) { fetchLeads(); showToast("Đã cập nhật", "success"); }
       else { const err = await r.json().catch(() => ({})); showToast(err.error || "Lỗi cập nhật", "error"); }
     } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
