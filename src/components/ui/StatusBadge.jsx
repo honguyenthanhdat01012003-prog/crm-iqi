@@ -34,6 +34,15 @@ export function NewLeadBadge() {
   return <span className="crm-status-badge crm-status-badge--new">NEW</span>;
 }
 
+/** Lead xáo / nước rút được chia trong ngày — sale nhận biết dễ như tag NEW */
+export function ShuffleLeadBadge() {
+  return (
+    <span className="crm-status-badge crm-status-badge--shuffle" title={DISTRIBUTION_KIND_LABELS.shuffle}>
+      XÁO
+    </span>
+  );
+}
+
 export function ScheduledLeadBadge({ compact = false }) {
   return (
     <span

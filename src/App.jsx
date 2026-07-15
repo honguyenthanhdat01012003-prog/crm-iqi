@@ -24,7 +24,7 @@ import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLea
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
-import { StatusBadge, NewLeadBadge, ScheduledLeadBadge } from "./components/ui/StatusBadge.jsx";
+import { StatusBadge, NewLeadBadge, ScheduledLeadBadge, ShuffleLeadBadge } from "./components/ui/StatusBadge.jsx";
 import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
 import {
   STATUS_LABEL_TO_KEY,
@@ -314,6 +314,56 @@ function isNewTaggedLead(lead) {
   const created = parseLeadDate(lead?.createdAt || lead?.created_at);
   if (!created) return false;
   return getVnCalendarDay(created) === getVnCalendarDay(new Date());
+}
+
+/** Lead được chia cho sale hôm nay (theo assignedAt). */
+function isAssignedTodayLead(lead) {
+  const assigned = parseLeadDate(lead?.assignedAt || lead?.assigned_at);
+  if (!assigned) return false;
+  return getVnCalendarDay(assigned) === getVnCalendarDay(new Date());
+}
+
+/**
+ * Tag XÁO: lead xáo / nước rút được chia trong ngày (không phải lead MKT NEW).
+ */
+function isShuffleTaggedLead(lead) {
+  if (!lead || isNewTaggedLead(lead)) return false;
+  if (!isAssignedTodayLead(lead)) return false;
+  const kind = String(lead?.distributionKind || "").trim();
+  return kind === "shuffle" || kind === "rotate";
+}
+
+/** Đưa lên đầu list sale: NEW hôm nay hoặc lead cũ vừa được chia hôm nay (xáo/manual/…). */
+function isSaleHotAssignLead(lead) {
+  if (isNewTaggedLead(lead)) return true;
+  return isAssignedTodayLead(lead) && !isNewTaggedLead(lead);
+}
+
+function saleLeadPriorityRank(lead) {
+  if (isNewTaggedLead(lead)) return 0;
+  if (isSaleHotAssignLead(lead)) return 1;
+  return 2;
+}
+
+function assignedOrCreatedTs(lead) {
+  return (
+    parseLeadDate(lead?.assignedAt || lead?.assigned_at)?.getTime() ||
+    parseLeadDate(lead?.createdAt || lead?.created_at)?.getTime() ||
+    0
+  );
+}
+
+/** Sale: NEW + XÁO hôm nay luôn trên đầu; trong nhóm sort theo giờ chia mới nhất. */
+function sortLeadsForSaleView(leads, sortConfig) {
+  const base = sortConfig?.key ? sortLeadsScope(leads, sortConfig) : [...(Array.isArray(leads) ? leads : [])];
+  return base.sort((a, b) => {
+    const ra = saleLeadPriorityRank(a);
+    const rb = saleLeadPriorityRank(b);
+    if (ra !== rb) return ra - rb;
+    // Trong cùng nhóm ưu tiên: giờ chia / tạo mới hơn lên trước
+    if (!sortConfig?.key) return assignedOrCreatedTs(b) - assignedOrCreatedTs(a);
+    return 0; // giữ thứ tự sortConfig đã áp trong nhóm
+  });
 }
 
 function isInstantSlaEligibleLeadClient(lead) {
@@ -4845,6 +4895,7 @@ const LeadsPage = (props) => {
   }, [isAdmin]);
 
   const isRecentLead = useCallback((l) => isNewTaggedLead(l), []);
+  const isShuffleLead = useCallback((l) => isShuffleTaggedLead(l), []);
 
   const projectMap = useMemo(() => {
     const m = {};
@@ -4931,9 +4982,10 @@ const LeadsPage = (props) => {
   }, [leads, leadsScopeMode, scopeFilterOpts, activeTab, filteredBeforeTab]);
 
   const sortedLeads = useMemo(() => {
+    if (isSale) return sortLeadsForSaleView(tabFiltered, leadsScopeMode ? sortConfig : null);
     if (!leadsScopeMode) return tabFiltered;
     return sortLeadsScope(tabFiltered, sortConfig);
-  }, [tabFiltered, leadsScopeMode, sortConfig]);
+  }, [tabFiltered, leadsScopeMode, sortConfig, isSale]);
 
   const displayLeadsTotal = leadsScopeMode ? sortedLeads.length : (leadsTotal || 0);
   const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
@@ -8345,6 +8397,7 @@ const LeadsPage = (props) => {
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <NewLeadBadge />}
+                        {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                         {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
@@ -8367,6 +8420,7 @@ const LeadsPage = (props) => {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <NewLeadBadge />}
+                      {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
@@ -8488,6 +8542,7 @@ const LeadsPage = (props) => {
             isAdmin={isAdmin}
             isSale={isSale}
             isRecentLead={isRecentLead}
+            isShuffleLead={isShuffleLead}
             getLeadProjectName={getLeadProjectName}
             getLeadTemp={getLeadTemp}
             startIndex={(safePage - 1) * pageSize}

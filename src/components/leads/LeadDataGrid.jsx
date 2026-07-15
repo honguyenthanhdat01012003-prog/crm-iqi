@@ -1,6 +1,6 @@
 import React from "react";
 import { Lock, MessageSquare, Phone, UserPlus } from "lucide-react";
-import { StatusBadge, NewLeadBadge, TempBadge } from "../ui/StatusBadge.jsx";
+import { StatusBadge, NewLeadBadge, TempBadge, ShuffleLeadBadge } from "../ui/StatusBadge.jsx";
 import { telHref, zaloHref } from "../../utils/phoneLinks.js";
 
 export function LeadDataGrid({
@@ -10,6 +10,7 @@ export function LeadDataGrid({
   isAdmin,
   isSale,
   isRecentLead,
+  isShuffleLead,
   getLeadProjectName,
   getLeadTemp,
   startIndex = 0,
@@ -85,6 +86,7 @@ export function LeadDataGrid({
                   <td className="crm-data-grid-name">
                     <div className="crm-data-grid-name-inner">
                       {isRecentLead(lead) && <NewLeadBadge />}
+                      {isSale && isShuffleLead?.(lead) && <ShuffleLeadBadge />}
                       {isAdmin && lead.regCount > 1 && (
                         <span className="crm-status-badge crm-status-badge--reg">ĐK {lead.regIndex}</span>
                       )}
