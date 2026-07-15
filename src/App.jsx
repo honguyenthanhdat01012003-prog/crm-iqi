@@ -1289,6 +1289,8 @@ function CRMApp({ user, updateUser, onLogout }) {
   const clientScopeCacheRef = useRef(new Map());
   const scopeInflightRef = useRef(new Map());
   const prefetchStartedRef = useRef(false);
+  const prefetchPausedRef = useRef(false);
+  const dataChangedTimerRef = useRef(null);
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
 
   const applyScopePayload = useCallback((data, cacheKey) => {
@@ -1636,18 +1638,25 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, []);
 
+  useEffect(() => {
+    // Dashboard/sync nặng — tạm dừng prefetch để khỏi tranh DB
+    prefetchPausedRef.current = page === "dashboard";
+  }, [page]);
+
   /** Prefetch scope mọi dự án lúc đang ở màn chọn → ấn vào là có cache. */
   const prefetchAllProjectScopes = useCallback(async () => {
     const list = Array.isArray(projects) ? projects : [];
     if (!list.length) return;
     const userKey = scopeUserKey(user);
     const counts = projectLeadCounts?.byProject || {};
-    // Dự án nhỏ trước — cache đầy nhanh hơn
     const ordered = [...list].sort(
       (a, b) => (Number(counts[a.id]) || 0) - (Number(counts[b.id]) || 0)
     );
 
     for (const proj of ordered) {
+      while (prefetchPausedRef.current) {
+        await new Promise((r) => setTimeout(r, 800));
+      }
       const pid = String(proj.id);
       const cacheKey = buildScopeCacheKey({
         selectedProject: pid,
@@ -1670,7 +1679,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       } catch (err) {
         console.warn("[CRM] prefetch scope failed:", pid, err?.message || err);
       }
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 400));
     }
   }, [projects, projectLeadCounts, user, fetchAndCacheScope, buildScopeUrlFor]);
 
@@ -1841,12 +1850,19 @@ function CRMApp({ user, updateUser, onLogout }) {
     socket.on("data-changed", () => {
       if (user.role === "sale" && !selectedProject) return;
       if (selectedProject === "personal") return;
-      invalidateClientScopeCache(clientScopeCacheRef.current);
-      fetchLeadScope({ background: true, skipCacheRead: true });
-      fetchProjectLeadCounts();
+      // Debounce — tránh nhiều lần lưu/chia liên tiếp spamming full scope refresh
+      if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
+      dataChangedTimerRef.current = setTimeout(() => {
+        invalidateClientScopeCache(clientScopeCacheRef.current);
+        fetchLeadScope({ background: true, skipCacheRead: true });
+        fetchProjectLeadCounts();
+      }, 1200);
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
-    return () => socket.disconnect();
+    return () => {
+      if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
+      socket.disconnect();
+    };
   }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, selectedProject, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
@@ -3897,7 +3913,12 @@ function DashboardPage({ projects, apiFetch }) {
     }
   }, [apiFetch, buildAuditQuery]);
 
-  useEffect(() => { loadSlaAudit(); }, [loadSlaAudit]);
+  // SLA audit + monthly report: load sau dashboard để không tranh CPU lần mở
+  useEffect(() => {
+    if (loading || !data) return;
+    const t = setTimeout(() => { loadSlaAudit(); }, 400);
+    return () => clearTimeout(t);
+  }, [loading, data, loadSlaAudit]);
 
   const exportSlaAuditCsv = useCallback(async () => {
     try {
@@ -3918,17 +3939,21 @@ function DashboardPage({ projects, apiFetch }) {
   }, [apiFetch, buildAuditQuery]);
 
   useEffect(() => {
+    if (loading || !data) return;
     const prev = new Date();
     prev.setDate(1);
     prev.setMonth(prev.getMonth() - 1);
     const year = prev.getFullYear();
     const month = prev.getMonth() + 1;
     const qs = new URLSearchParams({ year: String(year), month: String(month), projectId });
-    apiFetch(`${API}/discipline/monthly-report?${qs}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setMonthlyReport(d))
-      .catch(() => setMonthlyReport(null));
-  }, [apiFetch, projectId]);
+    const t = setTimeout(() => {
+      apiFetch(`${API}/discipline/monthly-report?${qs}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => setMonthlyReport(d))
+        .catch(() => setMonthlyReport(null));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [apiFetch, projectId, loading, data]);
 
   const kpis = data?.kpis;
   const funnel = data?.funnel || [];
@@ -4946,8 +4971,8 @@ const LeadsPage = (props) => {
     if (!shuffleOpen || !shuffleProject || !isAdminOnly) return;
     let cancelled = false;
     setShufflePoolLoading(true);
-    const projectParam = shuffleProject ? `&projectId=${shuffleProject}` : "";
-    apiFetch(`${API}/data?all=1${projectParam}`)
+    // Scope theo dự án — nhẹ hơn data?all=1 (kéo cả DB)
+    apiFetch(`${API}/data/scope?projectId=${encodeURIComponent(shuffleProject)}`)
       .then((r) => (r.ok ? r.json() : { leads: [] }))
       .then((d) => { if (!cancelled) setShufflePoolLeads(d.leads || []); })
       .catch(() => { if (!cancelled) setShufflePoolLeads([]); })
@@ -5191,9 +5216,10 @@ const LeadsPage = (props) => {
       if (data.error) { setShuffleMsg("[ERR] " + data.error); }
       else {
         setShuffleMsg("[OK] " + data.msg);
-        applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.schedules)) setSchedules(data.schedules);
         setShuffleSelected(new Set());
+        // Refresh nhẹ nền — không chờ full DB như trước
+        if (onRefreshLeadScope) void onRefreshLeadScope({ background: true, skipCacheRead: true });
       }
     } catch (e) {
       setShuffleMsg("[ERR] Lỗi: " + e.message);

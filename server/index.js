@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-13-prefetch-scopes-a";
+const BUILD_VERSION = "2026-07-15-fast-mutations-dash-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3351,6 +3351,20 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
   };
 }
 
+/** Trả 1 lead đã map — dùng cho PUT/history để không load cả DB. */
+async function buildUpdatedLeadPayload(db, leadId, user = null) {
+  const row = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+  if (!row) return null;
+  const page = await finishLeadsPage(db, [row], 1, null, user, {
+    salePerspectiveName: user?.role === "sale" ? null : null,
+    skipHistory: true,
+  });
+  const lead = page.leads[0] || null;
+  if (!lead) return null;
+  // Đảm bảo historyCount tăng để client refetch timeline
+  return lead;
+}
+
 /** Load toàn bộ lead trong scope (1 dự án / filter) — không history, dùng hybrid cache client. */
 async function queryLeadsScope(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
@@ -5117,15 +5131,44 @@ function buildTrendSeries(range, leadsByDay, dailyCostMap) {
   });
 }
 
+let dashboardCache = { at: 0, key: "", data: null };
+const DASHBOARD_CACHE_MS = 45_000;
+
 app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
   try {
     const { projectId = "all", preset = "month", startDate, endDate } = req.query;
     const range = resolveDashboardDateRange(preset, startDate, endDate);
+    const cacheKey = [
+      req.user.role,
+      req.user.userId || req.user.displayName,
+      projectId,
+      preset,
+      startDate || "",
+      endDate || "",
+      String(dataVersion),
+    ].join("|");
+    const now = Date.now();
+    if (dashboardCache.key === cacheKey && dashboardCache.data && now - dashboardCache.at < DASHBOARD_CACHE_MS) {
+      return res.json({ ...dashboardCache.data, cached: true });
+    }
 
-    let leadRows = await all(db, "SELECT * FROM leads");
+    // Chỉ SELECT project cần thiết — tránh kéo cả DB rồi filter JS
+    let leadSql = "SELECT * FROM leads";
+    const leadParams = [];
+    const where = [];
     if (req.user.role === "manager") {
       const pids = await getUserProjectIds(req.user.userId);
-      leadRows = leadRows.filter((l) => pids.includes(l.project_id));
+      if (!pids.length) {
+        return res.json({
+          range: { preset, startDate: null, endDate: null, label: range.label },
+          stats: { total: 0 },
+          kpis: { marketing: { totalLeads: 0, totalSpent: 0, cpl: 0 }, quality: { good: 0, bad: 0, neutral: 0, qualityPct: 0 }, sales: { booked: 0, closed: 0, totalBooking: 0 } },
+          funnel: [], trend: [], sources: [], campaigns: [], campaignMeta: {}, saleRanking: [], unassignedLeads: 0,
+          discipline: { totalPenalties: 0, bySale: [], recent: [] },
+        });
+      }
+      where.push(`project_id IN (${pids.map(() => "?").join(",")})`);
+      leadParams.push(...pids);
     }
     if (projectId && projectId !== "all") {
       const pid = Number(projectId);
@@ -5133,8 +5176,11 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         const pids = await getUserProjectIds(req.user.userId);
         if (!pids.includes(pid)) return res.status(403).json({ error: "Không có quyền" });
       }
-      leadRows = leadRows.filter((l) => l.project_id === pid);
+      where.push("project_id = ?");
+      leadParams.push(pid);
     }
+    if (where.length) leadSql += ` WHERE ${where.join(" AND ")}`;
+    let leadRows = await all(db, leadSql, leadParams);
 
     const filteredLeads = leadRows.filter((l) => leadInDateRange(l, range));
     const historyMap = await loadHistoryForLeads(db, filteredLeads.map((l) => l.id));
@@ -5382,7 +5428,9 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         bySale: disciplineBySale,
         recent: recentPenalties,
       },
-    });
+    };
+    dashboardCache = { at: Date.now(), key: cacheKey, data: payload };
+    res.json(payload);
   } catch (err) {
     console.error("[GET /api/dashboard]", err);
     res.status(500).json({ error: err.message });
@@ -5993,6 +6041,7 @@ function emitDataChanged(reason) {
   invalidateLeadTabIndexCache();
   invalidateSaleScopeCache();
   schedulesResponseCache = { at: 0, data: null };
+  dashboardCache = { at: 0, key: "", data: null };
   if (io) {
     io.emit("data-changed", { reason, ts: Date.now(), version: dataVersion });
   }
@@ -6892,40 +6941,46 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     }
     await db.batch(stmts, "write");
 
-    try {
-      for (let i = 0; i < leads.length; i++) {
-        const assignedSale = saleNames[i % saleNames.length];
-        await sendTelegramNewLeadNotification(db, { leadId: leads[i].id, saleName: assignedSale });
-      }
-    } catch (teleErr) {
-      console.error("[Telegram shuffle] Send failed:", teleErr.message);
-    }
-
-    try {
-      const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [pid]);
-      for (const [saleName, saleLeadIds] of assignedBySale.entries()) {
-        const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [saleLeadIds[0]]);
-        const extra = saleLeadIds.length > 1 ? ` và ${saleLeadIds.length - 1} lead khác` : "";
-        sendPushToDisplayName(saleName, {
-          title: `Bạn có ${saleLeadIds.length} lead mới`,
-          body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
-          tag: `sale-shuffle-${pid}-${saleName}-${Date.now()}`,
-          sound: "sale",
-          data: { url: "/", type: "sale_shuffle_leads", projectId: pid, leadIds: saleLeadIds },
-          requireInteraction: true,
-        }).catch(err => console.error(`[Push] Shuffle notify failed for ${saleName}:`, err.message));
-      }
-    } catch (pushErr) {
-      console.error("[Push shuffle] Send failed:", pushErr.message);
-    }
+    // Telegram + Push chạy nền — không block response chia lead
+    setImmediate(() => {
+      (async () => {
+        try {
+          for (let i = 0; i < leads.length; i++) {
+            const assignedSale = saleNames[i % saleNames.length];
+            await sendTelegramNewLeadNotification(db, { leadId: leads[i].id, saleName: assignedSale });
+          }
+        } catch (teleErr) {
+          console.error("[Telegram shuffle] Send failed:", teleErr.message);
+        }
+        try {
+          const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [pid]);
+          for (const [saleName, saleLeadIds] of assignedBySale.entries()) {
+            const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [saleLeadIds[0]]);
+            const extra = saleLeadIds.length > 1 ? ` và ${saleLeadIds.length - 1} lead khác` : "";
+            sendPushToDisplayName(saleName, {
+              title: `Bạn có ${saleLeadIds.length} lead mới`,
+              body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
+              tag: `sale-shuffle-${pid}-${saleName}-${Date.now()}`,
+              sound: "sale",
+              data: { url: "/", type: "sale_shuffle_leads", projectId: pid, leadIds: saleLeadIds },
+              requireInteraction: true,
+            }).catch(err => console.error(`[Push] Shuffle notify failed for ${saleName}:`, err.message));
+          }
+        } catch (pushErr) {
+          console.error("[Push shuffle] Send failed:", pushErr.message);
+        }
+      })();
+    });
 
     lastSyncHash = "";
     await refreshLeadTabDenormMany(db, leads.map((l) => l.id));
     emitDataChanged("shuffle-leads");
 
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    res.json({ msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`, assigned: leads.length, ...data });
+    res.json({
+      msg: `Đã xáo ${leads.length} lead cho ${saleNames.length} sale`,
+      assigned: leads.length,
+      version: dataVersion,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || "Shuffle failed" });
   }
@@ -8522,15 +8577,26 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     if (uniqueLeadIds.length !== leadIds.length) {
       console.log(`[Schedule] Removed ${leadIds.length - uniqueLeadIds.length} duplicate/invalid lead IDs`);
     }
-    const validRows = [];
-    for (const lid of uniqueLeadIds) {
-      const row = await get(db, "SELECT id FROM leads WHERE id = ? AND project_id = ?", [lid, sourceProjectId]);
-      if (row) validRows.push(Number(row.id));
+    // Validate batch — 1 query thay vì N lần get
+    if (uniqueLeadIds.length) {
+      const BATCH = 400;
+      const validSet = new Set();
+      for (let i = 0; i < uniqueLeadIds.length; i += BATCH) {
+        const batch = uniqueLeadIds.slice(i, i + BATCH);
+        const ph = batch.map(() => "?").join(",");
+        const rows = await all(
+          db,
+          `SELECT id FROM leads WHERE project_id = ? AND id IN (${ph})`,
+          [sourceProjectId, ...batch]
+        );
+        for (const r of rows) validSet.add(Number(r.id));
+      }
+      const before = uniqueLeadIds.length;
+      uniqueLeadIds = uniqueLeadIds.filter((id) => validSet.has(id));
+      if (uniqueLeadIds.length !== before) {
+        console.log(`[Schedule] Removed ${before - uniqueLeadIds.length} lead IDs not found in project ${projectId}`);
+      }
     }
-    if (validRows.length !== uniqueLeadIds.length) {
-      console.log(`[Schedule] Removed ${uniqueLeadIds.length - validRows.length} lead IDs not found in project ${projectId}`);
-    }
-    uniqueLeadIds = validRows;
     if (!uniqueLeadIds.length) return res.status(400).json({ error: "Không tìm thấy lead hợp lệ trong dự án để tạo lịch chia" });
 
     let scheduleProjectId = sourceProjectId;
@@ -8632,13 +8698,13 @@ app.post("/api/leads/schedule-distribution", requireAuth, requireAdmin, async (r
     // Don't process immediately - let the scheduled time control when leads are distributed
     // processSchedules will run on next API call when the time is right
 
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
+    lastSyncHash = "";
+    emitDataChanged("schedule-distribution");
     const allSchedules = await all(db, "SELECT * FROM lead_schedules ORDER BY id DESC");
     res.json({
       msg: `Đã tạo lịch chia ${uniqueLeadIds.length} lead cho ${sNames.length} sale (${perDay} lead/ngày/người, ${distTimesArr.length} khung giờ: ${distTimesArr.join(', ')}). Giai đoạn: ${startDate} → ${endDate}`,
       schedules: await enrichSchedulesForResponse(db, allSchedules),
-      ...data,
+      version: dataVersion,
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "Schedule creation failed" });
@@ -10299,7 +10365,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       }
     }
 
-    // When admin/manager assigns lead to a sale: save history + send Telegram
+    // When admin/manager assigns lead to a sale: save history + notify (notify nền)
     if ((req.user.role === "admin" || req.user.role === "manager") && saleName) {
       const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [actualLeadId]);
       const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -10311,26 +10377,26 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         [actualLeadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"]
       );
 
-      // Send Telegram notification with inline keyboard
-      try {
-        await sendTelegramNewLeadNotification(db, { leadId: actualLeadId, saleName, lead });
-      } catch (teleErr) {
-        console.error("[Telegram] Send failed:", teleErr.message);
-      }
-
-      try {
-        const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
-        sendPushToDisplayName(saleName, {
-          title: "Bạn có lead mới",
-          body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
-          tag: `sale-lead-${actualLeadId}`,
-          sound: "sale",
-          data: { url: "/", type: "sale_new_lead", leadId: actualLeadId },
-          requireInteraction: true,
-        }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
-      } catch (pushErr) {
-        console.error("[Push] Sale notify failed:", pushErr.message);
-      }
+      setImmediate(() => {
+        sendTelegramNewLeadNotification(db, { leadId: actualLeadId, saleName, lead }).catch((teleErr) => {
+          console.error("[Telegram] Send failed:", teleErr.message);
+        });
+        (async () => {
+          try {
+            const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
+            sendPushToDisplayName(saleName, {
+              title: "Bạn có lead mới",
+              body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
+              tag: `sale-lead-${actualLeadId}`,
+              sound: "sale",
+              data: { url: "/", type: "sale_new_lead", leadId: actualLeadId },
+              requireInteraction: true,
+            }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
+          } catch (pushErr) {
+            console.error("[Push] Sale notify failed:", pushErr.message);
+          }
+        })();
+      });
     }
 
     // For manager-only changes, return targeted update (avoids race with sync)
@@ -10351,9 +10417,9 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     lastSyncHash = ""; // invalidate hash after any lead change
     await refreshLeadTabDenorm(db, actualLeadId);
     emitDataChanged("update-lead");
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    res.json(data);
+    // Không trả full DB — chỉ lead vừa sửa (sale/admin lưu trạng thái nhanh)
+    const updatedLead = await buildUpdatedLeadPayload(db, actualLeadId, req.user);
+    res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
   } catch (err) {
     res.status(500).json({ error: err.message || "Update failed" });
   }
@@ -10436,9 +10502,8 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     await refreshLeadTabDenorm(db, leadId);
     emitDataChanged("lead-history-update");
 
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    res.json(data);
+    const updatedLead = await buildUpdatedLeadPayload(db, leadId, req.user);
+    res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
