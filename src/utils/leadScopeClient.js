@@ -167,11 +167,12 @@ const DISK_DB_NAME = "crm-iqi-cache";
 const DISK_DB_VERSION = 1;
 const DISK_STORE = "scope";
 
-export function getClientScopeCacheEntry(cache, cacheKey) {
+export function getClientScopeCacheEntry(cache, cacheKey, opts = {}) {
   if (!cache || !cacheKey) return null;
   const entry = cache.get(cacheKey);
   if (!entry) return null;
-  if (Date.now() - entry.at > CLIENT_SCOPE_CACHE_MS) {
+  const stale = Date.now() - entry.at > CLIENT_SCOPE_CACHE_MS;
+  if (stale && !opts.allowStale) {
     cache.delete(cacheKey);
     return null;
   }

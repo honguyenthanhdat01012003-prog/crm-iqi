@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-lite-skip-history-e";
+const BUILD_VERSION = "2026-07-15-instant-project-click-f";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -5996,7 +5996,7 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     const t0 = Date.now();
     if (syncInProgress) {
       const waitStart = Date.now();
-      while (syncInProgress && Date.now() - waitStart < 3000) await new Promise((r) => setTimeout(r, 100));
+      while (syncInProgress && Date.now() - waitStart < 200) await new Promise((r) => setTimeout(r, 40));
     }
     if (scopeInflightCount >= SCOPE_MAX_CONCURRENT) {
       return res.status(503).json({
