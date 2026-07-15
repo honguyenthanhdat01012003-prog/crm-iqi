@@ -13,5 +13,5 @@ else
 fi
 
 sleep 1
-export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-768}"
+export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-640}"
 exec node server/keeper.js

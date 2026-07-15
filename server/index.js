@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-instant-project-click-f";
+const BUILD_VERSION = "2026-07-16-keeper-watchdog-g";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -15010,10 +15010,11 @@ if (!process.env.VERCEL) {
   // Crash có kiểm soát → keeper.js restart (đừng treo process “zombie”)
   process.on("uncaughtException", (err) => {
     console.error("[FATAL] uncaughtException:", err?.stack || err);
-    setTimeout(() => process.exit(1), 300);
+    setTimeout(() => process.exit(1), 400);
   });
+  // Không exit process vì rejection lặt vặt (network/TG) — dễ gây Stopped trên aaPanel
   process.on("unhandledRejection", (reason) => {
-    console.error("[FATAL] unhandledRejection:", reason);
+    console.error("[WARN] unhandledRejection:", reason);
   });
 
   const server = http.createServer(app);
@@ -15084,8 +15085,8 @@ if (!process.env.VERCEL) {
     }, 3000);
   });
 
-  // Auto-sync Google Sheets (default 90s — 30s quá dày dễ OOM/khóa DB trên VPS nhỏ)
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 90 * 1000;
+  // Auto-sync Google Sheets (default 3 phút — dày quá dễ OOM → aaPanel Stopped)
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 180 * 1000;
   let isSyncing = false;
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
@@ -15093,9 +15094,19 @@ if (!process.env.VERCEL) {
       console.log(`[${label}] Skip — scope đang chạy`);
       return;
     }
+    const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
+    if (heapMb > 420) {
+      console.warn(`[${label}] Skip — heap=${heapMb}MB (tránh OOM/Stopped)`);
+      try {
+        if (global.gc) global.gc();
+      } catch { /* no --expose-gc */ }
+      dashboardCache = { at: 0, key: "", data: null };
+      scopeResponseCache = { at: 0, key: "", data: null };
+      return;
+    }
     isSyncing = true;
     try {
-      console.log(`[${label}] Starting...`);
+      console.log(`[${label}] Starting (heap=${heapMb}MB)...`);
       await syncAllProjects(db);
       console.log(`[${label}] Done`);
     } catch (e) {
@@ -15104,9 +15115,9 @@ if (!process.env.VERCEL) {
       isSyncing = false;
     }
   };
-  setTimeout(() => runAutoSync("auto-sync-boot"), 45000);
+  setTimeout(() => runAutoSync("auto-sync-boot"), 60000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 45s`);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 60s`);
 
   // Lịch chia lead — chạy nền, không block GET /api/data
   setInterval(async () => {
