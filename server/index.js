@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-xao-tag-manual-assign-a";
+const BUILD_VERSION = "2026-07-15-fast-project-switch-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -5823,10 +5823,6 @@ app.get("/api/config", requireAuth, async (_req, res) => {
 app.get("/api/data", requireAuth, async (req, res) => {
   try {
     const t0 = Date.now();
-    if (syncInProgress) {
-      const waitStart = Date.now();
-      while (syncInProgress && Date.now() - waitStart < 3000) await new Promise(r => setTimeout(r, 100));
-    }
 
     // Phase 1 boot: metadata only — unblock UI shell immediately (no lead scan)
     if (req.query.bootstrapOnly === "1") {
@@ -5852,6 +5848,14 @@ app.get("/api/data", requireAuth, async (req, res) => {
     }
 
     const { q, filters } = parseLeadsFilters(req);
+    const isLite = q.lite;
+
+    // Lite đổi dự án: chờ sync rất ngắn — trước đây 3s làm sale/admin cảm giác đơ
+    if (syncInProgress) {
+      const waitStart = Date.now();
+      const maxWait = isLite ? 350 : 2000;
+      while (syncInProgress && Date.now() - waitStart < maxWait) await new Promise(r => setTimeout(r, 50));
+    }
 
     // Legacy: admin shuffle tools request full lead list
     if (q.all && (req.user.role === "admin" || req.user.role === "manager")) {
@@ -5863,8 +5867,6 @@ app.get("/api/data", requireAuth, async (req, res) => {
       const payload = await buildDataPayloadExtras(db, req.user, { ...bootstrap, ...data, tabCounts, saleRanking, leadsTotal: data.leads.length, leadsPage: 1, leadsLimit: data.leads.length, paginated: false });
       return res.json(payload);
     }
-
-    const isLite = q.lite;
 
     if (isLite) {
       const pageData = await queryLeadsPage(db, req.user, filters, q.page, q.limit);

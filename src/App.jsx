@@ -1802,17 +1802,54 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
 
-  // Prefetch nhẹ — chỉ khi đã vào 1 dự án (không prefetch lúc sale còn ở màn card ngoài)
+  // Prefetch sớm: sale đang màn chọn dự án, hoặc đã vào dự án
   useEffect(() => {
     if (!initialDataLoaded || !projects.length) return;
-    if (!selectedProject || selectedProject === "personal") return;
     if (prefetchStartedRef.current) return;
+    const onPicker = user.role === "sale" && !selectedProject;
+    if (!onPicker && (!selectedProject || selectedProject === "personal")) return;
     prefetchStartedRef.current = true;
+    const delay = onPicker ? 600 : 3500;
     const t = setTimeout(() => {
       void prefetchAllProjectScopes();
-    }, 8000);
+    }, delay);
     return () => clearTimeout(t);
-  }, [initialDataLoaded, projects, selectedProject, prefetchAllProjectScopes]);
+  }, [initialDataLoaded, projects, selectedProject, prefetchAllProjectScopes, user.role]);
+
+  /** Warm cache 1 dự án (hover card / sắp chọn) — disk trước, scope nhẹ nếu dự án nhỏ. */
+  const prefetchOneProject = useCallback((pid) => {
+    const id = String(pid || "");
+    if (!id || id === "personal" || id === "all") return;
+    const userKey = scopeUserKey(user);
+    const cacheKey = buildScopeCacheKey({
+      selectedProject: id,
+      managerFilter: "all",
+      saleFilter: "all",
+      userRole: user.role,
+      userId: userKey,
+    });
+    if (getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey)) return;
+    if (scopeInflightRef.current.get(cacheKey)) return;
+    const count = Number(projectLeadCounts?.byProject?.[id] ?? projectLeadCounts?.byProject?.[Number(id)]) || 0;
+    void (async () => {
+      try {
+        const disk = await readScopeDiskCache(userKey, cacheKey);
+        if (disk?.data) {
+          setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, disk.data, {
+            userKey,
+            persist: false,
+          });
+          return;
+        }
+        // Chỉ prefetch scope full khi dự án nhỏ — tránh đè backend
+        if (count > 0 && count <= 500) {
+          await fetchAndCacheScope(cacheKey, buildScopeUrlFor(id, "all", "all"), userKey);
+        }
+      } catch (err) {
+        console.warn("[CRM] prefetch one project failed:", id, err?.message || err);
+      }
+    })();
+  }, [user, projectLeadCounts, fetchAndCacheScope, buildScopeUrlFor]);
 
   const prevScopeKeyRef = useRef("");
   const projectLoadSeqRef = useRef(0);
@@ -1859,8 +1896,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
 
     setLeadsFetching(true);
+    leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
+
     void (async () => {
-      const disk = await readScopeDiskCache(userKey, cacheKey);
+      // Song song: disk + lite + (nếu có) prefetch inflight — trước đây chờ disk xong mới lite → chậm
+      const diskP = readScopeDiskCache(userKey, cacheKey);
+      const liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+      const inflight = scopeInflightRef.current.get(cacheKey);
+
+      const disk = await diskP;
       if (projectLoadSeqRef.current !== seq) return;
       if (disk?.data) {
         setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, disk.data, {
@@ -1873,13 +1917,11 @@ function CRMApp({ user, updateUser, onLogout }) {
         return;
       }
 
-      // Prefetch đang chạy cho dự án này → chờ chung request, hiện ngay khi xong
-      const inflight = scopeInflightRef.current.get(cacheKey);
       if (inflight) {
         try {
           const data = await inflight;
           if (projectLoadSeqRef.current !== seq) return;
-          if (data) {
+          if (data?.leads?.length) {
             applyScopePayload(data, cacheKey);
             setLeadsFetching(false);
             return;
@@ -1889,18 +1931,16 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       }
 
-      // Đổi dự án: tắt scope mode cũ (tránh lọc nhầm lead dự án khác thành 0)
+      // Chưa có cache: tắt scope mode cũ, chờ lite (đã chạy song song)
       setLeadsScopeMode(false);
       leadsScopeModeRef.current = false;
       setLeads([]);
       leadsRef.current = [];
       setLeadsTotal(0);
-      leadsQueryRef.current = { ...leadsQueryRef.current, page: 1, limit: 15 };
 
-      // Lite trước (nhẹ) → mới scope nền. Không đụng song song để khỏi đè chết backend.
       let lite = null;
       try {
-        lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+        lite = await liteP;
       } catch (err) {
         console.warn("[CRM] lite after project change failed:", err?.message || err);
       }
@@ -1908,8 +1948,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeadsFetching(false);
 
       if (!lite?.leads?.length) {
-        // Thử lại lite 1 lần — thường là lúc Node vừa restart
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 500));
         if (projectLoadSeqRef.current !== seq) return;
         lite = await fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
         if (projectLoadSeqRef.current !== seq) return;
@@ -1920,7 +1959,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         return;
       }
 
-      // Scope full nền (không chặn UI). Lỗi/503 thì giữ lite.
+      // Scope full nền — không chặn UI (đã có lite)
       try {
         const scopeData = await fetchAndCacheScope(cacheKey, buildScopeUrlFor(selectedProject), userKey);
         if (projectLoadSeqRef.current !== seq) return;
@@ -2749,6 +2788,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             setHighlightLeadId={setHighlightLeadId}
             selectedProject={selectedProject}
             setSelectedProject={setSelectedProject}
+            onPrefetchProject={prefetchOneProject}
             schedules={schedules}
             setSchedules={setSchedules}
             managerFilter={managerFilter}
@@ -4617,6 +4657,7 @@ const LeadsPage = (props) => {
     setHighlightLeadId,
     selectedProject,
     setSelectedProject,
+    onPrefetchProject,
     schedules,
     setSchedules,
     managerFilter,
@@ -5669,7 +5710,10 @@ const LeadsPage = (props) => {
                   {availableProjects.map((p) => {
                     const count = projectLeadCountsMap[p.id] || 0;
                     return (
-                      <button key={p.id} onClick={() => setSelectedProject(String(p.id))} style={{ width: "100%", border: "none", background: "#fff", borderBottom: "1px solid #eef2f7", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
+                      <button key={p.id} onClick={() => setSelectedProject(String(p.id))}
+                        onMouseEnter={() => onPrefetchProject?.(p.id)}
+                        onTouchStart={() => onPrefetchProject?.(p.id)}
+                        style={{ width: "100%", border: "none", background: "#fff", borderBottom: "1px solid #eef2f7", padding: "13px 14px", display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", textAlign: "left", cursor: "pointer" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
                           <Building2 size={17} color="#d97706" />
                           <span style={{ minWidth: 0 }}>
@@ -5737,8 +5781,14 @@ const LeadsPage = (props) => {
               const count = projectLeadCountsMap[p.id] || 0;
               return (
                 <div key={p.id} onClick={() => setSelectedProject(String(p.id))}
+                  onMouseEnter={e => {
+                    onPrefetchProject?.(p.id);
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,.1)";
+                    e.currentTarget.style.borderColor = "#e88a2e";
+                  }}
+                  onTouchStart={() => onPrefetchProject?.(p.id)}
                   style={{ background: "#fff", borderRadius: 12, padding: 20, cursor: "pointer", border: "1px solid #e5e7eb", boxShadow: "0 1px 3px rgba(0,0,0,.06)", transition: "transform .15s, box-shadow .15s, border-color .15s" }}
-                  onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,.1)"; e.currentTarget.style.borderColor = "#e88a2e"; }}
                   onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,.06)"; e.currentTarget.style.borderColor = "#e5e7eb"; }}>
                   <div style={{ fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                     <Building2 size={16} style={{ color: "#e88a2e" }} /> {p.name}
@@ -8188,6 +8238,9 @@ const LeadsPage = (props) => {
             <select
               value={selectedProject || "all"}
               onChange={(e) => setSelectedProject(e.target.value)}
+              onFocus={() => {
+                (availableProjects || []).slice(0, 8).forEach((p) => onPrefetchProject?.(p.id));
+              }}
               style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: "#fff", color: "#1f2937", flex: isMobile ? 1 : "none", minWidth: isMobile ? 0 : 180 }}
             >
               {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
