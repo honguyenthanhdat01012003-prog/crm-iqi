@@ -8039,7 +8039,9 @@ const LeadsPage = (props) => {
               <button onClick={() => setSelectedProject(null)} title="Chọn dự án khác" style={{ width: 28, height: 28, border: "1px solid #d9e2dc", borderRadius: 8, background: "#fff", color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
                 <ArrowLeft size={14} />
               </button>
-              <select value={selectedProject || "all"} onChange={(e) => { setSelectedProject(e.target.value); setCurrentPage(1); }} style={{ minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: 14, color: "#0f172a", fontWeight: 850 }}>
+              <select value={selectedProject || "all"} onChange={(e) => { setSelectedProject(e.target.value); setCurrentPage(1); }}
+                onFocus={() => { (availableProjects || []).slice(0, 8).forEach((p) => onPrefetchProject?.(p.id)); }}
+                style={{ minWidth: 0, border: "none", outline: "none", background: "transparent", fontSize: 14, color: "#0f172a", fontWeight: 850 }}>
                 {isAdmin && user.role === "admin" && <option value="all">Tất cả dự án</option>}
                 {availableProjects.map((p) => <option key={p.id} value={String(p.id)}>{p.name}</option>)}
               </select>
