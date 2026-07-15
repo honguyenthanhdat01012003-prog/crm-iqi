@@ -294,13 +294,14 @@ async function apiFetch(url, opts = {}) {
 
 function parseLeadDate(str) {
   if (!str || str === "-") return null;
-  const mTimeFirst = str.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  const s = String(str).trim().replace(",", " ");
+  const mTimeFirst = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?\s+(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (mTimeFirst) {
     return new Date(Number(mTimeFirst[6]), Number(mTimeFirst[5]) - 1, Number(mTimeFirst[4]), Number(mTimeFirst[1]), Number(mTimeFirst[2]), Number(mTimeFirst[3] || 0));
   }
-  const m = str.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  const m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
-  const iso = new Date(str);
+  const iso = new Date(s);
   return isNaN(iso.getTime()) ? null : iso;
 }
 
@@ -324,13 +325,22 @@ function isAssignedTodayLead(lead) {
 }
 
 /**
- * Tag XÁO: lead xáo / nước rút được chia trong ngày (không phải lead MKT NEW).
+ * Tag XÁO:
+ * - Lead xáo/rotate được chia hôm nay
+ * - Lead cũ vừa chia tay hôm nay (distributionKind = manual)
+ * - Lead copy MKT Xáo (isMktXao) còn chưa feedback — sale nhận diện data xáo
  */
 function isShuffleTaggedLead(lead) {
   if (!lead || isNewTaggedLead(lead)) return false;
-  if (!isAssignedTodayLead(lead)) return false;
   const kind = String(lead?.distributionKind || "").trim();
-  return kind === "shuffle" || kind === "rotate";
+  const st = String(lead?.status || lead?.tabStatus || "new");
+  const isNewStatus = !st || st === "new";
+
+  if (kind === "shuffle" || kind === "rotate") return true;
+  if (isAssignedTodayLead(lead)) return true;
+  // Data MKT Xáo / copy vẫn còn Chưa feedback → hiện XÁO (kể cả assignedAt cũ/thiếu)
+  if (lead.isMktXao && isNewStatus) return true;
+  return false;
 }
 
 /** Đưa lên đầu list sale: NEW hôm nay hoặc lead cũ vừa được chia hôm nay (xáo/manual/…). */
@@ -8397,7 +8407,7 @@ const LeadsPage = (props) => {
                       <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
                         {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
                         {isRecentLead(l) && <NewLeadBadge />}
-                        {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
+                        {isShuffleLead(l) && <ShuffleLeadBadge />}
                         {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
@@ -8420,7 +8430,7 @@ const LeadsPage = (props) => {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <NewLeadBadge />}
-                      {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
+                      {isShuffleLead(l) && <ShuffleLeadBadge />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
@@ -9039,6 +9049,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         rawStatus: "",
         tabStatus: "new",
         assignedAt: new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }),
+        distributionKind: lead.isMktXao || !isNewTaggedLead(lead) ? "shuffle" : "manual",
+        isMktXao: !!lead.isMktXao,
       },
     }, { suppressNotifications: true });
     showToast(`Đã chia cho ${editSale}`, "success");

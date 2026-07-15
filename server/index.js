@@ -38,7 +38,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-15-sale-history-realtime-a";
+const BUILD_VERSION = "2026-07-15-xao-tag-manual-assign-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -10354,11 +10354,19 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
 
     // Verify lead exists; if ID stale (after sync), try finding by name+phone
     let actualLeadId = leadId;
-    const existCheck = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE id = ?", [leadId]);
+    let existCheck = await get(
+      db,
+      "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE id = ?",
+      [leadId]
+    );
     if (!existCheck && name && phone) {
-      const byNamePhone = await get(db, "SELECT id, phone, manager_name, sale_name FROM leads WHERE name = ? AND phone = ? ORDER BY id DESC LIMIT 1", [name, phone]);
-      if (byNamePhone) {
-        actualLeadId = byNamePhone.id;
+      existCheck = await get(
+        db,
+        "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE name = ? AND phone = ? ORDER BY id DESC LIMIT 1",
+        [name, phone]
+      );
+      if (existCheck) {
+        actualLeadId = existCheck.id;
         console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by name+phone ${name}/${phone} -> ID ${actualLeadId}`);
       } else {
         return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId}, name=${name})` });
@@ -10407,7 +10415,14 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           sets.push("raw_status = ?"); params.push("");
           const assignNow = getAssignmentNowStr();
           sets.push("assigned_at = ?"); params.push(assignNow);
-          sets.push("distribution_kind = ?"); params.push(LEAD_DISTRIBUTION_KINDS.manual);
+          // Lead cũ / MKT Xáo → distribution_kind = shuffle để sale có tag XÁO
+          const created = parseLeadDate(existCheck?.created_at || "");
+          const isCreatedToday = created && getVnCalendarDay(created) === getVnCalendarDay(new Date());
+          const mktMeta = getMktXaoMeta(existCheck || {});
+          const assignKind = (!isCreatedToday || mktMeta.isMktXao)
+            ? LEAD_DISTRIBUTION_KINDS.shuffle
+            : LEAD_DISTRIBUTION_KINDS.manual;
+          sets.push("distribution_kind = ?"); params.push(assignKind);
           sets.push("sla_12h_warned_at = ?"); params.push("");
           sets.push("sla_recalled_at = ?"); params.push("");
         }
