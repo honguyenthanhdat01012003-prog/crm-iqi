@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-17-autosync-fast-a";
+const BUILD_VERSION = "2026-07-17-autosync-fast-b";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -2815,7 +2815,7 @@ function invalidateProjectCountsCache() {
 }
 
 let scopeResponseCache = { at: 0, key: "", data: null };
-const SCOPE_RESPONSE_CACHE_MS = 90_000;
+const SCOPE_RESPONSE_CACHE_MS = 15_000;
 
 function scopeCacheKey(user, filters = {}) {
   return [
@@ -4059,8 +4059,8 @@ async function syncAllProjects(db, opts = {}) {
         await new Promise((r) => setTimeout(r, 300));
         heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
       }
-      // Chỉ hoãn khi heap cực cao (ưu tiên tốc độ; user chấp nhận tốn RAM)
-      if (heapBefore > 1200 && (writes >= 1 || okCount >= 1)) {
+      // Chỉ hoãn khi gần trần heap 4GB
+      if (heapBefore > 3600 && (writes >= 1 || okCount >= 1)) {
         deferred = ordered.length - pi;
         console.warn(`[syncAllProjects] defer ${deferred} projects — heap=${heapBefore}MB writes=${writes} ok=${okCount}`);
         break;
@@ -6302,7 +6302,7 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     const t0 = Date.now();
     if (syncInProgress) {
       const waitStart = Date.now();
-      while (syncInProgress && Date.now() - waitStart < 200) await new Promise((r) => setTimeout(r, 40));
+      while (syncInProgress && Date.now() - waitStart < 2500) await new Promise((r) => setTimeout(r, 50));
     }
     if (scopeInflightCount >= SCOPE_MAX_CONCURRENT) {
       return res.status(503).json({
@@ -6310,9 +6310,9 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
         retry: true,
       });
     }
-    // Tránh OOM: nếu Node đã ngốn RAM lớn, trả lite-friendly 503 thay vì SELECT * dump
+    // Tránh OOM khi gần trần heap (keeper mặc định 4GB) — trước đây 450MB khiến list lead stale sau sync
     const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-    if (heapMb > 450) {
+    if (heapMb > 3200) {
       console.warn(`[GET /api/data/scope] skip heap=${heapMb}MB`);
       return res.status(503).json({
         error: "Server đang quá tải bộ nhớ — dùng phân trang / thử lại",
@@ -6478,9 +6478,10 @@ function emitDataChanged(reason) {
   dataVersion += 1;
   invalidateBootstrapCache();
   invalidateLeadAuxCache();
-  invalidateProjectCountsCache();
+  invalidateProjectCountsCache(); // also clears scopeResponseCache
   invalidateLeadTabIndexCache();
   invalidateSaleScopeCache();
+  invalidateScopeResponseCache();
   schedulesResponseCache = { at: 0, data: null };
   dashboardCache = { at: 0, key: "", data: null };
   if (io) {
@@ -15459,8 +15460,8 @@ if (!process.env.VERCEL) {
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
     const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-    // Chỉ skip khi gần trần heap keeper (1536) — tránh miss lead vì skip sớm
-    if (heapMb > 1100) {
+    // Chỉ skip khi gần trần heap keeper (4GB)
+    if (heapMb > 3400) {
       console.warn(`[${label}] Skip — heap=${heapMb}MB quá cao`);
       try { if (global.gc) global.gc(); } catch { /* */ }
       lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: `heap_${heapMb}`, heapMb, at: new Date().toISOString() };

@@ -1923,11 +1923,27 @@ function CRMApp({ user, updateUser, onLogout }) {
     const seq = ++projectLoadSeqRef.current;
 
     const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
-    if (cached?.data?.leads?.length) {
+    const expectedCount = Number(projectLeadCounts?.byProject?.[Number(selectedProject)] || 0);
+    const cachedLen = Array.isArray(cached?.data?.leads) ? cached.data.leads.length : 0;
+    // Count ngoài (13) > cache trong (12) → bỏ cache cũ, fetch mới ngay
+    const countMismatch =
+      selectedProject &&
+      selectedProject !== "all" &&
+      expectedCount > 0 &&
+      cachedLen > 0 &&
+      cachedLen < expectedCount;
+
+    if (cached?.data?.leads?.length && !countMismatch) {
       applyScopePayload(cached.data, cacheKey);
       setLeadsFetching(false);
       void fetchLeadScope({ background: true, skipCacheRead: true });
       return;
+    }
+
+    if (countMismatch) {
+      invalidateClientScopeCache(clientScopeCacheRef.current, cacheKey);
+      const uk = scopeUserKey(user);
+      if (uk) void deleteScopeDiskCache(uk, cacheKey);
     }
 
     setLeadsFetching(true);
@@ -2052,7 +2068,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         done();
       }
     })();
-  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData]);
+  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData, projectLeadCounts]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -2093,22 +2109,26 @@ function CRMApp({ user, updateUser, onLogout }) {
       showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
-      // Không xóa cache — giữ list hiện ngay khi đổi dự án; chỉ refresh nền
+      // Xóa cache list lead cũ — trước đây counts cập nhật (13) nhưng cache vẫn 12 khi click vào dự án
+      invalidateClientScopeCache(clientScopeCacheRef.current);
+      const uk = scopeUserKey(user);
+      if (uk) void deleteScopeDiskCache(uk);
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       dataChangedTimerRef.current = setTimeout(() => {
         fetchProjectLeadCounts();
         // Sale ở màn chọn dự án: không đụng lead list — tin vào socket lead-notification
         if (user.role === "sale" && !selectedProject) return;
         if (selectedProject === "personal") return;
+        if (!selectedProject) return;
         fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
-      }, 600);
+      }, 400);
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
     return () => {
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       socket.disconnect();
     };
-  }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user.role, selectedProject, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user, selectedProject, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -2129,9 +2149,13 @@ function CRMApp({ user, updateUser, onLogout }) {
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
             if (selectedProject === "personal") return;
-            // Soft refresh — không nuke cache (tránh click dự án phải load lạnh)
+            // Soft refresh — invalidate cache để count ngoài khớp list trong
+            invalidateClientScopeCache(clientScopeCacheRef.current);
+            const uk = scopeUserKey(user);
+            if (uk) void deleteScopeDiskCache(uk);
             fetchProjectLeadCounts();
             if (user.role === "sale" && !selectedProject) return;
+            if (!selectedProject) return;
             fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
           }
         })
@@ -2145,7 +2169,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, user.role, selectedProject]);
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, fetchProjectLeadCounts, user, selectedProject]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
