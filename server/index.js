@@ -6149,6 +6149,8 @@ function emitLeadNotification(userId, payload = {}) {
     body: payload.body || "Ban co thong bao moi",
     sound: payload.sound || "manager",
     leadId: payload.data?.leadId || payload.leadId || null,
+    phone: payload.data?.phone || payload.phone || null,
+    tag: payload.tag || null,
     ts: Date.now(),
   });
 }
@@ -10435,10 +10437,21 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (existCheck) {
         actualLeadId = existCheck.id;
         console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by name+phone ${name}/${phone} -> ID ${actualLeadId}`);
-      } else {
-        return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId}, name=${name})` });
       }
-    } else if (!existCheck) {
+    }
+    // Fallback phone-only — client đôi khi gửi thiếu name (chia lead thất bại sau sync đổi ID)
+    if (!existCheck && phone) {
+      existCheck = await get(
+        db,
+        "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1",
+        [String(phone).trim()]
+      );
+      if (existCheck) {
+        actualLeadId = existCheck.id;
+        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualLeadId}`);
+      }
+    }
+    if (!existCheck) {
       return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId})` });
     }
 
@@ -10599,9 +10612,14 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
             sendPushToDisplayName(saleName, {
               title: "Bạn có lead mới",
               body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
-              tag: `sale-lead-${actualLeadId}`,
+              tag: `sale-lead-${actualLeadId}-${Date.now()}`,
               sound: "sale",
-              data: { url: "/", type: "sale_new_lead", leadId: actualLeadId },
+              data: {
+                url: "/",
+                type: "sale_new_lead",
+                leadId: actualLeadId,
+                phone: lead?.phone || "",
+              },
               requireInteraction: true,
             }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
           } catch (pushErr) {

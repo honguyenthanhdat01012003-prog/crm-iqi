@@ -91,15 +91,17 @@ export function detectLeadNotifications(prevLeads, nextLeads, { role, displayNam
     return isRecentLead(l);
   });
 
+  // Lead vừa vào list của sale (chia mới / chia lại) — không yêu cầu known/recent.
+  // Chỉ dùng khi refresh sau boot (không suppress), tránh flood lúc load lần đầu.
   const newlyAssigned = role === "sale"
     ? nextArr.filter((l) => {
       const id = Number(l?.id);
       const key = leadKey(l);
-      if (!id || !key || !known.has(id) || seen.has(key)) return false;
+      if (!id || !key || seen.has(key)) return false;
       if (!isSamePersonName(l.saleName, displayName)) return false;
       const prevLead = prevArr.find((p) => Number(p.id) === id);
-      if (!prevLead) return false;
-      return !isSamePersonName(prevLead.saleName, displayName);
+      if (prevLead && isSamePersonName(prevLead.saleName, displayName)) return false;
+      return true;
     })
     : [];
 
@@ -113,15 +115,18 @@ export function detectLeadNotifications(prevLeads, nextLeads, { role, displayNam
 
 export function leadFromPushPayload(payload = {}) {
   const body = String(payload.body || "");
-  const leadId = Number(payload.leadId || payload.id || 0) || 0;
-  const fallbackKey = payload.tag || payload.title || body || String(Date.now());
+  const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+  const leadId = Number(payload.leadId || data.leadId || payload.id || 0) || 0;
+  const ts = payload.ts || Date.now();
+  const fallbackKey = payload.tag || payload.title || body || String(ts);
   const nameFromBody = body.split("-")[0]?.replace(/^.*?:/, "").trim();
+  // Unique theo từng lần push — chia lại cùng lead không bị crm_seen_keys nuốt
   return {
     id: leadId || `push:${fallbackKey}`,
     leadId,
-    notifKey: leadId ? `id:${leadId}` : `push:${fallbackKey}`,
+    notifKey: leadId ? `push:${leadId}:${ts}` : `push:${fallbackKey}`,
     name: nameFromBody || payload.title || "Lead moi",
-    phone: payload.phone || "",
+    phone: payload.phone || data.phone || "",
     notifTime: Date.now(),
     fromPush: true,
   };

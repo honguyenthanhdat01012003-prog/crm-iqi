@@ -1356,8 +1356,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   const dataChangedTimerRef = useRef(null);
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
 
-  const applyScopePayload = useCallback((data, cacheKey) => {
+  const applyScopePayload = useCallback((data, cacheKey, options = {}) => {
     if (!data || !Array.isArray(data.leads)) return;
+    const suppressNotifications = options.suppressNotifications !== false;
     // Scope rỗng nhưng leadsTotal > 0 = response lỗi/đứt — không ghi đè list
     if (data.leads.length === 0 && Number(data.leadsTotal) > 0) return;
     // Scope rỗng trong khi list đang có data và total không xác nhận 0 — giữ lite/cache
@@ -1366,7 +1367,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Dự án quá lớn: dùng phân trang server, không bật local scope mode
     if (data.leads.length > 0 && (data.scopeTooLarge || data.paginated === true || data.scope === false)) {
-      applyApiData(data, { suppressNotifications: true });
+      applyApiData(data, { suppressNotifications });
       leadsRef.current = data.leads;
       setLeadsScopeMode(false);
       leadsScopeModeRef.current = false;
@@ -1379,7 +1380,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     scopeCacheKeyRef.current = cacheKey;
     setLeadsScopeMode(true);
     leadsScopeModeRef.current = true;
-    applyApiData(data, { suppressNotifications: true });
+    applyApiData(data, { suppressNotifications });
     leadsRef.current = data.leads;
     if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
       stableTabCountsRef.current = data.tabCounts;
@@ -1474,7 +1475,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [buildTabCountsUrl]);
 
-  const fetchLeadScope = useCallback(async ({ background = false, skipCacheRead = false } = {}) => {
+  const fetchLeadScope = useCallback(async ({ background = false, skipCacheRead = false, detectNotifications = false } = {}) => {
     const userKey = scopeUserKey(user);
     const cacheKey = buildScopeCacheKey({
       selectedProject,
@@ -1522,7 +1523,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (background && scopeCacheKeyRef.current !== requestKey) return data;
       markInitialDataLoaded();
       bootDoneRef.current = true;
-      applyScopePayload(data, cacheKey);
+      applyScopePayload(data, cacheKey, {
+        // Chỉ bật detect khi realtime refresh (socket/poll) — tránh flood lúc boot/cache
+        suppressNotifications: !detectNotifications,
+      });
       if (data.leads) {
         setSeenLeadKeys((prev) => {
           if (prev.size === 0) {
@@ -2093,9 +2097,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       dataChangedTimerRef.current = setTimeout(() => {
         fetchProjectLeadCounts();
+        // Sale ở màn chọn dự án: không đụng lead list — tin vào socket lead-notification
         if (user.role === "sale" && !selectedProject) return;
         if (selectedProject === "personal") return;
-        fetchLeadScope({ background: true, skipCacheRead: true });
+        fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
       }, 600);
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
@@ -2127,7 +2132,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             // Soft refresh — không nuke cache (tránh click dự án phải load lạnh)
             fetchProjectLeadCounts();
             if (user.role === "sale" && !selectedProject) return;
-            fetchLeadScope({ background: true, skipCacheRead: true });
+            fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
           }
         })
         .catch(() => markConnectivityFailure());
@@ -9252,7 +9257,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ saleName: editSale, phone: lead.phone }),
+        body: JSON.stringify({ saleName: editSale, phone: lead.phone, name: lead.name }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
