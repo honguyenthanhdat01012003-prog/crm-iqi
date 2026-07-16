@@ -2173,7 +2173,9 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (data.hash) setSyncHash(String(data.hash));
       if (data.lastSync) setLastSync(data.lastSync);
       if (data.syncErrors && data.syncErrors.length) {
-        showToast("Đồng bộ xong nhưng có lỗi: " + data.syncErrors.join(", "), "warning");
+        const short = data.syncErrors.slice(0, 3).join(" | ");
+        const more = data.syncErrors.length > 3 ? ` (+${data.syncErrors.length - 3} dự án)` : "";
+        showToast("Đồng bộ xong nhưng sheet lỗi: " + short + more, "warning");
       } else {
         showToast("Đã đồng bộ dữ liệu từ Google Sheet", "success");
       }

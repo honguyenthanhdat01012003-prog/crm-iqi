@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { execFile } from "child_process";
 import cors from "cors";
 import crypto from "crypto";
 import express from "express";
@@ -10,9 +11,12 @@ import https from "https";
 import jwt from "jsonwebtoken";
 import zlib from "zlib";
 import path from "path";
+import { promisify } from "util";
 import { Server as SocketIOServer } from "socket.io";
 import { fileURLToPath } from "url";
 import webpush from "web-push";
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-sheet-sync-lite-h";
+const BUILD_VERSION = "2026-07-16-sheet-curl-fallback-i";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -1271,28 +1275,88 @@ function httpsGetSheetText(url, { timeoutMs = 20000 } = {}) {
   });
 }
 
+async function curlGetSheetText(url, { timeoutMs = 20000 } = {}) {
+  const timeoutSec = Math.max(5, Math.ceil(timeoutMs / 1000));
+  // curl dùng CA hệ thống Linux — ổn định hơn Node trên aaPanel khi TLS leaf fail
+  const { stdout } = await execFileAsync(
+    "curl",
+    [
+      "-fsSL",
+      "--max-time", String(timeoutSec),
+      "--connect-timeout", "10",
+      "-A", "Mozilla/5.0 (compatible; CRM-IQI-Sync/1.0)",
+      "-H", "Accept: text/csv,text/plain,*/*",
+      url,
+    ],
+    { maxBuffer: 32 * 1024 * 1024, encoding: "utf8" }
+  );
+  if (!stdout || !String(stdout).trim()) throw new Error("Sheet curl returned empty body");
+  return String(stdout);
+}
+
 async function fetchCsvText(csvUrl, opts = {}) {
   const normalizedUrl = sanitizeSheetUrl(csvUrl);
   const timeoutMs = Number(opts.timeoutMs || process.env.SHEET_FETCH_TIMEOUT_MS || 20000);
   const maxRetries = Number(opts.retries || process.env.SHEET_FETCH_RETRIES || 3);
   const parsed = assertSheetSourceUrl(normalizedUrl);
+  const preferCurl = process.env.SHEET_FETCH_CURL === "1" || process.platform === "linux";
 
   let lastErr = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      if (preferCurl) {
+        try {
+          return await curlGetSheetText(normalizedUrl, { timeoutMs });
+        } catch (curlErr) {
+          console.warn(`[sheet-fetch] curl failed (${parsed.hostname}): ${curlErr.message || curlErr}`);
+          return await httpsGetSheetText(normalizedUrl, { timeoutMs });
+        }
+      }
       return await httpsGetSheetText(normalizedUrl, { timeoutMs });
     } catch (err) {
       lastErr = err;
       const reason = String(err?.cause?.code || err?.code || err?.message || err);
       console.warn(`[sheet-fetch] attempt ${attempt}/${maxRetries} failed (${parsed.hostname}): ${reason}`);
+      // Retry bằng curl nếu Node TLS fail
+      if (/unable to verify|UNABLE_TO_VERIFY|certificate|ECONNRESET|ETIMEDOUT/i.test(reason)) {
+        try {
+          return await curlGetSheetText(normalizedUrl, { timeoutMs });
+        } catch (curlErr) {
+          lastErr = curlErr;
+          console.warn(`[sheet-fetch] curl fallback failed: ${curlErr.message || curlErr}`);
+        }
+      }
       if (attempt < maxRetries) await new Promise((r) => setTimeout(r, 350 * attempt));
     }
   }
   const msg = String(lastErr?.message || lastErr || "unknown");
-  if (/unable to verify|UNABLE_TO_VERIFY|certificate/i.test(msg)) {
-    throw new Error(`${msg} — chạy server qua keeper.js với NODE_OPTIONS=--use-system-ca rồi restart aaPanel`);
-  }
   throw new Error(`Sheet request failed after ${maxRetries} attempts: ${msg}`);
+}
+
+async function probeSheetFetchHealth() {
+  const testUrl = buildCsvUrl(DEFAULT_LEAD_GID);
+  const t0 = Date.now();
+  try {
+    const text = await fetchCsvText(testUrl, { timeoutMs: 12000, retries: 1 });
+    return {
+      ok: true,
+      ms: Date.now() - t0,
+      bytes: text.length,
+      lines: text.split(/\r?\n/).length,
+      node: process.version,
+      execArgv: process.execArgv,
+      platform: process.platform,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      ms: Date.now() - t0,
+      error: err.message || String(err),
+      node: process.version,
+      execArgv: process.execArgv,
+      platform: process.platform,
+    };
+  }
 }
 
 function extractProjectName(csvText) {
@@ -4027,6 +4091,16 @@ app.get("/api/version", (req, res) => {
     telegramMenuButtons: true,
     telegramPerplexity: true,
   });
+});
+
+// Public: test VPS → Google Sheet connectivity (no secrets)
+app.get("/api/health/sheet", async (_req, res) => {
+  try {
+    const sheet = await probeSheetFetchHealth();
+    res.status(sheet.ok ? 200 : 503).json({ version: BUILD_VERSION, sheet });
+  } catch (err) {
+    res.status(500).json({ version: BUILD_VERSION, sheet: { ok: false, error: err.message } });
+  }
 });
 
 // Debug endpoint — check manager distribution in DB (no auth for easy testing)
