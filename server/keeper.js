@@ -51,6 +51,7 @@ function start() {
     NODE_OPTIONS: [
       process.env.NODE_OPTIONS,
       `--max-old-space-size=${MAX_OLD}`,
+      "--expose-gc",
       process.env.NODE_OPTIONS?.includes("use-system-ca") ? "" : "--use-system-ca",
     ]
       .filter(Boolean)

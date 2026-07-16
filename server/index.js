@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-autosync-curl-j";
+const BUILD_VERSION = "2026-07-16-autosync-stable-k";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3980,7 +3980,8 @@ async function syncAllProjects(db) {
     let okCount = 0;
     let skippedLegacy = 0;
     // Tuần tự — sync song song dễ OOM khiến aaPanel hiện Stopped
-    for (const p of projects) {
+    for (let pi = 0; pi < projects.length; pi++) {
+      const p = projects[pi];
       try {
         if (p.is_legacy) {
           skippedLegacy++;
@@ -3990,14 +3991,21 @@ async function syncAllProjects(db) {
           errors.push(`${p.name}: thiếu lead_url`);
           continue;
         }
+        const heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
+        if (heapBefore > 520) {
+          console.warn(`[syncAllProjects] abort remaining — heap=${heapBefore}MB (đã OK ${okCount})`);
+          errors.push(`(dừng sớm heap=${heapBefore}MB, còn ${projects.length - pi} dự án)`);
+          break;
+        }
         await syncProject(db, p.id);
         okCount++;
       } catch (e) {
         console.error("Sync project", p.id, "failed:", e.message, e.stack);
         errors.push(`${p.name}: ${e.message}`);
       }
-      // nhường event loop / GC giữa các sheet
-      await new Promise((r) => setTimeout(r, 150));
+      // nhường event loop / GC giữa các sheet — tránh crash loop OOM
+      try { if (global.gc) global.gc(); } catch { /* */ }
+      await new Promise((r) => setTimeout(r, 400));
     }
     if (errors.length) console.error("Sync errors:", errors);
 
@@ -15393,9 +15401,9 @@ if (!process.env.VERCEL) {
       isSyncing = false;
     }
   };
-  setTimeout(() => runAutoSync("auto-sync-boot"), 45000);
+  setTimeout(() => runAutoSync("auto-sync-boot"), 90000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 45s`);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 90s`);
 
   // Lịch chia lead — chạy nền, không block GET /api/data
   setInterval(async () => {
