@@ -39,7 +39,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-keeper-watchdog-g";
+const BUILD_VERSION = "2026-07-16-sheet-sync-lite-h";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -6865,26 +6865,66 @@ app.post("/api/restore-backup", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-app.post("/api/sync", requireAuth, async (req, res) => {
+app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
   try {
-    const clientHash = req.body?.hash || "";
     console.log("[sync] Starting sync...");
     const { lastSync, syncErrors } = await syncAllProjects(db);
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    // Compute hash from lead count + last lead id + lastSync
-    const hashSrc = `${data.leads.length}|${data.leads[data.leads.length - 1]?.id || 0}|${lastSync}`;
-    const hash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
-    lastSyncHash = hash;
-    // If client already has this hash, return minimal response
-    if (clientHash && clientHash === hash) {
-      return res.json({ noChange: true, hash, lastSync });
+    await ensureSyncHash();
+    const out = { ok: true, lastSync, syncErrors, hash: lastSyncHash };
+    if (syncErrors.length) {
+      console.warn("[sync] completed with errors:", syncErrors.join(" | "));
+    } else {
+      console.log(`[sync] Done. hash=${lastSyncHash}`);
     }
-    console.log(`[sync] Done. leads=${data.leads.length} campaigns=${data.campaigns.length} errors=${syncErrors.length} hash=${hash}`);
-    res.json({ lastSync, syncErrors, hash, ...data });
+    res.json(out);
   } catch (err) {
     console.error("[sync] Top-level error:", err.message, err.stack);
     res.status(500).json({ error: err.message || "Sync failed" });
+  }
+});
+
+app.get("/api/sync/diagnostics", requireAuth, requireAdmin, async (_req, res) => {
+  try {
+    const projects = await all(db, "SELECT id, name, lead_url, is_legacy FROM projects ORDER BY id ASC");
+    const results = [];
+    for (const p of projects) {
+      if (p.is_legacy) {
+        results.push({ id: p.id, name: p.name, skipped: true, reason: "legacy" });
+        continue;
+      }
+      const leadUrl = sanitizeSheetUrl(p.lead_url);
+      if (!leadUrl) {
+        results.push({ id: p.id, name: p.name, skipped: true, reason: "no_lead_url" });
+        continue;
+      }
+      try {
+        const raw = await fetchCsvText(leadUrl, { timeoutMs: 15000, retries: 1 });
+        let cleanLeadCsv = raw;
+        const firstLine = raw.split(/\r?\n/)[0] || "";
+        if (!firstLine.includes(",")) cleanLeadCsv = raw.split(/\r?\n/).slice(1).join("\n");
+        const { headers, rawHeaders, rows, rawRows } = parseCSV(cleanLeadCsv);
+        const mapped = mapLeads(rows, headers, rawRows, rawHeaders);
+        results.push({
+          id: p.id,
+          name: p.name,
+          ok: true,
+          bytes: raw.length,
+          rowCount: rows.length,
+          mappedLeads: mapped.length,
+          leadUrl,
+        });
+      } catch (err) {
+        results.push({ id: p.id, name: p.name, ok: false, leadUrl, error: err.message || String(err) });
+      }
+    }
+    res.json({
+      build: BUILD_VERSION,
+      nodeVersion: process.version,
+      execArgv: process.execArgv,
+      results,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

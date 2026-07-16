@@ -2163,16 +2163,23 @@ function CRMApp({ user, updateUser, onLogout }) {
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const r = await apiFetch(`${API}/sync`, { method: "POST" });
+      const r = await apiFetch(`${API}/sync`, { method: "POST", timeoutMs: 120000 });
       if (!r.ok) {
         const err = await r.json().catch(() => ({}));
         showToast("Đồng bộ thất bại: " + (err.error || r.statusText), "error");
         return;
       }
       const data = await r.json();
-      applyApiData(data);
+      if (data.hash) setSyncHash(String(data.hash));
+      if (data.lastSync) setLastSync(data.lastSync);
       if (data.syncErrors && data.syncErrors.length) {
-        showToast("Đồng bộ hoàn tất nhưng có lỗi: " + data.syncErrors.join(", "), "warning");
+        showToast("Đồng bộ xong nhưng có lỗi: " + data.syncErrors.join(", "), "warning");
+      } else {
+        showToast("Đã đồng bộ dữ liệu từ Google Sheet", "success");
+      }
+      fetchProjectLeadCounts();
+      if (selectedProject !== "personal") {
+        fetchLeadScope({ background: true, skipCacheRead: true });
       }
     } catch (e) {
       console.error("Sync failed", e);

@@ -63,7 +63,10 @@ function start() {
     log(`start ${appScript} (heap max ${MAX_OLD}MB, restart#${restarts}, delay=${delay}ms)`);
     touchHeartbeat();
     try {
-      child = spawn(process.execPath, [appScript], {
+      const nodeArgs = process.execArgv.includes("use-system-ca")
+        ? [appScript]
+        : ["--use-system-ca", appScript];
+      child = spawn(process.execPath, nodeArgs, {
         stdio: "inherit",
         env,
         cwd: path.join(__dirname, ".."),
