@@ -7,6 +7,11 @@
 
 > Capacitor 8 cần Xcode 16 — đã hạ xuống Cap 5 để test trên VM/Mac cũ.
 
+## Push khi tắt app
+- **Android (máy thật):** đã có `google-services.json` + `VITE_NATIVE_PUSH_ENABLED=true`. Build APK, cấp quyền thông báo, login → FCM token. VPS cần `FIREBASE_*` (xem `HUONG_DAN_FIREBASE_NATIVE_PUSH.md`).
+- **iOS Simulator:** **không** nhận remote push khi kill app — chỉ báo khi app đang mở (Socket + local notif).
+- **iPhone thật:** cần thêm `GoogleService-Info.plist` + APNs key trên Firebase; chưa setup trong repo này.
+
 ## Build & sync
 ```bash
 git pull
@@ -29,3 +34,4 @@ Mở **`ios/App/App.xcworkspace`** (không mở `.xcodeproj` nếu có CocoaPods
 - `VITE_API_BASE_URL` tuyệt đối + CapacitorHttp
 - Bearer; login xóa token cũ; không `Content-Type` trên GET
 - SW tắt trên native
+- Native push FCM (Android) khi `VITE_NATIVE_PUSH_ENABLED=true`
