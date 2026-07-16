@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-autosync-stable-k";
+const BUILD_VERSION = "2026-07-16-autosync-60s-l";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3764,23 +3764,40 @@ async function readData(db) {
   return result;
 }
 
-async function syncProject(db, projectId) {
+async function syncProject(db, projectId, opts = {}) {
+  const skipCost = opts.skipCost === true;
+  const force = opts.force === true;
   const project = await get(db, "SELECT * FROM projects WHERE id = ?", [projectId]);
   if (!project) throw new Error("Project not found: " + projectId);
 
   // Skip legacy (old data) projects — they don't sync from sheets
-  if (project.is_legacy) return;
+  if (project.is_legacy) return { skipped: true, reason: "legacy" };
 
   const leadUrl = sanitizeSheetUrl(project.lead_url);
   const costUrl = sanitizeSheetUrl(project.cost_url);
-  if (!leadUrl) return;
+  if (!leadUrl) return { skipped: true, reason: "no_lead_url" };
 
-  const rawLead = await fetchCsvText(leadUrl);
+  // Cache-bust Google publish CSV (pub hay trả bản cũ vài phút)
+  const fetchUrl = leadUrl.includes("?")
+    ? `${leadUrl}&crm_sync_ts=${Date.now()}`
+    : `${leadUrl}?crm_sync_ts=${Date.now()}`;
+  const rawLead = await fetchCsvText(fetchUrl);
 
   let cleanLeadCsv = rawLead;
   const firstLine = rawLead.split(/\r?\n/)[0] || "";
   if (!firstLine.includes(",")) {
     cleanLeadCsv = rawLead.split(/\r?\n/).slice(1).join("\n");
+  }
+
+  // Sheet không đổi → bỏ ghi DB (auto-sync 60s vẫn nhẹ, không OOM)
+  const sheetHash = crypto.createHash("md5").update(cleanLeadCsv).digest("hex");
+  const hashKey = `sheet_csv_hash_${projectId}`;
+  if (!force) {
+    const prevHash = await get(db, "SELECT value FROM settings WHERE key = ?", [hashKey]);
+    if (prevHash?.value === sheetHash) {
+      console.log(`[syncProject] project=${projectId} sheet unchanged (${sheetHash.slice(0, 8)}), skip`);
+      return { unchanged: true, sheetHash };
+    }
   }
 
   const { headers, rawHeaders, rows, rawRows } = parseCSV(cleanLeadCsv);
@@ -3789,7 +3806,7 @@ async function syncProject(db, projectId) {
   // Safety: if Google Sheets returned 0 leads, skip to prevent wiping existing data
   if (mappedLeads.length === 0) {
     console.log(`[syncProject] project=${projectId} got 0 leads from Google Sheets, skipping to preserve data`);
-    return;
+    return { skipped: true, reason: "zero_leads" };
   }
 
   mappedLeads.forEach((l) => {
@@ -3797,7 +3814,7 @@ async function syncProject(db, projectId) {
   });
 
   let projectCost = { totalSpent: 0, totalLeads: 0, totalBooking: 0, cpLead: 0 };
-  if (costUrl) {
+  if (costUrl && !skipCost) {
     try {
       const rawCost = await fetchCsvText(costUrl);
       const { rawHeaders: costRH, rawRows: costRR } = parseCSV(rawCost);
@@ -3822,10 +3839,13 @@ async function syncProject(db, projectId) {
   const campaigns = Array.from(campaignMap.values());
 
   const { newPhones } = await replaceProjectData(db, projectId, mappedLeads, campaigns);
-  await run(db, "UPDATE projects SET cost_data = ? WHERE id = ?", [
-    JSON.stringify(projectCost),
-    projectId,
-  ]);
+  if (costUrl && !skipCost) {
+    await run(db, "UPDATE projects SET cost_data = ? WHERE id = ?", [
+      JSON.stringify(projectCost),
+      projectId,
+    ]);
+  }
+  await upsertSetting(db, hashKey, sheetHash);
 
   // === Round-robin: assign manager_name to ALL unassigned leads ===
   try {
@@ -3961,6 +3981,11 @@ async function syncProject(db, projectId) {
     console.error(`[syncProject] Manager assign/notify error for project ${projectId}:`, notifyErr.message);
   }
 
+  return {
+    unchanged: false,
+    newCount: Array.isArray(newPhones) ? newPhones.length : 0,
+    newPhones: newPhones || [],
+  };
 }
 
 let lastAutoSyncMeta = {
@@ -3972,12 +3997,16 @@ let lastAutoSyncMeta = {
   insertedHint: null,
 };
 
-async function syncAllProjects(db) {
+async function syncAllProjects(db, opts = {}) {
+  const skipCost = opts.skipCost === true;
+  const force = opts.force === true;
   syncInProgress = true;
   try {
     const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
     const errors = [];
     let okCount = 0;
+    let changedCount = 0;
+    let newLeadTotal = 0;
     let skippedLegacy = 0;
     // Tuần tự — sync song song dễ OOM khiến aaPanel hiện Stopped
     for (let pi = 0; pi < projects.length; pi++) {
@@ -3992,34 +4021,37 @@ async function syncAllProjects(db) {
           continue;
         }
         const heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-        if (heapBefore > 520) {
+        if (heapBefore > 560) {
           console.warn(`[syncAllProjects] abort remaining — heap=${heapBefore}MB (đã OK ${okCount})`);
           errors.push(`(dừng sớm heap=${heapBefore}MB, còn ${projects.length - pi} dự án)`);
           break;
         }
-        await syncProject(db, p.id);
+        const pr = await syncProject(db, p.id, { skipCost, force });
         okCount++;
+        if (pr && !pr.unchanged && !pr.skipped) {
+          changedCount++;
+          newLeadTotal += Number(pr.newCount || 0);
+        }
       } catch (e) {
         console.error("Sync project", p.id, "failed:", e.message, e.stack);
         errors.push(`${p.name}: ${e.message}`);
       }
-      // nhường event loop / GC giữa các sheet — tránh crash loop OOM
       try { if (global.gc) global.gc(); } catch { /* */ }
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 200));
     }
     if (errors.length) console.error("Sync errors:", errors);
 
     const lastSync = new Date().toISOString();
-    // Chỉ ghi lastSync khi có ít nhất 1 project sync OK — tránh UI tưởng đã sync khi toàn lỗi sheet
     if (okCount > 0) {
       await upsertSetting(db, "lastSync", lastSync);
       try {
         const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
         const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
-        const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
+        const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}|${changedCount}`;
         lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
       } catch {}
-      emitDataChanged("sync");
+      // Chỉ broadcast khi có thay đổi thật — tránh refresh spam mỗi phút
+      if (changedCount > 0) emitDataChanged("sync");
     } else {
       console.warn(`[syncAllProjects] 0 project OK (errors=${errors.length}, legacy=${skippedLegacy}) — không cập nhật lastSync`);
     }
@@ -4029,13 +4061,21 @@ async function syncAllProjects(db) {
       at: lastSync,
       ok: okCount > 0 && errors.length === 0,
       okCount,
+      changedCount,
+      newLeadTotal,
       errors: errors.slice(0, 10),
       skipped: null,
       heapMb: Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024)),
-      insertedHint: null,
+      insertedHint: newLeadTotal || null,
     };
 
-    return { lastSync: okCount > 0 ? lastSync : (await getConfig(db)).lastSync, syncErrors: errors, okCount };
+    return {
+      lastSync: okCount > 0 ? lastSync : (await getConfig(db)).lastSync,
+      syncErrors: errors,
+      okCount,
+      changedCount,
+      newLeadTotal,
+    };
   } finally {
     syncInProgress = false;
   }
@@ -6994,9 +7034,12 @@ app.post("/api/restore-backup", requireAuth, requireAdmin, async (req, res) => {
 app.post("/api/sync", requireAuth, requireAdmin, async (req, res) => {
   try {
     console.log("[sync] Starting sync...");
-    const { lastSync, syncErrors } = await syncAllProjects(db);
+    const { lastSync, syncErrors, changedCount, newLeadTotal } = await syncAllProjects(db, {
+      skipCost: false,
+      force: true,
+    });
     await ensureSyncHash();
-    const out = { ok: true, lastSync, syncErrors, hash: lastSyncHash };
+    const out = { ok: true, lastSync, syncErrors, hash: lastSyncHash, changedCount, newLeadTotal };
     if (syncErrors.length) {
       console.warn("[sync] completed with errors:", syncErrors.join(" | "));
     } else {
@@ -7180,7 +7223,7 @@ app.post("/api/projects/import-legacy", requireAuth, requireAdminOnly, async (re
 app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    await syncProject(db, id);
+    await syncProject(db, id, { skipCost: false, force: true });
     const data = await readData(db);
     await filterDataForRole(data, req.user);
     res.json(data);
@@ -15354,39 +15397,26 @@ if (!process.env.VERCEL) {
     }, 3000);
   });
 
-  // Auto-sync Google Sheets (default 3 phút — dày quá dễ OOM → aaPanel Stopped)
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 180 * 1000;
+  // Auto-sync Google Sheets mỗi ~60s (như trước). Sheet không đổi → chỉ fetch+hash, không ghi DB.
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 60 * 1000;
   let isSyncing = false;
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
-    if (scopeInflightCount > 0) {
-      console.log(`[${label}] Skip — scope đang chạy`);
-      lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: "scope_inflight", at: new Date().toISOString() };
-      return;
-    }
     const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-    const lastOkAt = lastAutoSyncMeta?.ok ? Date.parse(lastAutoSyncMeta.at || 0) : 0;
-    const staleMs = Date.now() - (lastOkAt || 0);
-    // Heap cao: chỉ skip nếu vừa sync OK gần đây (<8 phút). Stale → vẫn sync để không miss lead.
-    if (heapMb > 480 && staleMs < 8 * 60 * 1000) {
-      console.warn(`[${label}] Skip — heap=${heapMb}MB (tránh OOM/Stopped)`);
-      try {
-        if (global.gc) global.gc();
-      } catch { /* no --expose-gc */ }
-      dashboardCache = { at: 0, key: "", data: null };
-      scopeResponseCache = { at: 0, key: "", data: null };
+    // Không skip vì scope/user đang load — trước đây hay miss lead giờ cao điểm
+    if (heapMb > 580) {
+      console.warn(`[${label}] Skip — heap=${heapMb}MB quá cao`);
+      try { if (global.gc) global.gc(); } catch { /* */ }
       lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: `heap_${heapMb}`, heapMb, at: new Date().toISOString() };
       return;
-    }
-    if (heapMb > 480) {
-      console.warn(`[${label}] heap=${heapMb}MB nhưng sync stale ${Math.round(staleMs / 1000)}s — vẫn chạy để nhận lead mới`);
-      try { if (global.gc) global.gc(); } catch { /* */ }
     }
     isSyncing = true;
     try {
       console.log(`[${label}] Starting (heap=${heapMb}MB)...`);
-      const result = await syncAllProjects(db);
-      console.log(`[${label}] Done ok=${result.okCount || 0} errors=${(result.syncErrors || []).length}`);
+      const result = await syncAllProjects(db, { skipCost: true, force: false });
+      console.log(
+        `[${label}] Done ok=${result.okCount || 0} changed=${result.changedCount || 0} new=${result.newLeadTotal || 0} errors=${(result.syncErrors || []).length}`
+      );
     } catch (e) {
       console.error(`[${label}] Error:`, e.message);
       lastAutoSyncMeta = {
@@ -15401,9 +15431,9 @@ if (!process.env.VERCEL) {
       isSyncing = false;
     }
   };
-  setTimeout(() => runAutoSync("auto-sync-boot"), 90000);
+  setTimeout(() => runAutoSync("auto-sync-boot"), 25000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 90s`);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 25s`);
 
   // Lịch chia lead — chạy nền, không block GET /api/data
   setInterval(async () => {

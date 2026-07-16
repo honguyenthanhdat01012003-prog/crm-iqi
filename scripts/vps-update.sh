@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PORT="${PORT:-4000}"
-EXPECTED_VERSION_PREFIX="2026-07-16-autosync-stable"
+EXPECTED_VERSION_PREFIX="2026-07-16-autosync-60s"
 
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
@@ -72,4 +72,4 @@ echo "$SHEET_JSON"
 
 echo "Done. Hard-refresh CRM (Ctrl+F5)."
 echo "Public check: curl -s https://crm-iqi.id.vn/api/version"
-echo "Expect version: 2026-07-16-autosync-stable-k"
+echo "Expect version: 2026-07-16-autosync-60s-l"
