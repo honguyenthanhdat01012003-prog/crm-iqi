@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-sheet-curl-fallback-i";
+const BUILD_VERSION = "2026-07-16-autosync-curl-j";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3963,15 +3963,35 @@ async function syncProject(db, projectId) {
 
 }
 
+let lastAutoSyncMeta = {
+  at: null,
+  ok: null,
+  errors: [],
+  skipped: null,
+  heapMb: null,
+  insertedHint: null,
+};
+
 async function syncAllProjects(db) {
   syncInProgress = true;
   try {
     const projects = await all(db, "SELECT * FROM projects ORDER BY id ASC");
     const errors = [];
+    let okCount = 0;
+    let skippedLegacy = 0;
     // Tuần tự — sync song song dễ OOM khiến aaPanel hiện Stopped
     for (const p of projects) {
       try {
+        if (p.is_legacy) {
+          skippedLegacy++;
+          continue;
+        }
+        if (!sanitizeSheetUrl(p.lead_url)) {
+          errors.push(`${p.name}: thiếu lead_url`);
+          continue;
+        }
         await syncProject(db, p.id);
+        okCount++;
       } catch (e) {
         console.error("Sync project", p.id, "failed:", e.message, e.stack);
         errors.push(`${p.name}: ${e.message}`);
@@ -3980,16 +4000,34 @@ async function syncAllProjects(db) {
       await new Promise((r) => setTimeout(r, 150));
     }
     if (errors.length) console.error("Sync errors:", errors);
+
     const lastSync = new Date().toISOString();
-    await upsertSetting(db, "lastSync", lastSync);
-    try {
-      const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
-      const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
-      const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
-      lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
-    } catch {}
-    emitDataChanged("sync");
-    return { lastSync, syncErrors: errors };
+    // Chỉ ghi lastSync khi có ít nhất 1 project sync OK — tránh UI tưởng đã sync khi toàn lỗi sheet
+    if (okCount > 0) {
+      await upsertSetting(db, "lastSync", lastSync);
+      try {
+        const lc = await get(db, "SELECT COUNT(*) as c FROM leads");
+        const lastLead = await get(db, "SELECT id FROM leads ORDER BY id DESC LIMIT 1");
+        const hashSrc = `${lc?.c || 0}|${lastLead?.id || 0}|${lastSync}`;
+        lastSyncHash = crypto.createHash("md5").update(hashSrc).digest("hex").slice(0, 12);
+      } catch {}
+      emitDataChanged("sync");
+    } else {
+      console.warn(`[syncAllProjects] 0 project OK (errors=${errors.length}, legacy=${skippedLegacy}) — không cập nhật lastSync`);
+    }
+
+    await upsertSetting(db, "lastSyncErrors", JSON.stringify(errors.slice(0, 20))).catch(() => {});
+    lastAutoSyncMeta = {
+      at: lastSync,
+      ok: okCount > 0 && errors.length === 0,
+      okCount,
+      errors: errors.slice(0, 10),
+      skipped: null,
+      heapMb: Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024)),
+      insertedHint: null,
+    };
+
+    return { lastSync: okCount > 0 ? lastSync : (await getConfig(db)).lastSync, syncErrors: errors, okCount };
   } finally {
     syncInProgress = false;
   }
@@ -4079,8 +4117,12 @@ if (fs.existsSync(distPath)) {
 }
 
 // Version endpoint — no auth required, used to verify deployment
-app.get("/api/version", (req, res) => {
+app.get("/api/version", async (req, res) => {
   const dist = verifyDistBundle();
+  let lastSync = null;
+  try {
+    lastSync = (await getConfig(db))?.lastSync || null;
+  } catch { /* db may be down */ }
   res.json({
     version: BUILD_VERSION,
     uptime: process.uptime(),
@@ -4088,6 +4130,8 @@ app.get("/api/version", (req, res) => {
     distOk: dist.ok,
     jsBundle: dist.jsBundle || null,
     distError: dist.ok ? null : dist.error,
+    lastSync,
+    autoSync: lastAutoSyncMeta,
     telegramMenuButtons: true,
     telegramPerplexity: true,
   });
@@ -15309,32 +15353,49 @@ if (!process.env.VERCEL) {
     if (isSyncing || !db) return;
     if (scopeInflightCount > 0) {
       console.log(`[${label}] Skip — scope đang chạy`);
+      lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: "scope_inflight", at: new Date().toISOString() };
       return;
     }
     const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-    if (heapMb > 420) {
+    const lastOkAt = lastAutoSyncMeta?.ok ? Date.parse(lastAutoSyncMeta.at || 0) : 0;
+    const staleMs = Date.now() - (lastOkAt || 0);
+    // Heap cao: chỉ skip nếu vừa sync OK gần đây (<8 phút). Stale → vẫn sync để không miss lead.
+    if (heapMb > 480 && staleMs < 8 * 60 * 1000) {
       console.warn(`[${label}] Skip — heap=${heapMb}MB (tránh OOM/Stopped)`);
       try {
         if (global.gc) global.gc();
       } catch { /* no --expose-gc */ }
       dashboardCache = { at: 0, key: "", data: null };
       scopeResponseCache = { at: 0, key: "", data: null };
+      lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: `heap_${heapMb}`, heapMb, at: new Date().toISOString() };
       return;
+    }
+    if (heapMb > 480) {
+      console.warn(`[${label}] heap=${heapMb}MB nhưng sync stale ${Math.round(staleMs / 1000)}s — vẫn chạy để nhận lead mới`);
+      try { if (global.gc) global.gc(); } catch { /* */ }
     }
     isSyncing = true;
     try {
       console.log(`[${label}] Starting (heap=${heapMb}MB)...`);
-      await syncAllProjects(db);
-      console.log(`[${label}] Done`);
+      const result = await syncAllProjects(db);
+      console.log(`[${label}] Done ok=${result.okCount || 0} errors=${(result.syncErrors || []).length}`);
     } catch (e) {
       console.error(`[${label}] Error:`, e.message);
+      lastAutoSyncMeta = {
+        ...lastAutoSyncMeta,
+        at: new Date().toISOString(),
+        ok: false,
+        errors: [e.message],
+        skipped: null,
+        heapMb,
+      };
     } finally {
       isSyncing = false;
     }
   };
-  setTimeout(() => runAutoSync("auto-sync-boot"), 60000);
+  setTimeout(() => runAutoSync("auto-sync-boot"), 45000);
   setInterval(() => runAutoSync("auto-sync"), SYNC_INTERVAL);
-  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 60s`);
+  console.log(`[auto-sync] Enabled, interval=${SYNC_INTERVAL / 1000}s, first run in 45s`);
 
   // Lịch chia lead — chạy nền, không block GET /api/data
   setInterval(async () => {
