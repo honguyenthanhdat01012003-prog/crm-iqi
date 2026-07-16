@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import fs from "fs";
 import helmet from "helmet";
 import http from "http";
+import https from "https";
 import jwt from "jsonwebtoken";
 import zlib from "zlib";
 import path from "path";
@@ -1196,42 +1197,102 @@ async function getConfig(db) {
   };
 }
 
+const SHEET_FETCH_HOST_SUFFIXES = ["google.com", "googleapis.com", "googleusercontent.com"];
+
+function isAllowedSheetHost(hostname = "") {
+  const h = String(hostname).toLowerCase();
+  return SHEET_FETCH_HOST_SUFFIXES.some((suffix) => h === suffix || h.endsWith(`.${suffix}`));
+}
+
+function assertSheetSourceUrl(csvUrl) {
+  let parsed;
+  try {
+    parsed = new URL(csvUrl);
+  } catch {
+    throw new Error("Invalid URL format");
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!host.endsWith("google.com") && !host.endsWith("googleapis.com")) {
+    throw new Error("Only Google Sheets URLs are allowed");
+  }
+  if (parsed.protocol !== "https:") throw new Error("Only HTTPS URLs allowed");
+  return parsed;
+}
+
+function httpsGetSheetText(url, { timeoutMs = 20000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const visit = (currentUrl, redirectCount = 0) => {
+      if (redirectCount > 10) return reject(new Error("Sheet redirect loop"));
+      let parsed;
+      try {
+        parsed = new URL(currentUrl);
+      } catch {
+        return reject(new Error("Invalid URL format"));
+      }
+      if (!isAllowedSheetHost(parsed.hostname)) {
+        return reject(new Error(`Sheet redirect blocked: ${parsed.hostname}`));
+      }
+      if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return reject(new Error("Only HTTPS URLs allowed"));
+      }
+      const lib = parsed.protocol === "https:" ? https : http;
+      const req = lib.get({
+        hostname: parsed.hostname,
+        path: `${parsed.pathname}${parsed.search}`,
+        port: parsed.port || undefined,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; CRM-IQI-Sync/1.0)",
+          Accept: "text/csv,text/plain,*/*",
+        },
+        timeout: timeoutMs,
+        family: process.env.SHEET_FETCH_IPV4 === "1" ? 4 : undefined,
+      }, (res) => {
+        if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume();
+          const next = new URL(res.headers.location, currentUrl).toString();
+          return visit(next, redirectCount + 1);
+        }
+        if (res.statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`Sheet request failed: ${res.statusCode}`));
+        }
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => { body += chunk; });
+        res.on("end", () => resolve(body));
+      });
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("Sheet request timeout"));
+      });
+      req.on("error", reject);
+    };
+    visit(url);
+  });
+}
+
 async function fetchCsvText(csvUrl, opts = {}) {
   const normalizedUrl = sanitizeSheetUrl(csvUrl);
   const timeoutMs = Number(opts.timeoutMs || process.env.SHEET_FETCH_TIMEOUT_MS || 20000);
   const maxRetries = Number(opts.retries || process.env.SHEET_FETCH_RETRIES || 3);
-
-  // SSRF protection: only allow Google Sheets URLs
-  let parsed;
-  try {
-    parsed = new URL(normalizedUrl);
-    if (!parsed.hostname.endsWith("google.com") && !parsed.hostname.endsWith("googleapis.com")) {
-      throw new Error("Only Google Sheets URLs are allowed");
-    }
-    if (parsed.protocol !== "https:") throw new Error("Only HTTPS URLs allowed");
-  } catch (e) {
-    if (e.message.includes("allowed")) throw e;
-    throw new Error("Invalid URL format");
-  }
+  const parsed = assertSheetSourceUrl(normalizedUrl);
 
   let lastErr = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const response = await fetch(normalizedUrl, { signal: ctrl.signal });
-      if (!response.ok) throw new Error(`Sheet request failed: ${response.status}`);
-      return await response.text();
+      return await httpsGetSheetText(normalizedUrl, { timeoutMs });
     } catch (err) {
       lastErr = err;
       const reason = String(err?.cause?.code || err?.code || err?.message || err);
       console.warn(`[sheet-fetch] attempt ${attempt}/${maxRetries} failed (${parsed.hostname}): ${reason}`);
       if (attempt < maxRetries) await new Promise((r) => setTimeout(r, 350 * attempt));
-    } finally {
-      clearTimeout(timer);
     }
   }
-  throw new Error(`Sheet request failed after ${maxRetries} attempts: ${lastErr?.message || lastErr}`);
+  const msg = String(lastErr?.message || lastErr || "unknown");
+  if (/unable to verify|UNABLE_TO_VERIFY|certificate/i.test(msg)) {
+    throw new Error(`${msg} — chạy server qua keeper.js với NODE_OPTIONS=--use-system-ca rồi restart aaPanel`);
+  }
+  throw new Error(`Sheet request failed after ${maxRetries} attempts: ${msg}`);
 }
 
 function extractProjectName(csvText) {

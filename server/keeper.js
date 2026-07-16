@@ -48,7 +48,11 @@ function start() {
 
   const env = {
     ...process.env,
-    NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${MAX_OLD}`]
+    NODE_OPTIONS: [
+      process.env.NODE_OPTIONS,
+      `--max-old-space-size=${MAX_OLD}`,
+      process.env.NODE_OPTIONS?.includes("use-system-ca") ? "" : "--use-system-ca",
+    ]
       .filter(Boolean)
       .join(" ")
       .trim(),
