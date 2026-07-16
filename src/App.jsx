@@ -2174,10 +2174,16 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (data.lastSync) setLastSync(data.lastSync);
       if (data.syncErrors && data.syncErrors.length) {
         const short = data.syncErrors.slice(0, 3).join(" | ");
-        const more = data.syncErrors.length > 3 ? ` (+${data.syncErrors.length - 3} dự án)` : "";
-        showToast("Đồng bộ xong nhưng sheet lỗi: " + short + more, "warning");
+        const more = data.syncErrors.length > 3 ? ` (+${data.syncErrors.length - 3})` : "";
+        showToast("Đồng bộ xong nhưng có lỗi: " + short + more, "warning");
+      } else if (data.deferred > 0) {
+        showToast(
+          `Đã đồng bộ ${data.okCount || 0} dự án (RAM cao, còn ${data.deferred} sẽ chạy lần sau)`,
+          "warning"
+        );
       } else {
-        showToast("Đã đồng bộ dữ liệu từ Google Sheet", "success");
+        const extra = data.newLeadTotal > 0 ? ` — +${data.newLeadTotal} lead mới` : "";
+        showToast("Đã đồng bộ dữ liệu từ Google Sheet" + extra, "success");
       }
       fetchProjectLeadCounts();
       if (selectedProject !== "personal") {

@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appScript = path.join(__dirname, "index.js");
 const HEARTBEAT = path.join(__dirname, "data", "keeper.heartbeat");
 const RESTART_MS = Math.max(1500, Number(process.env.KEEPER_RESTART_MS) || 2500);
-const MAX_OLD = process.env.NODE_MAX_OLD_SPACE_SIZE || "640";
+const MAX_OLD = process.env.NODE_MAX_OLD_SPACE_SIZE || "1536";
 
 let child = null;
 let stopping = false;
