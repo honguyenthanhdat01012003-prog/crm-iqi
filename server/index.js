@@ -1196,10 +1196,15 @@ async function getConfig(db) {
   };
 }
 
-async function fetchCsvText(csvUrl) {
+async function fetchCsvText(csvUrl, opts = {}) {
+  const normalizedUrl = sanitizeSheetUrl(csvUrl);
+  const timeoutMs = Number(opts.timeoutMs || process.env.SHEET_FETCH_TIMEOUT_MS || 20000);
+  const maxRetries = Number(opts.retries || process.env.SHEET_FETCH_RETRIES || 3);
+
   // SSRF protection: only allow Google Sheets URLs
+  let parsed;
   try {
-    const parsed = new URL(csvUrl);
+    parsed = new URL(normalizedUrl);
     if (!parsed.hostname.endsWith("google.com") && !parsed.hostname.endsWith("googleapis.com")) {
       throw new Error("Only Google Sheets URLs are allowed");
     }
@@ -1208,9 +1213,25 @@ async function fetchCsvText(csvUrl) {
     if (e.message.includes("allowed")) throw e;
     throw new Error("Invalid URL format");
   }
-  const response = await fetch(csvUrl);
-  if (!response.ok) throw new Error(`Sheet request failed: ${response.status}`);
-  return response.text();
+
+  let lastErr = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const response = await fetch(normalizedUrl, { signal: ctrl.signal });
+      if (!response.ok) throw new Error(`Sheet request failed: ${response.status}`);
+      return await response.text();
+    } catch (err) {
+      lastErr = err;
+      const reason = String(err?.cause?.code || err?.code || err?.message || err);
+      console.warn(`[sheet-fetch] attempt ${attempt}/${maxRetries} failed (${parsed.hostname}): ${reason}`);
+      if (attempt < maxRetries) await new Promise((r) => setTimeout(r, 350 * attempt));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(`Sheet request failed after ${maxRetries} attempts: ${lastErr?.message || lastErr}`);
 }
 
 function extractProjectName(csvText) {
@@ -3625,8 +3646,8 @@ async function syncProject(db, projectId) {
   // Skip legacy (old data) projects — they don't sync from sheets
   if (project.is_legacy) return;
 
-  const leadUrl = project.lead_url;
-  const costUrl = project.cost_url;
+  const leadUrl = sanitizeSheetUrl(project.lead_url);
+  const costUrl = sanitizeSheetUrl(project.cost_url);
   if (!leadUrl) return;
 
   const rawLead = await fetchCsvText(leadUrl);
