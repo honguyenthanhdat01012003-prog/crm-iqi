@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-16-autosync-rotate-m";
+const BUILD_VERSION = "2026-07-17-autosync-fast-a";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3789,7 +3789,7 @@ async function syncProject(db, projectId, opts = {}) {
     cleanLeadCsv = rawLead.split(/\r?\n/).slice(1).join("\n");
   }
 
-  // Sheet không đổi → bỏ ghi DB (auto-sync 60s vẫn nhẹ, không OOM)
+  // Sheet không đổi → bỏ ghi DB (auto-sync vẫn nhẹ khi chỉ hash-check)
   const sheetHash = crypto.createHash("md5").update(cleanLeadCsv).digest("hex");
   const hashKey = `sheet_csv_hash_${projectId}`;
   if (!force) {
@@ -4014,11 +4014,11 @@ function freeSyncMemory(label = "sync") {
 async function syncAllProjects(db, opts = {}) {
   const skipCost = opts.skipCost === true;
   const force = opts.force === true;
-  // Auto: mỗi lần chỉ ghi DB tối đa vài dự án (xoay vòng) — tránh heap 900MB+ bỏ 9 dự án mãi
+  // Auto: mặc định ghi hết dự án có sheet đổi (ưu tiên tốc độ lead mới; RAM cao hơn OK)
   const maxWrites = Number(
     opts.maxWrites != null
       ? opts.maxWrites
-      : (skipCost ? (process.env.SYNC_MAX_WRITES_AUTO || 3) : (process.env.SYNC_MAX_WRITES_MANUAL || 99))
+      : (skipCost ? (process.env.SYNC_MAX_WRITES_AUTO || 99) : (process.env.SYNC_MAX_WRITES_MANUAL || 99))
   );
   syncInProgress = true;
   try {
@@ -4059,8 +4059,8 @@ async function syncAllProjects(db, opts = {}) {
         await new Promise((r) => setTimeout(r, 300));
         heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
       }
-      // Đã ghi ít nhất 1 dự án + heap vẫn cao → hoãn phần còn lại (xoay vòng lần sau), KHÔNG tính là lỗi sheet
-      if (heapBefore > 820 && (writes >= 1 || okCount >= 1)) {
+      // Chỉ hoãn khi heap cực cao (ưu tiên tốc độ; user chấp nhận tốn RAM)
+      if (heapBefore > 1200 && (writes >= 1 || okCount >= 1)) {
         deferred = ordered.length - pi;
         console.warn(`[syncAllProjects] defer ${deferred} projects — heap=${heapBefore}MB writes=${writes} ok=${okCount}`);
         break;
@@ -4085,7 +4085,7 @@ async function syncAllProjects(db, opts = {}) {
         errors.push(`${p.name}: ${e.message}`);
       }
       freeSyncMemory("sync-between");
-      await new Promise((r) => setTimeout(r, 150));
+      await new Promise((r) => setTimeout(r, 40));
     }
 
     if (syncable.length > 0) {
@@ -15453,14 +15453,14 @@ if (!process.env.VERCEL) {
     }, 3000);
   });
 
-  // Auto-sync ~45s, mỗi lần tối đa vài dự án (xoay vòng) để không miss lead vì RAM
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 45 * 1000;
+  // Auto-sync ~20s, ghi hết dự án có sheet đổi — ưu tiên lead mới lên CRM nhanh
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 20 * 1000;
   let isSyncing = false;
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;
     const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-    // Không skip vì scope/user đang load — trước đây hay miss lead giờ cao điểm
-    if (heapMb > 580) {
+    // Chỉ skip khi gần trần heap keeper (1536) — tránh miss lead vì skip sớm
+    if (heapMb > 1100) {
       console.warn(`[${label}] Skip — heap=${heapMb}MB quá cao`);
       try { if (global.gc) global.gc(); } catch { /* */ }
       lastAutoSyncMeta = { ...lastAutoSyncMeta, skipped: `heap_${heapMb}`, heapMb, at: new Date().toISOString() };
