@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-17-autosync-fast-c";
+const BUILD_VERSION = "2026-07-17-ios-push-d";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -312,19 +312,21 @@ async function sendNativePushToUser(userId, payload) {
         };
       }
     } else {
-      // iOS: cần FCM token (qua FirebaseApp.configure), không phải raw APNs hex
-      message.notification = { title, body: payload.body || "Bạn có thông báo mới" };
+      // iOS (TestFlight/App Store = production APNs): alert rõ ràng, không content-available (tránh silent)
+      const iosBody = payload.body || "Bạn có thông báo mới";
+      message.notification = { title, body: iosBody };
+      const collapseId = String(payload.tag || payload.data?.leadId || `crm-${Date.now()}`).slice(0, 64);
       message.apns = {
         headers: {
           "apns-priority": "10",
           "apns-push-type": "alert",
+          "apns-collapse-id": collapseId,
         },
         payload: {
           aps: {
-            alert: { title, body: payload.body || "Bạn có thông báo mới" },
+            alert: { title, body: iosBody },
             sound: "default",
             badge: 1,
-            "content-available": 1,
           },
         },
       };
@@ -4476,7 +4478,11 @@ app.post("/api/native-push/test", requireAuth, async (req, res) => {
       data: { url: "/", type: "native_push_test" },
       requireInteraction: true,
     });
-    res.json({ ok: true, ...result });
+    const tokens = await all(db,
+      `SELECT id, platform, last_error, updated_at FROM native_push_tokens WHERE user_id = ? ORDER BY updated_at DESC`,
+      [req.user.userId]
+    );
+    res.json({ ok: true, ...result, tokens });
   } catch (err) {
     console.error("[NativePush] Test failed:", err.message);
     res.status(500).json({ error: err.message });

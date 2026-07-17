@@ -974,7 +974,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, []);
 
-  const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null } = {}) => {
+  const triggerLeadAlerts = useCallback(({ notifyLeads = [], soundKind = "manager", pushItem = null, skipLocal = false } = {}) => {
     const items = (pushItem ? [pushItem] : notifyLeads).filter(Boolean);
     if (!items.length) return;
     const existing = Array.isArray(notificationsRef.current) ? notificationsRef.current : [];
@@ -986,7 +986,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!fresh.length) return;
     playLeadSound(soundKind);
     const first = fresh[0];
-    if (nativeLocalSupported) {
+    // Đã có FCM: để hệ thống hiện tray (kể cả tắt app). LocalNotification chỉ gây double khi app mở.
+    if (nativeLocalSupported && !nativePushSupported && !skipLocal) {
       showNativeLeadNotification({
         title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
         body: first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới"),
@@ -1003,7 +1004,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (!stillFresh.length) return current;
       return [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
     });
-  }, [nativeLocalSupported, playLeadSound, seenLeadKeys, user.role]);
+  }, [nativeLocalSupported, nativePushSupported, playLeadSound, seenLeadKeys, user.role]);
 
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
@@ -1229,13 +1230,16 @@ function CRMApp({ user, updateUser, onLogout }) {
           showToast(data.body || notification?.body || "Lead bị thu hồi do quá hạn SLA", "warning");
           return;
         }
+        // App đang mở: FCM đã (có thể) hiện banner — chỉ cập nhật list trong app, không LocalNotification
         const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale" : "manager";
         triggerLeadAlerts({
           soundKind,
+          skipLocal: true,
           pushItem: leadFromPushPayload({
             title: notification?.title || data.title,
             body: notification?.body || data.body,
             leadId: data.leadId,
+            phone: data.phone,
             sound: data.sound || data.type,
           }),
         });

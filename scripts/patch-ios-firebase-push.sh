@@ -38,19 +38,51 @@ else
   echo "WARN: không thấy Podfile"
 fi
 
-# --- AppDelegate: FirebaseApp.configure() ---
-if ! grep -q "FirebaseApp.configure" "$DELEGATE"; then
-  echo "==> Patch AppDelegate.swift (FirebaseApp.configure)"
-  if ! grep -q "import FirebaseCore" "$DELEGATE"; then
-    perl -i -pe 's/import Capacitor/import Capacitor\nimport FirebaseCore/' "$DELEGATE"
-  fi
-  if grep -q "didFinishLaunchingWithOptions" "$DELEGATE"; then
-    perl -i -0pe 's/(didFinishLaunchingWithOptions[^{]*\{\n)/$1        FirebaseApp.configure()\n/' "$DELEGATE"
-  else
-    echo "WARN: không tìm thấy didFinishLaunchingWithOptions — thêm FirebaseApp.configure() thủ công"
-  fi
+# --- AppDelegate: Firebase + forward APNs token ---
+if ! grep -q "Messaging.messaging().apnsToken" "$DELEGATE" 2>/dev/null; then
+  echo "==> Ghi AppDelegate.swift (Firebase + APNs→FCM)"
+  cat > "$DELEGATE" <<'SWIFT'
+import UIKit
+import Capacitor
+import FirebaseCore
+import FirebaseMessaging
+
+@UIApplicationMain
+class AppDelegate: UIResponder, UIApplicationDelegate {
+
+    var window: UIWindow?
+
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        FirebaseApp.configure()
+        return true
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        Messaging.messaging().apnsToken = deviceToken
+        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+    }
+
+    func applicationWillResignActive(_ application: UIApplication) {}
+    func applicationDidEnterBackground(_ application: UIApplication) {}
+    func applicationWillEnterForeground(_ application: UIApplication) {}
+    func applicationDidBecomeActive(_ application: UIApplication) {}
+    func applicationWillTerminate(_ application: UIApplication) {}
+
+    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        return ApplicationDelegateProxy.shared.application(app, open: url, options: options)
+    }
+
+    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void) -> Bool {
+        return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
+    }
+}
+SWIFT
 else
-  echo "==> AppDelegate đã có FirebaseApp.configure"
+  echo "==> AppDelegate đã forward APNs token"
 fi
 
 echo "==> pod install"
