@@ -19,9 +19,9 @@ export function isSamePersonName(a, b) {
 }
 
 export function leadKey(lead) {
+  const id = Number(lead?.leadId || lead?.id);
+  if (id && !Number.isNaN(id) && id > 0) return `id:${id}`;
   if (lead?.notifKey) return String(lead.notifKey);
-  const id = lead?.leadId || lead?.id;
-  if (id && !String(id).startsWith("push:")) return `id:${id}`;
   const name = String(lead?.name || "").trim();
   const phone = String(lead?.phone || "").trim();
   return name || phone ? `${name}||${phone}` : "";
@@ -124,7 +124,7 @@ export function leadFromPushPayload(payload = {}) {
   return {
     id: leadId || `push:${fallbackKey}`,
     leadId,
-    notifKey: leadId ? `push:${leadId}:${ts}` : `push:${fallbackKey}`,
+    notifKey: leadId ? `id:${leadId}` : `push:${fallbackKey}`,
     name: nameFromBody || payload.title || "Lead moi",
     phone: payload.phone || data.phone || "",
     notifTime: Date.now(),

@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-17-ios-push-d";
+const BUILD_VERSION = "2026-07-17-ios-push-e";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -349,8 +349,10 @@ async function sendNativePushToUser(userId, payload) {
       }
       sent++;
       await run(db, "UPDATE native_push_tokens SET last_error = '', updated_at = datetime('now') WHERE id = ?", [row.id]);
+      console.log(`[NativePush] OK user#${userId} platform=${row.platform || "?"} token#${row.id}`);
     } catch (err) {
       await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [String(err.message || err).slice(0, 500), row.id]);
+      console.error(`[NativePush] Exception token#${row.id}:`, err.message || err);
     }
   }
   return { sent };
@@ -389,7 +391,10 @@ async function sendPushToUser(userId, payload) {
     console.error(`[NativePush] Send failed for user#${userId}:`, err.message || err);
     return { sent: 0, error: err.message || String(err) };
   });
-  emitLeadNotification(userId, payload);
+  // Đã gửi FCM → không emit socket (tránh double banner + double list khi app mở)
+  if (!(native.sent > 0)) {
+    emitLeadNotification(userId, payload);
+  }
   return { sent: sent + (native.sent || 0), webSent: sent, nativeSent: native.sent || 0, nativeSkipped: native.skipped };
 }
 

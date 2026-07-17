@@ -2101,7 +2101,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         return;
       }
       const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale" : "manager";
-      triggerLeadAlerts({ soundKind, pushItem: leadFromPushPayload(payload) });
+      triggerLeadAlerts({ soundKind, skipLocal: true, pushItem: leadFromPushPayload(payload) });
     });
     socket.on("lead-sla-recall", (payload) => {
       playRecallSound();
@@ -2124,7 +2124,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         if (user.role === "sale" && !selectedProject) return;
         if (selectedProject === "personal") return;
         if (!selectedProject) return;
-        fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
+        // Native push: socket lead-notification đã báo — không detect lại từ refresh (gây double)
+        const detectOnRefresh = !nativePushSupported;
+        fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: detectOnRefresh });
       }, 400);
     });
     socket.on("announcement-changed", () => { fetchAnnouncements(); });
@@ -2132,7 +2134,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       socket.disconnect();
     };
-  }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user, selectedProject, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
+  }, [applyApiData, fetchLeadScope, fetchAnnouncements, fetchProjectLeadCounts, triggerLeadAlerts, playRecallSound, user, selectedProject, nativePushSupported, markApiOk, markSocketConnected, markSocketDisconnected, markConnectivityFailure]);
 
   useEffect(() => {
     const pollMs = 10000;
@@ -2160,7 +2162,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             fetchProjectLeadCounts();
             if (user.role === "sale" && !selectedProject) return;
             if (!selectedProject) return;
-            fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: true });
+            fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: !nativePushSupported });
           }
         })
         .catch(() => markConnectivityFailure());
@@ -2173,7 +2175,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, fetchProjectLeadCounts, user, selectedProject]);
+  }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, fetchProjectLeadCounts, user, selectedProject, nativePushSupported]);
 
   // Heartbeat - cập nhật trạng thái online mỗi 60 giây
   useEffect(() => {
