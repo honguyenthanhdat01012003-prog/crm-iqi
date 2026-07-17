@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-17-autosync-fast-b";
+const BUILD_VERSION = "2026-07-17-autosync-fast-c";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -290,9 +290,6 @@ async function sendNativePushToUser(userId, payload) {
       token: row.token,
       data,
       android: { priority: "HIGH", ttl: "86400s" },
-      apns: {
-        payload: { aps: { sound: "default", alert: { title, body } } },
-      },
     };
     // Android: gửi cả notification + data để hệ thống hiện tray khi app tắt/background.
     // data giữ để LeadFirebaseMessagingService xử lý khi app đang mở.
@@ -315,7 +312,22 @@ async function sendNativePushToUser(userId, payload) {
         };
       }
     } else {
+      // iOS: cần FCM token (qua FirebaseApp.configure), không phải raw APNs hex
       message.notification = { title, body: payload.body || "Bạn có thông báo mới" };
+      message.apns = {
+        headers: {
+          "apns-priority": "10",
+          "apns-push-type": "alert",
+        },
+        payload: {
+          aps: {
+            alert: { title, body: payload.body || "Bạn có thông báo mới" },
+            sound: "default",
+            badge: 1,
+            "content-available": 1,
+          },
+        },
+      };
     }
     try {
       const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {

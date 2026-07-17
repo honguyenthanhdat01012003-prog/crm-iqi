@@ -3,7 +3,9 @@ import path from "path";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-const hasFirebaseConfig = fs.existsSync(path.resolve("android/app/google-services.json"));
+const hasAndroidFirebase = fs.existsSync(path.resolve("android/app/google-services.json"));
+const hasIosFirebase = fs.existsSync(path.resolve("ios/App/App/GoogleService-Info.plist"));
+const hasFirebaseConfig = hasAndroidFirebase || hasIosFirebase;
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");

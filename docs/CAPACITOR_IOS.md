@@ -1,16 +1,50 @@
 # Capacitor iOS — LUX IQI CRM
 
-## Yêu cầu phiên bản (test trên Mac cũ)
-- **Capacitor 5.7.x** — mở được với **Xcode 14** (macOS 13)
+## Yêu cầu phiên bản
+- **Capacitor 5.7.x**
 - API: `https://crm-iqi.id.vn/api`
-- Auth Bearer JWT
+- Bundle ID: `vn.id.crmiqi.app`
 
-> Capacitor 8 cần Xcode 16 — đã hạ xuống Cap 5 để test trên VM/Mac cũ.
+## Push khi tắt app (iPhone)
 
-## Push khi tắt app
-- **Android (máy thật):** đã có `google-services.json` + `VITE_NATIVE_PUSH_ENABLED=true`. Build APK, cấp quyền thông báo, login → FCM token. VPS cần `FIREBASE_*` (xem `HUONG_DAN_FIREBASE_NATIVE_PUSH.md`).
-- **iOS Simulator:** **không** nhận remote push khi kill app — chỉ báo khi app đang mở (Socket + local notif).
-- **iPhone thật:** cần thêm `GoogleService-Info.plist` + APNs key trên Firebase; chưa setup trong repo này.
+Quyền thông báo **không đủ**. Khi app tắt cần **FCM + APNs**.
+
+### Checklist bắt buộc
+1. Firebase: app iOS + `GoogleService-Info.plist`
+2. Firebase Cloud Messaging: upload APNs `.p8` vào **Development + Production**
+3. File plist trong `ios/App/App/` + Target Membership **App**
+4. **Firebase SDK trên iOS** (quan trọng):
+   ```bash
+   # Mac, trong thư mục project
+   bash scripts/patch-ios-firebase-push.sh
+   ```
+   Script thêm `Firebase/Messaging` + `FirebaseApp.configure()` vào AppDelegate.
+   **Thiếu bước này** → app lấy token APNs thô → server FCM gửi fail → tắt app im.
+5. Xcode Capabilities:
+   - Push Notifications
+   - Background Modes → Remote notifications
+6. Build **TestFlight mới** → gắn vào Internal → Update trên iPhone
+7. VPS đã có `FIREBASE_*` / `secrets/firebase-service-account.json` (cùng project Android)
+
+### Kiểm tra trên iPhone
+1. Mở app → login
+2. Menu **chuông** phải hiện: **Đã đăng ký FCM**
+3. Nếu hiện "Chưa đăng ký FCM" / lỗi token → chưa patch Firebase / chưa rebuild
+
+### Test push từ server
+Lấy Bearer token CRM (login web), rồi:
+```bash
+curl -s -H "Authorization: Bearer TOKEN" https://crm-iqi.id.vn/api/native-push/status
+# Cần: tokenCount >= 1, platform = ios, last_error rỗng
+
+curl -s -X POST -H "Authorization: Bearer TOKEN" https://crm-iqi.id.vn/api/native-push/test
+```
+**Tắt hẳn app** rồi mới gọi test. App đang mở có thể dùng socket, không chứng minh push nền.
+
+### Lưu ý
+- **Simulator** không nhận remote push khi kill app
+- Mỗi build TestFlight mới phải **Add vào group** rồi bấm **Update** trong app TestFlight
+- Internal: không chờ Apple duyệt; External: cần review
 
 ## Build & sync
 ```bash
@@ -18,20 +52,13 @@ git pull
 npm install
 npm run build:capacitor
 npx cap sync ios
+bash scripts/patch-ios-firebase-push.sh
 npx cap open ios
 ```
 
-Mở **`ios/App/App.xcworkspace`** (không mở `.xcodeproj` nếu có CocoaPods).
+Mở **`ios/App/App.xcworkspace`**.
 
-## Xcode 14
-1. Signing → Team
-2. Bundle ID: `vn.id.crmiqi.app`
-3. Product → Clean Build Folder
-4. Xóa app trên simulator/máy → Run
-
-## Checklist đã gắn
-- `base: './'` khi mode capacitor
-- `VITE_API_BASE_URL` tuyệt đối + CapacitorHttp
-- Bearer; login xóa token cũ; không `Content-Type` trên GET
-- SW tắt trên native
-- Native push FCM (Android) khi `VITE_NATIVE_PUSH_ENABLED=true`
+## Xcode
+1. Signing → Team, Bundle ID `vn.id.crmiqi.app`
+2. Capabilities: Push + Remote notifications
+3. Clean → Archive → Upload
