@@ -138,6 +138,14 @@ export async function obtainNativePushDeviceToken() {
   try {
     const token = await waitForNativePushToken(PushNotifications);
     if (!token || token.length < 20) return { ok: false, error: "FCM token rỗng" };
+    // APNs device token thường chỉ hex ~64 ký tự — FCM token dài hơn và có ký tự khác
+    const looksLikeApnsHex = /^[0-9a-fA-F]{64}$/.test(token);
+    if (looksLikeApnsHex) {
+      return {
+        ok: false,
+        error: "Đang lấy APNs token thay vì FCM. Cập nhật AppDelegate (Messaging.messaging().token) rồi build lại.",
+      };
+    }
     return { ok: true, permission: "granted", token };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };

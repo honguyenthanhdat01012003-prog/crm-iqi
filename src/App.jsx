@@ -1105,6 +1105,26 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId, refreshNativePushServerStatus]);
 
+  const handleTestNativePush = useCallback(async () => {
+    if (!nativePushSupported || pushBusy) return;
+    setPushBusy(true);
+    try {
+      const res = await apiFetch(`${API}/native-push/test`, { method: "POST", body: "{}" });
+      const data = await res.json().catch(() => ({}));
+      const status = await refreshNativePushServerStatus();
+      const err = status?.tokens?.[0]?.last_error || data.error || "";
+      if (res.ok && (data.sent > 0 || data.nativeSent > 0)) {
+        showToast("Đã gửi push test. Vuốt tắt app rồi thử lại — phải thấy banner.", "success");
+      } else {
+        showToast("Push test thất bại: " + (err || data.error || `sent=${data.sent ?? 0}`), "warning");
+      }
+    } catch (err) {
+      showToast("Push test lỗi: " + (err.message || err), "warning");
+    } finally {
+      setPushBusy(false);
+    }
+  }, [nativePushSupported, pushBusy, refreshNativePushServerStatus]);
+
   useEffect(() => {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
     nativePushAutoTriedRef.current = true;
@@ -2520,6 +2540,20 @@ function CRMApp({ user, updateUser, onLogout }) {
                   >
                     {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
                   </button>
+                  {pushEnabled && (
+                    <button
+                      type="button"
+                      onClick={handleTestNativePush}
+                      disabled={pushBusy}
+                      style={{
+                        border: "1px solid #93c5fd", background: "#eff6ff", color: "#1d4ed8",
+                        borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 800,
+                        cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                      }}
+                    >
+                      Gửi thử push
+                    </button>
+                  )}
                 </div>
               ) : (
                 <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>

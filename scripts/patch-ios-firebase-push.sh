@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Chạy trên Mac sau khi đã có GoogleService-Info.plist trong ios/App/App/
-# Bật Firebase Messaging để Capacitor nhận FCM token (không phải raw APNs).
+# Bắt buộc: đẩy FCM token (String) cho Capacitor — KHÔNG đẩy raw APNs Data.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,7 +24,6 @@ fi
 if [ -f "$PODFILE" ]; then
   if ! grep -q "Firebase/Messaging" "$PODFILE"; then
     echo "==> Thêm pod Firebase/Messaging vào Podfile"
-    # Chèn vào trong target 'App' do
     if grep -q "target 'App'" "$PODFILE"; then
       perl -i -0pe "s/(target 'App' do\\n)/\$1  pod 'Firebase\/Messaging'\\n/" "$PODFILE" || true
     fi
@@ -38,10 +37,8 @@ else
   echo "WARN: không thấy Podfile"
 fi
 
-# --- AppDelegate: Firebase + forward APNs token ---
-if ! grep -q "Messaging.messaging().apnsToken" "$DELEGATE" 2>/dev/null; then
-  echo "==> Ghi AppDelegate.swift (Firebase + APNs→FCM)"
-  cat > "$DELEGATE" <<'SWIFT'
+echo "==> Ghi AppDelegate.swift (FCM token String + banner foreground)"
+cat > "$DELEGATE" <<'SWIFT'
 import UIKit
 import Capacitor
 import FirebaseCore
@@ -59,16 +56,34 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         return true
     }
 
-    // Hiện banner + tiếng khi app đang mở (foreground)
+    // Banner + tiếng khi app đang mở (iOS 13 dùng .alert)
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound, .badge])
+        if #available(iOS 14.0, *) {
+            completionHandler([.banner, .sound, .badge])
+        } else {
+            completionHandler([.alert, .sound, .badge])
+        }
     }
 
+    // QUAN TRỌNG: phải đẩy FCM token (String), không đẩy APNs Data
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Messaging.messaging().apnsToken = deviceToken
-        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: deviceToken)
+        Messaging.messaging().token { token, error in
+            if let error = error {
+                NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
+                return
+            }
+            guard let token = token, !token.isEmpty else {
+                NotificationCenter.default.post(
+                    name: .capacitorDidFailToRegisterForRemoteNotifications,
+                    object: NSError(domain: "FCM", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty FCM token"])
+                )
+                return
+            }
+            NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: token)
+        }
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
@@ -90,18 +105,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     }
 }
 SWIFT
-else
-  echo "==> AppDelegate đã forward APNs token"
-fi
 
 echo "==> pod install"
 cd "$ROOT/ios/App"
 pod install
 
 echo ""
-echo "Done. Tiếp theo trong Xcode:"
-echo "  1) Signing & Capabilities → Push Notifications + Background Modes (Remote notifications)"
-echo "  2) Clean → Archive → Upload TestFlight (build mới)"
-echo "  3) Gắn build vào Internal → Update trên iPhone"
-echo "  4) Mở app → login → menu chuông phải thấy 'Đã đăng ký FCM'"
-echo "  5) Tắt app → web gửi test / chia lead"
+echo "Done. Kiểm tra AppDelegate có dòng: Messaging.messaging().token"
+echo "Rồi: Clean → Archive → Upload TestFlight → Update trên iPhone"
+echo "Sau Update: mở app → Đăng ký lại FCM → VUỐT TẮT app → web chia lead"
