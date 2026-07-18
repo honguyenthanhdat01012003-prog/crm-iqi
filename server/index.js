@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-push-all-j";
+const BUILD_VERSION = "2026-07-18-push-log-k";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -267,12 +267,29 @@ function getNativeNotificationSound(sound) {
   return { channelId: "lead_notifications", soundName: "default", iosSound: "default" };
 }
 
+// Ghi push.log riêng — độc lập stdout (aaPanel/keeper nuốt log console)
+const PUSH_LOG_FILE = path.join(DB_DIR, "push.log");
+function appendPushLog(entry) {
+  try {
+    const line = JSON.stringify({ at: new Date().toISOString(), ...entry }) + "\n";
+    try {
+      const st = fs.statSync(PUSH_LOG_FILE);
+      if (st.size > 2 * 1024 * 1024) fs.truncateSync(PUSH_LOG_FILE, 0);
+    } catch { /* file chưa tồn tại */ }
+    fs.appendFileSync(PUSH_LOG_FILE, line);
+  } catch { /* không để log làm hỏng flow gửi */ }
+}
+
 async function sendNativePushToUser(userId, payload) {
   const cfg = getFirebaseConfig();
-  if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) return { sent: 0, skipped: true };
+  if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) {
+    appendPushLog({ ev: "native_skip", userId, reason: "firebase_not_configured" });
+    return { sent: 0, skipped: true };
+  }
   const tokens = await all(db, "SELECT id, token, platform FROM native_push_tokens WHERE user_id = ?", [userId]);
   if (!tokens.length) {
     console.warn(`[NativePush] user#${userId} không có FCM token nào — app chưa đăng ký hoặc token bị xoá`);
+    appendPushLog({ ev: "native_skip", userId, reason: "no_tokens", title: payload.title });
     return { sent: 0 };
   }
 
@@ -369,8 +386,12 @@ async function sendNativePushToUser(userId, payload) {
       sent++;
       await run(db, "UPDATE native_push_tokens SET last_error = '', updated_at = datetime('now') WHERE id = ?", [row.id]);
       console.log(`[NativePush] OK user#${userId} platform=${row.platform || "?"} token#${row.id}`);
-    } else if (lastFailure) {
-      await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [lastFailure, row.id]);
+      appendPushLog({ ev: "native_ok", userId, tokenId: row.id, platform: row.platform, title: payload.title, body: payload.body });
+    } else {
+      appendPushLog({ ev: "native_fail", userId, tokenId: row.id, platform: row.platform, title: payload.title, error: lastFailure || "token_removed_400_404" });
+      if (lastFailure) {
+        await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [lastFailure, row.id]);
+      }
     }
   }
   return { sent };
@@ -432,6 +453,7 @@ async function sendPushToDisplayName(displayName, payload) {
   }
   if (!users.length) {
     console.warn(`[Push] No user found for display_name="${name}" — phone tray skipped`);
+    appendPushLog({ ev: "name_not_found", name, title: payload.title });
     return { sent: 0, skipped: true, reason: "user_not_found" };
   }
   let total = { sent: 0, webSent: 0, nativeSent: 0 };
@@ -445,6 +467,7 @@ async function sendPushToDisplayName(displayName, payload) {
     total.nativeSent += r.nativeSent || 0;
   }
   console.log(`[Push] display_name="${name}" → ${users.length} user(s), web=${total.webSent} native=${total.nativeSent}`);
+  appendPushLog({ ev: "name_push_done", name, users: users.length, webSent: total.webSent, nativeSent: total.nativeSent, title: payload.title });
   return total;
 }
 

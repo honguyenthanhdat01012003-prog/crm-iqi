@@ -55,3 +55,14 @@ const subs = await db.execute(`
   ORDER BY s.updated_at DESC LIMIT 10
 `);
 console.log(JSON.stringify(subs.rows, null, 2));
+
+console.log("\n=== 4. push.log — 25 sự kiện gửi push gần nhất ===");
+import("fs").then(({ default: fs }) => {
+  const logPath = path.join(__dirname, "..", "server", "data", "push.log");
+  try {
+    const lines = fs.readFileSync(logPath, "utf8").trim().split("\n");
+    console.log(lines.slice(-25).join("\n") || "(trống)");
+  } catch {
+    console.log("(chưa có push.log — server chưa chạy bản mới hoặc chưa có lần gửi nào)");
+  }
+});
