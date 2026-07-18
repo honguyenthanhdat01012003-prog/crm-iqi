@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PORT="${PORT:-4000}"
-EXPECTED_VERSION_PREFIX="2026-07-18-login-fast-h"
+EXPECTED_VERSION_PREFIX="2026-07-18-stable-i"
 
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
@@ -49,7 +49,8 @@ pkill -f "server/keeper.js" 2>/dev/null || true
 pkill -f "server/index.js" 2>/dev/null || true
 sleep 2
 
-export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-640}"
+# 4096MB — PHẢI khớp keeper. Từng để 640 làm server OOM crash-loop mỗi 20 giây!
+export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-4096}"
 export PORT
 mkdir -p "$ROOT/server/data"
 nohup node server/keeper.js >> "$ROOT/server/data/keeper.out" 2>&1 &
@@ -72,5 +73,8 @@ echo "$SHEET_JSON"
 
 echo "Done. Hard-refresh CRM (Ctrl+F5)."
 echo "Public check: curl -s https://crm-iqi.id.vn/api/version"
-echo "Expect version: 2026-07-17-autosync-fast-b"
+echo "Expect version: ${EXPECTED_VERSION_PREFIX}"
 echo "aaPanel Memory Limit: để trống hoặc ≥ 4096M (keeper mặc định heap 4096)"
+echo ""
+echo "KIỂM TRA ỔN ĐỊNH: chạy lệnh dưới 2 lần cách nhau 1 phút — uptime phải TĂNG dần:"
+echo "  curl -s http://127.0.0.1:${PORT}/api/version | grep -o '\"uptime\":[0-9]*'"

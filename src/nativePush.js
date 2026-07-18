@@ -162,14 +162,27 @@ export async function syncNativePushTokenToServer(apiFetch, apiBase = "/api") {
   }
   const platform = window.Capacitor?.getPlatform?.() || "unknown";
   const deviceId = getNativePushDeviceId();
-  const res = await apiFetch(`${apiBase}/native-push/register`, {
-    method: "POST",
-    body: JSON.stringify({ token, platform, deviceId }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) return { ok: false, error: data.error || "Không lưu được FCM token lên server" };
-  localStorage.setItem("crm_native_push_token", token);
-  return { ok: true, token, deviceId, fcmConfigured: data.fcmConfigured };
+  // Server có thể đang restart — thử tối đa 3 lần, backoff tăng dần
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    try {
+      const res = await apiFetch(`${apiBase}/native-push/register`, {
+        method: "POST",
+        timeoutMs: 15000,
+        body: JSON.stringify({ token, platform, deviceId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        localStorage.setItem("crm_native_push_token", token);
+        return { ok: true, token, deviceId, fcmConfigured: data.fcmConfigured };
+      }
+      lastError = data.error || `Server trả lỗi ${res.status}`;
+    } catch (err) {
+      lastError = err?.message || String(err);
+    }
+  }
+  return { ok: false, error: lastError || "Không lưu được FCM token lên server" };
 }
 
 export async function subscribeToNativePushNotifications(apiFetch, apiBase = "/api") {
