@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-stable-i";
+const BUILD_VERSION = "2026-07-18-push-all-j";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -271,7 +271,10 @@ async function sendNativePushToUser(userId, payload) {
   const cfg = getFirebaseConfig();
   if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) return { sent: 0, skipped: true };
   const tokens = await all(db, "SELECT id, token, platform FROM native_push_tokens WHERE user_id = ?", [userId]);
-  if (!tokens.length) return { sent: 0 };
+  if (!tokens.length) {
+    console.warn(`[NativePush] user#${userId} không có FCM token nào — app chưa đăng ký hoặc token bị xoá`);
+    return { sent: 0 };
+  }
 
   const accessToken = await getFcmAccessToken();
   let sent = 0;
@@ -417,20 +420,32 @@ async function sendPushToDisplayName(displayName, payload) {
   if (!displayName) return { sent: 0, skipped: true, reason: "empty_name" };
   const name = String(displayName).trim();
   if (!name) return { sent: 0, skipped: true, reason: "empty_name" };
-  // Exact match trước, rồi fallback LOWER/TRIM — tránh sale lệch hoa thường / khoảng trắng → không có tray
-  let user = await get(db, "SELECT id, display_name FROM users WHERE display_name = ? LIMIT 1", [name]);
-  if (!user?.id) {
-    user = await get(
+  // Gửi cho TẤT CẢ user trùng tên (không LIMIT 1) — nếu có 2 tài khoản trùng
+  // display_name, LIMIT 1 có thể chọn nhầm tài khoản không có token → mất push.
+  let users = await all(db, "SELECT id, display_name FROM users WHERE display_name = ?", [name]);
+  if (!users.length) {
+    users = await all(
       db,
-      "SELECT id, display_name FROM users WHERE LOWER(TRIM(display_name)) = LOWER(TRIM(?)) LIMIT 1",
+      "SELECT id, display_name FROM users WHERE LOWER(TRIM(display_name)) = LOWER(TRIM(?))",
       [name]
     );
   }
-  if (!user?.id) {
+  if (!users.length) {
     console.warn(`[Push] No user found for display_name="${name}" — phone tray skipped`);
     return { sent: 0, skipped: true, reason: "user_not_found" };
   }
-  return sendPushToUser(user.id, payload);
+  let total = { sent: 0, webSent: 0, nativeSent: 0 };
+  for (const user of users) {
+    const r = await sendPushToUser(user.id, payload).catch((err) => {
+      console.error(`[Push] sendPushToUser user#${user.id} failed:`, err.message || err);
+      return { sent: 0 };
+    });
+    total.sent += r.sent || 0;
+    total.webSent += r.webSent || 0;
+    total.nativeSent += r.nativeSent || 0;
+  }
+  console.log(`[Push] display_name="${name}" → ${users.length} user(s), web=${total.webSent} native=${total.nativeSent}`);
+  return total;
 }
 
 const PUBLISH_BASE =
