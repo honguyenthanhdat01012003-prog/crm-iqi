@@ -1258,12 +1258,18 @@ function CRMApp({ user, updateUser, onLogout }) {
         });
       },
       onAction: (event) => {
-        const leadId = Number(event?.notification?.data?.leadId || 0);
-        if (leadId) {
-          setHighlightLeadId(leadId);
-          setSelectedProject("all");
-          setPage("leads");
+        const d = event?.notification?.data || {};
+        let leadId = Number(d.leadId || 0);
+        // FCM serialize mảng thành chuỗi "1,2,3" — nếu chỉ có 1 lead thì mở thẳng chi tiết
+        if (!leadId && d.leadIds) {
+          const ids = String(d.leadIds).split(",").map((s) => Number(s)).filter(Boolean);
+          if (ids.length === 1) leadId = ids[0];
         }
+        const projectId = Number(d.projectId || 0);
+        // Nhảy vào ĐÚNG dự án của lead; không có projectId thì mới về "Tất cả"
+        setSelectedProject(projectId || "all");
+        if (leadId) setHighlightLeadId(leadId);
+        setPage("leads");
       },
     }).then((fn) => { if (alive) cleanup = fn; else fn?.(); }).catch(() => {});
     return () => { alive = false; cleanup?.(); };
@@ -9247,7 +9253,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ status: editStatus, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ status: editStatus, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
       });
       const data = await r.json();
       if (!r.ok) {
@@ -9278,7 +9284,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ customerFbUrl: newUrl, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ customerFbUrl: newUrl, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -9317,7 +9323,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ ...next, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ ...next, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -9368,7 +9374,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ saleName: editSale, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ saleName: editSale, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -9410,7 +9416,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       console.log("[handleChangeManager] Calling API: PUT /api/leads/" + lead.id, { managerName: editManager, phone: lead.phone, name: lead.name });
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ managerName: editManager, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ managerName: editManager, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
       });
       console.log("[handleChangeManager] API Response status:", r.status);
       const data = await r.json();

@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-push-admin-b";
+const BUILD_VERSION = "2026-07-18-assign-fix-c";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -7475,7 +7475,7 @@ app.post("/api/leads/assign-bulk", requireAuth, requireAdmin, async (req, res) =
         body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
         tag: `sale-bulk-${saleName}-${Date.now()}`,
         sound: "sale",
-        data: { url: "/", type: "sale_bulk_leads", leadIds },
+        data: { url: "/", type: "sale_bulk_leads", leadIds, projectId: firstLead?.project_id },
         requireInteraction: true,
       }).catch(err => console.error(`[Push] Bulk sale notify failed for ${saleName}:`, err.message));
     } catch (pushErr) {
@@ -8074,7 +8074,7 @@ async function recallScheduledLeadSLA(db, lead, nowStr) {
     body: `${lead.name || "Khách"} — quá 24h chưa feedback, đã đưa về rổ xáo 24h`,
     tag: `scheduled-sla-recall-${lead.id}`,
     sound: "sla_recall",
-    data: { url: "/", type: "scheduled_sla_recall", leadId: lead.id },
+    data: { url: "/", type: "scheduled_sla_recall", leadId: lead.id, projectId: lead.project_id },
   }).catch((err) => console.error("[Push] SLA recall failed:", err.message));
 
   return true;
@@ -8209,7 +8209,7 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
     body: `${updated?.name || "Khách"}${pushBodySuffix}`,
     tag: `sla-shuffle-pool-${saleName}-${lead.id}-${Date.now()}`,
     sound: "sale",
-    data: { url: "/", type: "sla_shuffle_pool", leadIds: String(lead.id) },
+    data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id },
     requireInteraction: true,
   }).catch((err) => console.error(`[Push] SLA pool assign failed for ${saleName}:`, err.message));
   await refreshLeadTabDenorm(db, lead.id);
@@ -8243,7 +8243,7 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
     body: `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`,
     tag: `instant-sla-recall-${lead.id}`,
     sound: "sla_recall",
-    data: { url: "/", type: "instant_sla_recall", leadId: lead.id },
+    data: { url: "/", type: "instant_sla_recall", leadId: lead.id, projectId: lead.project_id },
   }).catch((err) => console.error("[Push] Instant SLA recall failed:", err.message));
 
   const newSale = await assignSlaPoolLeadToNextSale(db, lead, nowStr, {
@@ -8391,7 +8391,7 @@ async function processInstantLeadSLA(db) {
         body: `${lead.name || "Khách"} — còn 2 phút để cập nhật feedback (hạn 10 phút)`,
         tag: `instant-sla-warn-${lead.id}`,
         sound: "sale",
-        data: { url: "/", type: "instant_sla_warn", leadId: lead.id },
+        data: { url: "/", type: "instant_sla_warn", leadId: lead.id, projectId: lead.project_id },
       }).catch((err) => console.error(`[Push] Instant SLA warn failed for ${saleName}:`, err.message));
       notifyInstantSlaWarnTelegram(db, lead, saleName).catch(() => {});
       warned += 1;
@@ -8773,6 +8773,7 @@ async function processAutoRotate(db) {
             url: "/",
             type: first.isSprint ? "sale_sprint_rotate" : "sale_auto_rotate",
             leadIds: items.map((i) => i.leadId),
+            projectId: first?.projectId,
           },
           requireInteraction: true,
         }).catch((err) => console.error(`[Push] Auto-rotate notify failed for ${saleName}:`, err.message));
@@ -9159,7 +9160,7 @@ async function processSchedules(db, triggerUser) {
           body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
           tag: `sale-schedule-${sch.id}-${saleName}-${slotToProcess}`,
           sound: "sale",
-          data: { url: "/", type: "sale_schedule_leads", scheduleId: sch.id, leadIds: saleLeadIds },
+          data: { url: "/", type: "sale_schedule_leads", scheduleId: sch.id, leadIds: saleLeadIds, projectId: firstLead?.project_id },
           requireInteraction: true,
         }).catch(err => console.error(`[Push] Schedule notify failed for ${saleName}:`, err.message));
       }
@@ -10864,40 +10865,58 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     const leadId = Number(req.params.id);
     const phone = req.body?.phone;
     const name = req.body?.name;
+    const bodyProjectId = Number(req.body?.projectId) || 0;
     console.log(`[PUT /api/leads/${leadId}] body:`, JSON.stringify(req.body), `user: ${req.user.displayName} role: ${req.user.role}`);
 
     // Verify lead exists; if ID stale (after sync), try finding by name+phone
+    // QUAN TRỌNG: khách đăng ký nhiều dự án có nhiều dòng lead cùng SĐT — phải khớp
+    // ĐÚNG dự án đang thao tác, nếu không sẽ chia nhầm lead của dự án khác (bug chia
+    // lead "báo thành công nhưng lead không qua, không có lịch sử").
+    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind";
     let actualLeadId = leadId;
-    let existCheck = await get(
-      db,
-      "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE id = ?",
-      [leadId]
-    );
+    let existCheck = await get(db, `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE id = ?`, [leadId]);
+    const projFilter = bodyProjectId ? " AND project_id = ?" : "";
+    const projArgs = bodyProjectId ? [bodyProjectId] : [];
     if (!existCheck && name && phone) {
       existCheck = await get(
         db,
-        "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE name = ? AND phone = ? ORDER BY id DESC LIMIT 1",
-        [name, phone]
+        `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE name = ? AND phone = ?${projFilter} ORDER BY id DESC LIMIT 1`,
+        [name, phone, ...projArgs]
       );
       if (existCheck) {
         actualLeadId = existCheck.id;
-        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by name+phone ${name}/${phone} -> ID ${actualLeadId}`);
+        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by name+phone ${name}/${phone} (project=${bodyProjectId || "any"}) -> ID ${actualLeadId}`);
       }
     }
     // Fallback phone-only — client đôi khi gửi thiếu name (chia lead thất bại sau sync đổi ID)
     if (!existCheck && phone) {
       existCheck = await get(
         db,
-        "SELECT id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1",
-        [String(phone).trim()]
+        `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE phone = ?${projFilter} ORDER BY id DESC LIMIT 1`,
+        [String(phone).trim(), ...projArgs]
       );
       if (existCheck) {
         actualLeadId = existCheck.id;
-        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by phone ${phone} -> ID ${actualLeadId}`);
+        console.log(`[PUT /api/leads] ID ${leadId} not found, resolved by phone ${phone} (project=${bodyProjectId || "any"}) -> ID ${actualLeadId}`);
       }
     }
     if (!existCheck) {
-      return res.status(404).json({ error: `Lead không tồn tại (ID=${leadId})` });
+      return res.status(404).json({ error: `Lead không tồn tại hoặc đã thay đổi sau đồng bộ (ID=${leadId}). Vui lòng tải lại danh sách rồi thử lại.` });
+    }
+    // ID cũ vẫn tồn tại nhưng thuộc dự án khác (ID bị tái sử dụng sau sync) → tìm lại đúng dự án
+    if (bodyProjectId && Number(existCheck.project_id) !== bodyProjectId && phone) {
+      const rightProject = await get(
+        db,
+        `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE phone = ? AND project_id = ? ORDER BY id DESC LIMIT 1`,
+        [String(phone).trim(), bodyProjectId]
+      );
+      if (rightProject) {
+        console.log(`[PUT /api/leads] ID ${leadId} thuộc project ${existCheck.project_id} ≠ ${bodyProjectId} — resolved lại theo phone -> ID ${rightProject.id}`);
+        existCheck = rightProject;
+        actualLeadId = rightProject.id;
+      } else {
+        return res.status(409).json({ error: `Lead không còn trong dự án này (đã đổi sau đồng bộ). Vui lòng tải lại danh sách rồi thử lại.` });
+      }
     }
 
     if (req.user.role === "sale") {
@@ -11064,6 +11083,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
                 type: "sale_new_lead",
                 leadId: actualLeadId,
                 phone: lead?.phone || "",
+                projectId: lead?.project_id,
               },
               requireInteraction: true,
             }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));

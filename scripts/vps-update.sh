@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PORT="${PORT:-4000}"
-EXPECTED_VERSION_PREFIX="2026-07-18-push-admin-b"
+EXPECTED_VERSION_PREFIX="2026-07-18-assign-fix-c"
 
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
