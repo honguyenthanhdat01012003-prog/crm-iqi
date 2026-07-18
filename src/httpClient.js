@@ -143,11 +143,24 @@ export async function apiFetch(url, opts = {}) {
     return out;
   }
 
-  const res = await fetch(fullUrl, {
-    ...opts,
-    method,
-    headers,
-  });
+  let signal = opts.signal;
+  let timeoutTimer = null;
+  if (opts.timeoutMs && typeof AbortController !== "undefined" && !signal) {
+    const controller = new AbortController();
+    signal = controller.signal;
+    timeoutTimer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  }
+  let res;
+  try {
+    res = await fetch(fullUrl, {
+      ...opts,
+      method,
+      headers,
+      signal,
+    });
+  } finally {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+  }
   if (res.status === 401 && opts.skipAuth !== true) {
     localStorage.removeItem("crm_token");
     localStorage.removeItem("crm_user");

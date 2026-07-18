@@ -528,11 +528,23 @@ function LoginPage({ onLogin }) {
     try {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
-      const res = await apiFetch(`${API}/login`, {
-        method: "POST",
-        skipAuth: true,
-        body: JSON.stringify({ username, password }),
-      });
+      // Timeout 15s + tự thử lại 1 lần — tránh treo lâu rồi bắt người dùng bấm lại
+      let res = null;
+      let lastErr = null;
+      for (let attempt = 0; attempt < 2 && !res; attempt++) {
+        try {
+          res = await apiFetch(`${API}/login`, {
+            method: "POST",
+            skipAuth: true,
+            timeoutMs: 15000,
+            body: JSON.stringify({ username, password }),
+          });
+        } catch (err) {
+          lastErr = err;
+          if (attempt === 0) await new Promise((r) => setTimeout(r, 700));
+        }
+      }
+      if (!res) throw lastErr || new Error("timeout");
       const data = await res.json();
       if (!res.ok) { setError(String(data.error || "Đăng nhập thất bại")); return; }
       localStorage.setItem("crm_token", data.token);

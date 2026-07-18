@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-ios-push-g";
+const BUILD_VERSION = "2026-07-18-login-fast-h";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -4031,18 +4031,20 @@ let lastAutoSyncMeta = {
   insertedHint: null,
 };
 
-function freeSyncMemory(label = "sync") {
+/**
+ * KHÔNG xoá cache và KHÔNG gọi global.gc() bừa bãi ở đây!
+ * global.gc() là full GC stop-the-world — gọi mỗi 20s trước từng dự án từng làm
+ * toàn bộ API (kể cả /api/login) đứng hình nhiều giây. Cache đã được
+ * emitDataChanged() xoá đúng lúc khi dữ liệu thật sự thay đổi.
+ */
+function gcIfHeapHigh(thresholdMb = 2200, label = "sync") {
   try {
-    dashboardCache = { at: 0, key: "", data: null };
-    scopeResponseCache = { at: 0, key: "", data: null };
-    bootstrapCache = { at: 0, data: null, key: "" };
-    invalidateBootstrapCache();
-    invalidateLeadAuxCache();
-    invalidateScopeResponseCache();
-  } catch (e) {
-    console.warn(`[${label}] freeSyncMemory:`, e.message);
-  }
-  try { if (global.gc) global.gc(); } catch { /* */ }
+    const heapMb = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
+    if (heapMb > thresholdMb && global.gc) {
+      global.gc();
+      console.log(`[${label}] Forced GC at heap=${heapMb}MB`);
+    }
+  } catch { /* */ }
 }
 
 async function syncAllProjects(db, opts = {}) {
@@ -4083,13 +4085,13 @@ async function syncAllProjects(db, opts = {}) {
       ? [...syncable.slice(rotate), ...syncable.slice(0, rotate)]
       : [];
 
-    freeSyncMemory("sync-start");
+    gcIfHeapHigh(2200, "sync-start");
 
     for (let pi = 0; pi < ordered.length; pi++) {
       const p = ordered[pi];
       let heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
-      if (heapBefore > 700) {
-        freeSyncMemory("sync-heap");
+      if (heapBefore > 2200) {
+        gcIfHeapHigh(2200, "sync-heap");
         await new Promise((r) => setTimeout(r, 300));
         heapBefore = Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024));
       }
@@ -4118,7 +4120,6 @@ async function syncAllProjects(db, opts = {}) {
         console.error("Sync project", p.id, "failed:", e.message, e.stack);
         errors.push(`${p.name}: ${e.message}`);
       }
-      freeSyncMemory("sync-between");
       await new Promise((r) => setTimeout(r, 40));
     }
 
