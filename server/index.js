@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-ux-fix-a";
+const BUILD_VERSION = "2026-07-18-push-admin-b";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -3995,31 +3995,52 @@ async function syncProject(db, projectId, opts = {}) {
           const projectName = projectRow ? projectRow.name : "-";
           const activeBot = await getBotForProject(projectId);
 
-          if (!activeBot || !activeBot.token) {
-            console.warn(`[syncProject] ⚠️ project=${projectId} NO active Telegram bot! Skipping notification.`);
-          } else {
-            // Group new leads by their ACTUAL assigned manager_name (from DB)
-            const mgrLeadMap = new Map();
-            for (const lead of newLeads) {
-              const mgr = findManagerByName(managers, lead.manager_name);
-              if (!mgr) {
-                console.warn(`[syncProject] ⚠️ Lead "${lead.name}" manager_name="${lead.manager_name || ""}" không khớp quản lý dự án`);
-                continue;
-              }
-              if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
-              mgrLeadMap.get(mgr.id).leads.push(lead);
-            }
-            for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
-              const previewNames = mgrNewLeads.slice(0, 3).map(l => l.name || "N/A").join(", ");
-              sendPushToUser(mgr.id, {
-                title: `Có ${mgrNewLeads.length} lead mới`,
-                body: `${projectName}${previewNames ? `: ${previewNames}` : ""}`,
-                tag: `manager-new-${projectId}-${mgr.id}`,
-                sound: "manager",
-                data: { url: "/", type: "manager_new_leads", projectId, leadIds: mgrNewLeads.map(l => l.id) },
-                requireInteraction: true,
-              }).catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
+          // Payload push chung cho admin/quản lý: "Bạn có N lead mới hãy vào chia cho sale"
+          // Nội dung: Dự án + Tên khách + Nhu cầu (sản phẩm khách quan tâm)
+          const describeLead = (l) => `${l.name || "N/A"}${l.product && l.product !== "-" ? ` — ${l.product}` : ""}`;
+          const buildNewLeadPush = (leadsArr, tag, type) => ({
+            title: `Bạn có ${leadsArr.length} lead mới hãy vào chia cho sale`,
+            body: `${projectName}: ${leadsArr.slice(0, 2).map(describeLead).join(", ")}${leadsArr.length > 2 ? ` và ${leadsArr.length - 2} khách khác` : ""}`,
+            tag,
+            sound: "manager",
+            data: { url: "/", type, projectId, leadIds: leadsArr.map((l) => l.id) },
+            requireInteraction: true,
+          });
 
+          // Group new leads by their ACTUAL assigned manager_name (from DB)
+          const mgrLeadMap = new Map();
+          for (const lead of newLeads) {
+            const mgr = findManagerByName(managers, lead.manager_name);
+            if (!mgr) {
+              console.warn(`[syncProject] ⚠️ Lead "${lead.name}" manager_name="${lead.manager_name || ""}" không khớp quản lý dự án`);
+              continue;
+            }
+            if (!mgrLeadMap.has(mgr.id)) mgrLeadMap.set(mgr.id, { mgr, leads: [] });
+            mgrLeadMap.get(mgr.id).leads.push(lead);
+          }
+
+          // Quản lý: push app (không phụ thuộc Telegram bot)
+          for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
+            sendPushToUser(mgr.id, buildNewLeadPush(mgrNewLeads, `manager-new-${projectId}-${mgr.id}`, "manager_new_leads"))
+              .catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
+          }
+
+          // Admin: chỉ báo app (không Telegram) — báo tổng lead mới của dự án
+          try {
+            const adminUsers = await all(db, "SELECT id, display_name FROM users WHERE role = 'admin'");
+            for (const adm of adminUsers) {
+              sendPushToUser(adm.id, buildNewLeadPush(newLeads, `admin-new-${projectId}-${adm.id}`, "admin_new_leads"))
+                .catch(err => console.error(`[Push] Admin notify failed for ${adm.display_name}:`, err.message));
+            }
+          } catch (admErr) {
+            console.error("[Push] Admin new-lead notify error:", admErr.message);
+          }
+
+          // Telegram: chỉ quản lý, cần bot của dự án
+          if (!activeBot || !activeBot.token) {
+            console.warn(`[syncProject] ⚠️ project=${projectId} NO active Telegram bot! Skipping Telegram notification (app push vẫn gửi).`);
+          } else {
+            for (const { mgr, leads: mgrNewLeads } of mgrLeadMap.values()) {
               const tgChatId = String(mgr.telegram_id || "").trim();
               if (!tgChatId) {
                 console.warn(`[syncProject] ⚠️ Manager "${mgr.display_name}" chưa có Telegram ID — PWA vẫn báo nhưng Telegram bỏ qua. Vào Quản lý tài khoản → thêm Telegram ID (bấm /start bot để lấy ID).`);
