@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-sound-nav-fix";
+const BUILD_VERSION = "2026-07-18-teams-v1";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -524,7 +524,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 38; // Bump this when adding new DDL/migrations
+const DB_VERSION = 39; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -609,7 +609,7 @@ function getAssignmentNowStr() {
 function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
   const ts = now || getAssignmentNowStr();
   return {
-    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '' WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', team_id = NULL WHERE id = ?",
     args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
     now: ts,
   };
@@ -617,14 +617,14 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
 
 function buildLeadUnassignUpdateStmt(leadId) {
   return {
-    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '' WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', team_id = NULL WHERE id = ?",
     args: [leadId],
   };
 }
 
 function buildLeadEnterShufflePoolStmt(leadId, nowStr, { markRecalled = false } = {}) {
   return {
-    sql: `UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = ?, shuffle_pool_at = ?, sla_12h_warned_at = '', instant_sla_warned_at = '', sla_recalled_at = ? WHERE id = ?`,
+    sql: `UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = ?, shuffle_pool_at = ?, sla_12h_warned_at = '', instant_sla_warned_at = '', sla_recalled_at = ?, team_id = NULL WHERE id = ?`,
     args: [LEAD_DISTRIBUTION_KINDS.slaShuffle, nowStr, markRecalled ? nowStr : "", leadId],
   };
 }
@@ -1245,6 +1245,19 @@ async function initDb() {
     try { await run(db, "ALTER TABLE lead_history ADD COLUMN note TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE lead_history ADD COLUMN user_name TEXT DEFAULT ''"); } catch (_) {}
     try { await run(db, "ALTER TABLE lead_history ADD COLUMN created_at TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 39) {
+    console.log("[DB] v39 migration: teams (nhóm sale) — lead chia cho team thì cả nhóm cùng thấy");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS teams (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '',
+        leader_id INTEGER DEFAULT NULL,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try { await run(db, "ALTER TABLE users ADD COLUMN team_id INTEGER DEFAULT NULL"); } catch (_) {}
+    try { await run(db, "ALTER TABLE leads ADD COLUMN team_id INTEGER DEFAULT NULL"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3193,6 +3206,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     slaRecalledAt: l.sla_recalled_at || "",
     shufflePoolAt: l.shuffle_pool_at || "",
     instantSlaWarnedAt: l.instant_sla_warned_at || "",
+    teamId: l.team_id || null,
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
@@ -3211,6 +3225,61 @@ function buildPhoneRegistrationsFromMap(phoneRegMap) {
   return phoneRegistrations;
 }
 
+/* ---------- Teams (nhóm sale) helpers ---------- */
+const saleTeamIdCache = new Map(); // userId -> { at, teamId }
+const SALE_TEAM_CACHE_MS = 30_000;
+async function getSaleTeamId(userId) {
+  if (!userId) return 0;
+  const c = saleTeamIdCache.get(userId);
+  const now = Date.now();
+  if (c && now - c.at < SALE_TEAM_CACHE_MS) return c.teamId;
+  let teamId = 0;
+  try {
+    const row = await get(db, "SELECT team_id FROM users WHERE id = ?", [userId]);
+    teamId = Number(row?.team_id) || 0;
+  } catch (_) { /* cột team_id chưa có (DB cũ) */ }
+  saleTeamIdCache.set(userId, { at: now, teamId });
+  return teamId;
+}
+function invalidateSaleTeamCache() { saleTeamIdCache.clear(); }
+
+async function getTeamWithMembers(teamId) {
+  const t = await get(db, "SELECT * FROM teams WHERE id = ?", [teamId]);
+  if (!t) return null;
+  const members = await all(db, "SELECT id, username, display_name FROM users WHERE team_id = ? ORDER BY id", [teamId]);
+  const leader = members.find((m) => m.id === t.leader_id) || null;
+  return {
+    id: t.id,
+    name: t.name || "",
+    leaderId: t.leader_id || null,
+    leaderName: leader?.display_name || "",
+    members: members.map((m) => ({ id: m.id, username: m.username, displayName: m.display_name })),
+    createdAt: t.created_at || "",
+  };
+}
+
+/** Sale được cập nhật lead nếu: đang là sale phụ trách HOẶC là thành viên team của lead. */
+async function saleCanUpdateLead(leadRow, displayName) {
+  if (!leadRow) return { ok: false, status: 404, error: "Lead không tồn tại" };
+  if (matchSaleName(leadRow.sale_name, displayName)) return { ok: true };
+  const teamId = Number(leadRow.team_id) || 0;
+  if (teamId) {
+    try {
+      const u = await get(
+        db,
+        "SELECT id FROM users WHERE team_id = ? AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?)) LIMIT 1",
+        [teamId, String(displayName || "")]
+      );
+      if (u) return { ok: true };
+    } catch (_) {}
+  }
+  return {
+    ok: false,
+    status: 403,
+    error: "Lead đã được chuyển sale khác hoặc bị thu hồi — bạn không thể cập nhật.",
+  };
+}
+
 async function buildLeadsSqlFilters(db, user, filters = {}) {
   const parts = [];
   const params = [];
@@ -3222,7 +3291,9 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     params.push(...pids);
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
+    const teamId = await getSaleTeamId(user.userId);
     // Sale đang phụ trách HOẶC đã feedback thật (không còn tab "new") — sale bị thu hồi SLA không thấy lead
+    // Lead chia cho TEAM: mọi thành viên team cùng thấy (leads.team_id)
     parts.push(`(
       LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
       OR EXISTS (
@@ -3231,8 +3302,10 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
           AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
           AND LOWER(TRIM(COALESCE(lss.sale_tab_status, ''))) NOT IN ('', 'new')
       )
+      ${teamId ? "OR leads.team_id = ?" : ""}
     )`);
     params.push(dn, dn);
+    if (teamId) params.push(teamId);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -4817,6 +4890,89 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
     await run(db, "DELETE FROM users WHERE id = ?", [id]);
     const users = await selectUsers();
     res.json(await mapUsersWithProjects(users));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Teams (nhóm sale) ---------- */
+async function listTeamsPayload() {
+  const teams = await all(db, "SELECT * FROM teams ORDER BY id");
+  const members = await all(db, "SELECT id, username, display_name, team_id FROM users WHERE team_id IS NOT NULL");
+  return teams.map((t) => ({
+    id: t.id,
+    name: t.name || "",
+    leaderId: t.leader_id || null,
+    leaderName: members.find((m) => m.id === t.leader_id)?.display_name || "",
+    members: members
+      .filter((m) => m.team_id === t.id)
+      .map((m) => ({ id: m.id, username: m.username, displayName: m.display_name })),
+    createdAt: t.created_at || "",
+  }));
+}
+
+async function applyTeamMembers(teamId, leaderId, memberIds) {
+  const ids = [...new Set([...(memberIds || []).map(Number), Number(leaderId) || 0].filter(Boolean))];
+  await run(db, "UPDATE users SET team_id = NULL WHERE team_id = ?", [teamId]);
+  if (ids.length) {
+    const ph = ids.map(() => "?").join(",");
+    await run(db, `UPDATE users SET team_id = ? WHERE id IN (${ph})`, [teamId, ...ids]);
+  }
+  invalidateSaleTeamCache();
+}
+
+// Mọi role đều đọc được (sale cần tên team để hiện badge trên lead)
+app.get("/api/teams", requireAuth, async (_req, res) => {
+  try {
+    res.json(await listTeamsPayload());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/teams", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    const leaderId = Number(req.body?.leaderId) || 0;
+    const memberIds = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+    if (!name) return res.status(400).json({ error: "Cần nhập tên team" });
+    if (!leaderId) return res.status(400).json({ error: "Cần chọn leader cho team" });
+    const result = await run(db, "INSERT INTO teams(name, leader_id) VALUES(?, ?)", [name, leaderId]);
+    await applyTeamMembers(result.lastID, leaderId, memberIds);
+    res.json(await listTeamsPayload());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/teams/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const team = await get(db, "SELECT id FROM teams WHERE id = ?", [id]);
+    if (!team) return res.status(404).json({ error: "Team không tồn tại" });
+    const name = String(req.body?.name || "").trim();
+    const leaderId = Number(req.body?.leaderId) || 0;
+    const memberIds = Array.isArray(req.body?.memberIds) ? req.body.memberIds : [];
+    if (!name) return res.status(400).json({ error: "Cần nhập tên team" });
+    if (!leaderId) return res.status(400).json({ error: "Cần chọn leader cho team" });
+    await run(db, "UPDATE teams SET name = ?, leader_id = ? WHERE id = ?", [name, leaderId, id]);
+    await applyTeamMembers(id, leaderId, memberIds);
+    res.json(await listTeamsPayload());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/teams/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await run(db, "UPDATE users SET team_id = NULL WHERE team_id = ?", [id]);
+    await run(db, "UPDATE leads SET team_id = NULL WHERE team_id = ?", [id]);
+    await run(db, "DELETE FROM teams WHERE id = ?", [id]);
+    invalidateSaleTeamCache();
+    lastSyncHash = "";
+    emitDataChanged("team-deleted");
+    res.json(await listTeamsPayload());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -10859,7 +11015,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     console.log(`[PUT /api/leads] version=${BUILD_VERSION} body=${JSON.stringify(req.body)} user=${req.user?.displayName} role=${req.user?.role}`);
     // Chia lead chỉ chờ sync rất ngắn — trước đây max 15s làm nút "Chia lead" đơ
     const assignHotPath = (req.user.role === "admin" || req.user.role === "manager")
-      && req.body?.saleName
+      && (req.body?.saleName || req.body?.teamId)
       && req.body?.status === undefined
       && req.body?.notes === undefined;
     await waitForSyncBrief("PUT leads", assignHotPath ? 400 : 1500);
@@ -10873,7 +11029,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     // QUAN TRỌNG: khách đăng ký nhiều dự án có nhiều dòng lead cùng SĐT — phải khớp
     // ĐÚNG dự án đang thao tác, nếu không sẽ chia nhầm lead của dự án khác (bug chia
     // lead "báo thành công nhưng lead không qua, không có lịch sử").
-    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind";
+    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind, team_id";
     let actualLeadId = leadId;
     let existCheck = await get(db, `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE id = ?`, [leadId]);
     const projFilter = bodyProjectId ? " AND project_id = ?" : "";
@@ -10921,13 +11077,26 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     if (req.user.role === "sale") {
-      const lead = existCheck || await get(db, "SELECT sale_name FROM leads WHERE id = ?", [actualLeadId]);
-      const own = assertCurrentSaleOwnsLead(lead, req.user.displayName);
+      const lead = existCheck || await get(db, "SELECT sale_name, team_id FROM leads WHERE id = ?", [actualLeadId]);
+      const own = await saleCanUpdateLead(lead, req.user.displayName);
       if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
 
-    const { status, notes, saleId, saleName, isHot, managerName, customerFbUrl, phone2, phone3, adminNote } = req.body;
+    let { status, notes, saleId, saleName, isHot, managerName, customerFbUrl, phone2, phone3, adminNote } = req.body;
+
+    // Chia lead cho TEAM: sale chính = leader, cả nhóm cùng thấy + cùng nhận thông báo
+    let assignTeam = null;
+    if ((req.user.role === "admin" || req.user.role === "manager") && req.body.teamId !== undefined && saleName === undefined) {
+      const tid = Number(req.body.teamId) || 0;
+      if (tid) {
+        assignTeam = await getTeamWithMembers(tid);
+        if (!assignTeam) return res.status(404).json({ error: "Team không tồn tại — tải lại trang rồi thử lại" });
+        if (!assignTeam.leaderName) return res.status(400).json({ error: "Team chưa có leader — vào Quản lý tài khoản chọn leader trước" });
+        saleName = assignTeam.leaderName;
+      }
+    }
+
     const normalizedStatus = status !== undefined ? normalizeStatus(status) : undefined;
     if (req.user.role === "sale" && status !== undefined) {
       const saleStatusText = String(status || "").trim();
@@ -10953,6 +11122,8 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
+        // Chia cho team → gắn team_id; chia cho sale lẻ → bỏ team cũ (nếu có)
+        sets.push("team_id = ?"); params.push(assignTeam ? assignTeam.id : null);
         // Reset status to "new" (Chưa feedback) when reassigning to a new sale
         if (status === undefined) {
           reassigning = true;
@@ -11061,10 +11232,13 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
       const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [actualLeadId]);
       const nextSeq = (maxSeq?.m ?? -1) + 1;
+      const historyNote = assignTeam
+        ? `Admin ${req.user.displayName} chia lead cho team ${assignTeam.name} (leader ${saleName})`
+        : `Admin ${req.user.displayName} chia lead`;
       await run(
         db,
         "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        [actualLeadId, saleName, "Chia lead", now, "", `Admin ${req.user.displayName} chia lead`, nextSeq, "admin"]
+        [actualLeadId, saleName, "Chia lead", now, "", historyNote, nextSeq, "admin"]
       );
 
       setImmediate(() => {
@@ -11074,20 +11248,27 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
         (async () => {
           try {
             const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
-            sendPushToDisplayName(saleName, {
-              title: "Bạn có lead mới",
-              body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
-              tag: `sale-lead-${actualLeadId}-${Date.now()}`,
-              sound: "sale",
-              data: {
-                url: "/",
-                type: "sale_new_lead",
-                leadId: actualLeadId,
-                phone: lead?.phone || "",
-                projectId: lead?.project_id,
-              },
-              requireInteraction: true,
-            }).catch(err => console.error(`[Push] Sale notify failed for ${saleName}:`, err.message));
+            // Team: push cho TẤT CẢ thành viên; sale lẻ: push 1 người như cũ
+            const pushTargets = assignTeam
+              ? assignTeam.members.map((m) => m.displayName).filter(Boolean)
+              : [saleName];
+            const pushTitle = assignTeam ? `Team ${assignTeam.name} có khách mới` : "Bạn có lead mới";
+            for (const target of pushTargets) {
+              sendPushToDisplayName(target, {
+                title: pushTitle,
+                body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
+                tag: `sale-lead-${actualLeadId}-${Date.now()}`,
+                sound: "sale",
+                data: {
+                  url: "/",
+                  type: "sale_new_lead",
+                  leadId: actualLeadId,
+                  phone: lead?.phone || "",
+                  projectId: lead?.project_id,
+                },
+                requireInteraction: true,
+              }).catch(err => console.error(`[Push] Sale notify failed for ${target}:`, err.message));
+            }
           } catch (pushErr) {
             console.error("[Push] Sale notify failed:", pushErr.message);
           }
@@ -11142,7 +11323,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found" });
 
     if (req.user.role === "sale") {
-      const own = assertCurrentSaleOwnsLead(lead, req.user.displayName);
+      const own = await saleCanUpdateLead(lead, req.user.displayName);
       if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
@@ -11546,9 +11727,9 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
-        const leadRow = await get(db, "SELECT id, sale_name FROM leads WHERE id = ?", [leadId]);
+        const leadRow = await get(db, "SELECT id, sale_name, team_id FROM leads WHERE id = ?", [leadId]);
         const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
-        const own = assertCurrentSaleOwnsLead(leadRow, saleUser?.display_name || "");
+        const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
         if (!own.ok) {
           await answerCb(callback_query.id, "Lead đã chuyển sale khác");
           await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
@@ -11690,9 +11871,9 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
 
         // Get lead info — fallback by phone if lead_id is stale (sync may have re-created lead with new ID)
-        let lead = await get(db, "SELECT id, name, phone, sale_name, project_id FROM leads WHERE id = ?", [leadId]);
+        let lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id FROM leads WHERE id = ?", [leadId]);
         if (!lead && pending.phone) {
-          lead = await get(db, "SELECT id, name, phone, sale_name, project_id FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [pending.phone]);
+          lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [pending.phone]);
           if (lead) {
             console.log(`[telegram-webhook] Lead#${leadId} not found, fallback by phone "${pending.phone}" → Lead#${lead.id}`);
             leadId = lead.id;
@@ -11700,7 +11881,7 @@ async function handleTelegramWebhook(req, res) {
         }
 
         const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
-        const own = assertCurrentSaleOwnsLead(lead, saleUser?.display_name || "");
+        const own = await saleCanUpdateLead(lead, saleUser?.display_name || "");
         if (!own.ok) {
           await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
           await sendTg(chatId, "⚠️ Lead đã được chuyển sale khác hoặc bị thu hồi — không thể cập nhật feedback.");

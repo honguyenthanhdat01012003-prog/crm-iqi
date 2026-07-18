@@ -4206,6 +4206,22 @@ function DashboardKpiGroup({ title, icon: Icon, children, accent }) {
   );
 }
 
+function DashMiniPager({ page, totalPages, onChange }) {
+  if (totalPages <= 1) return null;
+  const navBtn = (disabled) => ({
+    padding: "5px 9px", borderRadius: 8, border: "1px solid #d1d5db",
+    background: disabled ? "#f3f4f6" : "#fff", color: disabled ? "#9ca3af" : "#374151",
+    cursor: disabled ? "default" : "pointer", display: "flex", alignItems: "center",
+  });
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 10, padding: "10px 0 2px" }}>
+      <button onClick={() => onChange(Math.max(1, page - 1))} disabled={page === 1} style={navBtn(page === 1)}><ChevronLeft size={14} /></button>
+      <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Trang {page}/{totalPages}</span>
+      <button onClick={() => onChange(Math.min(totalPages, page + 1))} disabled={page === totalPages} style={navBtn(page === totalPages)}><ChevronRight size={14} /></button>
+    </div>
+  );
+}
+
 function DashboardPage({ projects, apiFetch }) {
   const isMobile = useIsMobile();
   const [preset, setPreset] = useState("month");
@@ -4246,6 +4262,10 @@ function DashboardPage({ projects, apiFetch }) {
   const [auditSaleFilter, setAuditSaleFilter] = useState("all");
   const [auditSlaType, setAuditSlaType] = useState("all");
   const [auditVerdict, setAuditVerdict] = useState("all");
+  const [auditPage, setAuditPage] = useState(1);
+  const [rankPage, setRankPage] = useState(1);
+  useEffect(() => { setAuditPage(1); }, [auditSaleFilter, auditSlaType, auditVerdict, slaAudit]);
+  useEffect(() => { setRankPage(1); }, [preset, projectId]);
 
   const loadDashboard = useCallback(async () => {
     const hasData = !!dataRef.current;
@@ -4466,7 +4486,9 @@ function DashboardPage({ projects, apiFetch }) {
               )}
               {isMobile ? (
                 <div className="crm-dash-sale-cards">
-                  {saleRanking.slice(0, 10).map((s, i) => (
+                  {saleRanking.slice((rankPage - 1) * 5, rankPage * 5).map((s, idx) => {
+                    const i = (rankPage - 1) * 5 + idx;
+                    return (
                     <div key={s.name} className="crm-dash-sale-card">
                       <div className="crm-dash-sale-card__head">
                         <span>{i < 3 ? <Trophy size={14} style={{ color: ["#FFD700", "#C0C0C0", "#CD7F32"][i] }} /> : `#${i + 1}`} {s.name}</span>
@@ -4482,7 +4504,9 @@ function DashboardPage({ projects, apiFetch }) {
                         </span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
+                  <DashMiniPager page={rankPage} totalPages={Math.ceil(saleRanking.length / 5)} onChange={setRankPage} />
                 </div>
               ) : (
                 <div className="crm-dash-table-wrap">
@@ -4503,8 +4527,10 @@ function DashboardPage({ projects, apiFetch }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {saleRanking.map((s, i) => (
-                        <tr key={s.name} style={{ background: i % 2 ? "#f9fafb" : "#fff" }}>
+                      {saleRanking.slice((rankPage - 1) * 5, rankPage * 5).map((s, idx) => {
+                        const i = (rankPage - 1) * 5 + idx;
+                        return (
+                        <tr key={s.name} style={{ background: idx % 2 ? "#f9fafb" : "#fff" }}>
                           <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
                           <td style={{ ...tdStyle, fontWeight: 600 }}>{s.name}</td>
                           <td style={{ ...tdStyle, fontWeight: 700 }}>{s.total}</td>
@@ -4517,9 +4543,11 @@ function DashboardPage({ projects, apiFetch }) {
                           <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>{formatResponseMs(s.avgResponseMs)}</td>
                           <td style={{ ...tdStyle, fontWeight: 700, color: s.slaPenalties > 0 ? "#dc2626" : "#94a3b8" }}>{s.slaPenalties || 0}</td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
+                  <DashMiniPager page={rankPage} totalPages={Math.ceil(saleRanking.length / 5)} onChange={setRankPage} />
                 </div>
               )}
             </div>
@@ -4746,7 +4774,7 @@ function DashboardPage({ projects, apiFetch }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {auditItems.map((row) => (
+                      {auditItems.slice((auditPage - 1) * 5, auditPage * 5).map((row) => (
                         <tr key={row.id}>
                           <td style={{ ...tdStyle, whiteSpace: "nowrap", fontSize: 12 }}>{row.recalledAt || "—"}</td>
                           <td style={{ ...tdStyle, fontWeight: 600 }}>{row.saleName}</td>
@@ -4784,6 +4812,7 @@ function DashboardPage({ projects, apiFetch }) {
                       ))}
                     </tbody>
                   </table>
+                  <DashMiniPager page={auditPage} totalPages={Math.ceil(auditItems.length / 5)} onChange={setAuditPage} />
                   {slaAudit?.hasMore && (
                     <div style={{ fontSize: 12, color: "#64748b", padding: "8px 0" }}>Hiển thị 500 bản ghi đầu — thu hẹp bộ lọc hoặc xuất CSV để xem đủ.</div>
                   )}
@@ -5177,6 +5206,16 @@ const LeadsPage = (props) => {
       apiFetch(`${API}/users`).then(r => r.json()).then(data => setAllUsers(Array.isArray(data) ? data : [])).catch(() => {});
     }
   }, [isAdmin]);
+
+  // Teams (nhóm sale) — dùng cho dropdown chia lead + badge team trên lead
+  const [teams, setTeams] = useState([]);
+  useEffect(() => {
+    apiFetch(`${API}/teams`)
+      .then(r => (r.ok ? r.json() : []))
+      .then(data => setTeams(Array.isArray(data) ? data : []))
+      .catch(() => {});
+  }, []);
+  const teamNameMap = useMemo(() => Object.fromEntries(teams.map(t => [t.id, t.name])), [teams]);
 
   const isRecentLead = useCallback((l) => isNewTaggedLead(l), []);
   const isShuffleLead = useCallback((l) => isShuffleTaggedLead(l), []);
@@ -8701,6 +8740,7 @@ const LeadsPage = (props) => {
                         {isRecentLead(l) && <NewLeadBadge />}
                         {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                         {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
+                        {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                         <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                       </span>
                       <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -8725,6 +8765,7 @@ const LeadsPage = (props) => {
                       {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
+                      {l.teamId && teamNameMap[l.teamId] && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       <StatusBadge status={l.status} size="sm" />
                       {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
@@ -8826,7 +8867,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} />
                   </div>
                 )}
               </div>
@@ -8870,6 +8911,7 @@ const LeadsPage = (props) => {
                 inDrawer
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
+                teams={teams}
               />
             )}
           </LeadDetailDrawer>
@@ -8909,6 +8951,7 @@ const LeadsPage = (props) => {
                 isMobile={isMobile}
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
+                teams={teams}
               />
             </div>
           </div>
@@ -9000,7 +9043,7 @@ function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, c
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {} }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [] }) {
   const isSale = user.role === "sale";
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -9364,18 +9407,26 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   const handleAssignSale = async () => {
     if (!editSale) return;
+    // Chia cho TEAM: value dạng "team:ID" — sale chính = leader, cả nhóm cùng thấy
+    const teamMatch = /^team:(\d+)$/.exec(editSale);
+    const assignTeam = teamMatch ? teams.find(t => t.id === Number(teamMatch[1])) : null;
+    if (teamMatch && !assignTeam) { showToast("Team không tồn tại — tải lại trang", "error"); return; }
+    if (assignTeam && !assignTeam.leaderName) { showToast("Team chưa có leader — vào Quản lý tài khoản chọn leader trước", "error"); return; }
+    const displaySale = assignTeam ? assignTeam.leaderName : editSale;
     setSavingSale(true);
     const prevSale = lead.saleName || "";
     const prevStatus = lead.status || "new";
     const prevRaw = lead.rawStatus || "";
     const prevAssigned = lead.assignedAt || "";
+    const prevTeamId = lead.teamId || null;
     // Optimistic — UI đổi ngay, không chờ API
     applyApiData({
       updatedLead: {
         id: lead.id,
         name: lead.name,
         phone: lead.phone,
-        saleName: editSale,
+        saleName: displaySale,
+        teamId: assignTeam ? assignTeam.id : null,
         status: "new",
         rawStatus: "",
         tabStatus: "new",
@@ -9384,12 +9435,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         isMktXao: !!lead.isMktXao,
       },
     }, { suppressNotifications: true });
-    showToast(`Đã chia cho ${editSale}`, "success");
+    showToast(assignTeam ? `Đã chia cho team ${assignTeam.name} (${assignTeam.members.length} người)` : `Đã chia cho ${editSale}`, "success");
     setSavingSale(false);
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ saleName: editSale, phone: lead.phone, name: lead.name, projectId: lead.projectId }),
+        body: JSON.stringify(
+          assignTeam
+            ? { teamId: assignTeam.id, phone: lead.phone, name: lead.name, projectId: lead.projectId }
+            : { saleName: editSale, phone: lead.phone, name: lead.name, projectId: lead.projectId }
+        ),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -9400,6 +9455,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             status: prevStatus,
             rawStatus: prevRaw,
             assignedAt: prevAssigned,
+            teamId: prevTeamId,
           },
         }, { suppressNotifications: true });
         showToast(data.error || "Chia lead thất bại", "error");
@@ -9414,6 +9470,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           status: prevStatus,
           rawStatus: prevRaw,
           assignedAt: prevAssigned,
+          teamId: prevTeamId,
         },
       }, { suppressNotifications: true });
       showToast("Lỗi kết nối: " + e.message, "error");
@@ -9779,6 +9836,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
               style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 auto" : "none", minHeight: mobileControlHeight, background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Sale --</option>
+              {teams.length > 0 && (
+                <optgroup label="Team (cả nhóm cùng nhận)">
+                  {teams.map(t => (
+                    <option key={`team-${t.id}`} value={`team:${t.id}`}>
+                      Team {t.name} — {t.members.length} người{t.leaderName ? ` (leader ${t.leaderName})` : ""}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
@@ -9792,7 +9858,10 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <DetailAccordion
               icon={<Share2 size={14} color="#1a3c20" />}
               title="Sale phụ trách"
-              summary={lead.saleName || "Chưa chia"}
+              summary={(() => {
+                const t = lead.teamId ? teams.find(x => x.id === lead.teamId) : null;
+                return t ? `Team ${t.name} · ${lead.saleName || "?"}` : (lead.saleName || "Chưa chia");
+              })()}
               summaryColor={lead.saleName ? "#15803d" : "#dc2626"}
               open={openSection === "sale"}
               onToggle={() => toggleSection("sale")}
@@ -9803,12 +9872,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         }
         return (
           <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 16, fontSize: 13 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
               {lead.saleName
                 ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
                 : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
               }
+              {lead.teamId && (() => {
+                const t = teams.find(x => x.id === lead.teamId);
+                return t ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }} title={`Cả team cùng chăm: ${t.members.map(m => m.displayName).join(", ")}`}>Team {t.name} · {t.members.length} người</span> : null;
+              })()}
             </div>
             {saleBody}
           </div>
@@ -15020,6 +15093,176 @@ function ProfilePage({ user, updateUser }) {
   );
 }
 
+/* ===== Teams (nhóm sale) — chia lead cho team thì cả nhóm cùng nhận ===== */
+function TeamsSection({ users, isMobile }) {
+  const [teams, setTeams] = useState([]);
+  const [showTeamForm, setShowTeamForm] = useState(false);
+  const [editingTeam, setEditingTeam] = useState(null);
+  const [teamDraft, setTeamDraft] = useState({ name: "", leaderId: 0, memberIds: [] });
+  const [teamError, setTeamError] = useState("");
+  const [savingTeam, setSavingTeam] = useState(false);
+
+  const saleUsers = useMemo(() => (Array.isArray(users) ? users.filter(u => u.role === "sale") : []), [users]);
+  // Sale đã nằm team khác — cảnh báo khi chọn (1 sale chỉ thuộc 1 team)
+  const memberTeamMap = useMemo(() => {
+    const map = {};
+    for (const t of teams) for (const m of t.members) map[m.id] = t;
+    return map;
+  }, [teams]);
+
+  const loadTeams = async () => {
+    try {
+      const r = await apiFetch(`${API}/teams`);
+      if (r.ok) setTeams(await r.json());
+    } catch (e) { console.error(e); }
+  };
+  useEffect(() => { loadTeams(); }, []);
+
+  const openNewTeam = () => { setEditingTeam(null); setTeamDraft({ name: "", leaderId: 0, memberIds: [] }); setTeamError(""); setShowTeamForm(true); };
+  const openEditTeam = (t) => { setEditingTeam(t); setTeamDraft({ name: t.name, leaderId: t.leaderId || 0, memberIds: t.members.map(m => m.id) }); setTeamError(""); setShowTeamForm(true); };
+
+  const toggleMember = (id) => setTeamDraft(d => {
+    const selected = d.memberIds.includes(id);
+    return {
+      ...d,
+      memberIds: selected ? d.memberIds.filter(x => x !== id) : [...d.memberIds, id],
+      leaderId: selected && d.leaderId === id ? 0 : d.leaderId,
+    };
+  });
+
+  const saveTeam = async () => {
+    if (!teamDraft.name.trim()) { setTeamError("Cần nhập tên team"); return; }
+    if (!teamDraft.memberIds.length) { setTeamError("Cần chọn ít nhất 1 thành viên"); return; }
+    if (!teamDraft.leaderId) { setTeamError("Cần chọn leader cho team"); return; }
+    setSavingTeam(true); setTeamError("");
+    try {
+      const url = editingTeam ? `${API}/teams/${editingTeam.id}` : `${API}/teams`;
+      const r = await apiFetch(url, { method: editingTeam ? "PUT" : "POST", body: JSON.stringify(teamDraft) });
+      const d = await r.json();
+      if (!r.ok) { setTeamError(d.error || "Lưu thất bại"); return; }
+      setTeams(Array.isArray(d) ? d : []);
+      setShowTeamForm(false);
+      showToast(editingTeam ? "Đã cập nhật team" : "Đã tạo team", "success");
+    } catch (e) {
+      setTeamError("Lỗi kết nối: " + e.message);
+    } finally {
+      setSavingTeam(false);
+    }
+  };
+
+  const deleteTeam = async (t) => {
+    const ok = await showConfirm(`Xóa team "${t.name}"? Lead đã chia cho team vẫn giữ sale phụ trách, chỉ bỏ gắn team.`);
+    if (!ok) return;
+    try {
+      const r = await apiFetch(`${API}/teams/${t.id}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok) { showToast(d.error || "Xóa thất bại", "error"); return; }
+      setTeams(Array.isArray(d) ? d : []);
+      showToast("Đã xóa team", "success");
+    } catch (e) { showToast("Lỗi kết nối: " + e.message, "error"); }
+  };
+
+  const selectedMembers = saleUsers.filter(u => teamDraft.memberIds.includes(u.id));
+
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 14, color: "#6b7280", display: "flex", alignItems: "center", gap: 6 }}>
+          <Users size={14} /> Team Sale ({teams.length})
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>— chia lead cho team thì cả nhóm cùng thấy khách</span>
+        </div>
+        <button onClick={openNewTeam} style={{ ...btnPrimary, minHeight: 40 }}>+ Tạo Team</button>
+      </div>
+
+      {teams.length === 0 ? (
+        <div style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13, boxShadow: "0 1px 3px rgba(0,0,0,.08)", marginBottom: 24 }}>
+          Chưa có team nào. Tạo team, chọn leader + thành viên — khi chia lead có thể chia cho cả team.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(auto-fill, minmax(300px, 1fr))", gap: 10, marginBottom: 24 }}>
+          {teams.map((t) => (
+            <div key={t.id} style={{ background: "#fff", borderRadius: 10, padding: 14, boxShadow: "0 1px 3px rgba(0,0,0,.06)", border: "1px solid #e5e7eb" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontWeight: 800, fontSize: 14, color: "#0f172a", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ padding: "2px 8px", borderRadius: 8, fontSize: 11, fontWeight: 800, background: "#ede9fe", color: "#6d28d9" }}>Team</span>
+                  {t.name}
+                </span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b" }}>{t.members.length} người</span>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+                {t.members.map((m) => (
+                  <span key={m.id} style={{
+                    display: "inline-flex", alignItems: "center", gap: 3, padding: "3px 8px", borderRadius: 999, fontSize: 11, fontWeight: 700,
+                    background: m.id === t.leaderId ? "#fef3c7" : "#f1f5f9",
+                    color: m.id === t.leaderId ? "#92400e" : "#334155",
+                  }}>
+                    {m.id === t.leaderId && <Crown size={11} />}
+                    {m.displayName}
+                  </span>
+                ))}
+                {!t.members.length && <span style={{ fontSize: 11, color: "#dc2626" }}>Chưa có thành viên</span>}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button onClick={() => openEditTeam(t)} style={{ ...btnSecondary, flex: 1, padding: "7px", fontSize: 12, minHeight: 34, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>
+                <button onClick={() => deleteTeam(t)} style={{ ...btnDanger, flex: 1, padding: "7px", fontSize: 12, minHeight: 34, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showTeamForm && (
+        <Modal onClose={() => setShowTeamForm(false)} title={editingTeam ? `Sửa team ${editingTeam.name}` : "Tạo Team mới"}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>Tên team</label>
+              <input value={teamDraft.name} onChange={(e) => setTeamDraft(d => ({ ...d, name: e.target.value }))}
+                placeholder="VD: Team A"
+                style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
+                Thành viên ({teamDraft.memberIds.length})
+              </label>
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: 8, padding: 6 }}>
+                {saleUsers.length === 0 && <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Chưa có tài khoản sale nào</div>}
+                {saleUsers.map((u) => {
+                  const checked = teamDraft.memberIds.includes(u.id);
+                  const otherTeam = memberTeamMap[u.id] && (!editingTeam || memberTeamMap[u.id].id !== editingTeam.id) ? memberTeamMap[u.id] : null;
+                  return (
+                    <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 8px", borderRadius: 6, cursor: "pointer", background: checked ? "#f0faf1" : "transparent", fontSize: 13 }}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleMember(u.id)} />
+                      <span style={{ fontWeight: 600, color: "#0f172a" }}>{u.displayName}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>@{u.username}</span>
+                      {otherTeam && <span style={{ fontSize: 10, color: "#d97706", fontWeight: 700 }}>đang ở team {otherTeam.name}</span>}
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Sale đang ở team khác nếu được chọn sẽ tự chuyển sang team này.</div>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>Leader (người chịu trách nhiệm chính)</label>
+              <select value={teamDraft.leaderId || ""} onChange={(e) => setTeamDraft(d => ({ ...d, leaderId: Number(e.target.value) || 0 }))}
+                style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, background: "#fff" }}>
+                <option value="">-- Chọn leader trong thành viên --</option>
+                {selectedMembers.map((u) => <option key={u.id} value={u.id}>{u.displayName}</option>)}
+              </select>
+            </div>
+            {teamError && <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>{teamError}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowTeamForm(false)} style={{ ...btnSecondary, minHeight: 38 }}>Hủy</button>
+              <button onClick={saveTeam} disabled={savingTeam} style={{ ...btnPrimary, minHeight: 38 }}>
+                {savingTeam ? "Đang lưu..." : (editingTeam ? "Lưu thay đổi" : "Tạo team")}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) {
   const isMobile = useIsMobile();
   const [users, setUsers] = useState([]);
@@ -15530,6 +15773,9 @@ function UsersPage({ projects, leads, isManager = false, isAdminOnly = false }) 
           ><ChevronRight size={14} /></button>
         </div>
       )}
+
+      {/* ===== TEAM SALE ===== */}
+      <TeamsSection users={users} isMobile={isMobile} />
 
       {/* ===== TELEGRAM BOT (Admin only) ===== */}
       {isAdminOnly && <>
