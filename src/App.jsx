@@ -4264,8 +4264,9 @@ function DashboardPage({ projects, apiFetch }) {
   const [auditVerdict, setAuditVerdict] = useState("all");
   const [auditPage, setAuditPage] = useState(1);
   const [rankPage, setRankPage] = useState(1);
+  const [teamRankPage, setTeamRankPage] = useState(1);
   useEffect(() => { setAuditPage(1); }, [auditSaleFilter, auditSlaType, auditVerdict, slaAudit]);
-  useEffect(() => { setRankPage(1); }, [preset, projectId]);
+  useEffect(() => { setRankPage(1); setTeamRankPage(1); }, [preset, projectId]);
 
   const loadDashboard = useCallback(async () => {
     const hasData = !!dataRef.current;
@@ -4378,6 +4379,7 @@ function DashboardPage({ projects, apiFetch }) {
   const campaigns = data?.campaigns || [];
   const campaignMeta = data?.campaignMeta || {};
   const saleRanking = data?.saleRanking || [];
+  const teamRanking = data?.teamRanking || [];
   const unassignedLeads = data?.unassignedLeads || 0;
   const discipline = data?.discipline || { totalPenalties: 0, bySale: [], recent: [] };
   const rangeLabel = data?.range?.label || "";
@@ -4624,6 +4626,87 @@ function DashboardPage({ projects, apiFetch }) {
               </div>
             </div>
           </div>
+
+          {/* Xếp hạng Team — doanh số 2 lớp: team + người chốt trong team */}
+          {teamRanking.length > 0 && (
+            <div className={`crm-dash-row${isMobile ? " crm-dash-row--stack" : ""}`}>
+              <div className="crm-dash-panel crm-dash-panel--wide">
+                <h4 className="crm-dash-panel__title"><Users size={18} style={{ color: "#7c3aed" }} /> Xếp hạng Team</h4>
+                {isMobile ? (
+                  <div className="crm-dash-sale-cards">
+                    {teamRanking.slice((teamRankPage - 1) * 5, teamRankPage * 5).map((t, idx) => {
+                      const i = (teamRankPage - 1) * 5 + idx;
+                      return (
+                        <div key={t.teamId} className="crm-dash-sale-card" style={{ borderLeft: "3px solid #8b5cf6" }}>
+                          <div className="crm-dash-sale-card__head">
+                            <span>{i < 3 ? <Trophy size={14} style={{ color: ["#FFD700", "#C0C0C0", "#CD7F32"][i] }} /> : `#${i + 1}`} Team {t.name} <span style={{ color: "#94a3b8", fontWeight: 400 }}>({t.memberCount} người)</span></span>
+                            <strong>{t.total} lead</strong>
+                          </div>
+                          <div className="crm-dash-sale-card__metrics">
+                            <span>Booking: <b>{t.booked || 0}</b></span>
+                            <span>BK khác: <b>{t.bookingOther || 0}</b></span>
+                            <span>Chốt: <b>{t.closed || 0}</b></span>
+                            <span>Doanh số: <b style={{ color: "#059669" }}>{t.dealValue ? formatVND(t.dealValue) : "—"}</b></span>
+                          </div>
+                          {t.closers?.length > 0 && (
+                            <div style={{ fontSize: 11, color: "#7c3aed", marginTop: 4 }}>
+                              Người chốt: {t.closers.map((c) => `${c.name} (${(c.closed || 0) + (c.booked || 0) + (c.bookingOther || 0)})`).join(", ")}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    <DashMiniPager page={teamRankPage} totalPages={Math.ceil(teamRanking.length / 5)} onChange={setTeamRankPage} />
+                  </div>
+                ) : (
+                  <div className="crm-dash-table-wrap">
+                    <table style={tableStyle}>
+                      <thead>
+                        <tr>
+                          <th style={thStyle}>#</th>
+                          <th style={thStyle}>Team</th>
+                          <th style={thStyle}>Leader</th>
+                          <th style={thStyle}>Thành viên</th>
+                          <th style={thStyle}>Tổng lead</th>
+                          <th style={thStyle}>Booking</th>
+                          <th style={thStyle}>BK sàn khác</th>
+                          <th style={thStyle}>Chốt</th>
+                          <th style={thStyle}>Doanh số</th>
+                          <th style={thStyle}>Win rate</th>
+                          <th style={thStyle}>Người chốt trong team</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teamRanking.slice((teamRankPage - 1) * 5, teamRankPage * 5).map((t, idx) => {
+                          const i = (teamRankPage - 1) * 5 + idx;
+                          return (
+                            <tr key={t.teamId} style={{ background: idx % 2 ? "#f9fafb" : "#fff" }}>
+                              <td style={tdStyle}>{i === 0 ? <Trophy size={14} style={{ color: "#FFD700" }} /> : i === 1 ? <Trophy size={14} style={{ color: "#C0C0C0" }} /> : i === 2 ? <Trophy size={14} style={{ color: "#CD7F32" }} /> : i + 1}</td>
+                              <td style={{ ...tdStyle, fontWeight: 700, color: "#6d28d9" }}>Team {t.name}</td>
+                              <td style={tdStyle}>{t.leaderName || "—"}</td>
+                              <td style={tdStyle} title={(t.members || []).join(", ")}>{t.memberCount}</td>
+                              <td style={{ ...tdStyle, fontWeight: 700 }}>{t.total}</td>
+                              <td style={tdStyle}>{t.booked || 0}</td>
+                              <td style={tdStyle}>{t.bookingOther || 0}</td>
+                              <td style={{ ...tdStyle, color: "#059669", fontWeight: 700 }}>{t.closed || 0}</td>
+                              <td style={{ ...tdStyle, color: "#059669", fontWeight: 700, whiteSpace: "nowrap" }}>{t.dealValue ? formatVND(t.dealValue) : "—"}</td>
+                              <td style={{ ...tdStyle, fontWeight: 700, color: t.winRate >= 10 ? "#059669" : "#64748b" }}>{t.winRate}%</td>
+                              <td style={{ ...tdStyle, fontSize: 11.5, whiteSpace: "normal", maxWidth: 220 }}>
+                                {t.closers?.length
+                                  ? t.closers.map((c) => `${c.name} (${(c.closed || 0) + (c.booked || 0) + (c.bookingOther || 0)})`).join(", ")
+                                  : <span style={{ color: "#94a3b8" }}>—</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <DashMiniPager page={teamRankPage} totalPages={Math.ceil(teamRanking.length / 5)} onChange={setTeamRankPage} />
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="crm-dash-row crm-dash-row--discipline">
             <div className="crm-dash-panel crm-dash-panel--wide crm-dash-discipline">

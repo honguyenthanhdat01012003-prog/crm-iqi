@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-teams-v2";
+const BUILD_VERSION = "2026-07-18-teams-v3";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -5873,7 +5873,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     // Chỉ lấy cột cần cho KPI — SELECT * làm dashboard PWA chậm 1–2 phút
     let leadSql = `SELECT id, project_id, name, phone, status, raw_status, admin_tab_status,
       created_at, sale_name, manager_name, source, campaign, campaign_id, ads_id,
-      adset_name, ad_name, form_name, product, budget, deal_value
+      adset_name, ad_name, form_name, product, budget, deal_value, team_id
       FROM leads`;
     const leadParams = [];
     const where = [];
@@ -5884,7 +5884,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           range: { preset, startDate: null, endDate: null, label: range.label },
           stats: { total: 0 },
           kpis: { marketing: { totalLeads: 0, totalSpent: 0, cpl: 0 }, quality: { good: 0, bad: 0, neutral: 0, qualityPct: 0 }, sales: { booked: 0, closed: 0, totalBooking: 0 } },
-          funnel: [], trend: [], sources: [], campaigns: [], campaignMeta: {}, saleRanking: [], unassignedLeads: 0,
+          funnel: [], trend: [], sources: [], campaigns: [], campaignMeta: {}, saleRanking: [], teamRanking: [], unassignedLeads: 0,
           discipline: { totalPenalties: 0, bySale: [], recent: [] },
         });
       }
@@ -5911,6 +5911,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     const sourceMap = {};
     const campaignMap = {};
     const saleMap = {};
+    const teamMap = {}; // doanh số 2 lớp: team + người chốt trong team
 
     for (const lead of filteredLeads) {
       const hist = historyMap[lead.id] || [];
@@ -5971,6 +5972,28 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         sm.closed += credit.closed || 0;
         sm.booked += credit.booked || 0;
         sm.bookingOther += credit.bookingOther || 0;
+      }
+
+      const leadTeamId = Number(lead.team_id) || 0;
+      if (leadTeamId) {
+        if (!teamMap[leadTeamId]) {
+          teamMap[leadTeamId] = { teamId: leadTeamId, total: 0, closed: 0, booked: 0, bookingOther: 0, dealValue: 0, closers: {} };
+        }
+        const tm = teamMap[leadTeamId];
+        tm.total += 1;
+        if (tabStatus === "closed") {
+          tm.closed += 1;
+          tm.dealValue += Number(lead.deal_value) || 0;
+        } else if (tabStatus === "booked") tm.booked += 1;
+        else if (tabStatus === "booking_other") tm.bookingOther += 1;
+        // Lớp 2: người chốt thật trong team (từ lịch sử feedback, không mặc định là leader)
+        for (const credit of dealCredits) {
+          if (!(credit.closed || credit.booked || credit.bookingOther)) continue;
+          if (!tm.closers[credit.name]) tm.closers[credit.name] = { name: credit.name, closed: 0, booked: 0, bookingOther: 0 };
+          tm.closers[credit.name].closed += credit.closed || 0;
+          tm.closers[credit.name].booked += credit.booked || 0;
+          tm.closers[credit.name].bookingOther += credit.bookingOther || 0;
+        }
       }
     }
 
@@ -6060,6 +6083,43 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       })
       .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
+    let teamRanking = [];
+    const teamMapIds = Object.keys(teamMap).map(Number);
+    if (teamMapIds.length) {
+      try {
+        const teamRows = await all(db, "SELECT id, name, leader_id FROM teams");
+        const teamUsers = await all(db, "SELECT id, display_name, team_id FROM users WHERE team_id IS NOT NULL");
+        const teamInfoById = {};
+        for (const t of teamRows) teamInfoById[t.id] = { name: t.name, leaderId: t.leader_id, members: [] };
+        for (const u of teamUsers) {
+          if (teamInfoById[u.team_id]) teamInfoById[u.team_id].members.push({ id: u.id, displayName: u.display_name });
+        }
+        teamRanking = Object.values(teamMap)
+          .map((tm) => {
+            const info = teamInfoById[tm.teamId];
+            const leaderName = info?.members.find((m) => m.id === info.leaderId)?.displayName || "";
+            return {
+              teamId: tm.teamId,
+              name: info?.name || `Team #${tm.teamId}`,
+              leaderName,
+              memberCount: info?.members.length || 0,
+              members: (info?.members || []).map((m) => m.displayName),
+              total: tm.total,
+              closed: tm.closed,
+              booked: tm.booked,
+              bookingOther: tm.bookingOther,
+              dealValue: tm.dealValue,
+              winRate: tm.total ? +((tm.closed / tm.total) * 100).toFixed(1) : 0,
+              convertRate: tm.total ? +(((tm.closed + tm.booked + tm.bookingOther) / tm.total) * 100).toFixed(1) : 0,
+              closers: Object.values(tm.closers).sort((a, b) => b.closed - a.closed || b.booked - a.booked),
+            };
+          })
+          .sort((a, b) => b.closed - a.closed || b.dealValue - a.dealValue || b.total - a.total);
+      } catch (e) {
+        console.warn("[GET /api/dashboard] teamRanking skipped:", e.message);
+      }
+    }
+
     const unassignedLeads = filteredLeads.filter((l) => !getLeadAssignedSales(l, historyMap[l.id] || []).length).length;
 
     const sources = Object.entries(sourceMap)
@@ -6143,6 +6203,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       campaigns,
       campaignMeta,
       saleRanking,
+      teamRanking,
       unassignedLeads,
       discipline: {
         totalPenalties,
