@@ -60,6 +60,7 @@
 .crm-sidebar--mobile {
   width: 280px;
   transform: translateX(-100%);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .crm-sidebar--mobile-open {
@@ -228,8 +229,9 @@
 }
 
 .crm-header--mobile {
-  padding: 8px 12px;
-  min-height: 52px;
+  /* Đẩy header xuống dưới tai thỏ/status bar (giống FB) — safe-area chỉ có giá trị trên máy có notch */
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px;
+  min-height: calc(52px + env(safe-area-inset-top, 0px));
 }
 
 .crm-header-left {
@@ -1073,36 +1075,19 @@
 }
 
 /* ===== Mobile Notification Sheet ===== */
-.crm-mobile-notif-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.42);
-  z-index: 960;
-  animation: crmFadeIn 0.2s ease;
-}
-
+/* Tab Thông báo toàn màn hình kiểu Facebook — bottom nav vẫn hiện, không còn bottom-sheet */
 .crm-mobile-notif-sheet {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
-  max-height: min(88vh, calc(100dvh - 24px));
+  top: 0;
+  bottom: calc(54px + env(safe-area-inset-bottom, 0px));
   background: #fff;
-  border-radius: 16px 16px 0 0;
-  z-index: 970;
+  border-radius: 0;
+  z-index: 940;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 -10px 40px rgba(15, 23, 42, 0.18);
-  animation: crmSlideUp 0.28s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.crm-mobile-notif-handle {
-  width: 36px;
-  height: 4px;
-  border-radius: 999px;
-  background: #d1d5db;
-  margin: 8px auto 4px;
-  flex-shrink: 0;
+  animation: crmFadeIn 0.18s ease;
 }
 
 .crm-mobile-notif-header {
@@ -1110,16 +1095,18 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 14px 10px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px;
   border-bottom: 1px solid #e5e7eb;
   flex-shrink: 0;
+  background: #fff;
 }
 
 .crm-mobile-notif-header b {
-  font-size: 15px;
+  font-size: 19px;
+  font-weight: 800;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   color: #0f172a;
 }
 

@@ -2448,8 +2448,9 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const handleMobileBottomTab = (tab) => {
     if (tab.key === "notifications") {
-      setShowMobileNotif(true);
+      setShowMobileNotif((v) => !v);
       setShowNotif(false);
+      setBottomNavHidden(false);
       return;
     }
     setPage(tab.key);
@@ -2991,7 +2992,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
       {isMobile && (
         <nav
-          className={`crm-bottom-nav${bottomNavHidden || showMobileNotif ? " crm-bottom-nav--hidden" : ""}`}
+          className={`crm-bottom-nav${bottomNavHidden && !showMobileNotif ? " crm-bottom-nav--hidden" : ""}`}
           style={{ gridTemplateColumns: `repeat(${mobileBottomTabs.length}, minmax(0, 1fr))` }}
         >
           {mobileBottomTabs.map((tab) => {
@@ -3020,9 +3021,7 @@ function CRMApp({ user, updateUser, onLogout }) {
 
       {isMobile && showMobileNotif && (
         <>
-          <div className="crm-mobile-notif-backdrop" onClick={() => setShowMobileNotif(false)} />
           <div className="crm-mobile-notif-sheet" role="dialog" aria-label="Thông báo">
-            <div className="crm-mobile-notif-handle" />
             <div className="crm-mobile-notif-header">
               <b><Bell size={16} /> Thông báo</b>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -3485,9 +3484,9 @@ function ChatSidebar({ currentUser }) {
         }}
         style={{
           position: "fixed",
-          ...(isMobile
-            ? { top: "auto", bottom: "calc(58px + env(safe-area-inset-bottom, 0px))", transform: "none" }
-            : { top: "50%", transform: "translateY(-50%)" }),
+          // Giữa mép phải màn hình (mobile trước đây nằm sát đáy, khó bấm)
+          top: "50%",
+          transform: "translateY(-50%)",
           right: sidebarOpen ? sidebarWidth : 0,
           zIndex: 1001,
           width: 28, height: 64, border: "none", cursor: "pointer",
@@ -3526,9 +3525,9 @@ function ChatSidebar({ currentUser }) {
         display: "flex", flexDirection: "column",
         boxShadow: sidebarOpen ? "-4px 0 20px rgba(0,0,0,.08)" : "none",
       }}>
-        {/* Header */}
+        {/* Header — chừa safe-area cho tai thỏ */}
         <div style={{
-          padding: "14px 12px 10px", borderBottom: "1px solid #e4e6eb",
+          padding: "calc(14px + env(safe-area-inset-top, 0px)) 12px 10px", borderBottom: "1px solid #e4e6eb",
           background: "linear-gradient(180deg, #1a3c20 0%, #0d2b12 100%)", color: "#fff",
         }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
