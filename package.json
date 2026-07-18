@@ -12,9 +12,9 @@
     "server": "node server/keeper.js",
     "start": "node server/keeper.js",
     "start:raw": "node server/index.js",
-    "cap:sync": "npm run build:capacitor && cap sync",
-    "cap:sync:ios": "npm run build:capacitor && npx cap sync ios",
-    "cap:sync:android": "npm run build:capacitor && npx cap sync android",
+    "cap:sync": "npm run build:capacitor && cap sync && git checkout -- dist",
+    "cap:sync:ios": "npm run build:capacitor && npx cap sync ios && git checkout -- dist",
+    "cap:sync:android": "npm run build:capacitor && npx cap sync android && git checkout -- dist",
     "cap:open:android": "cap open android",
     "cap:open:ios": "cap open ios"
   },
