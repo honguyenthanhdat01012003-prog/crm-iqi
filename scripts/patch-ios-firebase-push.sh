@@ -122,6 +122,7 @@ if command -v afconvert >/dev/null 2>&1; then
   convert_sound "lead-sale.mp3" "lead_sale.caf"
   convert_sound "lead-manager.mp3" "lead_manager.caf"
   convert_sound "lead-recall.mp3" "lead_recall.caf"
+  convert_sound "lead-update.mp3" "lead_update.caf"
   SOUND_OK=1
 else
   echo "  WARN: không có afconvert — bỏ qua âm thanh riêng (iOS sẽ dùng tiếng mặc định)"
@@ -136,7 +137,7 @@ echo "Done. Kiểm tra AppDelegate có dòng: Messaging.messaging().token"
 if [ "$SOUND_OK" = "1" ]; then
   echo ""
   echo "QUAN TRỌNG — thêm âm thanh vào Xcode (1 lần duy nhất):"
-  echo "  1. Mở Xcode → kéo 3 file lead_sale.caf, lead_manager.caf, lead_recall.caf"
+  echo "  1. Mở Xcode → kéo 4 file lead_sale.caf, lead_manager.caf, lead_recall.caf, lead_update.caf"
   echo "     (nằm trong ios/App/App/) vào folder App (bên dưới App màu xanh)"
   echo "  2. Tick 'Copy items if needed' + tick target 'App' → Finish"
 fi

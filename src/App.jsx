@@ -816,6 +816,10 @@ function CRMApp({ user, updateUser, onLogout }) {
       else localStorage.removeItem("crm_selected_project");
     } catch {}
   }, [selectedProject]);
+  // Sale không có scope "Tất cả dự án" — nếu bị kẹt ở "all" (bấm banner cũ) thì về màn chọn dự án
+  useEffect(() => {
+    if (user.role === "sale" && selectedProject === "all") setSelectedProject(null);
+  }, [user.role, selectedProject]);
   const [searchText, setSearchText] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -855,6 +859,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
   const recallLeadAudioRef = useRef(null);
+  const updateLeadAudioRef = useRef(null);
   const lastLeadSoundRef = useRef({ kind: "", at: 0 });
   const nativePushAutoTriedRef = useRef(false);
 
@@ -894,17 +899,21 @@ function CRMApp({ user, updateUser, onLogout }) {
     managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
     saleLeadAudioRef.current = new Audio("/sounds/lead-sale.mp3");
     recallLeadAudioRef.current = new Audio("/sounds/lead-recall.mp3");
+    updateLeadAudioRef.current = new Audio("/sounds/lead-update.mp3");
     managerLeadAudioRef.current.preload = "auto";
     saleLeadAudioRef.current.preload = "auto";
     recallLeadAudioRef.current.preload = "auto";
+    updateLeadAudioRef.current.preload = "auto";
   }, []);
 
   const playLeadSound = useCallback((kind) => {
-    const soundKind = kind === "sale" ? "sale" : "manager";
+    const soundKind = kind === "sale" ? "sale" : kind === "update" ? "update" : "manager";
     const now = Date.now();
     if (lastLeadSoundRef.current.kind === soundKind && now - lastLeadSoundRef.current.at < 1800) return;
     lastLeadSoundRef.current = { kind: soundKind, at: now };
-    const audio = soundKind === "sale" ? saleLeadAudioRef.current : managerLeadAudioRef.current;
+    const audio = soundKind === "sale" ? saleLeadAudioRef.current
+      : soundKind === "update" ? updateLeadAudioRef.current
+      : managerLeadAudioRef.current;
     const playBeep = () => {
       try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1223,7 +1232,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         playRecallSound();
         return;
       }
-      if (event.data.sound !== "sale" && event.data.sound !== "manager") return;
+      if (event.data.sound !== "sale" && event.data.sound !== "manager" && event.data.sound !== "update") return;
       const soundKind = event.data.sound;
       playLeadSound(soundKind);
     };
@@ -1244,7 +1253,9 @@ function CRMApp({ user, updateUser, onLogout }) {
           return;
         }
         // App đang mở: FCM đã (có thể) hiện banner — chỉ cập nhật list trong app, không LocalNotification
-        const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale" : "manager";
+        const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale"
+          : data.sound === "update" ? "update"
+          : "manager";
         triggerLeadAlerts({
           soundKind,
           skipLocal: true,
@@ -1266,8 +1277,10 @@ function CRMApp({ user, updateUser, onLogout }) {
           if (ids.length === 1) leadId = ids[0];
         }
         const projectId = Number(d.projectId || 0);
-        // Nhảy vào ĐÚNG dự án của lead; không có projectId thì mới về "Tất cả"
-        setSelectedProject(projectId || "all");
+        // Nhảy vào ĐÚNG dự án của lead. Sale KHÔNG có scope "Tất cả dự án" —
+        // nếu push cũ thiếu projectId thì giữ nguyên dự án đang chọn, không ép về "all"
+        if (projectId) setSelectedProject(String(projectId));
+        else if (user.role !== "sale") setSelectedProject("all");
         if (leadId) setHighlightLeadId(leadId);
         setPage("leads");
       },
@@ -2119,7 +2132,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         showToast(payload.body || "Lead bị thu hồi do quá hạn SLA", "warning");
         return;
       }
-      const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale" : "manager";
+      const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale"
+        : payload?.sound === "update" ? "update"
+        : "manager";
       triggerLeadAlerts({ soundKind, skipLocal: true, pushItem: leadFromPushPayload(payload) });
     });
     socket.on("lead-sla-recall", (payload) => {
@@ -5367,8 +5382,8 @@ const LeadsPage = (props) => {
   // Navigate to highlighted lead from notification click
   useEffect(() => {
     if (!highlightLeadId) return;
-    // Auto-select "all" project to ensure the lead is visible
-    if (!selectedProject) setSelectedProject("all");
+    // Auto-select "all" project to ensure the lead is visible (sale không có scope "all")
+    if (!selectedProject && user.role !== "sale") setSelectedProject("all");
     // Switch to "all" tab so we can find the lead
     setActiveTab("all");
   }, [highlightLeadId]);

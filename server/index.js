@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-assign-fix-c";
+const BUILD_VERSION = "2026-07-18-sound-nav-fix";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -264,6 +264,7 @@ function getNativeNotificationSound(sound) {
   if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v2", soundName: "lead_recall", iosSound: "lead_recall.caf" };
   if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale", iosSound: "lead_sale.caf" };
   if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager", iosSound: "lead_manager.caf" };
+  if (sound === "update") return { channelId: "lead_notifications_update_v1", soundName: "lead_update", iosSound: "lead_update.caf" };
   return { channelId: "lead_notifications", soundName: "default", iosSound: "default" };
 }
 
@@ -8150,7 +8151,7 @@ async function processScheduledLeadSLA(db) {
       title: "Nhắc nhở lead đặt lịch",
       body: `Bạn đang có ${count} lead đặt lịch chưa được xử lý. Thời hạn báo cáo còn 12 giờ.`,
       tag: `scheduled-sla-warn-${saleName}-${nowStr.slice(0, 10)}`,
-      sound: "sale",
+      sound: "update",
       data: { url: "/", type: "scheduled_sla_warn", count },
       requireInteraction: true,
     }).catch((err) => console.error(`[Push] SLA 12h warn failed for ${saleName}:`, err.message));
@@ -8390,7 +8391,7 @@ async function processInstantLeadSLA(db) {
         title: "Nhắc nhanh Lead New",
         body: `${lead.name || "Khách"} — còn 2 phút để cập nhật feedback (hạn 10 phút)`,
         tag: `instant-sla-warn-${lead.id}`,
-        sound: "sale",
+        sound: "update",
         data: { url: "/", type: "instant_sla_warn", leadId: lead.id, projectId: lead.project_id },
       }).catch((err) => console.error(`[Push] Instant SLA warn failed for ${saleName}:`, err.message));
       notifyInstantSlaWarnTelegram(db, lead, saleName).catch(() => {});
