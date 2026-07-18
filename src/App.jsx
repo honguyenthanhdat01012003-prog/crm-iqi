@@ -9085,6 +9085,47 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [messengerDraft, setMessengerDraft] = useState("");
   const [sendingMsg, setSendingMsg] = useState(false);
   const messengerEndRef = useRef(null);
+  // Phân vai team: mỗi thành viên tự ghi mình chào dự án nào / bài đánh gì
+  const [teamNotesData, setTeamNotesData] = useState(null); // { team, notes }
+  const [teamNotesLoading, setTeamNotesLoading] = useState(false);
+  const [myTeamNote, setMyTeamNote] = useState("");
+  const [savingTeamNote, setSavingTeamNote] = useState(false);
+
+  useEffect(() => {
+    if (!lead.teamId) { setTeamNotesData(null); setMyTeamNote(""); return; }
+    let cancelled = false;
+    setTeamNotesLoading(true);
+    apiFetch(`${API}/leads/${lead.id}/team-notes`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setTeamNotesData(d);
+        const dn = (user.displayName || "").trim().toLowerCase();
+        const mine = (d.notes || []).find((n) => (n.saleName || "").trim().toLowerCase() === dn);
+        setMyTeamNote(mine?.note || "");
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setTeamNotesLoading(false); });
+    return () => { cancelled = true; };
+  }, [lead.id, lead.teamId]);
+
+  const handleSaveTeamNote = async () => {
+    setSavingTeamNote(true);
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}/team-note`, {
+        method: "PUT",
+        body: JSON.stringify({ note: myTeamNote.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { showToast(d.error || "Lưu phân vai thất bại", "error"); return; }
+      if (d.notes) setTeamNotesData((prev) => ({ ...(prev || {}), notes: d.notes }));
+      showToast("Đã lưu phân vai", "success");
+    } catch (e) {
+      showToast("Lỗi kết nối: " + e.message, "error");
+    } finally {
+      setSavingTeamNote(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -9884,6 +9925,108 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               })()}
             </div>
             {saleBody}
+          </div>
+        );
+      })()}
+
+      {/* Phân vai team: ai chào dự án nào / bài đánh — mỗi thành viên tự ghi dòng của mình */}
+      {lead.teamId && (() => {
+        const team = teamNotesData?.team || teams.find((x) => x.id === lead.teamId) || null;
+        const members = team?.members || [];
+        const notes = teamNotesData?.notes || [];
+        const noteByName = {};
+        for (const n of notes) noteByName[(n.saleName || "").trim().toLowerCase()] = n;
+        const dn = (user.displayName || "").trim().toLowerCase();
+        const isMember = members.some((m) => (m.displayName || "").trim().toLowerCase() === dn);
+        const canEdit = isMember || !isSale;
+        const filledCount = members.filter((m) => (noteByName[(m.displayName || "").trim().toLowerCase()]?.note || "").trim()).length;
+        const memberNameSet = new Set(members.map((m) => (m.displayName || "").trim().toLowerCase()));
+        const extraNotes = notes.filter((n) => !memberNameSet.has((n.saleName || "").trim().toLowerCase()) && (n.note || "").trim());
+
+        const rowStyle = { display: "flex", alignItems: "flex-start", gap: 8, padding: "6px 0", borderBottom: "1px dashed #e9d5ff" };
+        const nameStyle = { fontSize: 12, fontWeight: 700, color: "#4c1d95", display: "flex", alignItems: "center", gap: 4, flexShrink: 0, minWidth: 90 };
+        const noteStyle = (has) => ({ fontSize: 12, color: has ? "#374151" : "#9ca3af", fontStyle: has ? "normal" : "italic", flex: 1, whiteSpace: "pre-wrap", wordBreak: "break-word" });
+
+        const rolesBody = (
+          <div>
+            {teamNotesLoading && !teamNotesData ? (
+              <div style={{ fontSize: 12, color: "#6b7280", padding: "4px 0" }}>Đang tải phân vai...</div>
+            ) : (
+              <>
+                {members.map((m) => {
+                  const key = (m.displayName || "").trim().toLowerCase();
+                  const n = noteByName[key];
+                  const has = !!(n?.note || "").trim();
+                  const isLeader = team && m.id === team.leaderId;
+                  const isMe = key === dn;
+                  return (
+                    <div key={m.id} style={rowStyle}>
+                      <span style={nameStyle}>
+                        {isLeader && <Crown size={12} color="#d97706" />}
+                        {m.displayName}{isMe ? " (tôi)" : ""}
+                      </span>
+                      <span style={noteStyle(has)}>{has ? n.note : "Chưa phân vai"}</span>
+                      {has && n.updatedAt && <span style={{ fontSize: 10, color: "#a78bfa", flexShrink: 0 }}>{n.updatedAt}</span>}
+                    </div>
+                  );
+                })}
+                {extraNotes.map((n) => (
+                  <div key={`extra-${n.userId}`} style={rowStyle}>
+                    <span style={{ ...nameStyle, color: "#1e40af" }}><Shield size={12} color="#1e40af" /> {n.saleName}</span>
+                    <span style={noteStyle(true)}>{n.note}</span>
+                  </div>
+                ))}
+                {canEdit && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <input
+                      type="text"
+                      value={myTeamNote}
+                      onChange={(e) => setMyTeamNote(e.target.value)}
+                      placeholder={isSale ? "VD: Tôi chào dự án Eco Retreat / đánh FOMO..." : "Ghi chú điều phối của QL/Admin..."}
+                      maxLength={300}
+                      style={{ padding: isMobile ? "10px 12px" : "6px 8px", borderRadius: 8, border: "1px solid #ddd6fe", fontSize: isMobile ? 13 : 12, flex: "1 1 200px", minHeight: isMobile ? 40 : "auto", background: "#fff" }}
+                    />
+                    <button onClick={handleSaveTeamNote} disabled={savingTeamNote}
+                      style={{ ...btnPrimary, padding: isMobile ? "10px 14px" : "6px 12px", fontSize: isMobile ? 12.5 : 12, background: "linear-gradient(135deg, #8b5cf6, #6d28d9)", minHeight: isMobile ? 40 : "auto", width: "auto" }}>
+                      {savingTeamNote ? "Đang lưu..." : <><Save size={13} /> Lưu vai của tôi</>}
+                    </button>
+                  </div>
+                )}
+                <div style={{ fontSize: 10.5, color: "#7c3aed", marginTop: 6 }}>
+                  Cả team cùng chăm 1 khách — mỗi người tự ghi mình chào dự án nào / bài đánh gì để tránh trùng nhau.
+                </div>
+              </>
+            )}
+          </div>
+        );
+
+        if (isMobile) {
+          return (
+            <DetailAccordion
+              icon={<Users size={14} color="#6d28d9" />}
+              title={`Phân vai team${team ? ` ${team.name}` : ""}`}
+              summary={members.length ? `${filledCount}/${members.length} đã phân vai` : "Xem phân vai"}
+              summaryColor={filledCount > 0 ? "#6d28d9" : "#9ca3af"}
+              open={openSection === "teamroles"}
+              onToggle={() => toggleSection("teamroles")}
+            >
+              {rolesBody}
+            </DetailAccordion>
+          );
+        }
+        return (
+          <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 16, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <b style={{ fontSize: 12, color: "#6d28d9", display: "flex", alignItems: "center", gap: 4 }}>
+                <Users size={14} /> Phân vai team{team ? ` ${team.name}` : ""}:
+              </b>
+              {members.length > 0 && (
+                <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }}>
+                  {filledCount}/{members.length} đã phân vai
+                </span>
+              )}
+            </div>
+            {rolesBody}
           </div>
         );
       })()}
