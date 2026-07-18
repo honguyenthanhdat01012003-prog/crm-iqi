@@ -521,6 +521,12 @@ function LoginPage({ onLogin }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // Đánh thức kết nối server ngay khi mở màn đăng nhập (DNS/TLS/keepalive)
+  // để lần bấm "Đăng nhập" đầu tiên không bị lỗi kết nối do cold start.
+  useEffect(() => {
+    apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: 8000 }).catch(() => {});
+  }, []);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -528,20 +534,20 @@ function LoginPage({ onLogin }) {
     try {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
-      // Timeout 15s + tự thử lại 1 lần — tránh treo lâu rồi bắt người dùng bấm lại
+      // Timeout 12s + tự thử lại tối đa 2 lần — tránh bắt người dùng bấm lại
       let res = null;
       let lastErr = null;
-      for (let attempt = 0; attempt < 2 && !res; attempt++) {
+      for (let attempt = 0; attempt < 3 && !res; attempt++) {
         try {
           res = await apiFetch(`${API}/login`, {
             method: "POST",
             skipAuth: true,
-            timeoutMs: 15000,
+            timeoutMs: 12000,
             body: JSON.stringify({ username, password }),
           });
         } catch (err) {
           lastErr = err;
-          if (attempt === 0) await new Promise((r) => setTimeout(r, 700));
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
         }
       }
       if (!res) throw lastErr || new Error("timeout");
@@ -990,12 +996,23 @@ function CRMApp({ user, updateUser, onLogout }) {
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
   const [showPendingPopup, setShowPendingPopup] = useState(false);
+  const [pendingSnoozeChecked, setPendingSnoozeChecked] = useState(false);
+  const pendingSnoozeKey = `crm_pending_snooze_${user.userId}`;
+  const closePendingPopup = useCallback(() => {
+    if (pendingSnoozeChecked) {
+      // Ẩn tới 00:00 ngày mai (theo ngày local)
+      try { localStorage.setItem(pendingSnoozeKey, new Date().toLocaleDateString("en-CA")); } catch {}
+    }
+    setShowPendingPopup(false);
+  }, [pendingSnoozeChecked, pendingSnoozeKey]);
   useEffect(() => {
     if (user.role !== "sale") return;
+    let snoozedToday = false;
+    try { snoozedToday = localStorage.getItem(pendingSnoozeKey) === new Date().toLocaleDateString("en-CA"); } catch {}
     apiFetch(`${API}/pending-leads`).then(r => r.json()).then(data => {
       if (data && (data.totalPending > 0 || data.pendingLeads)) {
         setPendingLeadsData(data);
-        if (data.totalPending > 0) setShowPendingPopup(true);
+        if (data.totalPending > 0 && !snoozedToday) setShowPendingPopup(true);
       }
     }).catch(() => {});
   }, []);
@@ -2463,7 +2480,8 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const renderNotificationBody = (closePanel) => (
     <>
-      {pushSupported && (
+      {/* Chỉ hiện khối trạng thái khi push CHƯA hoạt động (cần người dùng xử lý) — bình thường panel chỉ chứa thông báo */}
+      {pushSupported && !pushEnabled && (
         <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#f8fafc" }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ minWidth: 0 }}>
@@ -2516,20 +2534,6 @@ function CRMApp({ user, updateUser, onLogout }) {
                   >
                     {pushBusy ? "Đang đăng ký..." : pushEnabled ? "Đã bật" : "Đăng ký lại"}
                   </button>
-                  {pushEnabled && (
-                    <button
-                      type="button"
-                      onClick={handleTestNativePush}
-                      disabled={pushBusy}
-                      style={{
-                        border: "1px solid #93c5fd", background: "#eff6ff", color: "#1d4ed8",
-                        borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 800,
-                        cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-                      }}
-                    >
-                      Gửi thử push
-                    </button>
-                  )}
                 </div>
               ) : (
                 <span style={{ border: "1px solid " + (pushEnabled ? "#bbf7d0" : "#e5e7eb"), background: pushEnabled ? "#dcfce7" : "#fff", color: pushEnabled ? "#15803d" : "#64748b", borderRadius: 8, padding: "7px 10px", fontSize: 11, fontWeight: 800, whiteSpace: "nowrap" }}>
@@ -3260,7 +3264,7 @@ function CRMApp({ user, updateUser, onLogout }) {
                 <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>⏰ Nhắc nhở cập nhật khách hàng</div>
                 <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>Bạn có {pendingLeadsData.totalPending} khách chưa cập nhật trên 2 ngày</div>
               </div>
-              <button onClick={() => setShowPendingPopup(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+              <button onClick={closePendingPopup} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
             </div>
             <div style={{ maxHeight: "55vh", overflowY: "auto", padding: "12px 16px" }}>
               {pendingLeadsData.pendingLeads.map((l, i) => (
@@ -3284,9 +3288,20 @@ function CRMApp({ user, updateUser, onLogout }) {
                 <div style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: 8 }}>... và {pendingLeadsData.totalPending - pendingLeadsData.pendingLeads.length} khách khác</div>
               )}
             </div>
-            <div style={{ padding: "12px 16px", borderTop: "1px solid #e5e7eb", display: "flex", gap: 8 }}>
-              <button onClick={() => { setShowPendingPopup(false); setPage("leads"); }} style={{ flex: 1, padding: "10px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📋 Cập nhật ngay</button>
-              <button onClick={() => setShowPendingPopup(false)} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Để sau</button>
+            <div style={{ padding: "10px 16px 0", borderTop: "1px solid #e5e7eb" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#4b5563", cursor: "pointer", userSelect: "none" }}>
+                <input
+                  type="checkbox"
+                  checked={pendingSnoozeChecked}
+                  onChange={(e) => setPendingSnoozeChecked(e.target.checked)}
+                  style={{ width: 16, height: 16, accentColor: "#d97706", cursor: "pointer" }}
+                />
+                Không nhắc lại trong hôm nay (hiện lại từ 00:00 ngày mai)
+              </label>
+            </div>
+            <div style={{ padding: "10px 16px 12px", display: "flex", gap: 8 }}>
+              <button onClick={() => { closePendingPopup(); setPage("leads"); }} style={{ flex: 1, padding: "10px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📋 Cập nhật ngay</button>
+              <button onClick={closePendingPopup} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Để sau</button>
             </div>
           </div>
         </div>
@@ -5356,18 +5371,22 @@ const LeadsPage = (props) => {
   useEffect(() => {
     if (!highlightLeadId || activeTab !== "all") return;
     const idx = tabFiltered.findIndex(l => l.id === highlightLeadId);
+    const existsAnywhere = idx >= 0 || leads.some(l => l.id === highlightLeadId);
+    // Lead chưa có trong dữ liệu (đang tải) → GIỮ highlight, effect tự chạy lại khi leads đổi
+    if (!existsAnywhere) return;
     if (idx >= 0) {
       const targetPage = Math.floor(idx / pageSize) + 1;
       setCurrentPage(targetPage);
-      setExpandedIdStable(highlightLeadId);
-      // Scroll to the lead after render
-      setTimeout(() => {
-        const el = document.getElementById(`lead-${highlightLeadId}`);
-        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }, 100);
     }
+    // Mở thẳng chi tiết khách: mobile dùng màn chi tiết riêng, desktop dùng drawer
+    setExpandedIdStable(highlightLeadId);
+    if (isMobile) setMobileDetailId(highlightLeadId);
+    setTimeout(() => {
+      const el = document.getElementById(`lead-${highlightLeadId}`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 100);
     setHighlightLeadId(null);
-  }, [highlightLeadId, tabFiltered, pageSize]);
+  }, [highlightLeadId, tabFiltered, leads, pageSize, isMobile]);
 
   const saleNames = useMemo(() => {
     const names = new Set();
@@ -9232,51 +9251,71 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   const handleSaveFbUrl = async () => {
     if (savingFbUrl) return;
-    setSavingFbUrl(true);
+    const newUrl = editFbUrl.trim();
+    const prevUrl = lead.customerFbUrl || "";
+    // Optimistic — UI lưu ngay, gửi server chạy nền, lỗi thì hoàn lại
+    applyApiData({
+      updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, customerFbUrl: newUrl },
+    }, { suppressNotifications: true });
+    showToast("Đã lưu link Facebook khách", "success");
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({ customerFbUrl: editFbUrl, phone: lead.phone, name: lead.name }),
+        body: JSON.stringify({ customerFbUrl: newUrl, phone: lead.phone, name: lead.name }),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        showToast(data.error || "Lưu link Facebook thất bại", "error");
+        applyApiData({
+          updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, customerFbUrl: prevUrl },
+        }, { suppressNotifications: true });
+        showToast(data.error || "Lưu link Facebook thất bại — đã hoàn lại", "error");
         return;
       }
-      applyApiData(data, { suppressNotifications: true });
-      showToast("Đã lưu link Facebook khách", "success");
+      if (data.updatedLead) applyApiData(data, { suppressNotifications: true });
     } catch (e) {
-      showToast("Lỗi kết nối: " + e.message, "error");
-    } finally {
-      setSavingFbUrl(false);
+      applyApiData({
+        updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, customerFbUrl: prevUrl },
+      }, { suppressNotifications: true });
+      showToast("Lỗi kết nối, chưa lưu được link: " + e.message, "error");
     }
   };
 
   const handleSaveContactExtra = async () => {
     if (savingContactExtra) return;
-    setSavingContactExtra(true);
+    const next = {
+      phone2: editPhone2.trim(),
+      phone3: editPhone3.trim(),
+      adminNote: editAdminNote.trim(),
+    };
+    const prev = {
+      phone2: lead.phone2 || "",
+      phone3: lead.phone3 || "",
+      adminNote: lead.adminNote || "",
+    };
+    // Optimistic — UI lưu ngay, gửi server chạy nền, lỗi thì hoàn lại
+    applyApiData({
+      updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, ...next },
+    }, { suppressNotifications: true });
+    showToast("Đã lưu SĐT bổ sung & ghi chú", "success");
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}`, {
         method: "PUT",
-        body: JSON.stringify({
-          phone2: editPhone2.trim(),
-          phone3: editPhone3.trim(),
-          adminNote: editAdminNote.trim(),
-          phone: lead.phone,
-          name: lead.name,
-        }),
+        body: JSON.stringify({ ...next, phone: lead.phone, name: lead.name }),
       });
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       if (!r.ok) {
-        showToast(data.error || "Lưu thông tin liên hệ thất bại", "error");
+        applyApiData({
+          updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, ...prev },
+        }, { suppressNotifications: true });
+        showToast(data.error || "Lưu thông tin liên hệ thất bại — đã hoàn lại", "error");
         return;
       }
-      applyApiData(data, { suppressNotifications: true });
-      showToast("Đã lưu SĐT bổ sung & ghi chú", "success");
+      if (data.updatedLead) applyApiData(data, { suppressNotifications: true });
     } catch (e) {
-      showToast("Lỗi kết nối: " + e.message, "error");
-    } finally {
-      setSavingContactExtra(false);
+      applyApiData({
+        updatedLead: { id: lead.id, name: lead.name, phone: lead.phone, ...prev },
+      }, { suppressNotifications: true });
+      showToast("Lỗi kết nối, chưa lưu được: " + e.message, "error");
     }
   };
 
@@ -9377,9 +9416,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   const detailCellStyle = { minWidth: 0 };
   const detailValueStyle = { fontSize: isMobile ? 11 : 13, lineHeight: 1.35, overflowWrap: "anywhere", wordBreak: "break-word" };
-  const mobileControlHeight = isMobile ? 40 : "auto";
-  const mobileControlPadding = isMobile ? "8px 10px" : "6px 8px";
-  const mobileButtonPadding = isMobile ? "9px 12px" : "6px 12px";
+  const mobileControlHeight = isMobile ? 36 : "auto";
+  const mobileControlPadding = isMobile ? "7px 9px" : "6px 8px";
+  const mobileButtonPadding = isMobile ? "7px 12px" : "6px 12px";
   const mobilePanelPadding = isMobile ? 10 : 12;
   const layoutCompact = isMobile || inDrawer;
 
@@ -9489,8 +9528,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 />
               </div>
               <button onClick={handleSaveContactExtra} disabled={savingContactExtra}
-                style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
-                {savingContactExtra ? "Đang lưu..." : <><Save size={14} /> Lưu SĐT & ghi chú</>}
+                style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, minHeight: mobileControlHeight, width: "auto" }}>
+                {savingContactExtra ? "Đang lưu..." : <><Save size={13} /> Lưu SĐT & ghi chú</>}
               </button>
             </>
           ) : (
@@ -9610,8 +9649,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               placeholder="Dán link Facebook/Messenger của khách..."
               style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: layoutCompact ? "1 1 100%" : "1 1 260px", minWidth: 0, minHeight: mobileControlHeight, background: "#fff" }} />
             <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
-              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
-              {savingFbUrl ? "Đang lưu..." : <><Save size={14} /> Lưu link</>}
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: "auto" }}>
+              {savingFbUrl ? "Đang lưu..." : <><Save size={13} /> Lưu link</>}
             </button>
           </div>
         </div>
