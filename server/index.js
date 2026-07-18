@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-17-ios-push-f";
+const BUILD_VERSION = "2026-07-18-ios-push-g";
 
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
@@ -260,10 +260,11 @@ function stringifyFcmData(data = {}) {
 }
 
 function getNativeNotificationSound(sound) {
-  if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v2", soundName: "lead_recall" };
-  if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale" };
-  if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager" };
-  return { channelId: "lead_notifications", soundName: "default" };
+  // iosSound: tên file .caf nằm trong bundle app iOS. Nếu app không có file, iOS tự phát tiếng mặc định.
+  if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v2", soundName: "lead_recall", iosSound: "lead_recall.caf" };
+  if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale", iosSound: "lead_sale.caf" };
+  if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager", iosSound: "lead_manager.caf" };
+  return { channelId: "lead_notifications", soundName: "default", iosSound: "default" };
 }
 
 async function sendNativePushToUser(userId, payload) {
@@ -325,34 +326,48 @@ async function sendNativePushToUser(userId, payload) {
         payload: {
           aps: {
             alert: { title, body: iosBody },
-            sound: "default",
+            sound: notificationSound.iosSound,
             badge: 1,
           },
         },
       };
     }
-    try {
-      const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const body = await res.text();
-      if (!res.ok) {
-        if (res.status === 400 || res.status === 404) {
-          await run(db, "DELETE FROM native_push_tokens WHERE id = ?", [row.id]);
-        } else {
-          await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [body.slice(0, 500), row.id]);
+    // Retry 1 lần khi lỗi mạng / FCM 5xx — tránh mất thông báo vì trục trặc tạm thời
+    let lastFailure = "";
+    let delivered = false;
+    for (let attempt = 0; attempt < 2 && !delivered; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 800));
+      try {
+        const res = await fetch(`https://fcm.googleapis.com/v1/projects/${cfg.projectId}/messages:send`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        const body = await res.text();
+        if (res.ok) {
+          delivered = true;
+          break;
         }
-        console.error(`[NativePush] FCM failed token#${row.id}:`, body.slice(0, 300));
-        continue;
+        lastFailure = body.slice(0, 500);
+        if (res.status === 400 || res.status === 404) {
+          // Token chết hẳn — xoá luôn, không retry
+          await run(db, "DELETE FROM native_push_tokens WHERE id = ?", [row.id]);
+          lastFailure = "";
+          console.error(`[NativePush] Token#${row.id} invalid (${res.status}) — removed`);
+          break;
+        }
+        console.error(`[NativePush] FCM failed token#${row.id} attempt=${attempt + 1}:`, body.slice(0, 300));
+      } catch (err) {
+        lastFailure = String(err.message || err).slice(0, 500);
+        console.error(`[NativePush] Exception token#${row.id} attempt=${attempt + 1}:`, err.message || err);
       }
+    }
+    if (delivered) {
       sent++;
       await run(db, "UPDATE native_push_tokens SET last_error = '', updated_at = datetime('now') WHERE id = ?", [row.id]);
       console.log(`[NativePush] OK user#${userId} platform=${row.platform || "?"} token#${row.id}`);
-    } catch (err) {
-      await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [String(err.message || err).slice(0, 500), row.id]);
-      console.error(`[NativePush] Exception token#${row.id}:`, err.message || err);
+    } else if (lastFailure) {
+      await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [lastFailure, row.id]);
     }
   }
   return { sent };
@@ -4413,10 +4428,9 @@ app.post("/api/native-push/register", requireAuth, async (req, res) => {
     const deviceId = String(req.body?.deviceId || "").trim().slice(0, 120);
     const deviceLabel = String(req.body?.deviceLabel || req.headers["user-agent"] || "").slice(0, 500);
     if (!token || token.length < 20) return res.status(400).json({ error: "Native push token không hợp lệ" });
+    // Mỗi thiết bị giữ token riêng — KHÔNG xoá token của thiết bị khác (iPhone + Android cùng nhận)
     if (deviceId) {
-      await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND (device_id = '' OR device_id != ?)", [req.user.userId, deviceId]);
-    } else {
-      await run(db, "DELETE FROM native_push_tokens WHERE user_id = ?", [req.user.userId]);
+      await run(db, "DELETE FROM native_push_tokens WHERE user_id = ? AND (device_id = '' OR (device_id = ? AND token != ?))", [req.user.userId, deviceId, token]);
     }
     await run(db,
       `INSERT INTO native_push_tokens(user_id, token, device_id, platform, device_label, last_error, updated_at)

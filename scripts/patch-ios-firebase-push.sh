@@ -106,11 +106,40 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
 }
 SWIFT
 
+# --- Âm thanh riêng cho thông báo iOS: convert mp3 → caf ---
+echo "==> Tạo file âm thanh .caf cho iOS (afconvert)"
+SOUND_OK=0
+if command -v afconvert >/dev/null 2>&1; then
+  convert_sound() {
+    local src="$ROOT/public/sounds/$1"
+    local dst="$APP_DIR/$2"
+    if [ -f "$src" ]; then
+      afconvert -f caff -d ima4 "$src" "$dst" && echo "  + $2"
+    else
+      echo "  WARN: thiếu $src"
+    fi
+  }
+  convert_sound "lead-sale.mp3" "lead_sale.caf"
+  convert_sound "lead-manager.mp3" "lead_manager.caf"
+  convert_sound "lead-recall.mp3" "lead_recall.caf"
+  SOUND_OK=1
+else
+  echo "  WARN: không có afconvert — bỏ qua âm thanh riêng (iOS sẽ dùng tiếng mặc định)"
+fi
+
 echo "==> pod install"
 cd "$ROOT/ios/App"
 pod install
 
 echo ""
 echo "Done. Kiểm tra AppDelegate có dòng: Messaging.messaging().token"
+if [ "$SOUND_OK" = "1" ]; then
+  echo ""
+  echo "QUAN TRỌNG — thêm âm thanh vào Xcode (1 lần duy nhất):"
+  echo "  1. Mở Xcode → kéo 3 file lead_sale.caf, lead_manager.caf, lead_recall.caf"
+  echo "     (nằm trong ios/App/App/) vào folder App (bên dưới App màu xanh)"
+  echo "  2. Tick 'Copy items if needed' + tick target 'App' → Finish"
+fi
+echo ""
 echo "Rồi: Clean → Archive → Upload TestFlight → Update trên iPhone"
-echo "Sau Update: mở app → Đăng ký lại FCM → VUỐT TẮT app → web chia lead"
+echo "Sau Update: mở app → VUỐT TẮT app → web chia lead → phải có banner + tiếng riêng"

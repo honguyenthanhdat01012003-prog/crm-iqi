@@ -17,9 +17,7 @@ import {
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
-import { isCapacitorNativeApp } from "./nativeStartup.js";
-import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext, shouldShowNativeNotificationPrompt } from "./nativeNotificationPermission.js";
-import { NativeNotificationPermissionPrompt } from "./NativeNotificationPermissionPrompt.jsx";
+import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
 import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
@@ -481,41 +479,12 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
-  const [showNativePermPrompt, setShowNativePermPrompt] = useState(false);
-  const [nativePermChecked, setNativePermChecked] = useState(!isCapacitorNativeApp());
-
-  useEffect(() => {
-    if (!isCapacitorNativeApp()) return;
-    let alive = true;
-    (async () => {
-      const shouldPrompt = await shouldShowNativeNotificationPrompt();
-      if (!alive) return;
-      if (shouldPrompt) setShowNativePermPrompt(true);
-      setNativePermChecked(true);
-    })().catch(() => {
-      if (alive) setNativePermChecked(true);
-    });
-    return () => { alive = false; };
-  }, []);
 
   const updateUser = (u, t) => {
     setUser(u);
     if (t) { setToken(t); localStorage.setItem("crm_token", t); }
     localStorage.setItem("crm_user", JSON.stringify(u));
   };
-
-  if (!nativePermChecked) {
-    return null;
-  }
-
-  if (showNativePermPrompt) {
-    return (
-      <NativeNotificationPermissionPrompt
-        onDone={() => setShowNativePermPrompt(false)}
-        onLater={() => setShowNativePermPrompt(false)}
-      />
-    );
-  }
 
   if (!user || !token) {
     return <ErrorBoundary><LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} /></ErrorBoundary>;
@@ -1148,14 +1117,8 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       }
       setPushPermission(snapshot.ready || permission === "granted" ? "granted" : permission);
-      const status = await getNativePushServerStatus(apiFetch, API);
-      if (!alive) return;
-      if (status.ok) setNativePushServerStatus(status);
-      if (status.ok && status.tokenCount > 0) {
-        setPushEnabled(true);
-        localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
-        return;
-      }
+      // Luôn đăng ký lại token của THIẾT BỊ NÀY mỗi lần mở app —
+      // tránh trường hợp token bị xoá trên server (đổi máy, logout, FCM 404) mà app tưởng vẫn còn.
       const result = await subscribeToNativePushNotifications(apiFetch, API);
       if (!alive) return;
       const nextPermission = await getNativePushPermissionState();
@@ -1164,8 +1127,9 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushPermission(nextPermission);
       setPushEnabled(enabled);
       if (enabled) {
+        const firstTime = localStorage.getItem(`crm_native_push_enabled_${user.userId}`) !== "1";
         localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
-        showToast("Đã đăng ký FCM. Tắt app vẫn nhận lead + tiếng thông báo.", "success");
+        if (firstTime) showToast("Đã bật thông báo. Tắt app vẫn nhận lead.", "success");
       } else {
         localStorage.removeItem(`crm_native_push_enabled_${user.userId}`);
         const errMsg = result.error || (result.ok ? "Server chưa lưu token" : (result.permission === "denied" ? "Quyền thông báo bị chặn" : "Chưa lấy được FCM token — bấm Kích hoạt lại khi mở app"));

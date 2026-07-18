@@ -3,7 +3,6 @@ import { isNativePushSupported, getNativePushPermissionState } from "./nativePus
 import { isNativeLocalNotificationSupported, getNativeLocalPermissionState, requestNativeLocalNotificationPermission } from "./nativeLocalNotifications.js";
 
 export const NATIVE_PERM_PROMPT_KEY = "crm_native_perm_rationale_seen";
-export const NATIVE_PUSH_SETUP_KEY = "crm_native_push_setup_v2";
 
 export function isCapacitorNativeApp() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
@@ -106,19 +105,6 @@ export async function requestNativeNotificationPermissionWithContext() {
     console.warn("[NativeNotificationPermission] Request failed:", err?.message || err);
     return { ok: false, error: err?.message || String(err) };
   }
-}
-
-export async function shouldShowNativeNotificationPrompt() {
-  if (!isCapacitorNativeApp()) return false;
-  const pushSupported = isNativePushSupported();
-  const localSupported = isNativeLocalNotificationSupported();
-  if (!pushSupported && !localSupported) return false;
-  if (localStorage.getItem(NATIVE_PUSH_SETUP_KEY) === "1") return false;
-  if (pushSupported) {
-    const cachedToken = localStorage.getItem("crm_native_push_token") || "";
-    if (cachedToken.length > 20) return false;
-  }
-  return true;
 }
 
 export { openAppNotificationSettings };

@@ -3,7 +3,6 @@ export {
   ensureNativeNotificationChannels,
   getNativeNotificationPermissionSnapshot,
   requestNativeNotificationPermissionWithContext,
-  shouldShowNativeNotificationPrompt,
   openAppNotificationSettings,
   NATIVE_PERM_PROMPT_KEY,
 } from "./nativeNotificationPermission.js";
