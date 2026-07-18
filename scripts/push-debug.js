@@ -1,5 +1,6 @@
 /**
  * Chẩn đoán push: node scripts/push-debug.js "Đạt test"
+ * Xoá sạch token cũ:  node scripts/push-debug.js "Đạt test" --reset
  * In ra: tài khoản trùng tên, token FCM của từng tài khoản, lỗi gửi gần nhất.
  */
 import { createClient } from "@libsql/client";
@@ -11,6 +12,12 @@ const dbPath = path.join(__dirname, "..", "server", "data", "crm.db");
 const db = createClient({ url: `file:${dbPath}` });
 
 const name = process.argv[2] || "";
+const doReset = process.argv.includes("--reset");
+
+if (doReset) {
+  const r = await db.execute("DELETE FROM native_push_tokens");
+  console.log(`=== RESET: đã xoá ${r.rowsAffected} FCM token cũ. Mở app trên điện thoại để đăng ký lại. ===\n`);
+}
 
 console.log("=== 1. Tài khoản khớp tên ===");
 if (name) {

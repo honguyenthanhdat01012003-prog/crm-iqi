@@ -67,8 +67,11 @@ async function ensureNativePushChannels(PushNotifications) {
 }
 
 async function waitForNativePushToken(PushNotifications, timeoutMs = 30000) {
-  const existing = localStorage.getItem("crm_native_push_token");
-  if (existing && existing.length > 20) return existing;
+  // LUÔN xin token mới từ FCM thay vì tin cache — token cache có thể đã chết
+  // sau khi update/cài lại app (FCM vẫn trả OK nhưng Apple không giao nữa).
+  // Cache chỉ dùng làm fallback nếu FCM không phản hồi kịp.
+  const existing = localStorage.getItem("crm_native_push_token") || "";
+  const fallbackMs = existing.length > 20 ? 8000 : timeoutMs;
 
   return new Promise((resolve, reject) => {
     let done = false;
@@ -82,8 +85,9 @@ async function waitForNativePushToken(PushNotifications, timeoutMs = 30000) {
       if (done) return;
       done = true;
       cleanup();
-      reject(new Error("Không nhận được FCM token từ Google"));
-    }, timeoutMs);
+      if (existing.length > 20) resolve(existing);
+      else reject(new Error("Không nhận được FCM token từ Google"));
+    }, fallbackMs);
 
     PushNotifications.addListener("registration", (result) => {
       if (done) return;
