@@ -8965,6 +8965,21 @@ function MobileLeadSummary({ lead, isAdmin, isSale, onCall, onZalo, onToggleDeta
   );
 };
 
+/* Mục gập/mở cho màn chi tiết khách trên mobile — 1 dòng tóm tắt, bấm mới bung form */
+function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, children }) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
+      <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 12px", cursor: "pointer", userSelect: "none", background: open ? "#f8fafc" : "#fff" }}>
+        {icon}
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1f2937", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 600, color: summaryColor || "#9ca3af", maxWidth: "42%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+        <span style={{ color: "#9ca3af", fontSize: 10, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s", flexShrink: 0 }}>▼</span>
+      </div>
+      {open && <div style={{ padding: "10px 12px 12px", borderTop: "1px solid #f1f5f9" }}>{children}</div>}
+    </div>
+  );
+}
+
 function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {} }) {
   const isSale = user.role === "sale";
   const [history, setHistory] = useState([]);
@@ -8987,6 +9002,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [editAdminNote, setEditAdminNote] = useState(lead.adminNote || "");
   const [savingContactExtra, setSavingContactExtra] = useState(false);
   const [showRegHistory, setShowRegHistory] = useState(false);
+  // Mobile: mục nào đang bung trong màn chi tiết (accordion) — mặc định gập hết
+  const [openSection, setOpenSection] = useState(null);
+  const toggleSection = (key) => setOpenSection((s) => (s === key ? null : key));
   const [expandedSaleContact, setExpandedSaleContact] = useState(null); // track which sale contact group is expanded
   const [adPreview, setAdPreview] = useState(null);
   const [loadingAdPreview, setLoadingAdPreview] = useState(false);
@@ -9477,23 +9495,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       </div>
 
       {/* SĐT bổ sung + Ghi chú Admin (admin/manager sửa, sale xem) */}
-      {(isAdmin || lead.phone2 || lead.phone3 || lead.adminNote) && (
-        <div style={{
-          background: isAdmin ? "#f8fafc" : "#fffbeb",
-          border: `1px solid ${isAdmin ? "#e2e8f0" : "#fde68a"}`,
-          borderRadius: 8,
-          padding: mobilePanelPadding,
-          marginBottom: isMobile ? 10 : 12,
-          fontSize: isMobile ? 12 : 13,
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-            <b style={{ fontSize: 12, color: isAdmin ? "#0f3d1e" : "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
-              <Smartphone size={14} /> SĐT bổ sung & Ghi chú Admin
-            </b>
-            {!isAdmin && <span style={{ fontSize: 10, color: "#b45309", fontWeight: 700 }}>Sale đọc</span>}
-          </div>
-
-          {isAdmin ? (
+      {(isAdmin || lead.phone2 || lead.phone3 || lead.adminNote) && (() => {
+        const contactBody = isAdmin ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 8, marginBottom: 8 }}>
                 <div>
@@ -9565,9 +9568,42 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                 </div>
               )}
             </div>
-          )}
-        </div>
-      )}
+          );
+        const hasContactData = !!(lead.phone2 || lead.phone3 || lead.adminNote);
+        const contactSummary = [lead.phone2, lead.phone3].filter(Boolean).join(", ") || (lead.adminNote ? "Có ghi chú" : "Chưa có — bấm để thêm");
+        if (isMobile) {
+          return (
+            <DetailAccordion
+              icon={<Smartphone size={14} color="#0f3d1e" />}
+              title="SĐT phụ & Ghi chú Admin"
+              summary={contactSummary}
+              summaryColor={hasContactData ? "#15803d" : "#9ca3af"}
+              open={openSection === "contact"}
+              onToggle={() => toggleSection("contact")}
+            >
+              {contactBody}
+            </DetailAccordion>
+          );
+        }
+        return (
+          <div style={{
+            background: isAdmin ? "#f8fafc" : "#fffbeb",
+            border: `1px solid ${isAdmin ? "#e2e8f0" : "#fde68a"}`,
+            borderRadius: 8,
+            padding: mobilePanelPadding,
+            marginBottom: 12,
+            fontSize: 13,
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <b style={{ fontSize: 12, color: isAdmin ? "#0f3d1e" : "#92400e", display: "flex", alignItems: "center", gap: 4 }}>
+                <Smartphone size={14} /> SĐT bổ sung & Ghi chú Admin
+              </b>
+              {!isAdmin && <span style={{ fontSize: 10, color: "#b45309", fontWeight: 700 }}>Sale đọc</span>}
+            </div>
+            {contactBody}
+          </div>
+        );
+      })()}
 
       {/* Registration history - show when customer registered multiple times (admin/manager only) */}
       {isAdmin && registrations.length > 1 && (
@@ -9636,25 +9672,49 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       )}
 
       {/* Admin only: Facebook customer link */}
-      {user.role === "admin" && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Link Facebook khách:</b>
-            {lead.customerFbUrl
-              ? <a href={lead.customerFbUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb", fontWeight: 700 }}>Mở link hiện tại</a>
-              : <span style={{ fontSize: 11, color: "#64748b" }}>Chưa có link</span>}
+      {user.role === "admin" && (() => {
+        const fbBody = (
+          <>
+            {lead.customerFbUrl && (
+              <div style={{ marginBottom: 8 }}>
+                <a href={lead.customerFbUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#2563eb", fontWeight: 700 }}>Mở link hiện tại</a>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input value={editFbUrl} onChange={(e) => setEditFbUrl(e.target.value)}
+                placeholder="Dán link Facebook/Messenger của khách..."
+                style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: layoutCompact ? "1 1 100%" : "1 1 260px", minWidth: 0, minHeight: mobileControlHeight, background: "#fff" }} />
+              <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
+                style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: "auto" }}>
+                {savingFbUrl ? "Đang lưu..." : <><Save size={13} /> Lưu link</>}
+              </button>
+            </div>
+          </>
+        );
+        if (isMobile) {
+          return (
+            <DetailAccordion
+              icon={<Link size={14} color="#1e40af" />}
+              title="Link Facebook khách"
+              summary={lead.customerFbUrl ? "Đã có link" : "Chưa có link"}
+              summaryColor={lead.customerFbUrl ? "#2563eb" : "#9ca3af"}
+              open={openSection === "fb"}
+              onToggle={() => toggleSection("fb")}
+            >
+              {fbBody}
+            </DetailAccordion>
+          );
+        }
+        return (
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 12, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+              <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Link size={14} /> Link Facebook khách:</b>
+              {!lead.customerFbUrl && <span style={{ fontSize: 11, color: "#64748b" }}>Chưa có link</span>}
+            </div>
+            {fbBody}
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input value={editFbUrl} onChange={(e) => setEditFbUrl(e.target.value)}
-              placeholder="Dán link Facebook/Messenger của khách..."
-              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, flex: layoutCompact ? "1 1 100%" : "1 1 260px", minWidth: 0, minHeight: mobileControlHeight, background: "#fff" }} />
-            <button onClick={handleSaveFbUrl} disabled={savingFbUrl}
-              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: "linear-gradient(135deg, #2563eb, #1d4ed8)", minHeight: mobileControlHeight, width: "auto" }}>
-              {savingFbUrl ? "Đang lưu..." : <><Save size={13} /> Lưu link</>}
-            </button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Admin: Deal Value for closed leads */}
       {isAdmin && lead.status === "closed" && (() => {
@@ -9693,63 +9753,108 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       })()}
 
       {/* Admin: Chia lead cho Sale */}
-      {isAdmin && (
-        <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 16, fontSize: isMobile ? 12 : 13 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
-            {lead.saleName
-              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
-              : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
-            }
-          </div>
+      {isAdmin && (() => {
+        const saleBody = (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
-              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: mobileControlHeight, background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 auto" : "none", minHeight: mobileControlHeight, background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Sale --</option>
               {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
-              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
-              {savingSale ? "Đang chia..." : <><Share2 size={14} /> Chia lead</>}
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: mobileControlHeight, width: "auto" }}>
+              {savingSale ? "Đang chia..." : <><Share2 size={13} /> Chia</>}
             </button>
           </div>
-        </div>
-      )}
+        );
+        if (isMobile) {
+          return (
+            <DetailAccordion
+              icon={<Share2 size={14} color="#1a3c20" />}
+              title="Sale phụ trách"
+              summary={lead.saleName || "Chưa chia"}
+              summaryColor={lead.saleName ? "#15803d" : "#dc2626"}
+              open={openSection === "sale"}
+              onToggle={() => toggleSection("sale")}
+            >
+              {saleBody}
+            </DetailAccordion>
+          );
+        }
+        return (
+          <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 16, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
+              {lead.saleName
+                ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
+                : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
+              }
+            </div>
+            {saleBody}
+          </div>
+        );
+      })()}
 
       {/* Admin: Đổi Quản lý */}
-      {isAdmin && managerNames.length > 0 && (
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 16, fontSize: isMobile ? 12 : 13 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Shield size={14} /> Quản lý phụ trách:</b>
-            {lead.managerName
-              ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#dbeafe", color: "#1e40af" }}>{lead.managerName}</span>
-              : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa gán</span>
-            }
-          </div>
+      {isAdmin && managerNames.length > 0 && (() => {
+        const managerBody = (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editManager} onChange={(e) => setEditManager(e.target.value)}
-              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 100%" : "none", minHeight: mobileControlHeight, background: "#fff", color: editManager ? "#1f2937" : "#9ca3af" }}>
+              style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 auto" : "none", minHeight: mobileControlHeight, background: "#fff", color: editManager ? "#1f2937" : "#9ca3af" }}>
               <option value="">-- Chọn Quản lý --</option>
               {managerNames.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             <button onClick={handleChangeManager} disabled={savingManager || !editManager || editManager === lead.managerName}
-              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 13 : 12, background: (!editManager || editManager === lead.managerName) ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: mobileControlHeight, width: isMobile ? "100%" : "auto" }}>
-              {savingManager ? "Đang đổi..." : <><Shield size={14} /> Đổi quản lý</>}
+              style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: (!editManager || editManager === lead.managerName) ? "#93c5fd" : "linear-gradient(135deg, #3b82f6, #1d4ed8)", minHeight: mobileControlHeight, width: "auto" }}>
+              {savingManager ? "Đang đổi..." : <><Shield size={13} /> Đổi</>}
             </button>
           </div>
-        </div>
-      )}
+        );
+        if (isMobile) {
+          return (
+            <DetailAccordion
+              icon={<Shield size={14} color="#1e40af" />}
+              title="Quản lý phụ trách"
+              summary={lead.managerName || "Chưa gán"}
+              summaryColor={lead.managerName ? "#1e40af" : "#dc2626"}
+              open={openSection === "manager"}
+              onToggle={() => toggleSection("manager")}
+            >
+              {managerBody}
+            </DetailAccordion>
+          );
+        }
+        return (
+          <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 16, fontSize: 13 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <b style={{ fontSize: 12, color: "#1e40af", display: "flex", alignItems: "center", gap: 4 }}><Shield size={14} /> Quản lý phụ trách:</b>
+              {lead.managerName
+                ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#dbeafe", color: "#1e40af" }}>{lead.managerName}</span>
+                : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa gán</span>
+              }
+            </div>
+            {managerBody}
+          </div>
+        );
+      })()}
 
       {/* Admin: Khóa/Mở khóa Lead */}
       {isAdmin && (
-        <div style={{ background: lead.isLocked ? "#fef2f2" : "#f8fafc", border: `1px solid ${lead.isLocked ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 8, padding: mobilePanelPadding, marginBottom: isMobile ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
+        <div style={{
+          background: lead.isLocked ? "#fef2f2" : "#fff",
+          border: `1px solid ${lead.isLocked ? "#fca5a5" : "#e5e7eb"}`,
+          borderRadius: isMobile ? 10 : 8,
+          padding: isMobile ? "8px 12px" : mobilePanelPadding,
+          marginBottom: isMobile ? 8 : 12,
+          fontSize: isMobile ? 12 : 13,
+        }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {lead.isLocked ? <Lock size={16} color="#dc2626" /> : <Lock size={16} color="#9ca3af" />}
-              <span style={{ fontWeight: 700, color: lead.isLocked ? "#dc2626" : "#6b7280" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <Lock size={14} color={lead.isLocked ? "#dc2626" : "#9ca3af"} />
+              <span style={{ fontWeight: 700, fontSize: isMobile ? 12.5 : 13, color: lead.isLocked ? "#dc2626" : "#6b7280" }}>
                 {lead.isLocked ? "Lead đã khóa" : "Lead chưa khóa"}
               </span>
-              {lead.isLocked && <span style={{ fontSize: 11, color: "#9ca3af" }}>Không tự luân chuyển sang sale khác</span>}
+              {lead.isLocked && !isMobile && <span style={{ fontSize: 11, color: "#9ca3af" }}>Không tự luân chuyển sang sale khác</span>}
             </div>
             <button onClick={async () => {
               try {
@@ -9758,11 +9863,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               } catch {}
             }}
               style={{
-                ...btnPrimary, padding: isMobile ? "9px 12px" : "6px 14px", fontSize: isMobile ? 13 : 12,
+                ...btnPrimary, padding: isMobile ? "6px 12px" : "6px 14px", fontSize: 12,
                 background: lead.isLocked ? "linear-gradient(135deg, #22c55e, #16a34a)" : "linear-gradient(135deg, #ef4444, #dc2626)",
-                minHeight: mobileControlHeight,
+                minHeight: isMobile ? 30 : mobileControlHeight,
               }}>
-              {lead.isLocked ? <><Lock size={14} /> Mở khóa</> : <><Lock size={14} /> Khóa lead</>}
+              {lead.isLocked ? <><Lock size={13} /> Mở khóa</> : <><Lock size={13} /> Khóa</>}
             </button>
           </div>
         </div>
