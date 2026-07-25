@@ -43,12 +43,15 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-18-teams-v3";
-
+const BUILD_VERSION = "2026-07-25-sec-harden-v1";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
-const JWT_SECRET = process.env.JWT_SECRET || "lux-iqi-crm-jwt-2026-xK9mZpQ4vR7wNcE3bY6hT1sA8fJ5gL0d";
+const JWT_SECRET_DEFAULT = "lux-iqi-crm-jwt-2026-xK9mZpQ4vR7wNcE3bY6hT1sA8fJ5gL0d";
+const JWT_SECRET = process.env.JWT_SECRET || JWT_SECRET_DEFAULT;
+if (!process.env.JWT_SECRET) {
+  console.warn("[SECURITY] JWT_SECRET chưa set trong env — đang dùng secret mặc định. Ai có source code có thể giả JWT admin. Hãy set JWT_SECRET trên VPS.");
+}
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(",").map(s => s.trim()) : [];
 const corsOptions = {
   // true = reflect request Origin (web + capacitor://localhost)
@@ -3259,14 +3262,15 @@ function invalidateSaleTeamCache() { saleTeamIdCache.clear(); }
 async function getTeamWithMembers(teamId) {
   const t = await get(db, "SELECT * FROM teams WHERE id = ?", [teamId]);
   if (!t) return null;
-  const members = await all(db, "SELECT id, username, display_name FROM users WHERE team_id = ? ORDER BY id", [teamId]);
+  // Không trả username — tránh lộ tài khoản login cho sale/client
+  const members = await all(db, "SELECT id, display_name FROM users WHERE team_id = ? ORDER BY id", [teamId]);
   const leader = members.find((m) => m.id === t.leader_id) || null;
   return {
     id: t.id,
     name: t.name || "",
     leaderId: t.leader_id || null,
     leaderName: leader?.display_name || "",
-    members: members.map((m) => ({ id: m.id, username: m.username, displayName: m.display_name })),
+    members: members.map((m) => ({ id: m.id, displayName: m.display_name })),
     createdAt: t.created_at || "",
   };
 }
@@ -3800,8 +3804,8 @@ async function getBootstrapPayload(db, user) {
   }
 
   const payload = {
-    leadUrl: config.leadUrl,
-    costUrl: config.costUrl,
+    leadUrl: user.role === "sale" ? "" : config.leadUrl,
+    costUrl: user.role === "sale" ? "" : config.costUrl,
     projectName: config.projectName,
     lastSync: config.lastSync,
     campaigns: filteredCampaigns.map((c) => ({
@@ -3815,11 +3819,11 @@ async function getBootstrapPayload(db, user) {
     projects: projects.map((p) => ({
       id: p.id,
       name: p.name,
-      leadUrl: p.lead_url || "",
-      costUrl: p.cost_url || "",
-      costData: safeJsonParse(p.cost_data),
-      fbCode: p.fb_code || "",
-      fbPerson: p.fb_person || "",
+      leadUrl: user.role === "sale" ? "" : (p.lead_url || ""),
+      costUrl: user.role === "sale" ? "" : (p.cost_url || ""),
+      costData: user.role === "sale" ? null : safeJsonParse(p.cost_data),
+      fbCode: user.role === "sale" ? "" : (p.fb_code || ""),
+      fbPerson: user.role === "sale" ? "" : (p.fb_person || ""),
       dailyReportEnabled: Boolean(p.daily_report_enabled),
       isLegacy: Boolean(p.is_legacy),
     })),
@@ -4922,9 +4926,16 @@ app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 /* ---------- Teams (nhóm sale) ---------- */
-async function listTeamsPayload() {
-  const teams = await all(db, "SELECT * FROM teams ORDER BY id");
-  const members = await all(db, "SELECT id, username, display_name, team_id FROM users WHERE team_id IS NOT NULL");
+async function listTeamsPayload({ forUser = null } = {}) {
+  let teams = await all(db, "SELECT * FROM teams ORDER BY id");
+  // Sale chỉ được xem team của chính mình (đủ cho badge / phân vai)
+  if (forUser?.role === "sale") {
+    const myTeamId = await getSaleTeamId(forUser.userId);
+    teams = myTeamId ? teams.filter((t) => t.id === myTeamId) : [];
+  }
+  const members = teams.length
+    ? await all(db, "SELECT id, display_name, team_id FROM users WHERE team_id IS NOT NULL")
+    : [];
   return teams.map((t) => ({
     id: t.id,
     name: t.name || "",
@@ -4932,7 +4943,7 @@ async function listTeamsPayload() {
     leaderName: members.find((m) => m.id === t.leader_id)?.display_name || "",
     members: members
       .filter((m) => m.team_id === t.id)
-      .map((m) => ({ id: m.id, username: m.username, displayName: m.display_name })),
+      .map((m) => ({ id: m.id, displayName: m.display_name })),
     createdAt: t.created_at || "",
   }));
 }
@@ -4947,10 +4958,10 @@ async function applyTeamMembers(teamId, leaderId, memberIds) {
   invalidateSaleTeamCache();
 }
 
-// Mọi role đều đọc được (sale cần tên team để hiện badge trên lead)
-app.get("/api/teams", requireAuth, async (_req, res) => {
+// Admin/manager: toàn bộ team. Sale: chỉ team của mình. Không trả username.
+app.get("/api/teams", requireAuth, async (req, res) => {
   try {
-    res.json(await listTeamsPayload());
+    res.json(await listTeamsPayload({ forUser: req.user }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -6533,9 +6544,18 @@ app.post("/api/admin/redistribute-managers/:projectId", requireAuth, requireAdmi
   }
 });
 
-app.get("/api/config", requireAuth, async (_req, res) => {
+app.get("/api/config", requireAuth, async (req, res) => {
   try {
     const config = await getConfig(db);
+    // Sale không được thấy URL Google Sheet (tránh đọc/clone nguồn dữ liệu)
+    if (req.user.role === "sale") {
+      return res.json({
+        leadUrl: "",
+        costUrl: "",
+        projectName: config.projectName,
+        lastSync: config.lastSync,
+      });
+    }
     res.json(config);
   } catch (err) {
     res.status(500).json({ error: err.message || "Could not read config" });
@@ -7556,12 +7576,25 @@ app.get("/api/sync/diagnostics", requireAuth, requireAdmin, async (_req, res) =>
 app.get("/api/projects", requireAuth, async (req, res) => {
   try {
     const data = await readData(db);
+    let projects = data.projects;
     if (req.user.role === "manager") {
       const projectIds = await getUserProjectIds(req.user.userId);
-      res.json(data.projects.filter(p => projectIds.includes(p.id)));
-    } else {
-      res.json(data.projects);
+      projects = projects.filter(p => projectIds.includes(p.id));
+    } else if (req.user.role === "sale") {
+      // Sale chỉ cần id/name dự án — không trả sheet URL / cost / FB code
+      projects = projects.map((p) => ({
+        id: p.id,
+        name: p.name,
+        leadUrl: "",
+        costUrl: "",
+        costData: null,
+        fbCode: "",
+        fbPerson: "",
+        dailyReportEnabled: !!p.dailyReportEnabled,
+        isLegacy: !!p.isLegacy,
+      }));
     }
+    res.json(projects);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -11145,8 +11178,15 @@ app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
 app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
-    const lead = await get(db, "SELECT id, phone FROM leads WHERE id = ?", [leadId]);
+    const lead = await get(db, "SELECT id, phone, sale_name, team_id FROM leads WHERE id = ?", [leadId]);
     if (!lead?.phone) return res.json({ registrations: [] });
+    // Lịch sử đăng ký theo SĐT — chỉ admin/manager, hoặc sale đang phụ trách/team lead đó
+    if (req.user.role === "sale") {
+      const own = await saleCanUpdateLead(lead, req.user.displayName);
+      if (!own.ok) return res.status(403).json({ error: "Không có quyền xem lịch sử đăng ký lead này" });
+    } else if (req.user.role !== "admin" && req.user.role !== "manager") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
     const [rows, projectRows] = await Promise.all([
       all(db,
         "SELECT id, name, phone, project_id, campaign, adset_name, ad_name, created_at, notes, source, ads_id FROM leads WHERE phone = ?",
