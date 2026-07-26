@@ -80,6 +80,8 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
   const [busy, setBusy] = useState(false);
   const [summaryProjects, setSummaryProjects] = useState([]);
   const endRef = useRef(null);
+  const isPreviewOnly = user?.role === "sale" || user?.role === "manager";
+  const roleLabel = user?.role === "admin" ? "Admin" : user?.role === "manager" ? "Quản lý" : "Sale";
 
   const projectOptions = useMemo(() => {
     const fromSummary = (summaryProjects || []).map((p) => ({ id: p.id, name: p.name, unitCount: p.unitCount || 0 }));
@@ -111,7 +113,7 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
   }, [messages, open, menuOpen]);
 
   useEffect(() => {
-    if (!open || !apiFetch) return;
+    if (!open || !apiFetch || isPreviewOnly) return;
     let cancelled = false;
     (async () => {
       try {
@@ -121,7 +123,7 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
       } catch (_) {}
     })();
     return () => { cancelled = true; };
-  }, [open, apiFetch]);
+  }, [open, apiFetch, isPreviewOnly]);
 
   const pushBot = (payload) => {
     setMessages((prev) => [...prev, { id: `b-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, role: "bot", ...payload }]);
@@ -302,8 +304,6 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
     await runQuery(opt.value);
   };
 
-  const roleLabel = user?.role === "admin" ? "Admin" : user?.role === "manager" ? "Quản lý" : "Sale";
-
   return (
     <>
       {open && (
@@ -313,14 +313,28 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
             <div className="iqi-asst-header__meta">
               <div className="iqi-asst-header__title">IQI Sales Assistant</div>
               <div className="iqi-asst-header__sub">
-                <span className="iqi-asst-online" /> Online · GPT + Giỏ hàng · {roleLabel}
-                {projectFilterName ? ` · ${projectFilterName}` : ""}
-                {busy ? " · đang tìm…" : ""}
+                <span className="iqi-asst-online" /> {isPreviewOnly ? "Đang xây dựng" : "Online · GPT + Giỏ hàng"} · {roleLabel}
+                {!isPreviewOnly && projectFilterName ? ` · ${projectFilterName}` : ""}
+                {!isPreviewOnly && busy ? " · đang tìm…" : ""}
               </div>
             </div>
             <button type="button" className="iqi-asst-icon-btn" onClick={() => setOpen(false)} aria-label="Thu nhỏ">–</button>
           </div>
 
+          {isPreviewOnly ? (
+            <div className="iqi-asst-body" style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+              <div className="iqi-asst-msg iqi-asst-msg--bot" style={{ width: "100%", marginBottom: 0 }}>
+                <img src="/assistants/iqi-sales-bot.png?v=8" alt="" className="iqi-asst-msg__avatar" />
+                <div className="iqi-asst-msg__bubble" style={{ maxWidth: "100%" }}>
+                  <div style={{ fontWeight: 800, marginBottom: 8 }}>Trợ lý ảo đang được xây dựng</div>
+                  <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                    Hiện tại trợ lý ảo đang được build. Mọi người đợi một thời gian nhé — sẽ có thông báo về cách dùng khi sẵn sàng.
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
           <div className="iqi-asst-body">
             {messages.map((m) => (
               <div key={m.id} className={`iqi-asst-msg iqi-asst-msg--${m.role}`}>
@@ -397,6 +411,8 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
             </button>
             <button type="submit" aria-label="Gửi" disabled={busy}>➤</button>
           </form>
+            </>
+          )}
         </div>
       )}
 
