@@ -39,6 +39,7 @@ export async function searchInventoryUnits(db, { all, getUserProjectIds }, user,
   const minPrice = Number(filters.minPrice) > 0 ? Number(filters.minPrice) : 0;
   const maxPrice = Number(filters.maxPrice) > 0 ? Number(filters.maxPrice) : 0;
   const hasDrive = !!filters.hasDrive;
+  const status = String(filters.status || "").trim().toLowerCase();
   const limit = Math.min(50, Math.max(1, parseInt(filters.limit, 10) || 20));
   const sort = String(filters.sort || "price_asc").toLowerCase();
 
@@ -71,6 +72,12 @@ export async function searchInventoryUnits(db, { all, getUserProjectIds }, user,
   if (minPrice) { where.push("u.price >= ?"); params.push(minPrice); }
   if (maxPrice) { where.push("u.price > 0 AND u.price <= ?"); params.push(maxPrice); }
   if (hasDrive) { where.push("u.drive_url IS NOT NULL AND TRIM(u.drive_url) != ''"); }
+  if (status === "available" || status === "booking" || status === "sold") {
+    where.push("LOWER(u.status) = ?");
+    params.push(status);
+  } else if (status === "unsold" || status === "open") {
+    where.push("(LOWER(u.status) = 'available' OR LOWER(u.status) = 'booking' OR u.status IS NULL OR TRIM(u.status) = '')");
+  }
 
   if (q && !unitCode) {
     const tokens = [];
@@ -157,11 +164,14 @@ Schema:
   "minPrice": number hoặc null (VND),
   "maxPrice": number hoặc null (VND),
   "hasDrive": boolean,
+  "status": "available|booking|sold|'' — available=còn trống, booking=chờ cọc, sold=đã bán",
   "sort": "price_asc|price_desc|code",
   "limit": number 1-20
 }
 Quy tắc:
-- "rẻ nhất/giá thấp" → intent=cheapest, sort=price_asc, limit=5
+- "rẻ nhất/giá thấp/còn hàng/còn trống" → intent=cheapest hoặc search, status=available, sort=price_asc
+- "booking/chờ cọc" → status=booking
+- "đã bán" → status=sold
 - "đắt nhất" → sort=price_desc, limit=5
 - "link drive/ptg" → intent=drive, hasDrive=true
 - Chỉ mã căn rõ → intent=search + unitCode

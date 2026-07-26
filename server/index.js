@@ -21,6 +21,7 @@ import {
   buildInventoryAskReply,
   parseInventoryQuestionWithGpt,
 } from "./inventoryAsk.js";
+import { syncInventorySource as syncInventorySourceCore } from "./inventorySync.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-26-inventory-gpt-v1";
+const BUILD_VERSION = "2026-07-26-inventory-sync-v2";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2200,175 +2201,8 @@ function sanitizeSheetUrl(raw) {
 }
 
 /* ---------- Giỏ hàng (inventory) — sheet theo đại lý / dự án ---------- */
-function normalizeInventoryHeader(h = "") {
-  return String(h || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function pickInventoryCol(headers, ...needles) {
-  const normalized = headers.map((h) => ({ raw: h, n: normalizeInventoryHeader(h) }));
-  // 1) exact
-  for (const needle of needles) {
-    const n = normalizeInventoryHeader(needle);
-    const hit = normalized.find((h) => h.n === n);
-    if (hit) return hit.raw;
-  }
-  // 2) whole-token / starts-with (tránh "can" khớp "ma can")
-  for (const needle of needles) {
-    const n = normalizeInventoryHeader(needle);
-    const hit = normalized.find((h) => {
-      if (h.n.startsWith(n + " ") || h.n.endsWith(" " + n)) return true;
-      const parts = h.n.split(" ");
-      return parts.includes(n);
-    });
-    if (hit) return hit.raw;
-  }
-  return null;
-}
-
-function parseInventoryPrice(raw) {
-  if (raw == null) return 0;
-  const s = String(raw).replace(/[^\d.,]/g, "").trim();
-  if (!s) return 0;
-  if (s.includes(".") && s.includes(",")) {
-    return Number(s.replace(/\./g, "").replace(",", ".")) || 0;
-  }
-  if ((s.match(/\./g) || []).length > 1) return Number(s.replace(/\./g, "")) || 0;
-  if ((s.match(/,/g) || []).length > 1) return Number(s.replace(/,/g, "")) || 0;
-  return Number(s.replace(/,/g, "")) || 0;
-}
-
-function mapInventoryRow(row, headers) {
-  const getL = (...needles) => {
-    const key = pickInventoryCol(headers, ...needles);
-    if (!key) return "";
-    const v = row[key] ?? row[String(key).toLowerCase()] ?? "";
-    return String(v).trim();
-  };
-
-  const unitCode = getL("ma can", "macan", "unit code", "unitcode");
-  if (!unitCode) return null;
-
-  const priceCandidates = [
-    getL("tong gia bao gom vat kpbt", "tong gia", "gia ban", "gia gom vat", "gia vat", "price"),
-    getL("gia ke ca kpbt", "kpbt"),
-    getL("gia vay"),
-    getL("gia thanh toan som", "thanh toan som"),
-  ].filter(Boolean);
-  let price = 0;
-  let priceLabel = "";
-  for (const p of priceCandidates) {
-    const n = parseInventoryPrice(p);
-    if (n > price) { price = n; priceLabel = p; }
-  }
-
-  let driveUrl = getL("link ptg ve can", "link ptg", "link drive", "drive", "ptg");
-  if (driveUrl && !/^https?:\/\//i.test(driveUrl)) {
-    if (/drive\.google|docs\.google/i.test(driveUrl)) driveUrl = "https://" + driveUrl.replace(/^\/+/, "");
-    else driveUrl = "";
-  }
-
-  return {
-    unitCode,
-    building: getL("toa", "building", "block"),
-    floor: getL("tang", "floor"),
-    unitNo: getL("can"),
-    unitType: getL("loai hinh"),
-    layout: getL("loai can", "layout"),
-    direction: getL("huong", "direction"),
-    viewText: getL("view"),
-    areaNet: parseInventoryPrice(getL("dt thong thuy", "thong thuy", "net")),
-    areaGross: parseInventoryPrice(getL("dt tim tuong", "tim tuong", "gross")),
-    price,
-    priceLabel,
-    driveUrl,
-    status: getL("trang thai", "status", "tinh trang"),
-  };
-}
-
 async function syncInventorySource(db, sourceId) {
-  const source = await get(db, "SELECT * FROM inventory_sources WHERE id = ?", [sourceId]);
-  if (!source) throw new Error("Nguồn giỏ hàng không tồn tại");
-  const sheetUrl = sanitizeSheetUrl(source.sheet_url);
-  if (!sheetUrl) throw new Error("Thiếu link Google Sheet");
-
-  const fetchUrl = sheetUrl.includes("?")
-    ? `${sheetUrl}&crm_inv_ts=${Date.now()}`
-    : `${sheetUrl}?crm_inv_ts=${Date.now()}`;
-  const raw = await fetchCsvText(fetchUrl, { timeoutMs: 45000, retries: 1 });
-  let csvText = raw;
-  const firstLine = raw.split(/\r?\n/)[0] || "";
-  if (!firstLine.includes(",")) csvText = raw.split(/\r?\n/).slice(1).join("\n");
-
-  const { headers, rawHeaders, rows } = parseCSV(csvText);
-  const headerList = (rawHeaders && rawHeaders.length ? rawHeaders : headers) || [];
-  // rows keys are lowercased headers from parseCSV
-  const lowerHeaders = headers;
-
-  const mapped = [];
-  for (const row of rows) {
-    const m = mapInventoryRow(row, lowerHeaders);
-    if (m) mapped.push(m);
-  }
-  if (!mapped.length) {
-    throw new Error("Không đọc được căn nào — kiểm tra sheet đã Publish CSV và có cột Mã căn");
-  }
-
-  const nowStr = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
-  await run(db, "DELETE FROM inventory_units WHERE source_id = ?", [sourceId]);
-
-  // Batch insert
-  const stmts = mapped.map((u) => ({
-    sql: `INSERT INTO inventory_units(
-      project_id, source_id, source_code, unit_code, building, floor, unit_no,
-      unit_type, layout, direction, view_text, area_net, area_gross,
-      price, price_label, drive_url, status, raw_json, updated_at
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    args: [
-      source.project_id, sourceId, source.code || "", u.unitCode, u.building, u.floor, u.unitNo,
-      u.unitType, u.layout, u.direction, u.viewText, u.areaNet, u.areaGross,
-      u.price, u.priceLabel, u.driveUrl, u.status, "", nowStr,
-    ],
-  }));
-  // libsql batch in chunks
-  const chunk = 80;
-  for (let i = 0; i < stmts.length; i += chunk) {
-    await db.batch(stmts.slice(i, i + chunk), "write");
-  }
-
-  await run(db,
-    "UPDATE inventory_sources SET last_sync_at = ?, last_sync_count = ?, last_sync_error = '' WHERE id = ?",
-    [nowStr, mapped.length, sourceId]
-  );
-  return { ok: true, count: mapped.length, sourceId, projectId: source.project_id, code: source.code };
-}
-
-function mapInventoryUnitRow(u) {
-  return {
-    id: u.id,
-    projectId: u.project_id,
-    sourceId: u.source_id,
-    source: u.source_code || "",
-    unitCode: u.unit_code || "",
-    building: u.building || "",
-    floor: u.floor || "",
-    unitNo: u.unit_no || "",
-    unitType: u.unit_type || "",
-    layout: u.layout || "",
-    direction: u.direction || "",
-    view: u.view_text || "",
-    areaNet: u.area_net || 0,
-    areaGross: u.area_gross || 0,
-    price: u.price || 0,
-    priceLabel: u.price_label || "",
-    driveUrl: u.drive_url || "",
-    status: u.status || "",
-    updatedAt: u.updated_at || "",
-  };
+  return syncInventorySourceCore(db, { get, run, fetchCsvText, sanitizeSheetUrl }, sourceId);
 }
 
 async function assertUserCanAccessProject(user, projectId) {
@@ -8257,6 +8091,16 @@ app.post("/api/inventory/ask", requireAuth, async (req, res) => {
     if (intent === "cheapest") { sort = "price_asc"; limit = Math.min(limit, 5); }
     if (intent === "drive") parsed.hasDrive = true;
 
+    let status = String(parsed.status || "").toLowerCase();
+    if (!status && (intent === "cheapest" || intent === "search" || intent === "stock")) {
+      // Mặc định chỉ căn còn trống (tránh trả căn đã bán)
+      if (/con hang|con trong|re nhat|rẻ|trống|available|chua ban/i.test(question) || intent === "cheapest") {
+        status = "available";
+      }
+    }
+    if (/da ban|sold/i.test(question)) status = "sold";
+    if (/booking|cho coc|đặt cọc/i.test(question)) status = "booking";
+
     const filters = {
       projectId: resolvedProjectId || 0,
       unitCode: parsed.unitCode || "",
@@ -8268,6 +8112,7 @@ app.post("/api/inventory/ask", requireAuth, async (req, res) => {
       minPrice: parsed.minPrice || null,
       maxPrice: parsed.maxPrice || null,
       hasDrive: !!parsed.hasDrive,
+      status,
       sort,
       limit,
     };

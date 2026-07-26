@@ -28,7 +28,15 @@ function toCardUnit(u) {
     view: u.view || "",
     price: u.price || 0,
     driveUrl: u.driveUrl || "",
+    status: u.status || "",
   };
+}
+
+function statusLabel(s) {
+  if (s === "sold") return "Đã bán";
+  if (s === "booking") return "Booking";
+  if (s === "available") return "Còn trống";
+  return s || "";
 }
 
 function UnitCard({ u }) {
@@ -36,7 +44,13 @@ function UnitCard({ u }) {
     <div className="iqi-asst-unit">
       <div className="iqi-asst-unit__head">
         <strong>{u.id}</strong>
-        {u.source ? <span className="iqi-asst-unit__src">{u.source}</span> : null}
+        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          {u.status ? <span className="iqi-asst-unit__src" style={{
+            background: u.status === "sold" ? "#fee2e2" : u.status === "booking" ? "#fef9c3" : "#dcfce7",
+            color: u.status === "sold" ? "#b91c1c" : u.status === "booking" ? "#a16207" : "#166534",
+          }}>{statusLabel(u.status)}</span> : null}
+          {u.source ? <span className="iqi-asst-unit__src">{u.source}</span> : null}
+        </span>
       </div>
       <div className="iqi-asst-unit__meta">
         {[u.project, u.building && `Tòa ${u.building}`, u.type, u.direction, u.view].filter(Boolean).join(" · ")}
@@ -78,7 +92,7 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
       {
         id: "hi",
         role: "bot",
-        text: "Chào Anh/Chị! Hỏi tự nhiên (VD: căn rẻ nhất, 2BR dưới 5 tỷ) hoặc gõ mã căn.\nAdmin gắn giỏ: Dự án → Giỏ hàng. Cần OpenAI key trong Cài đặt Marketing.",
+        text: "Chào Anh/Chị! Hỏi tự nhiên (VD: căn rẻ nhất, 2BR dưới 5 tỷ) hoặc gõ mã căn.\nAdmin gắn giỏ + OpenAI key tại: Dự án → Giỏ hàng.",
       },
     ]);
     setMenuOpen(true);

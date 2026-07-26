@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Plus, RefreshCw, Trash2, X, Link as LinkIcon } from "lucide-react";
+import { Plus, RefreshCw, Trash2, X, Link as LinkIcon, Sparkles } from "lucide-react";
 
 /**
  * Modal quản lý nguồn giỏ hàng (Google Sheet) theo dự án.
@@ -20,6 +20,17 @@ export default function InventorySourcesModal({
   const [saving, setSaving] = useState(false);
   const [syncingId, setSyncingId] = useState(null);
   const [draft, setDraft] = useState({ code: "", name: "", sheetUrl: "" });
+  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
+  const [openaiDraft, setOpenaiDraft] = useState("");
+  const [savingOpenai, setSavingOpenai] = useState(false);
+
+  const loadOpenaiStatus = useCallback(async () => {
+    try {
+      const r = await apiFetch(`${API}/daily-news/settings`);
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) setHasOpenaiKey(!!d.hasOpenaiKey);
+    } catch (_) {}
+  }, [API, apiFetch]);
 
   const load = useCallback(async () => {
     if (!project?.id) return;
@@ -36,7 +47,30 @@ export default function InventorySourcesModal({
     }
   }, [API, apiFetch, project?.id, showToast]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); loadOpenaiStatus(); }, [load, loadOpenaiStatus]);
+
+  const saveOpenaiKey = async () => {
+    if (!openaiDraft.trim()) {
+      showToast("Nhập OpenAI API key (sk-...)", "warning");
+      return;
+    }
+    setSavingOpenai(true);
+    try {
+      const r = await apiFetch(`${API}/daily-news/settings`, {
+        method: "POST",
+        body: JSON.stringify({ openaiKey: openaiDraft.trim() }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Lưu key thất bại");
+      setHasOpenaiKey(true);
+      setOpenaiDraft("");
+      showToast("Đã lưu OpenAI key cho chatbot giỏ hàng", "success");
+    } catch (e) {
+      showToast(e.message, "error");
+    } finally {
+      setSavingOpenai(false);
+    }
+  };
 
   const addSource = async () => {
     if (!draft.code.trim() || !draft.sheetUrl.trim()) {
@@ -61,8 +95,10 @@ export default function InventorySourcesModal({
         throw new Error(hint);
       }
       setDraft({ code: "", name: "", sheetUrl: "" });
-      if (d.sync?.ok) showToast(`Đã thêm & sync ${d.sync.count} căn (${d.sync.code})`, "success");
-      else if (d.sync?.error) showToast(`Đã lưu nguồn nhưng sync lỗi: ${d.sync.error}`, "warning");
+      if (d.sync?.ok) {
+        const extra = [d.sync.available != null && `${d.sync.available} trống`, d.sync.booking && `${d.sync.booking} booking`, d.sync.sold && `${d.sync.sold} đã bán`].filter(Boolean).join(", ");
+        showToast(`Đã thêm & sync ${d.sync.count} căn (${d.sync.code})${extra ? ` — ${extra}` : ""}`, "success");
+      } else if (d.sync?.error) showToast(`Đã lưu nguồn nhưng sync lỗi: ${d.sync.error}`, "warning");
       else showToast("Đã thêm nguồn giỏ hàng", "success");
       await load();
     } catch (e) {
@@ -121,6 +157,41 @@ export default function InventorySourcesModal({
         </div>
 
         <div style={{ padding: 16 }}>
+          <div style={{
+            background: hasOpenaiKey ? "#f0fdf4" : "#fffbeb",
+            border: `1px solid ${hasOpenaiKey ? "#bbf7d0" : "#fde68a"}`,
+            borderRadius: 12,
+            padding: 12,
+            marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#334155", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+              <Sparkles size={14} color="#7c3aed" /> OpenAI API Key (chatbot hỏi tự nhiên)
+            </div>
+            <div style={{ fontSize: 11, color: hasOpenaiKey ? "#166534" : "#92400e", marginBottom: 8 }}>
+              {hasOpenaiKey
+                ? "Đã có key — chatbot giỏ hàng dùng GPT parse câu hỏi."
+                : "Chưa có key — chatbot chỉ search mã căn cơ bản. Dán sk-... bên dưới."}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                style={{ ...inputStyle, marginBottom: 0, flex: 1 }}
+                type="password"
+                value={openaiDraft}
+                onChange={(e) => setOpenaiDraft(e.target.value)}
+                placeholder={hasOpenaiKey ? "Nhập key mới để đổi..." : "sk-proj-..."}
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={saveOpenaiKey}
+                disabled={savingOpenai || !openaiDraft.trim()}
+                style={{ ...btnPrimary, opacity: !openaiDraft.trim() ? 0.5 : 1, whiteSpace: "nowrap", padding: "10px 14px" }}
+              >
+                {savingOpenai ? "..." : "Lưu key"}
+              </button>
+            </div>
+          </div>
+
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "#334155", marginBottom: 8 }}>Thêm nguồn (STH, IQI, LUX…)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 8, marginBottom: 8 }}>
@@ -144,8 +215,11 @@ export default function InventorySourcesModal({
               onChange={(e) => setDraft({ ...draft, sheetUrl: e.target.value })}
             />
             <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
-              Dán link Sheet (share hoặc Publish CSV). Sheet cần cột: <b>Mã căn</b>, giá, loại căn, hướng, view, link Drive…
-              <br />Quyền xem: Anyone with the link / Publish to web.
+              Dán link Sheet (có <b>gid=</b> đúng tab). Share: <b>Anyone with the link → Viewer</b>.
+              Cột cần: <b>Mã căn</b> / Mã Căn Hộ, giá, loại căn, hướng, view, <b>Tình trạng</b>.
+              <br />
+              <b>Lưu ý màu ô:</b> CSV không đọc được màu đỏ/vàng/trắng — dùng cột <b>Tình trạng</b>
+              (Còn hàng / Booking / Đã bán). Đỏ≈đã bán, vàng≈booking, trắng≈còn trống.
             </div>
             <button type="button" onClick={addSource} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.65 : 1, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <Plus size={14} /> {saving ? "Đang thêm & sync..." : "Thêm + Sync ngay"}

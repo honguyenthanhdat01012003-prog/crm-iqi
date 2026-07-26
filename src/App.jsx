@@ -13910,7 +13910,7 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
         {/* OpenAI API Key settings */}
         <div style={{ marginTop: 28, borderTop: "1px solid #e5e7eb", paddingTop: 20 }}>
           <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 6 }}>
-            <Sparkles size={16} /> OpenAI API Key (Đánh giá Content AI)
+            <Sparkles size={16} /> OpenAI API Key (Content AI + Chatbot giỏ hàng)
           </h3>
           <div style={{ background: hasOpenaiKey ? "#f0fdf4" : "#fffbeb", border: `1px solid ${hasOpenaiKey ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
@@ -13920,8 +13920,9 @@ function CampaignsPage({ leads, projects, isManager = false, isAdminOnly = false
               </span>
             </div>
             <div style={{ color: "#6b7280", fontSize: 11.5 }}>
-              Cần API key để sử dụng tính năng "Đánh giá Content" (GPT-4.1-nano, rất rẻ ~$0.20/1M token).
+              Cần API key cho "Đánh giá Content" và chatbot giỏ hàng (GPT-4.1-nano).
               Lấy key tại <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: "#8b5cf6" }}>platform.openai.com/api-keys</a>
+              — hoặc lưu nhanh tại <b>Dự án → Giỏ hàng</b>.
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
