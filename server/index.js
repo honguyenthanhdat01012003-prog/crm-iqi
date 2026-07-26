@@ -15,6 +15,12 @@ import { promisify } from "util";
 import { Server as SocketIOServer } from "socket.io";
 import { fileURLToPath } from "url";
 import webpush from "web-push";
+import {
+  mapInventoryUnitApi,
+  searchInventoryUnits,
+  buildInventoryAskReply,
+  parseInventoryQuestionWithGpt,
+} from "./inventoryAsk.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,7 +49,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-26-inventory-v1";
+const BUILD_VERSION = "2026-07-26-inventory-gpt-v1";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8147,63 +8153,136 @@ app.post("/api/projects/:id/inventory/sync-all", requireAuth, requireAdmin, asyn
 
 app.get("/api/inventory/search", requireAuth, async (req, res) => {
   try {
-    const q = String(req.query.q || "").trim();
-    const projectId = req.query.projectId && req.query.projectId !== "all" ? Number(req.query.projectId) : 0;
-    const sourceCode = String(req.query.source || "").trim().toUpperCase();
-    const layout = String(req.query.layout || req.query.type || "").trim();
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const result = await searchInventoryUnits(db, { all, getUserProjectIds }, req.user, {
+      q: req.query.q,
+      projectId: req.query.projectId,
+      source: req.query.source,
+      layout: req.query.layout || req.query.type,
+      limit: req.query.limit,
+      sort: req.query.sort || "price_asc",
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post("/api/inventory/ask", requireAuth, async (req, res) => {
+  try {
+    const question = String(req.body?.question || req.body?.q || "").trim();
+    if (!question) return res.status(400).json({ error: "Thiếu câu hỏi" });
+
+    const projectId = req.body?.projectId && req.body.projectId !== "all" ? Number(req.body.projectId) : 0;
+    const projectHintClient = String(req.body?.projectHint || "").trim();
+
+    // Fast path: mã căn rõ → không gọi GPT
+    const codeOnly = question.match(/^\s*([A-Za-z]{1,4}\d{2,6}[A-Za-z]?)\s*$/);
+    if (codeOnly) {
+      const result = await searchInventoryUnits(db, { all, getUserProjectIds }, req.user, {
+        unitCode: codeOnly[1],
+        projectId,
+        limit: 10,
+        sort: "code",
+      });
+      return res.json({
+        ok: true,
+        usedGpt: false,
+        intent: "search",
+        reply: buildInventoryAskReply("search", { unitCode: codeOnly[1] }, result.units),
+        filters: { unitCode: codeOnly[1], projectId },
+        ...result,
+      });
+    }
+
+    const apiKeyRow = await get(db, "SELECT value FROM settings WHERE key = 'openai_api_key'");
+    if (!apiKeyRow?.value) {
+      return res.status(400).json({
+        error: "Chưa cấu hình OpenAI API key. Vào Marketing → Cài đặt tài khoản → OpenAI API Key.",
+      });
+    }
 
     let allowedPids = null;
     if (req.user.role === "manager" || req.user.role === "sale") {
       allowedPids = await getUserProjectIds(req.user.userId);
-      if (!allowedPids.length) return res.json({ units: [], total: 0 });
     }
-
-    const where = ["1=1"];
-    const params = [];
-    if (projectId) {
-      if (allowedPids && !allowedPids.includes(projectId)) return res.status(403).json({ error: "Không có quyền dự án" });
-      where.push("u.project_id = ?");
-      params.push(projectId);
-    } else if (allowedPids) {
-      where.push(`u.project_id IN (${allowedPids.map(() => "?").join(",")})`);
-      params.push(...allowedPids);
-    }
-    if (sourceCode) { where.push("UPPER(u.source_code) = ?"); params.push(sourceCode); }
-    if (layout) { where.push("(u.layout LIKE ? OR u.unit_type LIKE ?)"); params.push(`%${layout}%`, `%${layout}%`); }
-
-    if (q) {
-      const tokens = [];
-      const codeMatches = q.match(/\b[A-Za-z]{1,4}\d{2,6}[A-Za-z]?\b/g) || [];
-      tokens.push(...codeMatches.map((t) => t.toLowerCase()));
-      const stop = new Set(["gia", "giá", "can", "căn", "cua", "của", "cho", "xem", "tim", "tìm", "bao", "nhieu", "nhiều", "la", "là"]);
-      for (const w of q.toLowerCase().split(/[\s,.;:!?/\\-]+/).filter(Boolean)) {
-        if (w.length >= 2 && !stop.has(w)) tokens.push(w);
+    let projSql = "SELECT p.id, p.name, (SELECT COUNT(*) FROM inventory_units u WHERE u.project_id = p.id) as unit_count FROM projects p WHERE 1=1";
+    const projParams = [];
+    if (allowedPids) {
+      if (!allowedPids.length) {
+        return res.json({ ok: true, usedGpt: false, intent: "clarify", reply: "Chưa có dự án được gán.", units: [], total: 0 });
       }
-      const uniq = [...new Set(tokens)];
-      if (uniq.length) {
-        const ors = uniq.map(() => "(LOWER(u.unit_code) LIKE ? OR LOWER(u.building) LIKE ? OR LOWER(u.layout) LIKE ? OR LOWER(u.direction) LIKE ? OR LOWER(u.view_text) LIKE ? OR LOWER(u.source_code) LIKE ?)").join(" OR ");
-        where.push(`(${ors})`);
-        for (const t of uniq) {
-          const like = `%${t}%`;
-          params.push(like, like, like, like, like, like);
-        }
-      }
+      projSql += " AND p.id IN (" + allowedPids.map(() => "?").join(",") + ")";
+      projParams.push(...allowedPids);
+    }
+    const projRows = await all(db, projSql, projParams);
+    const withInv = projRows.filter((r) => (r.unit_count || 0) > 0);
+    const projectNames = (withInv.length ? withInv : projRows).map((r) => r.name);
+
+    let parsed;
+    try {
+      parsed = await parseInventoryQuestionWithGpt(apiKeyRow.value, {
+        question,
+        projectNames,
+        projectHint: projectHintClient || (projectId ? (projRows.find((p) => p.id === projectId)?.name || "") : ""),
+      });
+    } catch (e) {
+      return res.status(e.status || 502).json({ error: e.message || "GPT lỗi" });
     }
 
-    const sql = `SELECT u.*, p.name as project_name FROM inventory_units u
-      LEFT JOIN projects p ON p.id = u.project_id
-      WHERE ${where.join(" AND ")}
-      ORDER BY u.price ASC, u.unit_code ASC
-      LIMIT ?`;
-    params.push(limit);
-    const rows = await all(db, sql, params);
+    const intent = String(parsed.intent || "search").toLowerCase();
+    if (intent === "clarify") {
+      return res.json({
+        ok: true,
+        usedGpt: true,
+        intent,
+        reply: buildInventoryAskReply("clarify", {}, []),
+        filters: parsed,
+        units: [],
+        total: 0,
+      });
+    }
+
+    let resolvedProjectId = projectId;
+    const hint = String(parsed.projectHint || "").trim().toLowerCase();
+    if (!resolvedProjectId && hint) {
+      const hit = projRows.find((p) => {
+        const name = String(p.name || "").toLowerCase();
+        return name.includes(hint) || hint.includes(name);
+      });
+      if (hit) resolvedProjectId = hit.id;
+    }
+
+    let sort = String(parsed.sort || "price_asc").toLowerCase();
+    let limit = Math.min(20, Math.max(1, Number(parsed.limit) || 10));
+    if (intent === "cheapest") { sort = "price_asc"; limit = Math.min(limit, 5); }
+    if (intent === "drive") parsed.hasDrive = true;
+
+    const filters = {
+      projectId: resolvedProjectId || 0,
+      unitCode: parsed.unitCode || "",
+      layout: parsed.layout || "",
+      source: parsed.source || "",
+      building: parsed.building || "",
+      direction: parsed.direction || "",
+      view: parsed.view || "",
+      minPrice: parsed.minPrice || null,
+      maxPrice: parsed.maxPrice || null,
+      hasDrive: !!parsed.hasDrive,
+      sort,
+      limit,
+    };
+
+    const result = await searchInventoryUnits(db, { all, getUserProjectIds }, req.user, filters);
     res.json({
-      total: rows.length,
-      units: rows.map((u) => ({ ...mapInventoryUnitRow(u), projectName: u.project_name || "" })),
+      ok: true,
+      usedGpt: true,
+      intent,
+      reply: buildInventoryAskReply(intent, filters, result.units),
+      filters,
+      ...result,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

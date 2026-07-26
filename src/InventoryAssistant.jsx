@@ -78,7 +78,7 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
       {
         id: "hi",
         role: "bot",
-        text: "Chào Anh/Chị! Bấm menu (☰) để chọn chức năng, hoặc gõ mã căn (VD: E11711).\nAdmin gắn giỏ hàng tại: Dự án → Giỏ hàng.",
+        text: "Chào Anh/Chị! Hỏi tự nhiên (VD: căn rẻ nhất, 2BR dưới 5 tỷ) hoặc gõ mã căn.\nAdmin gắn giỏ: Dự án → Giỏ hàng. Cần OpenAI key trong Cài đặt Marketing.",
       },
     ]);
     setMenuOpen(true);
@@ -128,6 +128,27 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || "Tra cứu thất bại");
     return { units: (d.units || []).map(toCardUnit), total: d.total || 0 };
+  };
+
+  const askInventory = async (question) => {
+    if (!apiFetch) return { units: [], reply: "Chưa kết nối API", error: "Chưa kết nối API" };
+    const r = await apiFetch(`${API}/inventory/ask`, {
+      method: "POST",
+      body: JSON.stringify({
+        question,
+        projectId: projectFilterId || undefined,
+        projectHint: projectFilterName || undefined,
+      }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || "GPT tra cứu thất bại");
+    return {
+      units: (d.units || []).map(toCardUnit),
+      total: d.total || 0,
+      reply: d.reply || "",
+      usedGpt: !!d.usedGpt,
+      intent: d.intent || "",
+    };
   };
 
   const handleMenuPick = async (item) => {
@@ -207,17 +228,23 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
     setMenuOpen(false);
     setBusy(true);
     try {
-      const { units } = await searchInventory({ q: text, layout, limit: 20 });
-      if (!units.length) {
-        pushBot({
-          text: `Không thấy căn khớp “${text || layout}”. Kiểm tra đã Sync giỏ hàng chưa, hoặc thử mã khác.`,
-        });
+      // Chọn loại căn từ menu → search thẳng, không cần GPT
+      if (layout && !text) {
+        const { units } = await searchInventory({ layout, limit: 20 });
+        if (!units.length) {
+          pushBot({ text: `Không thấy căn loại “${layout}”. Thử loại khác hoặc chọn dự án.` });
+          return;
+        }
+        pushBot({ text: `Các căn ${layout}:`, units });
         return;
       }
-      pushBot({
-        text: units.length === 1 ? `Thông tin căn ${units[0].id}:` : `Tìm thấy ${units.length} căn:`,
-        units,
-      });
+
+      const { units, reply } = await askInventory(text);
+      if (!units.length) {
+        pushBot({ text: reply || `Không thấy căn khớp “${text}”.` });
+        return;
+      }
+      pushBot({ text: reply || (units.length === 1 ? `Thông tin căn ${units[0].id}:` : `Tìm thấy ${units.length} căn:`), units });
     } catch (e) {
       pushBot({ text: e.message || "Lỗi tra cứu" });
     } finally {
@@ -272,7 +299,7 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
             <div className="iqi-asst-header__meta">
               <div className="iqi-asst-header__title">IQI Sales Assistant</div>
               <div className="iqi-asst-header__sub">
-                <span className="iqi-asst-online" /> Online · Giỏ hàng · {roleLabel}
+                <span className="iqi-asst-online" /> Online · GPT + Giỏ hàng · {roleLabel}
                 {projectFilterName ? ` · ${projectFilterName}` : ""}
                 {busy ? " · đang tìm…" : ""}
               </div>
@@ -361,10 +388,12 @@ export default function InventoryAssistant({ user, projects = [], isMobile = fal
 
       <button
         type="button"
-        className={`iqi-asst-fab${isMobile ? " iqi-asst-fab--mobile" : ""}`}
+        className={`iqi-asst-fab${isMobile ? " iqi-asst-fab--mobile" : ""}${open ? " iqi-asst-fab--hidden" : ""}`}
         onClick={() => setOpen((v) => !v)}
         title="IQI Sales Assistant"
         aria-label="Mở IQI Sales Assistant"
+        aria-hidden={open}
+        tabIndex={open ? -1 : 0}
       >
         <span className="iqi-asst-fab__wave" aria-hidden="true" />
         <span className="iqi-asst-fab__wave iqi-asst-fab__wave--2" aria-hidden="true" />

@@ -2388,6 +2388,11 @@
 .iqi-asst-fab:hover .iqi-asst-fab__core {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.34);
 }
+.iqi-asst-fab--hidden {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
 
 .iqi-asst-header__bot,
 .iqi-asst-msg__avatar {
@@ -2398,8 +2403,9 @@
   position: fixed;
   right: 20px;
   bottom: 118px;
-  width: 360px;
-  max-height: min(560px, calc(100vh - 140px));
+  width: 380px;
+  max-height: min(680px, calc(100vh - 100px));
+  height: min(680px, calc(100vh - 100px));
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -2414,8 +2420,9 @@
   right: 10px;
   left: 10px;
   width: auto;
-  bottom: calc(150px + env(safe-area-inset-bottom, 0px));
-  max-height: min(62vh, 520px);
+  bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+  height: min(78dvh, calc(100dvh - 100px - env(safe-area-inset-bottom, 0px)));
+  max-height: min(78dvh, calc(100dvh - 100px - env(safe-area-inset-bottom, 0px)));
 }
 
 .iqi-asst-header {
@@ -2425,6 +2432,7 @@
   padding: 12px 14px;
   color: #fff;
   background: linear-gradient(135deg, #1a3c20, #2d5a32 55%, #f58220);
+  flex-shrink: 0;
 }
 .iqi-asst-header__bot {
   width: 42px;
@@ -2464,10 +2472,12 @@
 }
 
 .iqi-asst-body {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 12px;
   background: linear-gradient(180deg, #f8fafc, #eef6ff);
+  -webkit-overflow-scrolling: touch;
 }
 .iqi-asst-msg {
   display: flex;
@@ -2553,13 +2563,14 @@
   text-decoration: none;
 }
 
-/* Menu sổ kiểu Viettel — hiện khi bấm ☰ */
+/* Menu sổ kiểu Viettel — hiện khi bấm ☰; không co/cắt nút */
 .iqi-asst-menu {
+  flex: 0 0 auto;
   border-top: 1px solid #e2e8f0;
   background: #fff;
-  padding: 10px 12px 8px;
-  max-height: 220px;
-  overflow: auto;
+  padding: 10px 12px 10px;
+  max-height: none;
+  overflow: visible;
   animation: iqiAsstPop 0.2s ease-out;
 }
 .iqi-asst-menu__title {
@@ -2576,9 +2587,9 @@
 .iqi-asst-menu__grid button {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   text-align: left;
-  padding: 10px 10px;
+  padding: 9px 10px;
   border-radius: 10px;
   border: 1px solid #e5e7eb;
   background: #fff;
@@ -2586,12 +2597,18 @@
   font-size: 12px;
   font-weight: 700;
   color: #0f172a;
+  line-height: 1.25;
+  min-height: 40px;
 }
 .iqi-asst-menu__grid button:hover {
   border-color: #a4d65e;
   background: #f7fdf0;
 }
-.iqi-asst-menu__ico { font-size: 14px; }
+.iqi-asst-menu__grid button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.iqi-asst-menu__ico { font-size: 14px; flex-shrink: 0; }
 
 /* Sổ chọn trong bubble (sau khi chọn menu) */
 .iqi-asst-select {
@@ -2632,8 +2649,10 @@
   gap: 6px;
   align-items: center;
   padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   border-top: 1px solid #e2e8f0;
   background: #fff;
+  flex: 0 0 auto;
 }
 .iqi-asst-footer input {
   flex: 1;
