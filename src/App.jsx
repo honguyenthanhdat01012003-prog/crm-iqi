@@ -22,6 +22,8 @@ import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLea
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
+import InventoryAssistant from "./InventoryAssistant.jsx";
+import InventorySourcesModal from "./InventorySourcesModal.jsx";
 import { StatusBadge, NewLeadBadge, ScheduledLeadBadge, ShuffleLeadBadge } from "./components/ui/StatusBadge.jsx";
 import { LeadGridSkeleton, LeadCardsSkeleton } from "./components/ui/SkeletonLoader.jsx";
 import {
@@ -3271,6 +3273,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       )}
 
       <ChatSidebar currentUser={user} />
+      <InventoryAssistant user={user} projects={projects} isMobile={isMobile} apiFetch={apiFetch} />
       <ToastContainer />
       <ConfirmModal_ />
       <AlertModal_ />
@@ -10857,6 +10860,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
   const [showMktProjectModal, setShowMktProjectModal] = React.useState(false);
   const [mktProjectName, setMktProjectName] = React.useState("");
   const [savingMktProject, setSavingMktProject] = React.useState(false);
+  const [inventoryProject, setInventoryProject] = React.useState(null);
 
   const createMktProject = async () => {
     const name = mktProjectName.trim();
@@ -10932,6 +10936,20 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
     </div>
   );
 
+  const inventoryModal = inventoryProject && (
+    <InventorySourcesModal
+      project={inventoryProject}
+      apiFetch={apiFetch}
+      API={API}
+      onClose={() => setInventoryProject(null)}
+      showToast={showToast}
+      btnPrimary={btnPrimary}
+      btnSecondary={btnSecondary}
+      btnDanger={btnDanger}
+      inputStyle={inputStyle}
+    />
+  );
+
   if (isMobile) {
     const mobileActionBtn = {
       border: "1px solid #d9e2dc",
@@ -10952,6 +10970,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {mktProjectModal}
+        {inventoryModal}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
           <div>
             <div style={{ fontSize: 11, color: "#64748b", fontWeight: 800, textTransform: "uppercase" }}>Danh sách</div>
@@ -11011,6 +11030,11 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
                         {isSyncing ? "Đang sync" : "Sync"}
                       </button>
                     )}
+                    {isAdminOnly && !p.isLegacy && (
+                      <button onClick={() => setInventoryProject(p)} style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 96, color: "#6d28d9", background: "#f5f3ff", borderColor: "#ddd6fe" }}>
+                        <Layers size={13} /> Giỏ hàng
+                      </button>
+                    )}
                     {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 84 }}><Pencil size={13} /> Sửa</button>}
                     {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...mobileActionBtn, flex: "0 0 auto", minWidth: 84, color: "#dc2626", background: "#fff7f7", borderColor: "#fecaca" }}><Trash2 size={13} /> Xóa</button>}
                   </div>
@@ -11026,6 +11050,7 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
   return (
     <>
       {mktProjectModal}
+      {inventoryModal}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <div style={{ fontSize: 14, color: "#6b7280" }}>{projects.length} dự án</div>
         {isAdminOnly && (
@@ -11057,17 +11082,25 @@ function ProjectsPage({ projects, openNewProject, openEditProject, deleteProject
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Chi phí: <b>{formatVND(c.totalSpent)}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Lead: <b>{c.totalLeads || 0}</b> | Booking: <b>{c.totalBooking || 0}</b></div>
               <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 12 }}>CPL: <b>{formatVND(c.cpLead)}</b></div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {!p.isLegacy && <button
                   onClick={() => syncOne(p.id)}
                   disabled={!!syncingId}
-                  style={{ ...btnPrimary, flex: 1, fontSize: 12, opacity: syncingId ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
+                  style={{ ...btnPrimary, flex: 1, minWidth: 88, fontSize: 12, opacity: syncingId ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
                 >
                   {isSyncing && <span style={{ display: "inline-block", width: 12, height: 12, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />}
                   {isSyncing ? "Đồng bộ..." : <><RefreshCw size={14} /> Sync</>}
                 </button>}
-                {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>}
-                {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>}
+                {isAdminOnly && !p.isLegacy && (
+                  <button
+                    onClick={() => setInventoryProject(p)}
+                    style={{ ...btnSecondary, flex: 1, minWidth: 96, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, color: "#6d28d9", borderColor: "#ddd6fe", background: "#f5f3ff" }}
+                  >
+                    <Layers size={12} /> Giỏ hàng
+                  </button>
+                )}
+                {isAdminOnly && <button onClick={() => openEditProject(p)} style={{ ...btnSecondary, flex: 1, minWidth: 72, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Pencil size={12} /> Sửa</button>}
+                {isAdminOnly && <button onClick={() => deleteProject(p.id)} style={{ ...btnDanger, flex: 1, minWidth: 72, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}><Trash2 size={12} /> Xóa</button>}
               </div>
             </div>
           );

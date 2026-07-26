@@ -43,7 +43,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-25-sec-harden-v1";
+const BUILD_VERSION = "2026-07-26-inventory-v1";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -527,7 +527,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 40; // Bump this when adding new DDL/migrations
+const DB_VERSION = 41; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1274,6 +1274,51 @@ async function initDb() {
         PRIMARY KEY (lead_id, user_id)
       )`);
     } catch (_) {}
+  }
+  if (dbVersion < 41) {
+    console.log("[DB] v41 migration: inventory_sources + inventory_units (giỏ hàng theo dự án)");
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS inventory_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        code TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        sheet_url TEXT NOT NULL DEFAULT '',
+        last_sync_at TEXT DEFAULT '',
+        last_sync_count INTEGER DEFAULT 0,
+        last_sync_error TEXT DEFAULT '',
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT (datetime('now'))
+      )`);
+    } catch (_) {}
+    try {
+      await run(db, `CREATE TABLE IF NOT EXISTS inventory_units (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        source_id INTEGER NOT NULL,
+        source_code TEXT NOT NULL DEFAULT '',
+        unit_code TEXT NOT NULL DEFAULT '',
+        building TEXT DEFAULT '',
+        floor TEXT DEFAULT '',
+        unit_no TEXT DEFAULT '',
+        unit_type TEXT DEFAULT '',
+        layout TEXT DEFAULT '',
+        direction TEXT DEFAULT '',
+        view_text TEXT DEFAULT '',
+        area_net REAL DEFAULT 0,
+        area_gross REAL DEFAULT 0,
+        price REAL DEFAULT 0,
+        price_label TEXT DEFAULT '',
+        drive_url TEXT DEFAULT '',
+        status TEXT DEFAULT '',
+        raw_json TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        UNIQUE(project_id, source_id, unit_code)
+      )`);
+    } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_units_project ON inventory_units(project_id)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_units_code ON inventory_units(unit_code)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_sources_project ON inventory_sources(project_id)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -2115,10 +2160,24 @@ function sanitizeSheetUrl(raw) {
   let url = String(raw).trim();
   // decode HTML entities
   url = url.replace(/&amp;/g, "&");
+
+  // Link /edit hoặc /d/{id} thường → export CSV (không cần Publish to web nếu sheet public/link)
+  const sheetIdMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i);
+  const isEditOrBare = sheetIdMatch && (
+    /\/edit\b/i.test(url) ||
+    /\/view\b/i.test(url) ||
+    (!/\/pub\b/i.test(url) && !/\/export\b/i.test(url) && !/gviz\/tq/i.test(url))
+  );
+  if (isEditOrBare) {
+    const gidMatch = url.match(/[?#&]gid=([0-9]+)/i);
+    const gid = gidMatch ? gidMatch[1] : "0";
+    return `https://docs.google.com/spreadsheets/d/${sheetIdMatch[1]}/export?format=csv&gid=${gid}`;
+  }
+
   // convert /pubhtml → /pub
   url = url.replace(/\/pubhtml\b/, "/pub");
-  // convert /edit urls → /pub
-  url = url.replace(/\/edit(#.*)?$/, "/pub");
+  // convert /edit urls → /pub (fallback nếu còn sót)
+  url = url.replace(/\/edit(#.*)?([?].*)?$/, "/pub$2");
   // strip widget / headers params
   url = url.replace(/[?&]widget=[^&]*/g, "").replace(/[?&]headers=[^&]*/g, "");
   // make sure output=csv is present (only when it's a Google Sheets pub URL)
@@ -2132,6 +2191,186 @@ function sanitizeSheetUrl(raw) {
   // fix double ? or dangling &
   url = url.replace(/\?&/, "?").replace(/&&+/g, "&");
   return url;
+}
+
+/* ---------- Giỏ hàng (inventory) — sheet theo đại lý / dự án ---------- */
+function normalizeInventoryHeader(h = "") {
+  return String(h || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function pickInventoryCol(headers, ...needles) {
+  const normalized = headers.map((h) => ({ raw: h, n: normalizeInventoryHeader(h) }));
+  // 1) exact
+  for (const needle of needles) {
+    const n = normalizeInventoryHeader(needle);
+    const hit = normalized.find((h) => h.n === n);
+    if (hit) return hit.raw;
+  }
+  // 2) whole-token / starts-with (tránh "can" khớp "ma can")
+  for (const needle of needles) {
+    const n = normalizeInventoryHeader(needle);
+    const hit = normalized.find((h) => {
+      if (h.n.startsWith(n + " ") || h.n.endsWith(" " + n)) return true;
+      const parts = h.n.split(" ");
+      return parts.includes(n);
+    });
+    if (hit) return hit.raw;
+  }
+  return null;
+}
+
+function parseInventoryPrice(raw) {
+  if (raw == null) return 0;
+  const s = String(raw).replace(/[^\d.,]/g, "").trim();
+  if (!s) return 0;
+  if (s.includes(".") && s.includes(",")) {
+    return Number(s.replace(/\./g, "").replace(",", ".")) || 0;
+  }
+  if ((s.match(/\./g) || []).length > 1) return Number(s.replace(/\./g, "")) || 0;
+  if ((s.match(/,/g) || []).length > 1) return Number(s.replace(/,/g, "")) || 0;
+  return Number(s.replace(/,/g, "")) || 0;
+}
+
+function mapInventoryRow(row, headers) {
+  const getL = (...needles) => {
+    const key = pickInventoryCol(headers, ...needles);
+    if (!key) return "";
+    const v = row[key] ?? row[String(key).toLowerCase()] ?? "";
+    return String(v).trim();
+  };
+
+  const unitCode = getL("ma can", "macan", "unit code", "unitcode");
+  if (!unitCode) return null;
+
+  const priceCandidates = [
+    getL("tong gia bao gom vat kpbt", "tong gia", "gia ban", "gia gom vat", "gia vat", "price"),
+    getL("gia ke ca kpbt", "kpbt"),
+    getL("gia vay"),
+    getL("gia thanh toan som", "thanh toan som"),
+  ].filter(Boolean);
+  let price = 0;
+  let priceLabel = "";
+  for (const p of priceCandidates) {
+    const n = parseInventoryPrice(p);
+    if (n > price) { price = n; priceLabel = p; }
+  }
+
+  let driveUrl = getL("link ptg ve can", "link ptg", "link drive", "drive", "ptg");
+  if (driveUrl && !/^https?:\/\//i.test(driveUrl)) {
+    if (/drive\.google|docs\.google/i.test(driveUrl)) driveUrl = "https://" + driveUrl.replace(/^\/+/, "");
+    else driveUrl = "";
+  }
+
+  return {
+    unitCode,
+    building: getL("toa", "building", "block"),
+    floor: getL("tang", "floor"),
+    unitNo: getL("can"),
+    unitType: getL("loai hinh"),
+    layout: getL("loai can", "layout"),
+    direction: getL("huong", "direction"),
+    viewText: getL("view"),
+    areaNet: parseInventoryPrice(getL("dt thong thuy", "thong thuy", "net")),
+    areaGross: parseInventoryPrice(getL("dt tim tuong", "tim tuong", "gross")),
+    price,
+    priceLabel,
+    driveUrl,
+    status: getL("trang thai", "status", "tinh trang"),
+  };
+}
+
+async function syncInventorySource(db, sourceId) {
+  const source = await get(db, "SELECT * FROM inventory_sources WHERE id = ?", [sourceId]);
+  if (!source) throw new Error("Nguồn giỏ hàng không tồn tại");
+  const sheetUrl = sanitizeSheetUrl(source.sheet_url);
+  if (!sheetUrl) throw new Error("Thiếu link Google Sheet");
+
+  const fetchUrl = sheetUrl.includes("?")
+    ? `${sheetUrl}&crm_inv_ts=${Date.now()}`
+    : `${sheetUrl}?crm_inv_ts=${Date.now()}`;
+  const raw = await fetchCsvText(fetchUrl, { timeoutMs: 45000, retries: 1 });
+  let csvText = raw;
+  const firstLine = raw.split(/\r?\n/)[0] || "";
+  if (!firstLine.includes(",")) csvText = raw.split(/\r?\n/).slice(1).join("\n");
+
+  const { headers, rawHeaders, rows } = parseCSV(csvText);
+  const headerList = (rawHeaders && rawHeaders.length ? rawHeaders : headers) || [];
+  // rows keys are lowercased headers from parseCSV
+  const lowerHeaders = headers;
+
+  const mapped = [];
+  for (const row of rows) {
+    const m = mapInventoryRow(row, lowerHeaders);
+    if (m) mapped.push(m);
+  }
+  if (!mapped.length) {
+    throw new Error("Không đọc được căn nào — kiểm tra sheet đã Publish CSV và có cột Mã căn");
+  }
+
+  const nowStr = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
+  await run(db, "DELETE FROM inventory_units WHERE source_id = ?", [sourceId]);
+
+  // Batch insert
+  const stmts = mapped.map((u) => ({
+    sql: `INSERT INTO inventory_units(
+      project_id, source_id, source_code, unit_code, building, floor, unit_no,
+      unit_type, layout, direction, view_text, area_net, area_gross,
+      price, price_label, drive_url, status, raw_json, updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    args: [
+      source.project_id, sourceId, source.code || "", u.unitCode, u.building, u.floor, u.unitNo,
+      u.unitType, u.layout, u.direction, u.viewText, u.areaNet, u.areaGross,
+      u.price, u.priceLabel, u.driveUrl, u.status, "", nowStr,
+    ],
+  }));
+  // libsql batch in chunks
+  const chunk = 80;
+  for (let i = 0; i < stmts.length; i += chunk) {
+    await db.batch(stmts.slice(i, i + chunk), "write");
+  }
+
+  await run(db,
+    "UPDATE inventory_sources SET last_sync_at = ?, last_sync_count = ?, last_sync_error = '' WHERE id = ?",
+    [nowStr, mapped.length, sourceId]
+  );
+  return { ok: true, count: mapped.length, sourceId, projectId: source.project_id, code: source.code };
+}
+
+function mapInventoryUnitRow(u) {
+  return {
+    id: u.id,
+    projectId: u.project_id,
+    sourceId: u.source_id,
+    source: u.source_code || "",
+    unitCode: u.unit_code || "",
+    building: u.building || "",
+    floor: u.floor || "",
+    unitNo: u.unit_no || "",
+    unitType: u.unit_type || "",
+    layout: u.layout || "",
+    direction: u.direction || "",
+    view: u.view_text || "",
+    areaNet: u.area_net || 0,
+    areaGross: u.area_gross || 0,
+    price: u.price || 0,
+    priceLabel: u.price_label || "",
+    driveUrl: u.drive_url || "",
+    status: u.status || "",
+    updatedAt: u.updated_at || "",
+  };
+}
+
+async function assertUserCanAccessProject(user, projectId) {
+  const pid = Number(projectId);
+  if (!pid) return false;
+  if (user.role === "admin") return true;
+  const pids = await getUserProjectIds(user.userId);
+  return pids.includes(pid);
 }
 
 async function replaceProjectData(db, projectId, leads, campaigns) {
@@ -7762,9 +8001,235 @@ app.delete("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) 
     await run(db, "DELETE FROM lead_history WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)", [id]);
     await run(db, "DELETE FROM leads WHERE project_id = ?", [id]);
     await run(db, "DELETE FROM campaigns WHERE project_id = ?", [id]);
+    try {
+      await run(db, "DELETE FROM inventory_units WHERE project_id = ?", [id]);
+      await run(db, "DELETE FROM inventory_sources WHERE project_id = ?", [id]);
+    } catch (_) {}
     await run(db, "DELETE FROM projects WHERE id = ?", [id]);
     const data = await readData(db);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ---------- Inventory (giỏ hàng theo dự án / đại lý) ---------- */
+app.get("/api/projects/:id/inventory-sources", requireAuth, async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    if (req.user.role !== "admin") {
+      const ok = await assertUserCanAccessProject(req.user, projectId);
+      if (!ok) return res.status(403).json({ error: "Không có quyền dự án này" });
+    }
+    const rows = await all(db,
+      `SELECT s.*, (SELECT COUNT(*) FROM inventory_units u WHERE u.source_id = s.id) as unit_count
+       FROM inventory_sources s WHERE s.project_id = ? ORDER BY s.id ASC`,
+      [projectId]
+    );
+    res.json(rows.map((s) => ({
+      id: s.id,
+      projectId: s.project_id,
+      code: s.code || "",
+      name: s.name || "",
+      sheetUrl: req.user.role === "sale" ? "" : (s.sheet_url || ""),
+      lastSyncAt: s.last_sync_at || "",
+      lastSyncCount: s.last_sync_count || 0,
+      lastSyncError: s.last_sync_error || "",
+      isActive: !!s.is_active,
+      unitCount: s.unit_count || 0,
+      createdAt: s.created_at || "",
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/projects/:id/inventory-sources", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    const proj = await get(db, "SELECT id, name FROM projects WHERE id = ?", [projectId]);
+    if (!proj) return res.status(404).json({ error: "Dự án không tồn tại" });
+    const code = String(req.body?.code || "").trim().toUpperCase();
+    const name = String(req.body?.name || "").trim() || code;
+    const sheetUrl = sanitizeSheetUrl(req.body?.sheetUrl || req.body?.sheet_url || "");
+    if (!code) return res.status(400).json({ error: "Cần mã nguồn (VD: STH, IQI, LUX)" });
+    if (!sheetUrl) return res.status(400).json({ error: "Cần link Google Sheet (Publish CSV)" });
+    const result = await run(db,
+      "INSERT INTO inventory_sources(project_id, code, name, sheet_url, is_active) VALUES(?, ?, ?, ?, 1)",
+      [projectId, code, name, sheetUrl]
+    );
+    const id = result.lastID || result.lastInsertRowid || result.lastInsertRowId;
+    // Auto sync lần đầu
+    let sync = null;
+    try { sync = await syncInventorySource(db, id); }
+    catch (e) {
+      await run(db, "UPDATE inventory_sources SET last_sync_error = ? WHERE id = ?", [e.message || String(e), id]);
+      sync = { ok: false, error: e.message };
+    }
+    const rows = await all(db, "SELECT * FROM inventory_sources WHERE project_id = ? ORDER BY id", [projectId]);
+    res.json({
+      ok: true,
+      sync,
+      sources: rows.map((s) => ({
+        id: s.id, projectId: s.project_id, code: s.code, name: s.name, sheetUrl: s.sheet_url,
+        lastSyncAt: s.last_sync_at, lastSyncCount: s.last_sync_count, lastSyncError: s.last_sync_error,
+        isActive: !!s.is_active,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/inventory-sources/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const src = await get(db, "SELECT * FROM inventory_sources WHERE id = ?", [id]);
+    if (!src) return res.status(404).json({ error: "Không tìm thấy nguồn" });
+    const code = req.body?.code != null ? String(req.body.code).trim().toUpperCase() : src.code;
+    const name = req.body?.name != null ? String(req.body.name).trim() : src.name;
+    const sheetUrl = req.body?.sheetUrl != null || req.body?.sheet_url != null
+      ? sanitizeSheetUrl(req.body.sheetUrl || req.body.sheet_url)
+      : src.sheet_url;
+    const isActive = req.body?.isActive != null ? (req.body.isActive ? 1 : 0) : src.is_active;
+    await run(db,
+      "UPDATE inventory_sources SET code = ?, name = ?, sheet_url = ?, is_active = ? WHERE id = ?",
+      [code, name || code, sheetUrl, isActive, id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/inventory-sources/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    await run(db, "DELETE FROM inventory_units WHERE source_id = ?", [id]);
+    await run(db, "DELETE FROM inventory_sources WHERE id = ?", [id]);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/inventory-sources/:id/sync", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const result = await syncInventorySource(db, id);
+    res.json(result);
+  } catch (err) {
+    try {
+      await run(db, "UPDATE inventory_sources SET last_sync_error = ? WHERE id = ?", [err.message || String(err), Number(req.params.id)]);
+    } catch (_) {}
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/projects/:id/inventory/sync-all", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    const sources = await all(db, "SELECT id FROM inventory_sources WHERE project_id = ? AND is_active = 1", [projectId]);
+    const results = [];
+    for (const s of sources) {
+      try {
+        results.push(await syncInventorySource(db, s.id));
+      } catch (e) {
+        await run(db, "UPDATE inventory_sources SET last_sync_error = ? WHERE id = ?", [e.message || String(e), s.id]);
+        results.push({ ok: false, sourceId: s.id, error: e.message });
+      }
+    }
+    res.json({ ok: true, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/inventory/search", requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    const projectId = req.query.projectId && req.query.projectId !== "all" ? Number(req.query.projectId) : 0;
+    const sourceCode = String(req.query.source || "").trim().toUpperCase();
+    const layout = String(req.query.layout || req.query.type || "").trim();
+    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit, 10) || 20));
+
+    let allowedPids = null;
+    if (req.user.role === "manager" || req.user.role === "sale") {
+      allowedPids = await getUserProjectIds(req.user.userId);
+      if (!allowedPids.length) return res.json({ units: [], total: 0 });
+    }
+
+    const where = ["1=1"];
+    const params = [];
+    if (projectId) {
+      if (allowedPids && !allowedPids.includes(projectId)) return res.status(403).json({ error: "Không có quyền dự án" });
+      where.push("u.project_id = ?");
+      params.push(projectId);
+    } else if (allowedPids) {
+      where.push(`u.project_id IN (${allowedPids.map(() => "?").join(",")})`);
+      params.push(...allowedPids);
+    }
+    if (sourceCode) { where.push("UPPER(u.source_code) = ?"); params.push(sourceCode); }
+    if (layout) { where.push("(u.layout LIKE ? OR u.unit_type LIKE ?)"); params.push(`%${layout}%`, `%${layout}%`); }
+
+    if (q) {
+      const tokens = [];
+      const codeMatches = q.match(/\b[A-Za-z]{1,4}\d{2,6}[A-Za-z]?\b/g) || [];
+      tokens.push(...codeMatches.map((t) => t.toLowerCase()));
+      const stop = new Set(["gia", "giá", "can", "căn", "cua", "của", "cho", "xem", "tim", "tìm", "bao", "nhieu", "nhiều", "la", "là"]);
+      for (const w of q.toLowerCase().split(/[\s,.;:!?/\\-]+/).filter(Boolean)) {
+        if (w.length >= 2 && !stop.has(w)) tokens.push(w);
+      }
+      const uniq = [...new Set(tokens)];
+      if (uniq.length) {
+        const ors = uniq.map(() => "(LOWER(u.unit_code) LIKE ? OR LOWER(u.building) LIKE ? OR LOWER(u.layout) LIKE ? OR LOWER(u.direction) LIKE ? OR LOWER(u.view_text) LIKE ? OR LOWER(u.source_code) LIKE ?)").join(" OR ");
+        where.push(`(${ors})`);
+        for (const t of uniq) {
+          const like = `%${t}%`;
+          params.push(like, like, like, like, like, like);
+        }
+      }
+    }
+
+    const sql = `SELECT u.*, p.name as project_name FROM inventory_units u
+      LEFT JOIN projects p ON p.id = u.project_id
+      WHERE ${where.join(" AND ")}
+      ORDER BY u.price ASC, u.unit_code ASC
+      LIMIT ?`;
+    params.push(limit);
+    const rows = await all(db, sql, params);
+    res.json({
+      total: rows.length,
+      units: rows.map((u) => ({ ...mapInventoryUnitRow(u), projectName: u.project_name || "" })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/inventory/summary", requireAuth, async (req, res) => {
+  try {
+    let allowedPids = null;
+    if (req.user.role === "manager" || req.user.role === "sale") {
+      allowedPids = await getUserProjectIds(req.user.userId);
+      if (!allowedPids.length) return res.json({ projects: [] });
+    }
+    let sql = `SELECT p.id, p.name,
+        (SELECT COUNT(*) FROM inventory_sources s WHERE s.project_id = p.id AND s.is_active = 1) as source_count,
+        (SELECT COUNT(*) FROM inventory_units u WHERE u.project_id = p.id) as unit_count
+      FROM projects p WHERE 1=1`;
+    const params = [];
+    if (allowedPids) {
+      sql += ` AND p.id IN (${allowedPids.map(() => "?").join(",")})`;
+      params.push(...allowedPids);
+    }
+    sql += " ORDER BY p.name ASC";
+    const rows = await all(db, sql, params);
+    res.json({
+      projects: rows
+        .filter((r) => (r.unit_count || 0) > 0 || (r.source_count || 0) > 0)
+        .map((r) => ({ id: r.id, name: r.name, sourceCount: r.source_count || 0, unitCount: r.unit_count || 0 })),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
