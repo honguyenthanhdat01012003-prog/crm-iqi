@@ -8999,7 +8999,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} acknowledgeLeadReceive={acknowledgeLeadReceive} ackingLeadIds={ackingLeadIds} />
                   </div>
                 )}
               </div>
@@ -9175,7 +9175,7 @@ function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, c
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [] }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [], acknowledgeLeadReceive, ackingLeadIds }) {
   const isSale = user.role === "sale";
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -9692,6 +9692,40 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   return (
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
+      {/* Ack lead banner — sale can confirm lead receipt to pause SLA recall */}
+      {isSale && lead.saleName && lead.assignedAt && lead.distributionKind !== "scheduled" && lead.distributionKind !== "sla_shuffle" && (() => {
+        const ackedAt = String(lead.instantSlaAcceptedAt || "").trim();
+        if (ackedAt) {
+          return (
+            <div style={{ marginBottom: 10, padding: "10px 14px", background: "#ecfeff", borderRadius: 10, border: "1px solid #a5f3fc", fontSize: 13, color: "#0e7490", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+              <span><strong>Đã nhận lead</strong> · {ackedAt}</span>
+            </div>
+          );
+        }
+        const sla = getInstantSlaInfo(lead);
+        if (!sla) return null;
+        const isAcking = ackingLeadIds?.has(lead.id);
+        const bg = sla.level === "overdue" ? "#fef2f2" : sla.level === "urgent" ? "#fff7ed" : "#f0fdf4";
+        const border = sla.level === "overdue" ? "#fecaca" : sla.level === "urgent" ? "#fed7aa" : "#bbf7d0";
+        const color = sla.level === "overdue" ? "#b91c1c" : sla.level === "urgent" ? "#c2410c" : "#15803d";
+        return (
+          <div style={{ marginBottom: 10, padding: "10px 14px", background: bg, borderRadius: 10, border: `1px solid ${border}`, fontSize: 13, color, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <Zap size={16} style={{ flexShrink: 0 }} />
+            <span><strong>{sla.text}</strong></span>
+            {acknowledgeLeadReceive && (
+              <button
+                type="button"
+                disabled={isAcking}
+                onClick={(e) => { e.stopPropagation(); acknowledgeLeadReceive(lead); }}
+                style={{ marginLeft: "auto", border: "1px solid #67e8f9", background: isAcking ? "#cffafe" : "#ecfeff", color: "#0e7490", borderRadius: 999, fontSize: 12, fontWeight: 700, padding: "6px 14px", cursor: isAcking ? "not-allowed" : "pointer", opacity: isAcking ? 0.7 : 1 }}
+              >
+                {isAcking ? "Đang xác nhận..." : "✅ Đã nhận lead"}
+              </button>
+            )}
+          </div>
+        );
+      })()}
       <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: layoutCompact ? 8 : 16, marginBottom: layoutCompact ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
         <div style={detailCellStyle}>
