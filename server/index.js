@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-26-inventory-sync-v2";
+const BUILD_VERSION = "2026-07-29-sync-race-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2505,22 +2505,58 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
     if (prev) {
       updatedLeads++;
+      // Protect CRM-assigned fields from being overwritten by sync if admin
+      // changed them AFTER our snapshot (race condition: admin assigns sale during sync).
+      // sale_name, sale_id, status, raw_status, assigned_at, distribution_kind are protected.
       stmts.push({
         sql: `UPDATE leads SET
           name = ?, phone = ?, ads_id = ?, campaign = ?, campaign_id = NULL,
           adset_name = ?, ad_name = ?, form_name = ?, product = ?,
-          raw_status = ?, status = ?, created_at = ?, inbox_url = ?, customer_fb_url = ?,
-          phone2 = ?, phone3 = ?, admin_note = ?,
-          is_hot = ?, sale_id = ?, sale_name = ?, manager_name = ?, source = ?, budget = ?,
-          sync_at = ?, notes = ?, deal_value = ?, is_locked = ?
+          raw_status = CASE
+            WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
+            THEN raw_status ELSE ? END,
+          status = CASE
+            WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
+            THEN status ELSE ? END,
+          created_at = ?, inbox_url = ?,
+          customer_fb_url = CASE WHEN TRIM(COALESCE(customer_fb_url,'')) != '' AND ? = '' THEN customer_fb_url ELSE ? END,
+          phone2 = CASE WHEN TRIM(COALESCE(phone2,'')) != '' AND ? = '' THEN phone2 ELSE ? END,
+          phone3 = CASE WHEN TRIM(COALESCE(phone3,'')) != '' AND ? = '' THEN phone3 ELSE ? END,
+          admin_note = CASE WHEN TRIM(COALESCE(admin_note,'')) != '' AND ? = '' THEN admin_note ELSE ? END,
+          is_hot = ?,
+          sale_id = CASE
+            WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
+            THEN sale_id ELSE ? END,
+          sale_name = CASE
+            WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
+            THEN sale_name ELSE ? END,
+          manager_name = CASE WHEN TRIM(COALESCE(manager_name,'')) != '' AND ? = '' THEN manager_name ELSE ? END,
+          source = ?, budget = ?,
+          sync_at = ?,
+          notes = CASE WHEN TRIM(COALESCE(notes,'')) != '' AND ? = '' THEN notes ELSE ? END,
+          deal_value = CASE WHEN deal_value > 0 AND ? = 0 THEN deal_value ELSE ? END,
+          is_locked = CASE WHEN is_locked = 1 AND ? = 0 THEN is_locked ELSE ? END
           WHERE id = ?`,
         args: [
           l.name, l.phone, lAdsId || "", l.campaign,
           l.adsetName || "-", l.adName || "-", l.formName || "-", l.product,
-          rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
-          phone2, phone3, adminNote,
-          isHot, saleId, saleName, managerName, l.source, l.budget,
-          l.syncAt, notes, dealValue, isLockedVal, prev.id,
+          prev.sale_name || "", rawStatus,
+          prev.sale_name || "", status,
+          l.createdAt, l.inboxUrl,
+          customerFbUrl, customerFbUrl,
+          phone2, phone2,
+          phone3, phone3,
+          adminNote, adminNote,
+          isHot,
+          prev.sale_name || "", saleId,
+          prev.sale_name || "", saleName,
+          managerName, managerName,
+          l.source, l.budget,
+          l.syncAt,
+          notes, notes,
+          dealValue, dealValue,
+          isLockedVal, isLockedVal,
+          prev.id,
         ],
       });
     } else {
