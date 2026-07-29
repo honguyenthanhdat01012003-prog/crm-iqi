@@ -834,7 +834,15 @@ function CRMApp({ user, updateUser, onLogout }) {
   // Project modal state
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState(null);
-  const [draftProject, setDraftProject] = useState({ name: "", leadUrl: "", costUrl: "", dailyReportEnabled: false });
+  const [projectTeams, setProjectTeams] = useState([]);
+  const [draftProject, setDraftProject] = useState({
+    name: "",
+    leadUrl: "",
+    costUrl: "",
+    dailyReportEnabled: false,
+    distributionMode: "log",
+    teamIdsOrdered: [],
+  });
 
   // Legacy import modal state
   const [showLegacyModal, setShowLegacyModal] = useState(false);
@@ -2277,21 +2285,51 @@ function CRMApp({ user, updateUser, onLogout }) {
   // --- Project CRUD ---
   const openNewProject = () => {
     setEditingProject(null);
-    setDraftProject({ name: "", leadUrl: "", costUrl: "", fbCode: "", fbPerson: "", dailyReportEnabled: false });
+    setDraftProject({
+      name: "",
+      leadUrl: "",
+      costUrl: "",
+      fbCode: "",
+      fbPerson: "",
+      dailyReportEnabled: false,
+      distributionMode: "log",
+      teamIdsOrdered: [],
+    });
     setShowProjectModal(true);
   };
 
   const openEditProject = (p) => {
     setEditingProject(p);
-    setDraftProject({ name: p.name, leadUrl: p.leadUrl || "", costUrl: p.costUrl || "", fbCode: p.fbCode || "", fbPerson: p.fbPerson || "", dailyReportEnabled: !!p.dailyReportEnabled });
+    setDraftProject({
+      name: p.name,
+      leadUrl: p.leadUrl || "",
+      costUrl: p.costUrl || "",
+      fbCode: p.fbCode || "",
+      fbPerson: p.fbPerson || "",
+      dailyReportEnabled: !!p.dailyReportEnabled,
+      distributionMode: p.distributionMode || "log",
+      teamIdsOrdered: Array.isArray(p.teamIdsOrdered) ? p.teamIdsOrdered : [],
+    });
     setShowProjectModal(true);
   };
 
   const [savingProject, setSavingProject] = useState(false);
   const [projectProgress, setProjectProgress] = useState("");
 
+  useEffect(() => {
+    if (!showProjectModal || user.role !== "admin") return;
+    apiFetch(`${API}/teams`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setProjectTeams(Array.isArray(d) ? d : []))
+      .catch(() => setProjectTeams([]));
+  }, [showProjectModal, user.role]);
+
   const saveProject = async () => {
     if (savingProject) return;
+    if ((draftProject.distributionMode || "log") === "race" && (!Array.isArray(draftProject.teamIdsOrdered) || !draftProject.teamIdsOrdered.length)) {
+      showToast("Chế độ Điều hướng race cần chọn ít nhất 1 team", "warning");
+      return;
+    }
     setSavingProject(true);
     setProjectProgress("Đang lưu dự án...");
     const body = draftProject;
@@ -3206,6 +3244,105 @@ function CRMApp({ user, updateUser, onLogout }) {
           <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8, lineHeight: 1.5 }}>
             💡 Mã dự án dùng để phân loại chiến dịch FB Ads. VD: nếu mã là "CT4", chiến dịch có chứa "CT4" trong tên sẽ tự động gán vào dự án này.
           </div>
+          <label style={labelStyle}>Hướng chia lead</label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+            <button
+              type="button"
+              onClick={() => setDraftProject((prev) => ({ ...prev, distributionMode: "log" }))}
+              style={{
+                border: "1px solid #d9e2dc",
+                borderRadius: 10,
+                padding: "10px 12px",
+                background: (draftProject.distributionMode || "log") === "log" ? "#ecfdf3" : "#fff",
+                color: "#0f3d1e",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              Chia lead log
+              <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>Quy trình hiện tại: quản lý nhận rồi tự chia sale.</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDraftProject((prev) => ({ ...prev, distributionMode: "race" }))}
+              style={{
+                border: "1px solid #d9e2dc",
+                borderRadius: 10,
+                padding: "10px 12px",
+                background: (draftProject.distributionMode || "log") === "race" ? "#eff6ff" : "#fff",
+                color: "#1d4ed8",
+                fontSize: 12,
+                fontWeight: 800,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              Điều hướng race
+              <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>Manager race 5p → team RR 10p → chưa chia nếu hết vòng.</div>
+            </button>
+          </div>
+          {(draftProject.distributionMode || "log") === "race" && (
+            <div style={{ border: "1px solid #dbeafe", borderRadius: 10, padding: 10, marginBottom: 10, background: "#f8fbff" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#1d4ed8", marginBottom: 8 }}>Team tham gia luân chuyển</div>
+              {projectTeams.length === 0 ? (
+                <div style={{ fontSize: 11, color: "#b45309" }}>Chưa có team. Tạo team ở mục Quản lý tài khoản trước.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {projectTeams.map((t) => {
+                    const selected = (draftProject.teamIdsOrdered || []).includes(t.id);
+                    return (
+                      <div key={t.id} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 6, alignItems: "center", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 8px", background: selected ? "#eef6ff" : "#fff" }}>
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={(e) => {
+                            const current = Array.isArray(draftProject.teamIdsOrdered) ? draftProject.teamIdsOrdered : [];
+                            if (e.target.checked) {
+                              setDraftProject((prev) => ({ ...prev, teamIdsOrdered: [...current, t.id] }));
+                            } else {
+                              setDraftProject((prev) => ({ ...prev, teamIdsOrdered: current.filter((id) => id !== t.id) }));
+                            }
+                          }}
+                        />
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{t.name} {t.leaderName ? `· leader ${t.leaderName}` : ""}</div>
+                        <button
+                          type="button"
+                          disabled={!selected}
+                          onClick={() => {
+                            const cur = [...(draftProject.teamIdsOrdered || [])];
+                            const idx = cur.indexOf(t.id);
+                            if (idx > 0) {
+                              [cur[idx - 1], cur[idx]] = [cur[idx], cur[idx - 1]];
+                              setDraftProject((prev) => ({ ...prev, teamIdsOrdered: cur }));
+                            }
+                          }}
+                          style={{ border: "1px solid #dbeafe", borderRadius: 6, background: "#fff", color: "#1d4ed8", fontSize: 11, fontWeight: 700, padding: "2px 6px", opacity: selected ? 1 : 0.4 }}
+                        >↑</button>
+                        <button
+                          type="button"
+                          disabled={!selected}
+                          onClick={() => {
+                            const cur = [...(draftProject.teamIdsOrdered || [])];
+                            const idx = cur.indexOf(t.id);
+                            if (idx >= 0 && idx < cur.length - 1) {
+                              [cur[idx], cur[idx + 1]] = [cur[idx + 1], cur[idx]];
+                              setDraftProject((prev) => ({ ...prev, teamIdsOrdered: cur }));
+                            }
+                          }}
+                          style={{ border: "1px solid #dbeafe", borderRadius: 6, background: "#fff", color: "#1d4ed8", fontSize: 11, fontWeight: 700, padding: "2px 6px", opacity: selected ? 1 : 0.4 }}
+                        >↓</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: 8 }}>
+                Thứ tự hiện tại: {(draftProject.teamIdsOrdered || []).map((id) => projectTeams.find((t) => t.id === id)?.name || `Team#${id}`).join(" → ") || "Chưa chọn"}
+              </div>
+            </div>
+          )}
           <label style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginTop: 10 }}>
             <span>
               Báo cáo Telegram hằng ngày
@@ -5172,6 +5309,31 @@ const LeadsPage = (props) => {
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
   const [ackingLeadIds, setAckingLeadIds] = useState(new Set());
+  const [claimingRaceLeadIds, setClaimingRaceLeadIds] = useState(new Set());
+
+  const claimRaceLead = async (lead) => {
+    if (!lead?.id || claimingRaceLeadIds.has(lead.id)) return;
+    setClaimingRaceLeadIds((prev) => new Set(prev).add(lead.id));
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}/race-claim`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showToast(d.error || "Nhận lead thất bại", "error");
+        return;
+      }
+      if (d.updatedLead) applyApiData(d, { suppressNotifications: true });
+      if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
+      showToast("Đã nhận lead thành công", "success");
+    } catch (e) {
+      showToast("Lỗi kết nối: " + (e.message || e), "error");
+    } finally {
+      setClaimingRaceLeadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(lead.id);
+        return next;
+      });
+    }
+  };
 
   const acknowledgeLeadReceive = async (lead) => {
     if (!lead?.id || ackingLeadIds.has(lead.id)) return;
@@ -8919,6 +9081,32 @@ const LeadsPage = (props) => {
                         </div>
                       );
                     })()}
+                    {(() => {
+                      const stage = String(l.raceStage || "").trim();
+                      const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
+                      const canTeamClaim = user.role === "sale" && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
+                      if (!canManagerClaim && !canTeamClaim) return null;
+                      const isClaiming = claimingRaceLeadIds.has(l.id);
+                      const deadline = l.raceDeadlineAt ? parseLeadDate(l.raceDeadlineAt) : null;
+                      const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+                      const mins = Math.floor(remainMs / 60000);
+                      const secs = Math.floor((remainMs % 60000) / 1000);
+                      const roleLabel = canManagerClaim ? "Quản lý" : "Team";
+                      return (
+                        <div style={{ marginTop: 4, padding: "4px 8px", background: "#ecfeff", borderRadius: 6, border: "1px solid #67e8f9", fontSize: 11, color: "#0e7490", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <Shield size={11} style={{ flexShrink: 0 }} />
+                          <span><strong>{roleLabel} nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
+                          <button
+                            type="button"
+                            disabled={isClaiming}
+                            onClick={(e) => { e.stopPropagation(); claimRaceLead(l); }}
+                            style={{ border: "1px solid #67e8f9", background: isClaiming ? "#cffafe" : "#ffffff", color: "#0e7490", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
+                          >
+                            {isClaiming ? "Đang nhận..." : "Nhận lead"}
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {(isSale || isAdmin) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
                       const ackedAt = String(l.instantSlaAcceptedAt || "").trim();
                       if (ackedAt) {
@@ -9009,7 +9197,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} acknowledgeLeadReceive={acknowledgeLeadReceive} ackingLeadIds={ackingLeadIds} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} acknowledgeLeadReceive={acknowledgeLeadReceive} ackingLeadIds={ackingLeadIds} claimRaceLead={claimRaceLead} claimingRaceLeadIds={claimingRaceLeadIds} />
                   </div>
                 )}
               </div>
@@ -9185,7 +9373,7 @@ function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, c
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [], acknowledgeLeadReceive, ackingLeadIds }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [], acknowledgeLeadReceive, ackingLeadIds, claimRaceLead, claimingRaceLeadIds }) {
   const isSale = user.role === "sale";
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -9702,6 +9890,33 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   return (
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
+      {(() => {
+        const stage = String(lead.raceStage || "").trim();
+        const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
+        const canTeamClaim = user.role === "sale" && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+        if (!canManagerClaim && !canTeamClaim) return null;
+        const isClaiming = claimingRaceLeadIds?.has(lead.id);
+        const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
+        const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+        const mins = Math.floor(remainMs / 60000);
+        const secs = Math.floor((remainMs % 60000) / 1000);
+        return (
+          <div style={{ marginBottom: 10, padding: "10px 14px", background: "#eff6ff", borderRadius: 10, border: "1px solid #93c5fd", fontSize: 13, color: "#1d4ed8", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <Shield size={16} style={{ flexShrink: 0 }} />
+            <span><strong>{canManagerClaim ? "Quản lý nhận lead" : "Team nhận lead"}</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
+            {claimRaceLead && (
+              <button
+                type="button"
+                disabled={isClaiming}
+                onClick={(e) => { e.stopPropagation(); claimRaceLead(lead); }}
+                style={{ marginLeft: "auto", border: "1px solid #93c5fd", background: isClaiming ? "#dbeafe" : "#ffffff", color: "#1d4ed8", borderRadius: 999, fontSize: 12, fontWeight: 700, padding: "6px 14px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
+              >
+                {isClaiming ? "Đang nhận..." : "✅ Nhận lead"}
+              </button>
+            )}
+          </div>
+        );
+      })()}
       {/* Ack lead banner — sale can confirm lead receipt to pause SLA recall */}
       {isSale && lead.saleName && lead.assignedAt && lead.distributionKind !== "scheduled" && lead.distributionKind !== "sla_shuffle" && (() => {
         const ackedAt = String(lead.instantSlaAcceptedAt || "").trim();
