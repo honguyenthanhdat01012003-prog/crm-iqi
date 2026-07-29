@@ -12,7 +12,7 @@ import {
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper,
-  Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock
+  Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
@@ -404,6 +404,7 @@ function getInstantSlaInfo(lead) {
   if (!isInstantSlaEligibleLeadClient(lead)) return null;
   const st = lead.status || "new";
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
+  if (String(lead.instantSlaAcceptedAt || "").trim()) return null;
   const start = parseLeadDate(lead.assignedAt);
   if (!start) return null;
   const deadline = new Date(start.getTime() + INSTANT_SLA_MS);
@@ -5160,6 +5161,30 @@ const LeadsPage = (props) => {
   const [leadReportEnd, setLeadReportEnd] = useState(() => new Date().toISOString().slice(0, 10));
   const isAdmin = user.role === "admin" || user.role === "manager";
   const isSale = user.role === "sale";
+  const [ackingLeadIds, setAckingLeadIds] = useState(new Set());
+
+  const acknowledgeLeadReceive = async (lead) => {
+    if (!lead?.id || ackingLeadIds.has(lead.id)) return;
+    setAckingLeadIds((prev) => new Set(prev).add(lead.id));
+    try {
+      const r = await apiFetch(`${API}/leads/${lead.id}/ack-receive`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showToast(d.error || "Xác nhận nhận lead thất bại", "error");
+        return;
+      }
+      if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
+      showToast("Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
+    } catch (e) {
+      showToast("Lỗi kết nối: " + (e.message || e), "error");
+    } finally {
+      setAckingLeadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(lead.id);
+        return next;
+      });
+    }
+  };
 
   // === Personal Leads state ===
   const [plLeads, setPlLeads] = useState([]);
@@ -8885,15 +8910,36 @@ const LeadsPage = (props) => {
                       );
                     })()}
                     {(isSale || isAdmin) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
+                      const ackedAt = String(l.instantSlaAcceptedAt || "").trim();
+                      if (ackedAt) {
+                        return (
+                          <div style={{ marginTop: 4, padding: "4px 8px", background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc", fontSize: 11, color: "#0e7490", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                            <CheckCircle2 size={11} style={{ flexShrink: 0 }} />
+                            <span><strong>Đã nhận lead</strong></span>
+                            <span style={{ opacity: 0.85 }}>· {ackedAt}</span>
+                          </div>
+                        );
+                      }
                       const sla = getInstantSlaInfo(l);
                       if (!sla) return null;
                       const bg = sla.level === "overdue" ? "#fef2f2" : sla.level === "urgent" ? "#fff7ed" : "#f0fdf4";
                       const border = sla.level === "overdue" ? "#fecaca" : sla.level === "urgent" ? "#fed7aa" : "#bbf7d0";
                       const color = sla.level === "overdue" ? "#b91c1c" : sla.level === "urgent" ? "#c2410c" : "#15803d";
+                      const isAcking = ackingLeadIds.has(l.id);
                       return (
-                        <div style={{ marginTop: 4, padding: "4px 8px", background: bg, borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, color, display: "flex", alignItems: "center", gap: 4 }}>
+                        <div style={{ marginTop: 4, padding: "4px 8px", background: bg, borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, color, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <Zap size={11} style={{ flexShrink: 0 }} />
                           <span><strong>{sla.text}</strong></span>
+                          {isSale && (
+                            <button
+                              type="button"
+                              disabled={isAcking}
+                              onClick={(e) => { e.stopPropagation(); acknowledgeLeadReceive(l); }}
+                              style={{ border: "1px solid #67e8f9", background: isAcking ? "#cffafe" : "#ecfeff", color: "#0e7490", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: isAcking ? "not-allowed" : "pointer", opacity: isAcking ? 0.7 : 1 }}
+                            >
+                              {isAcking ? "Đang xác nhận..." : "Đã nhận lead"}
+                            </button>
+                          )}
                         </div>
                       );
                     })()}

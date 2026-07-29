@@ -534,7 +534,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 41; // Bump this when adding new DDL/migrations
+const DB_VERSION = 42; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -619,7 +619,7 @@ function getAssignmentNowStr() {
 function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
   const ts = now || getAssignmentNowStr();
   return {
-    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', team_id = NULL WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = ?, status = 'new', raw_status = '', assigned_at = ?, distribution_kind = ?, sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', instant_sla_accepted_at = '', team_id = NULL WHERE id = ?",
     args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
     now: ts,
   };
@@ -627,14 +627,14 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
 
 function buildLeadUnassignUpdateStmt(leadId) {
   return {
-    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', team_id = NULL WHERE id = ?",
+    sql: "UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = '', sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '', instant_sla_warned_at = '', instant_sla_accepted_at = '', team_id = NULL WHERE id = ?",
     args: [leadId],
   };
 }
 
 function buildLeadEnterShufflePoolStmt(leadId, nowStr, { markRecalled = false } = {}) {
   return {
-    sql: `UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = ?, shuffle_pool_at = ?, sla_12h_warned_at = '', instant_sla_warned_at = '', sla_recalled_at = ?, team_id = NULL WHERE id = ?`,
+    sql: `UPDATE leads SET sale_name = '', sale_id = NULL, assigned_at = '', distribution_kind = ?, shuffle_pool_at = ?, sla_12h_warned_at = '', instant_sla_warned_at = '', instant_sla_accepted_at = '', sla_recalled_at = ?, team_id = NULL WHERE id = ?`,
     args: [LEAD_DISTRIBUTION_KINDS.slaShuffle, nowStr, markRecalled ? nowStr : "", leadId],
   };
 }
@@ -1326,6 +1326,12 @@ async function initDb() {
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_units_project ON inventory_units(project_id)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_units_code ON inventory_units(unit_code)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_inv_sources_project ON inventory_sources(project_id)"); } catch (_) {}
+  }
+
+  if (dbVersion < 42) {
+    console.log("[DB] v42 migration: instant_sla_accepted_at (xac nhan da nhan lead)");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN instant_sla_accepted_at TEXT DEFAULT ''"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_leads_instant_ack ON leads(instant_sla_accepted_at)"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3301,6 +3307,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     slaRecalledAt: l.sla_recalled_at || "",
     shufflePoolAt: l.shuffle_pool_at || "",
     instantSlaWarnedAt: l.instant_sla_warned_at || "",
+    instantSlaAcceptedAt: l.instant_sla_accepted_at || "",
     teamId: l.team_id || null,
     regCount: allRegs.length,
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
@@ -8451,7 +8458,7 @@ const TELEGRAM_LEAD_STATUS_BUTTONS = [
 ];
 
 function buildTelegramLeadInlineKeyboard(leadId) {
-  const keyboard = [];
+  const keyboard = [[{ text: "✅ Đã nhận lead", callback_data: `ack:${leadId}` }]];
   for (let i = 0; i < TELEGRAM_LEAD_STATUS_BUTTONS.length; i += 3) {
     keyboard.push(
       TELEGRAM_LEAD_STATUS_BUTTONS.slice(i, i + 3).map(([key, label]) => ({
@@ -9072,14 +9079,15 @@ async function processInstantLeadSLA(db) {
   const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain];
   const placeholders = instantKinds.map(() => "?").join(",");
   const candidates = await all(db,
-    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, created_at, team_id
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, instant_sla_accepted_at, created_at, team_id
      FROM leads
      WHERE distribution_kind IN (${placeholders})
        AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
        AND COALESCE(is_locked, 0) = 0
        AND TRIM(COALESCE(sale_name, '')) != ''
        AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
-       AND TRIM(COALESCE(assigned_at, '')) != ''`,
+       AND TRIM(COALESCE(assigned_at, '')) != ''
+      AND TRIM(COALESCE(instant_sla_accepted_at, '')) = ''`,
     instantKinds
   );
 
@@ -11591,6 +11599,38 @@ app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
   }
 });
 
+app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!leadId) return res.status(400).json({ error: "Lead không hợp lệ" });
+    const lead = await get(db, "SELECT id, sale_name, team_id, status, distribution_kind, instant_sla_accepted_at FROM leads WHERE id = ?", [leadId]);
+    if (!lead) return res.status(404).json({ error: "Không tìm thấy lead" });
+
+    if (req.user.role === "sale") {
+      const own = await saleCanUpdateLead(lead, req.user.displayName);
+      if (!own.ok) return res.status(own.status).json({ error: own.error });
+    } else if (req.user.role !== "admin" && req.user.role !== "manager") {
+      return res.status(403).json({ error: "Không có quyền xác nhận" });
+    }
+
+    const nowAck = getAssignmentNowStr();
+    const already = String(lead.instant_sla_accepted_at || "").trim();
+    if (!already) {
+      await run(db, "UPDATE leads SET instant_sla_accepted_at = ?, instant_sla_warned_at = '' WHERE id = ?", [nowAck, leadId]);
+      const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+      const nextSeq = (maxSeq?.m ?? -1) + 1;
+      await run(db, "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        [leadId, req.user.displayName || lead.sale_name || "", "Nhận lead", nowAck, "", "Xác nhận đã nhận lead", nextSeq, req.user.role === "sale" ? "sale-ack" : "manager-ack"]);
+      lastSyncHash = "";
+      emitDataChanged("lead-ack");
+    }
+
+    res.json({ ok: true, acknowledgedAt: already || nowAck });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put("/api/leads/:id", requireAuth, async (req, res) => {
   try {
     console.log(`[PUT /api/leads] version=${BUILD_VERSION} body=${JSON.stringify(req.body)} user=${req.user?.displayName} role=${req.user?.role}`);
@@ -11610,7 +11650,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     // QUAN TRỌNG: khách đăng ký nhiều dự án có nhiều dòng lead cùng SĐT — phải khớp
     // ĐÚNG dự án đang thao tác, nếu không sẽ chia nhầm lead của dự án khác (bug chia
     // lead "báo thành công nhưng lead không qua, không có lịch sử").
-    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind, team_id";
+    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind, team_id, instant_sla_accepted_at";
     let actualLeadId = leadId;
     let existCheck = await get(db, `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE id = ?`, [leadId]);
     const projFilter = bodyProjectId ? " AND project_id = ?" : "";
@@ -11722,6 +11762,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           sets.push("distribution_kind = ?"); params.push(assignKind);
           sets.push("sla_12h_warned_at = ?"); params.push("");
           sets.push("sla_recalled_at = ?"); params.push("");
+          sets.push("instant_sla_accepted_at = ?"); params.push("");
         }
       }
       // Admin can directly reassign manager (without changing sale)
@@ -12301,6 +12342,30 @@ async function handleTelegramWebhook(req, res) {
       }
 
       const chatId = userId;
+
+      if (parts[0] === "ack" && parts.length === 2) {
+        const leadId = Number(parts[1]);
+        const leadRow = await get(db, "SELECT id, sale_name, team_id, instant_sla_accepted_at FROM leads WHERE id = ?", [leadId]);
+        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
+        if (!own.ok) {
+          await answerCb(callback_query.id, "Lead đã chuyển sale khác");
+          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+          return res.json({ ok: true });
+        }
+        if (!String(leadRow?.instant_sla_accepted_at || "").trim()) {
+          const nowAck = getAssignmentNowStr();
+          await run(db, "UPDATE leads SET instant_sla_accepted_at = ?, instant_sla_warned_at = '' WHERE id = ?", [nowAck, leadId]);
+          const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+          const nextSeq = (maxSeq?.m ?? -1) + 1;
+          await run(db, "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+            [leadId, saleUser?.display_name || leadRow?.sale_name || "", "Nhận lead", nowAck, "", "Sale xác nhận đã nhận lead (Telegram)", nextSeq, "telegram-ack"]);
+          emitDataChanged("lead-ack-telegram");
+        }
+        await answerCb(callback_query.id, "✅ Đã nhận lead");
+        await sendTg(chatId, "✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA 10 phút cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.");
+        return res.json({ ok: true });
+      }
 
       if (parts[0] === "st" && parts.length === 3) {
         const leadId = Number(parts[1]);
