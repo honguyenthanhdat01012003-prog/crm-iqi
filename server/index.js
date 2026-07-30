@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-29-lead-race-v1";
+const BUILD_VERSION = "2026-07-30-ack-mobile-sla-team";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2561,10 +2561,16 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           adset_name = ?, ad_name = ?, form_name = ?, product = ?,
           raw_status = CASE
             WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
-            THEN raw_status ELSE ? END,
+            THEN raw_status
+            WHEN LOWER(TRIM(COALESCE(status,''))) NOT IN ('', 'new') AND LOWER(TRIM(COALESCE(?,''))) IN ('', 'new')
+            THEN raw_status
+            ELSE ? END,
           status = CASE
             WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
-            THEN status ELSE ? END,
+            THEN status
+            WHEN LOWER(TRIM(COALESCE(status,''))) NOT IN ('', 'new') AND LOWER(TRIM(COALESCE(?,''))) IN ('', 'new')
+            THEN status
+            ELSE ? END,
           created_at = ?, inbox_url = ?,
           customer_fb_url = CASE WHEN TRIM(COALESCE(customer_fb_url,'')) != '' AND ? = '' THEN customer_fb_url ELSE ? END,
           phone2 = CASE WHEN TRIM(COALESCE(phone2,'')) != '' AND ? = '' THEN phone2 ELSE ? END,
@@ -2587,8 +2593,8 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         args: [
           l.name, l.phone, lAdsId || "", l.campaign,
           l.adsetName || "-", l.adName || "-", l.formName || "-", l.product,
-          prev.sale_name || "", rawStatus,
-          prev.sale_name || "", status,
+          prev.sale_name || "", status, rawStatus,
+          prev.sale_name || "", status, status,
           l.createdAt, l.inboxUrl,
           customerFbUrl, customerFbUrl,
           phone2, phone2,
@@ -9182,7 +9188,7 @@ async function processScheduledLeadSLA(db) {
   const now = Date.now();
   const nowStr = getAssignmentNowStr();
   const candidates = await all(db,
-    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, sla_12h_warned_at, sla_recalled_at
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, sla_12h_warned_at, sla_recalled_at, team_id
      FROM leads
      WHERE distribution_kind = ?
        AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
@@ -9200,7 +9206,7 @@ async function processScheduledLeadSLA(db) {
 
   for (const lead of candidates) {
     const saleName = (lead.sale_name || "").trim();
-    if (await hasSlaFeedbackForCurrentSale(db, lead.id, saleName)) continue;
+    if (await hasSlaFeedbackForCurrentSale(db, lead.id, saleName, { teamId: lead.team_id })) continue;
 
     let assignedAt = getScheduledAssignmentTime(lead);
     if (!assignedAt) {
@@ -9394,8 +9400,10 @@ function isMeaningfulFeedbackHistoryRow(row = {}) {
   return false;
 }
 
-/** Sale đã cập nhật feedback trong chu kỳ phụ trách hiện tại → không thu hồi SLA. */
-async function hasSlaFeedbackForCurrentSale(db, leadId, saleName) {
+/** Sale đã cập nhật feedback trong chu kỳ phụ trách hiện tại → không thu hồi SLA.
+ *  Lead thuộc team: bất kỳ thành viên nào cập nhật cũng được tính (sale_name history = tên thành viên, không phải leader).
+ */
+async function hasSlaFeedbackForCurrentSale(db, leadId, saleName, { teamId = 0 } = {}) {
   if (!leadId || !saleName) return false;
   const chia = await get(db,
     `SELECT seq FROM lead_history
@@ -9404,18 +9412,33 @@ async function hasSlaFeedbackForCurrentSale(db, leadId, saleName) {
     [leadId, saleName]
   );
   const minSeq = chia ? chia.seq : -1;
+
+  const names = new Set([String(saleName || "").trim()].filter(Boolean));
+  const tid = Number(teamId) || 0;
+  if (tid) {
+    try {
+      const members = await all(db, "SELECT display_name FROM users WHERE team_id = ?", [tid]);
+      for (const m of members) {
+        const dn = String(m.display_name || "").trim();
+        if (dn) names.add(dn);
+      }
+    } catch (_) {}
+  }
+  const nameList = [...names];
+  if (!nameList.length) return false;
+  const namePlaceholders = nameList.map(() => "LOWER(TRIM(?))").join(",");
   const rows = await all(db,
     `SELECT action, status, feedback FROM lead_history
-     WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
-       AND action NOT IN ('Chia lead', 'Thu hồi SLA')
+     WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) IN (${namePlaceholders})
+       AND action NOT IN ('Chia lead', 'Thu hồi SLA', 'Nhận lead', 'Race claim quản lý', 'Race claim team', 'Race manual pool', 'Race team offer')
      ORDER BY seq DESC`,
-    [leadId, minSeq, saleName]
+    [leadId, minSeq, ...nameList]
   );
   return rows.some(isMeaningfulFeedbackHistoryRow);
 }
 
-async function hasInstantSlaFeedbackForCurrentSale(db, leadId, saleName) {
-  return hasSlaFeedbackForCurrentSale(db, leadId, saleName);
+async function hasInstantSlaFeedbackForCurrentSale(db, leadId, saleName, opts = {}) {
+  return hasSlaFeedbackForCurrentSale(db, leadId, saleName, opts);
 }
 
 async function getInstantSlaAssignmentTime(db, lead) {
@@ -9461,7 +9484,7 @@ async function processInstantLeadSLA(db) {
 
   for (const lead of candidates) {
     const saleName = (lead.sale_name || "").trim();
-    if (await hasInstantSlaFeedbackForCurrentSale(db, lead.id, saleName)) continue;
+    if (await hasInstantSlaFeedbackForCurrentSale(db, lead.id, saleName, { teamId: lead.team_id })) continue;
 
     const assignedAt = await getInstantSlaAssignmentTime(db, lead);
     if (!assignedAt) continue;

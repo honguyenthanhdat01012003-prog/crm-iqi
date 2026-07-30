@@ -9242,6 +9242,10 @@ const LeadsPage = (props) => {
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
                 teams={teams}
+                acknowledgeLeadReceive={acknowledgeLeadReceive}
+                ackingLeadIds={ackingLeadIds}
+                claimRaceLead={claimRaceLead}
+                claimingRaceLeadIds={claimingRaceLeadIds}
               />
             )}
           </LeadDetailDrawer>
@@ -9282,6 +9286,10 @@ const LeadsPage = (props) => {
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
                 teams={teams}
+                acknowledgeLeadReceive={acknowledgeLeadReceive}
+                ackingLeadIds={ackingLeadIds}
+                claimRaceLead={claimRaceLead}
+                claimingRaceLeadIds={claimingRaceLeadIds}
               />
             </div>
           </div>
