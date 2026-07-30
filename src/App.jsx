@@ -420,7 +420,10 @@ function getInstantSlaInfo(lead) {
   if (!isInstantSlaEligibleLeadClient(lead)) return null;
   const st = lead.status || "new";
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
-  if (String(lead.instantSlaAcceptedAt || "").trim()) return null;
+  const isTeam = Number(lead.teamId) > 0;
+  const acked = String(lead.instantSlaAcceptedAt || "").trim();
+  // Cá nhân đã ack → hết banner SLA nhận lead. Team vẫn hiện hạn cập nhật trạng thái 2h.
+  if (acked && !isTeam) return null;
   const start = parseLeadDate(lead.assignedAt);
   if (!start) return null;
   const slaMs = getInstantSlaDurationMs(lead);
@@ -428,10 +431,13 @@ function getInstantSlaInfo(lead) {
   const deadline = new Date(start.getTime() + slaMs);
   const remain = deadline.getTime() - Date.now();
   const pad = (n) => String(n).padStart(2, "0");
-  const isTeam = Number(lead.teamId) > 0;
   const deadlineLabel = `${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
+  const needsAck = !isTeam && !acked;
   if (remain <= 0) {
-    return { overdue: true, remainMs: remain, deadlineLabel, level: "overdue", text: isTeam ? "Quá hạn 2 giờ — sẽ thu hồi" : "Quá hạn 10 phút — sẽ thu hồi" };
+    return {
+      overdue: true, remainMs: remain, deadlineLabel, level: "overdue", needsAck, acked: !!acked,
+      text: isTeam ? "Quá hạn 2 giờ — sẽ thu hồi nếu chưa cập nhật trạng thái" : "Quá hạn 10 phút — sẽ thu hồi",
+    };
   }
   const mins = Math.floor(remain / 60000);
   const secs = Math.floor((remain % 60000) / 1000);
@@ -443,10 +449,12 @@ function getInstantSlaInfo(lead) {
     remainMs: remain,
     deadlineLabel,
     level,
+    needsAck,
+    acked: !!acked,
     text: isTeam
       ? (level === "urgent"
-        ? `Lead New (team): còn ${hours}h${pad(minsInHour)}m`
-        : `Lead New (team): hạn ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · SLA 2 giờ)`)
+        ? `Team: còn ${hours}h${pad(minsInHour)}m cập nhật trạng thái`
+        : `Team: hạn cập nhật ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · SLA 2 giờ)`)
       : (level === "urgent"
         ? `Lead New: còn ${mins}p${pad(secs)}s`
         : `Lead New: hạn ${deadlineLabel} (còn ${mins}p)`),
@@ -5337,22 +5345,34 @@ const LeadsPage = (props) => {
   const [claimingRaceLeadIds, setClaimingRaceLeadIds] = useState(new Set());
 
   const claimRaceLead = async (lead) => {
-    if (!lead?.id || claimingRaceLeadIds.has(lead.id)) return;
+    if (!lead?.id || claimingRaceLeadIds.has(lead.id) || ackingLeadIds.has(lead.id)) return;
     setClaimingRaceLeadIds((prev) => new Set(prev).add(lead.id));
+    setAckingLeadIds((prev) => new Set(prev).add(lead.id));
     try {
-      const r = await apiFetch(`${API}/leads/${lead.id}/race-claim`, { method: "POST" });
+      const r = await apiFetch(`${API}/leads/${lead.id}/race-claim`, {
+        method: "POST",
+        body: "{}",
+        timeoutMs: 20000,
+      });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         showToast(d.error || "Nhận lead thất bại", "error");
         return;
       }
       if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
-      if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
+      if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
       showToast(Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công", "success");
     } catch (e) {
-      showToast("Lỗi kết nối: " + (e.message || e), "error");
+      const msg = String(e?.message || e || "");
+      showToast(/abort|timeout|timed out/i.test(msg) ? "Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa" : ("Lỗi kết nối: " + msg), "error");
+      if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
     } finally {
       setClaimingRaceLeadIds((prev) => {
+        const next = new Set(prev);
+        next.delete(lead.id);
+        return next;
+      });
+      setAckingLeadIds((prev) => {
         const next = new Set(prev);
         next.delete(lead.id);
         return next;
@@ -5361,24 +5381,46 @@ const LeadsPage = (props) => {
   };
 
   const acknowledgeLeadReceive = async (lead) => {
-    if (!lead?.id || ackingLeadIds.has(lead.id)) return;
+    if (!lead?.id || ackingLeadIds.has(lead.id) || claimingRaceLeadIds.has(lead.id)) return;
     // Đang race claim → dùng chung nút xác nhận để claim, không tách 2 banner
     if (isOpenRaceStage(lead)) {
       await claimRaceLead(lead);
       return;
     }
+    // Lead team đã claim: không cần bấm ack lần 2 — chỉ cần cập nhật trạng thái trong 2h
+    if (Number(lead.teamId) > 0 && String(lead.instantSlaAcceptedAt || "").trim()) {
+      showToast("Team đã nhận lead — hãy cập nhật trạng thái trong hạn 2 giờ", "info");
+      return;
+    }
     setAckingLeadIds((prev) => new Set(prev).add(lead.id));
     try {
-      const r = await apiFetch(`${API}/leads/${lead.id}/ack-receive`, { method: "POST" });
+      const r = await apiFetch(`${API}/leads/${lead.id}/ack-receive`, {
+        method: "POST",
+        body: "{}",
+        timeoutMs: 20000,
+      });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) {
         showToast(d.error || "Xác nhận nhận lead thất bại", "error");
+        if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
         return;
       }
-      if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
-      showToast(Number(lead.teamId) > 0 ? "Đã xác nhận nhận lead — tạm dừng thu hồi SLA 2 giờ" : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
+      if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
+      else if (d.acknowledgedAt) {
+        applyApiData({
+          updatedLead: { ...lead, instantSlaAcceptedAt: d.acknowledgedAt },
+        }, { suppressNotifications: true });
+      }
+      if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
+      if (d.raceClaimed) {
+        showToast(Number(lead.teamId) > 0 || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công", "success");
+      } else {
+        showToast(Number(lead.teamId) > 0 ? "Đã xác nhận — team có 2 giờ cập nhật trạng thái" : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
+      }
     } catch (e) {
-      showToast("Lỗi kết nối: " + (e.message || e), "error");
+      const msg = String(e?.message || e || "");
+      showToast(/abort|timeout|timed out/i.test(msg) ? "Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa" : ("Lỗi kết nối: " + msg), "error");
+      if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
     } finally {
       setAckingLeadIds((prev) => {
         const next = new Set(prev);
@@ -9137,8 +9179,9 @@ const LeadsPage = (props) => {
                       );
                     })()}
                     {(isSale || isAdmin) && !isOpenRaceStage(l) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
+                      const isTeamLead = Number(l.teamId) > 0;
                       const ackedAt = String(l.instantSlaAcceptedAt || "").trim();
-                      if (ackedAt) {
+                      if (ackedAt && !isTeamLead) {
                         return (
                           <div style={{ marginTop: 4, padding: "4px 8px", background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc", fontSize: 11, color: "#0e7490", display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                             <CheckCircle2 size={11} style={{ flexShrink: 0 }} />
@@ -9157,7 +9200,7 @@ const LeadsPage = (props) => {
                         <div style={{ marginTop: 4, padding: "4px 8px", background: bg, borderRadius: 6, border: `1px solid ${border}`, fontSize: 11, color, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                           <Zap size={11} style={{ flexShrink: 0 }} />
                           <span><strong>{sla.text}</strong></span>
-                          {isSale && (
+                          {isSale && sla.needsAck && (
                             <button
                               type="button"
                               disabled={isAcking}
@@ -9957,8 +10000,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         }
 
         if (!(isSale && lead.saleName && lead.assignedAt && lead.distributionKind !== "scheduled" && lead.distributionKind !== "sla_shuffle")) return null;
+        const isTeamLead = Number(lead.teamId) > 0;
         const ackedAt = String(lead.instantSlaAcceptedAt || "").trim();
-        if (ackedAt) {
+        if (ackedAt && !isTeamLead) {
           return (
             <div style={{ marginBottom: 10, padding: "10px 14px", background: "#ecfeff", borderRadius: 10, border: "1px solid #a5f3fc", fontSize: 13, color: "#0e7490", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
@@ -9976,7 +10020,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={{ marginBottom: 10, padding: "10px 14px", background: bg, borderRadius: 10, border: `1px solid ${border}`, fontSize: 13, color, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <Zap size={16} style={{ flexShrink: 0 }} />
             <span><strong>{sla.text}</strong></span>
-            {acknowledgeLeadReceive && (
+            {acknowledgeLeadReceive && sla.needsAck && (
               <button
                 type="button"
                 disabled={isAcking}

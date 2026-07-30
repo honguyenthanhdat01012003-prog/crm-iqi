@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-30-telegram-recall-delete-all";
+const BUILD_VERSION = "2026-07-30-ack-claim-fast-team-sla";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -9550,6 +9550,8 @@ async function processInstantLeadSLA(db) {
   const nowStr = getAssignmentNowStr();
   const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain];
   const placeholders = instantKinds.map(() => "?").join(",");
+  // Cá nhân: thu hồi nếu chưa bấm "Đã nhận lead".
+  // Team: sau khi claim vẫn thu hồi nếu quá 2h chưa cập nhật trạng thái/feedback (bỏ qua instant_sla_accepted_at).
   const candidates = await all(db,
     `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, instant_sla_accepted_at, created_at, team_id, race_stage
      FROM leads
@@ -9559,7 +9561,10 @@ async function processInstantLeadSLA(db) {
        AND TRIM(COALESCE(sale_name, '')) != ''
        AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
        AND TRIM(COALESCE(assigned_at, '')) != ''
-       AND TRIM(COALESCE(instant_sla_accepted_at, '')) = ''
+       AND (
+         COALESCE(team_id, 0) > 0
+         OR TRIM(COALESCE(instant_sla_accepted_at, '')) = ''
+       )
        AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?)`,
     [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.teamOffer]
   );
@@ -12213,20 +12218,21 @@ async function claimLeadRace(db, leadId, user) {
     }
     const team = await getTeamWithMembers(offeredTeamId);
     if (!team?.leaderName) return { status: 400, error: "Team chưa có leader để giữ lead" };
+    // Claim = đã xác nhận nhận lead (không bắt bấm lần 2). SLA 2h còn chạy tới khi có feedback.
     const raceUpdate = await run(
       db,
       `UPDATE leads
        SET race_stage = ?, race_claimed_by = ?, race_claimed_at = ?, race_started_at = ?, race_deadline_at = '',
            team_id = ?, sale_name = ?, sale_id = NULL, assigned_at = ?, distribution_kind = ?,
-           instant_sla_warned_at = '', instant_sla_accepted_at = ''
+           instant_sla_warned_at = '', instant_sla_accepted_at = ?
        WHERE id = ? AND race_stage = ? AND race_team_id = ?`,
       [
         LEAD_RACE_STAGES.claimed, user.displayName || "", nowIso, nowIso,
-        offeredTeamId, team.leaderName, nowVi, LEAD_DISTRIBUTION_KINDS.manual,
+        offeredTeamId, team.leaderName, nowVi, LEAD_DISTRIBUTION_KINDS.manual, nowVi,
         leadId, LEAD_RACE_STAGES.teamOffer, offeredTeamId,
       ]
     );
-    if (!raceUpdate.changes) return { status: 409, error: "Lead đã có người nhận trước đó" };
+    if (!raceUpdate.changes) return { status: 409, error: "Lead đã có đồng đội nhận trước đó" };
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     await run(
@@ -12234,6 +12240,8 @@ async function claimLeadRace(db, leadId, user) {
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`, nextSeq, "race-team-claim"]
     );
+    // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh bấm tin cũ bị báo "đã chuyển"
+    await deleteTelegramMsgsForLeadSale(db, leadId, team.leaderName || user.displayName || "", projectId);
     lastSyncHash = "";
     emitDataChanged("race-claim-team");
     const updatedLead = await buildUpdatedLeadPayload(db, leadId, user);
@@ -12256,11 +12264,21 @@ app.post("/api/leads/:id/race-claim", requireAuth, async (req, res) => {
 });
 
 app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
+  const t0 = Date.now();
   try {
     const leadId = Number(req.params.id);
     if (!leadId) return res.status(400).json({ error: "Lead không hợp lệ" });
-    const lead = await get(db, "SELECT id, sale_name, team_id, status, distribution_kind, instant_sla_accepted_at FROM leads WHERE id = ?", [leadId]);
+    const lead = await get(db, "SELECT id, sale_name, team_id, status, distribution_kind, instant_sla_accepted_at, race_stage, race_team_id, project_id FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Không tìm thấy lead" });
+
+    // Nếu còn đang race offer → claim luôn (1 nút), tránh client gọi nhầm ack rồi fail
+    const raceStage = String(lead.race_stage || "").trim();
+    if (raceStage === LEAD_RACE_STAGES.teamOffer || raceStage === LEAD_RACE_STAGES.managerRace) {
+      const result = await claimLeadRace(db, leadId, req.user);
+      if (!result.ok) return res.status(result.status || 400).json({ error: result.error || "Không thể nhận lead" });
+      console.log(`[ack-receive] lead#${leadId} routed to race-claim in ${Date.now() - t0}ms`);
+      return res.json({ ok: true, raceClaimed: true, acknowledgedAt: getAssignmentNowStr(), updatedLead: result.updatedLead });
+    }
 
     if (req.user.role === "sale") {
       const own = await saleCanUpdateLead(lead, req.user.displayName);
@@ -12281,8 +12299,11 @@ app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
       emitDataChanged("lead-ack");
     }
 
-    res.json({ ok: true, acknowledgedAt: already || nowAck });
+    const updatedLead = await buildUpdatedLeadPayload(db, leadId, req.user);
+    console.log(`[ack-receive] lead#${leadId} ok in ${Date.now() - t0}ms`);
+    res.json({ ok: true, acknowledgedAt: already || nowAck, updatedLead });
   } catch (err) {
+    console.error(`[ack-receive] failed in ${Date.now() - t0}ms:`, err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -13026,7 +13047,7 @@ async function handleTelegramWebhook(req, res) {
 
         const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
         if (!own.ok) {
-          await answerCb(callback_query.id, "Lead đã chuyển sale khác");
+          await answerCb(callback_query.id, "Lead không còn của bạn (đã thu hồi/chuyển)");
           await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
           return res.json({ ok: true });
         }
@@ -13040,9 +13061,11 @@ async function handleTelegramWebhook(req, res) {
           emitDataChanged("lead-ack-telegram");
         }
         const win = getInstantSlaWindowsForLead(leadRow || {});
-        const pauseLabel = win.labelHours ? `${win.labelHours} giờ` : "10 phút";
+        const pauseLabel = win.labelHours ? `${win.labelHours} giờ cập nhật trạng thái` : "10 phút";
         await answerCb(callback_query.id, "✅ Đã nhận lead");
-        await sendTg(chatId, `✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA ${pauseLabel} cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.`);
+        await sendTg(chatId, Number(leadRow?.team_id) > 0
+          ? `✅ Đã xác nhận nhận lead.\n⏳ Team có *${pauseLabel}* để cập nhật trạng thái + ghi chú.`
+          : `✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA ${pauseLabel} cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.`);
         return res.json({ ok: true });
       }
 
@@ -13053,10 +13076,10 @@ async function handleTelegramWebhook(req, res) {
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
         const leadRow = await get(db, "SELECT id, sale_name, team_id FROM leads WHERE id = ?", [leadId]);
-        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const saleUser = await get(db, "SELECT display_name FROM users WHERE TRIM(COALESCE(telegram_id,'')) = ? LIMIT 1", [chatId]);
         const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
         if (!own.ok) {
-          await answerCb(callback_query.id, "Lead đã chuyển sale khác");
+          await answerCb(callback_query.id, "Lead không còn của bạn (đã thu hồi/chuyển)");
           await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
           return res.json({ ok: true });
         }
