@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-30-team-sla-2h-unify-ack";
+const BUILD_VERSION = "2026-07-30-telegram-recall-delete-all";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4243,16 +4243,25 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
         `🔗 Nhu cầu: ${escMd(lead.product || "-")}`,
         `⏳ Hạn xác nhận: *${deadlineLabel}*`,
       ].join("\n");
-      await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: String(mgr.telegram_id),
-          text: msg,
-          parse_mode: "Markdown",
-          reply_markup: { inline_keyboard: [[{ text: "✅ Nhận lead", callback_data: `raceclaim:${lead.id}` }]] },
-        }),
-      }).catch(() => {});
+      try {
+        const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: String(mgr.telegram_id),
+            text: msg,
+            parse_mode: "Markdown",
+            reply_markup: { inline_keyboard: [[{ text: "✅ Nhận lead", callback_data: `raceclaim:${lead.id}` }]] },
+          }),
+        });
+        const teleJson = await teleRes.json().catch(() => ({}));
+        const sentMsgId = teleJson.ok ? teleJson.result?.message_id : null;
+        if (sentMsgId) {
+          await run(db, "INSERT INTO telegram_lead_msgs(telegram_id, lead_id, message_id) VALUES(?, ?, ?)", [
+            String(mgr.telegram_id), lead.id, sentMsgId,
+          ]);
+        }
+      } catch (_) {}
     }
     if (targetName) appendPushLog({ ev: "race_manager_offer", name: targetName, leadId: lead.id, projectId });
   }
@@ -4294,6 +4303,8 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
 async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
   if (!lead?.id) return { ok: false, reason: "no_lead" };
   const projectId = Number(lead.project_id) || 0;
+  // Xóa tin Telegram cũ (manager race) trước khi gửi offer team mới
+  await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", projectId);
   const project = await get(db, "SELECT race_team_cursor FROM projects WHERE id = ?", [projectId]);
   const teams = await getProjectTeamMembersByOrder(projectId);
   if (!teams.length) return { ok: false, reason: "no_team" };
@@ -4327,6 +4338,7 @@ async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
 
 async function moveRaceLeadToManualPool(db, lead, { reason = "Hết vòng team không ai nhận" } = {}) {
   if (!lead?.id) return;
+  await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", lead.project_id);
   await run(
     db,
     `UPDATE leads
@@ -9028,32 +9040,65 @@ async function cleanupStaleTelegramLeadMsgs(db) {
   return cleaned;
 }
 
+/** Xóa mọi tin Telegram đã gửi cho lead này (mọi thành viên team / sale từng nhận tin). */
 async function deleteTelegramMsgsForLeadSale(db, leadId, saleName, projectId) {
   try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (!saleUser?.telegram_id) return;
     const activeBot = await getBotForProject(projectId);
     if (!activeBot?.token) return;
-    const chatId = saleUser.telegram_id;
-    const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
-    const pending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
-    const msgIds = new Set();
-    for (const tm of trackedMsgs) {
-      if (tm.message_id) msgIds.add(tm.message_id);
+
+    // 1) Mọi message đã track theo lead_id (không chỉ sale hiện tại / leader)
+    const trackedMsgs = await all(db, "SELECT telegram_id, message_id FROM telegram_lead_msgs WHERE lead_id = ?", [leadId]);
+    // 2) Pending theo lead
+    const pendingRows = await all(db, "SELECT telegram_id, message_id FROM telegram_pending WHERE lead_id = ?", [leadId]);
+
+    const byChat = new Map(); // chatId -> Set(message_id)
+    const addMsg = (chatId, messageId) => {
+      const c = String(chatId || "").trim();
+      const mid = Number(messageId) || 0;
+      if (!c || !mid) return;
+      if (!byChat.has(c)) byChat.set(c, new Set());
+      byChat.get(c).add(mid);
+    };
+    for (const tm of trackedMsgs) addMsg(tm.telegram_id, tm.message_id);
+    for (const p of pendingRows) addMsg(p.telegram_id, p.message_id);
+
+    let deleted = 0;
+    for (const [chatId, msgIds] of byChat.entries()) {
+      for (const message_id of msgIds) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, message_id }),
+          });
+          const j = await r.json().catch(() => ({}));
+          if (j.ok) {
+            deleted += 1;
+          } else {
+            // Fallback: gỡ nội dung nhạy cảm nếu không xóa được (quá 48h / lỗi API)
+            try {
+              await fetch(`https://api.telegram.org/bot${activeBot.token}/editMessageText`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  chat_id: chatId,
+                  message_id,
+                  text: "🚫 Lead đã thu hồi — thông tin khách đã được gỡ.",
+                  reply_markup: { inline_keyboard: [] },
+                }),
+              });
+            } catch (_) {}
+            console.warn(`[Telegram] deleteMessage failed lead#${leadId} chat=${chatId} msg=${message_id}: ${j.description || "unknown"}`);
+          }
+        } catch (e) {
+          console.warn(`[Telegram] deleteMessage error lead#${leadId}:`, e.message);
+        }
+      }
     }
-    if (pending?.message_id) msgIds.add(pending.message_id);
-    for (const message_id of msgIds) {
-      try {
-        await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatId, message_id }),
-        });
-      } catch (_) {}
-    }
-    await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
-    if (pending) {
-      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ? AND lead_id = ?", [chatId, leadId]);
-    }
+
+    await run(db, "DELETE FROM telegram_lead_msgs WHERE lead_id = ?", [leadId]);
+    await run(db, "DELETE FROM telegram_pending WHERE lead_id = ?", [leadId]);
+    if (deleted > 0) console.log(`[Telegram] Deleted ${deleted} lead msgs for lead#${leadId}`);
   } catch (err) {
     console.error("[Telegram] deleteTelegramMsgsForLeadSale failed:", err.message);
   }
@@ -9072,8 +9117,14 @@ async function notifySaleBatchSlaRecallTelegram(db, saleName, recalls = []) {
   if (!unique.length) return;
 
   try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (!saleUser?.telegram_id) return;
+    const recipients = new Set([String(saleName || "").trim()].filter(Boolean));
+    for (const r of unique) {
+      for (const n of (r.notifyNames || [])) {
+        const dn = String(n || "").trim();
+        if (dn) recipients.add(dn);
+      }
+    }
+
     const projectId = unique[0].projectId;
     const activeBot = await getBotForProject(projectId);
     if (!activeBot?.token) return;
@@ -9092,36 +9143,45 @@ async function notifySaleBatchSlaRecallTelegram(db, saleName, recalls = []) {
     }
 
     const isScheduled = unique[0].kind === "scheduled";
+    const isTeamHours = unique.some((r) => r.slaLabel === "2h");
     const title = isScheduled
       ? "🚫 *LEAD ĐẶT LỊCH BỊ THU HỒI (24H)*"
-      : "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*";
+      : (isTeamHours ? "🚫 *LEAD BỊ THU HỒI (2 GIỜ)*" : "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*");
     const reason = isScheduled
       ? "❌ _Quá 24 giờ chưa cập nhật feedback._"
-      : "❌ _Quá 10 phút chưa cập nhật trạng thái._";
+      : (isTeamHours
+        ? "❌ _Quá 2 giờ chưa cập nhật trạng thái._"
+        : "❌ _Quá 10 phút chưa cập nhật trạng thái._");
     const singleProject = unique.every((r) => r.projectId === unique[0].projectId);
     const headerProject = singleProject && projectCache[unique[0].projectId]
       ? [`Dự án: *${escMd(projectCache[unique[0].projectId])}*`, "----------------------------------------------"]
       : [];
 
-    await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: saleUser.telegram_id,
-        text: [
-          title,
-          ...headerProject,
-          `📋 *${unique.length}* khách bị thu hồi:`,
-          "",
-          ...nameLines,
-          "",
-          reason,
-          "_Lead đã chuyển khỏi bạn — tin nhắn lead cũ (kèm SĐT) đã được xóa trên Telegram._",
-          "_Bạn không cần liên hệ các khách này nữa._",
-        ].join("\n"),
-        parse_mode: "Markdown",
-      }),
-    });
+    const text = [
+      title,
+      ...headerProject,
+      `📋 *${unique.length}* khách bị thu hồi:`,
+      "",
+      ...nameLines,
+      "",
+      reason,
+      "_Lead đã chuyển khỏi bạn — tin nhắn lead cũ (kèm SĐT) đã được xóa trên Telegram._",
+      "_Bạn không cần liên hệ các khách này nữa._",
+    ].join("\n");
+
+    for (const name of recipients) {
+      const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [name]);
+      if (!saleUser?.telegram_id) continue;
+      await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: saleUser.telegram_id,
+          text,
+          parse_mode: "Markdown",
+        }),
+      });
+    }
   } catch (err) {
     console.error("[Telegram] Batch SLA recall notify failed:", err.message);
   }
@@ -9333,31 +9393,36 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
 async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
 
+  // Xóa mọi tin Telegram gắn lead (cả team members), rồi mới báo thu hồi
   await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
-  try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (saleUser?.telegram_id) {
-      await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
-    }
-  } catch (_) {}
 
+  const win = getInstantSlaWindowsForLead(lead);
+  const slaNote = win.labelHours
+    ? `Lead New quá ${win.labelHours} giờ chưa feedback — chuyển sale khác`
+    : "Lead New quá 10 phút chưa feedback — chuyển sale khác";
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
   await db.batch([
     {
       sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", "Lead New quá 10 phút chưa feedback — chuyển sale khác", nextSeq, "instant-sla-10m"],
+      args: [lead.id, saleName, "Thu hồi SLA", nowStr, "", slaNote, nextSeq, "instant-sla-10m"],
     },
   ], "write");
 
-  await emitLeadSlaRecallEvent(db, lead, saleName, "Lead New quá 10 phút chưa feedback");
+  await emitLeadSlaRecallEvent(db, lead, saleName, slaNote);
 
   // Lead của team: báo thu hồi cho CẢ NHÓM; lead lẻ: báo 1 sale
   const recallTeamNames = await getLeadTeamMemberNames(lead);
+  const pushTitle = win.labelHours
+    ? (recallTeamNames ? "Lead của team bị thu hồi (2 giờ)" : "Lead bị thu hồi (2 giờ)")
+    : (recallTeamNames ? "Lead của team bị thu hồi (10 phút)" : "Lead bị thu hồi (10 phút)");
+  const pushBody = win.labelHours
+    ? `${lead.name || "Khách"} — quá ${win.labelHours} giờ chưa feedback, đã chuyển sale khác`
+    : `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`;
   for (const target of (recallTeamNames || [saleName])) {
     sendPushToDisplayName(target, {
-      title: recallTeamNames ? "Lead của team bị thu hồi (10 phút)" : "Lead bị thu hồi (10 phút)",
-      body: `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`,
+      title: pushTitle,
+      body: pushBody,
       tag: `instant-sla-recall-${lead.id}`,
       sound: "sla_recall",
       data: { url: "/", type: "instant_sla_recall", leadId: lead.id, projectId: lead.project_id },
@@ -9368,16 +9433,22 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
     excludeSales: [saleName],
     source: "instant-sla-10m",
     distributionKind: LEAD_DISTRIBUTION_KINDS.instantChain,
-    historyNote: "Lead chuyển từ sale khác (quá 10 phút chưa feedback)",
-    telegramExtraLines: ["🔄 _Lead MKT mới chuyển giao — vui lòng cập nhật trong 10 phút!_"],
-    pushTitle: "Lead mới chuyển giao (SLA 10p)",
-    pushBodySuffix: " — vui lòng cập nhật trong 10 phút",
+    historyNote: win.labelHours
+      ? `Lead chuyển từ sale khác (quá ${win.labelHours} giờ chưa feedback)`
+      : "Lead chuyển từ sale khác (quá 10 phút chưa feedback)",
+    telegramExtraLines: win.labelHours
+      ? [`🔄 _Lead MKT mới chuyển giao — vui lòng cập nhật trong ${win.labelHours} giờ!_`]
+      : ["🔄 _Lead MKT mới chuyển giao — vui lòng cập nhật trong 10 phút!_"],
+    pushTitle: win.labelHours ? `Lead mới chuyển giao (SLA ${win.labelHours}h)` : "Lead mới chuyển giao (SLA 10p)",
+    pushBodySuffix: win.labelHours
+      ? ` — vui lòng cập nhật trong ${win.labelHours} giờ`
+      : " — vui lòng cập nhật trong 10 phút",
   });
 
   await run(
     db,
     `INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, newSale || "", nowStr, "instant-sla-10m", newSale ? "Lead New quá 10 phút — chuyển sale khác ngay" : "Lead New quá 10 phút — chờ rổ xáo (hết sale khả dụng)"]
+    [lead.id, lead.name || "", lead.phone || "", lead.project_id, saleName, newSale || "", nowStr, "instant-sla-10m", newSale ? "Lead New quá hạn — chuyển sale khác ngay" : "Lead New quá hạn — chờ rổ xáo (hết sale khả dụng)"]
   );
 
   if (!newSale) {
@@ -9511,12 +9582,16 @@ async function processInstantLeadSLA(db) {
       const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
       if (ok) {
         recalled += 1;
+        const teamNames = await getLeadTeamMemberNames(lead);
+        const win = getInstantSlaWindowsForLead(lead);
         if (!recallBySale.has(saleName)) recallBySale.set(saleName, []);
         recallBySale.get(saleName).push({
           leadId: lead.id,
           name: lead.name,
           projectId: lead.project_id,
           kind: "instant",
+          slaLabel: win.labelHours ? "2h" : "10m",
+          notifyNames: teamNames || [saleName],
         });
       }
       continue;
@@ -9599,6 +9674,8 @@ async function processLeadRace(db) {
       const teams = await getProjectTeamMembersByOrder(projectId);
       const currentIdx = Number(lead.race_team_index) || 0;
       const nextIdx = currentIdx + 1;
+      // Xóa tin Telegram (kèm SĐT) của team cũ trước khi chuyển
+      await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", projectId);
       if (nextIdx < teams.length) {
         const nextTeam = teams[nextIdx];
         const nowStr = getAssignmentNowStr();
@@ -10636,23 +10713,13 @@ app.post("/api/leads/schedules/:id/revoke", requireAuth, requireAdmin, async (re
       // Check if this lead still has the sale from this schedule
       const lead = await get(db, "SELECT sale_name, project_id FROM leads WHERE id = ?", [lid]);
       if (lead && lead.sale_name === entry.saleName) {
-        // Delete Telegram notification messages for this lead
+        // Delete Telegram notification messages for this lead (all recipients)
         try {
+          await deleteTelegramMsgsForLeadSale(db, lid, entry.saleName, lead.project_id);
           const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [entry.saleName]);
           if (saleUser && saleUser.telegram_id) {
             const activeBot = await getBotForProject(lead.project_id);
             if (activeBot && activeBot.token) {
-              const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, lid]);
-              for (const tm of trackedMsgs) {
-                try {
-                  await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
-                  });
-                } catch (_) {}
-              }
-              await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, lid]);
-
               // Send recall notice
               const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
               const leadRow = await get(db, "SELECT name FROM leads WHERE id = ?", [lid]);
@@ -12621,28 +12688,7 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
         const activeBot = lead ? await getBotForProject(lead.project_id) : await get(db, "SELECT token FROM telegram_bots WHERE is_active = 1 LIMIT 1");
         const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [hist.sale_name]);
         if (activeBot && activeBot.token && saleUser && saleUser.telegram_id) {
-          // Delete ALL tracked notification messages for this lead from this sale
-          const trackedMsgs = await all(db, "SELECT message_id FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
-          for (const tm of trackedMsgs) {
-            try {
-              await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: tm.message_id }),
-              });
-            } catch (_) {}
-          }
-          await run(db, "DELETE FROM telegram_lead_msgs WHERE telegram_id = ? AND lead_id = ?", [saleUser.telegram_id, leadId]);
-
-          // Also try deleting from legacy pending
-          const pending = await get(db, "SELECT message_id FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
-          if (pending && pending.message_id) {
-            try {
-              await fetch(`https://api.telegram.org/bot${activeBot.token}/deleteMessage`, {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ chat_id: saleUser.telegram_id, message_id: pending.message_id }),
-              });
-            } catch (_) {}
-          }
+          await deleteTelegramMsgsForLeadSale(db, leadId, hist.sale_name, lead?.project_id);
 
           // Send recall notification
           const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
@@ -12665,9 +12711,6 @@ app.delete("/api/leads/:id/history/:histId", requireAuth, requireAdmin, async (r
               parse_mode: "Markdown",
             }),
           });
-
-          // Clear telegram pending for this sale
-          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [saleUser.telegram_id]);
         }
       } catch (teleErr) {
         console.error("[Telegram] Recall message failed:", teleErr.message);
