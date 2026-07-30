@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-30-ack-mobile-sla-team";
+const BUILD_VERSION = "2026-07-30-team-sla-2h-unify-ack";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -544,6 +544,8 @@ const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const SCHEDULED_SLA_RECALL_MS = 24 * 60 * 60 * 1000;
 const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
 const INSTANT_SLA_RECALL_MS = 10 * 60 * 1000;
+const INSTANT_SLA_TEAM_WARN_MS = 90 * 60 * 1000; // nhắc khi còn ~30 phút (SLA team 2h)
+const INSTANT_SLA_TEAM_RECALL_MS = 2 * 60 * 60 * 1000; // team giữ lead 2h để cập nhật trạng thái
 function getVnCalendarDay(date) {
   const d = date instanceof Date ? date : parseLeadDate(date);
   if (!d || isNaN(d.getTime())) return "";
@@ -4204,6 +4206,14 @@ async function readData(db) {
   return result;
 }
 
+function getInstantSlaWindowsForLead(lead = {}) {
+  const hasTeam = Number(lead.team_id || lead.teamId) > 0;
+  if (hasTeam) {
+    return { warnMs: INSTANT_SLA_TEAM_WARN_MS, recallMs: INSTANT_SLA_TEAM_RECALL_MS, labelHours: 2 };
+  }
+  return { warnMs: INSTANT_SLA_WARN_MS, recallMs: INSTANT_SLA_RECALL_MS, labelMinutes: 10 };
+}
+
 function formatRaceDeadline(msFromNow) {
   return new Date(Date.now() + msFromNow).toISOString();
 }
@@ -4250,43 +4260,34 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
 
 async function sendRaceTeamOfferNotifications(db, projectId, lead, team, projectName = "-") {
   if (!lead || !team) return;
-  const deadlineLabel = new Date(Date.now() + TEAM_RACE_MS).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
-  const activeBot = await getBotForProject(projectId);
+  // Không gửi tin "TEAM ... LEAD CHỜ NHẬN" riêng — dùng tin BẠN CÓ LEAD MỚI chuẩn (1 nút Đã nhận lead).
+  const nowStr = getAssignmentNowStr();
   for (const m of (team.members || [])) {
     const dn = m.displayName || "";
-    if (dn) {
-      sendPushToDisplayName(dn, {
-        title: `Team ${team.name} có lead chờ nhận`,
-        body: `${projectName}: ${lead.name || "N/A"} • Hạn ${deadlineLabel}`,
-        tag: `race-team-${lead.id}-${team.id}-${Date.now()}`,
-        sound: "sale",
-        data: { url: "/", type: "race_team_offer", leadId: lead.id, projectId, teamId: team.id },
-        requireInteraction: true,
-      }).catch(() => {});
-    }
-    if (activeBot?.token) {
-      const saleUser = await get(db, "SELECT telegram_id FROM users WHERE id = ?", [m.id]);
-      const tg = String(saleUser?.telegram_id || "").trim();
-      if (!tg) continue;
-      const msg = [
-        `🚨 *TEAM ${escMd(team.name || "")} - LEAD CHỜ NHẬN*`,
-        `📋 Dự án: *${escMd(projectName || "-")}*`,
-        `👤 Khách: *${escMd(lead.name || "N/A")}*`,
-        `📞 SĐT: \`${lead.phone || "-"}\``,
-        `🔗 Nhu cầu: ${escMd(lead.product || "-")}`,
-        `⏳ Hạn xác nhận: *${deadlineLabel}*`,
-      ].join("\n");
-      await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: tg,
-          text: msg,
-          parse_mode: "Markdown",
-          reply_markup: { inline_keyboard: [[{ text: "✅ Team nhận lead", callback_data: `raceclaim:${lead.id}` }]] },
-        }),
-      }).catch(() => {});
-    }
+    if (!dn) continue;
+    sendPushToDisplayName(dn, {
+      title: "Bạn có lead mới hãy xác nhận nhận lead",
+      body: `${projectName}: ${lead.name || "N/A"} — Team ${team.name || ""}`,
+      tag: `race-team-${lead.id}-${team.id}-${Date.now()}`,
+      sound: "sale",
+      data: { url: "/", type: "race_team_offer", leadId: lead.id, projectId, teamId: team.id },
+      requireInteraction: true,
+    }).catch(() => {});
+  }
+  // Gửi Telegram chuẩn cho từng thành viên (cùng format hình 2)
+  for (const m of (team.members || [])) {
+    const dn = m.displayName || "";
+    if (!dn) continue;
+    await sendTelegramNewLeadNotification(db, {
+      leadId: lead.id,
+      saleName: dn,
+      lead: { ...lead, sale_name: dn, assigned_at: nowStr, team_id: team.id },
+      extraLines: [
+        `👥 Team: *${escMd(team.name || "")}*`,
+        `⏳ _Bấm "✅ Đã nhận lead" để team giữ lead. Sau đó có 2 giờ cập nhật trạng thái._`,
+      ],
+      deadlineMinutes: 120,
+    });
   }
 }
 
@@ -4302,17 +4303,25 @@ async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
   const team = teams[teamIdx];
   const nextCursor = (teamIdx + 1) % teams.length;
   const nowIso = new Date().toISOString();
+  const nowStr = getAssignmentNowStr();
   const deadlineIso = formatRaceDeadline(TEAM_RACE_MS);
   await run(
     db,
     `UPDATE leads
      SET race_stage = ?, race_started_at = ?, race_deadline_at = ?, race_team_id = ?, race_team_index = ?,
-         race_claimed_by = '', race_claimed_at = ''
+         race_claimed_by = '', race_claimed_at = '',
+         team_id = ?, sale_name = ?, sale_id = NULL, assigned_at = ?, distribution_kind = ?,
+         instant_sla_warned_at = '', instant_sla_accepted_at = ''
      WHERE id = ?`,
-    [LEAD_RACE_STAGES.teamOffer, nowIso, deadlineIso, team.id, teamIdx, lead.id]
+    [
+      LEAD_RACE_STAGES.teamOffer, nowIso, deadlineIso, team.id, teamIdx,
+      team.id, team.leaderName || "", nowStr, LEAD_DISTRIBUTION_KINDS.manual,
+      lead.id,
+    ]
   );
   await run(db, "UPDATE projects SET race_team_cursor = ? WHERE id = ?", [nextCursor, projectId]);
-  await sendRaceTeamOfferNotifications(db, projectId, lead, team, projectName);
+  const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+  await sendRaceTeamOfferNotifications(db, projectId, refreshed || lead, team, projectName);
   return { ok: true, team };
 }
 
@@ -8840,7 +8849,8 @@ function buildTelegramLeadInlineKeyboard(leadId) {
   return keyboard;
 }
 
-function buildTelegramNewLeadMessageText(lead, projectName, assignedAt, extraLines = []) {
+function buildTelegramNewLeadMessageText(lead, projectName, assignedAt, extraLines = [], deadlineLabel = null) {
+  const deadlineText = deadlineLabel || `${TELEGRAM_LEAD_DEADLINE_MIN} phút`;
   return [
     `🔔 *BẠN CÓ LEAD MỚI*`,
     `Dự án: *${escMd(projectName || "-")}*`,
@@ -8855,12 +8865,12 @@ function buildTelegramNewLeadMessageText(lead, projectName, assignedAt, extraLin
     `Bấm nút bên dưới để cập nhật trạng thái.`,
     `Sau đó nhắn tin feedback cho bot.`,
     ``,
-    `⏳ _Lưu ý: Bạn có ${TELEGRAM_LEAD_DEADLINE_MIN} phút để cập nhật trạng thái!_`,
+    `⏳ _Lưu ý: Bạn có ${deadlineText} để cập nhật trạng thái!_`,
   ].join("\n");
 }
 
 /** Gửi tin Telegram lead mới + lưu message_id để xóa khi quá hạn / thu hồi. */
-async function sendTelegramNewLeadNotification(db, { leadId, saleName, lead = null, extraLines = [] } = {}) {
+async function sendTelegramNewLeadNotification(db, { leadId, saleName, lead = null, extraLines = [], deadlineMinutes = null } = {}) {
   if (!leadId || !saleName) return null;
   try {
     const row = lead || await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
@@ -8871,7 +8881,11 @@ async function sendTelegramNewLeadNotification(db, { leadId, saleName, lead = nu
     if (!activeBot?.token) return null;
     const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [row.project_id]);
     const assignedAt = row.assigned_at || getAssignmentNowStr();
-    const msg = buildTelegramNewLeadMessageText(row, projectRow?.name, assignedAt, extraLines);
+    const win = getInstantSlaWindowsForLead(row);
+    const deadlineLabel = deadlineMinutes != null
+      ? (deadlineMinutes >= 60 ? `${Math.round(deadlineMinutes / 60)} giờ` : `${deadlineMinutes} phút`)
+      : (win.labelHours ? `${win.labelHours} giờ` : `${win.labelMinutes || TELEGRAM_LEAD_DEADLINE_MIN} phút`);
+    const msg = buildTelegramNewLeadMessageText(row, projectRow?.name, assignedAt, extraLines, deadlineLabel);
     const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -9466,7 +9480,7 @@ async function processInstantLeadSLA(db) {
   const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain];
   const placeholders = instantKinds.map(() => "?").join(",");
   const candidates = await all(db,
-    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, instant_sla_accepted_at, created_at, team_id
+    `SELECT id, name, phone, sale_name, status, project_id, assigned_at, distribution_kind, instant_sla_warned_at, instant_sla_accepted_at, created_at, team_id, race_stage
      FROM leads
      WHERE distribution_kind IN (${placeholders})
        AND LOWER(TRIM(COALESCE(status, ''))) IN ('', 'new')
@@ -9474,8 +9488,9 @@ async function processInstantLeadSLA(db) {
        AND TRIM(COALESCE(sale_name, '')) != ''
        AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', 'chua chia')
        AND TRIM(COALESCE(assigned_at, '')) != ''
-      AND TRIM(COALESCE(instant_sla_accepted_at, '')) = ''`,
-    instantKinds
+       AND TRIM(COALESCE(instant_sla_accepted_at, '')) = ''
+       AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?)`,
+    [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.teamOffer]
   );
 
   let recalled = 0;
@@ -9490,8 +9505,9 @@ async function processInstantLeadSLA(db) {
     if (!assignedAt) continue;
     if (!(await isInstantSlaEligibleLead(db, lead, assignedAt))) continue;
     const ageMs = now - assignedAt.getTime();
+    const win = getInstantSlaWindowsForLead(lead);
 
-    if (ageMs >= INSTANT_SLA_RECALL_MS) {
+    if (ageMs >= win.recallMs) {
       const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
       if (ok) {
         recalled += 1;
@@ -9506,14 +9522,16 @@ async function processInstantLeadSLA(db) {
       continue;
     }
 
-    if (ageMs >= INSTANT_SLA_WARN_MS && !lead.instant_sla_warned_at) {
+    if (ageMs >= win.warnMs && !lead.instant_sla_warned_at) {
       await run(db, "UPDATE leads SET instant_sla_warned_at = ? WHERE id = ?", [nowStr, lead.id]);
-      // Lead của team: nhắc CẢ NHÓM (ai rảnh thì feedback); lead lẻ: nhắc 1 sale
       const teamNames = await getLeadTeamMemberNames(lead);
+      const remainLabel = win.labelHours
+        ? `còn khoảng ${Math.max(1, Math.round((win.recallMs - ageMs) / 60000))} phút (hạn ${win.labelHours} giờ)`
+        : "còn 2 phút để cập nhật feedback (hạn 10 phút)";
       for (const target of (teamNames || [saleName])) {
         sendPushToDisplayName(target, {
           title: teamNames ? "Nhắc nhanh Lead New (team)" : "Nhắc nhanh Lead New",
-          body: `${lead.name || "Khách"} — còn 2 phút để cập nhật feedback (hạn 10 phút)`,
+          body: `${lead.name || "Khách"} — ${remainLabel}`,
           tag: `instant-sla-warn-${lead.id}`,
           sound: "update",
           data: { url: "/", type: "instant_sla_warn", leadId: lead.id, projectId: lead.project_id },
@@ -9583,15 +9601,23 @@ async function processLeadRace(db) {
       const nextIdx = currentIdx + 1;
       if (nextIdx < teams.length) {
         const nextTeam = teams[nextIdx];
+        const nowStr = getAssignmentNowStr();
         await run(
           db,
           `UPDATE leads
            SET race_stage = ?, race_started_at = ?, race_deadline_at = ?, race_team_id = ?, race_team_index = ?,
-               race_claimed_by = '', race_claimed_at = ''
+               race_claimed_by = '', race_claimed_at = '',
+               team_id = ?, sale_name = ?, sale_id = NULL, assigned_at = ?, distribution_kind = ?,
+               instant_sla_warned_at = '', instant_sla_accepted_at = ''
            WHERE id = ? AND race_stage = ?`,
-          [LEAD_RACE_STAGES.teamOffer, nowIso, formatRaceDeadline(TEAM_RACE_MS), nextTeam.id, nextIdx, lead.id, LEAD_RACE_STAGES.teamOffer]
+          [
+            LEAD_RACE_STAGES.teamOffer, nowIso, formatRaceDeadline(TEAM_RACE_MS), nextTeam.id, nextIdx,
+            nextTeam.id, nextTeam.leaderName || "", nowStr, LEAD_DISTRIBUTION_KINDS.manual,
+            lead.id, LEAD_RACE_STAGES.teamOffer,
+          ]
         );
-        await sendRaceTeamOfferNotifications(db, projectId, lead, nextTeam, projectRow?.name || "-");
+        const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+        await sendRaceTeamOfferNotifications(db, projectId, refreshed || lead, nextTeam, projectRow?.name || "-");
         moved += 1;
       } else {
         await moveRaceLeadToManualPool(db, lead, { reason: "Hết vòng team, đưa về chưa chia để xử lý tay" });
@@ -12105,19 +12131,33 @@ async function claimLeadRace(db, leadId, user) {
     return { ok: true, updatedLead };
   }
 
-  if (user.role === "sale" && stage === LEAD_RACE_STAGES.teamOffer) {
+  // Team offer: bất kỳ thành viên team đang được offer (kể cả manager nếu thuộc team)
+  const offeredTeamId = Number(lead.race_team_id) || 0;
+  if (stage === LEAD_RACE_STAGES.teamOffer && offeredTeamId) {
     const myTeamId = await getSaleTeamId(user.userId);
-    const offeredTeamId = Number(lead.race_team_id) || 0;
-    if (!myTeamId || myTeamId !== offeredTeamId) return { status: 403, error: "Lead này không được offer cho team của bạn" };
+    const isMember = myTeamId === offeredTeamId
+      || !!(await get(
+        db,
+        "SELECT id FROM users WHERE team_id = ? AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?)) LIMIT 1",
+        [offeredTeamId, user.displayName || ""]
+      ));
+    if (!isMember && user.role !== "admin") {
+      return { status: 403, error: "Lead này không được offer cho team của bạn" };
+    }
     const team = await getTeamWithMembers(offeredTeamId);
     if (!team?.leaderName) return { status: 400, error: "Team chưa có leader để giữ lead" };
     const raceUpdate = await run(
       db,
       `UPDATE leads
        SET race_stage = ?, race_claimed_by = ?, race_claimed_at = ?, race_started_at = ?, race_deadline_at = '',
-           team_id = ?, sale_name = ?, sale_id = NULL
+           team_id = ?, sale_name = ?, sale_id = NULL, assigned_at = ?, distribution_kind = ?,
+           instant_sla_warned_at = '', instant_sla_accepted_at = ''
        WHERE id = ? AND race_stage = ? AND race_team_id = ?`,
-      [LEAD_RACE_STAGES.claimed, user.displayName || "", nowIso, nowIso, offeredTeamId, team.leaderName, leadId, LEAD_RACE_STAGES.teamOffer, offeredTeamId]
+      [
+        LEAD_RACE_STAGES.claimed, user.displayName || "", nowIso, nowIso,
+        offeredTeamId, team.leaderName, nowVi, LEAD_DISTRIBUTION_KINDS.manual,
+        leadId, LEAD_RACE_STAGES.teamOffer, offeredTeamId,
+      ]
     );
     if (!raceUpdate.changes) return { status: 409, error: "Lead đã có người nhận trước đó" };
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -12125,7 +12165,7 @@ async function claimLeadRace(db, leadId, user) {
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", `${user.displayName || "Sale"} xác nhận cho team ${team.name}`, nextSeq, "race-team-claim"]
+      [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`, nextSeq, "race-team-claim"]
     );
     lastSyncHash = "";
     emitDataChanged("race-claim-team");
@@ -12894,7 +12934,7 @@ async function handleTelegramWebhook(req, res) {
 
       if (parts[0] === "raceclaim" && parts.length === 2) {
         const leadId = Number(parts[1]);
-        const tgUser = await get(db, "SELECT id, role, display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const tgUser = await get(db, "SELECT id, role, display_name FROM users WHERE TRIM(COALESCE(telegram_id,'')) = ? LIMIT 1", [chatId]);
         if (!tgUser) {
           await answerCb(callback_query.id, "Không tìm thấy tài khoản CRM");
           return res.json({ ok: true });
@@ -12905,18 +12945,42 @@ async function handleTelegramWebhook(req, res) {
           displayName: tgUser.display_name || "",
         });
         if (!result.ok) {
-          await answerCb(callback_query.id, result.error || "Nhận lead thất bại");
+          await answerCb(callback_query.id, (result.error || "Nhận lead thất bại").slice(0, 180));
           return res.json({ ok: true });
         }
         await answerCb(callback_query.id, "✅ Đã nhận lead");
-        await sendTg(chatId, "✅ Xác nhận nhận lead thành công.");
+        await sendTg(chatId, "✅ Team đã nhận lead thành công.\n⏳ Bạn có *2 giờ* để cập nhật trạng thái + ghi chú khách.");
         return res.json({ ok: true });
       }
 
       if (parts[0] === "ack" && parts.length === 2) {
         const leadId = Number(parts[1]);
-        const leadRow = await get(db, "SELECT id, sale_name, team_id, instant_sla_accepted_at FROM leads WHERE id = ?", [leadId]);
-        const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);
+        const leadRow = await get(db, "SELECT id, sale_name, team_id, instant_sla_accepted_at, race_stage, race_team_id, project_id FROM leads WHERE id = ?", [leadId]);
+        const saleUser = await get(db, "SELECT id, role, display_name FROM users WHERE TRIM(COALESCE(telegram_id,'')) = ? LIMIT 1", [chatId]);
+        if (!saleUser) {
+          await answerCb(callback_query.id, "Không tìm thấy tài khoản CRM");
+          return res.json({ ok: true });
+        }
+
+        const raceStage = String(leadRow?.race_stage || "").trim();
+        if (raceStage === LEAD_RACE_STAGES.teamOffer || raceStage === LEAD_RACE_STAGES.managerRace) {
+          const result = await claimLeadRace(db, leadId, {
+            userId: Number(saleUser.id) || 0,
+            role: saleUser.role || "sale",
+            displayName: saleUser.display_name || "",
+          });
+          if (!result.ok) {
+            await answerCb(callback_query.id, (result.error || "Nhận lead thất bại").slice(0, 180));
+            return res.json({ ok: true });
+          }
+          await answerCb(callback_query.id, "✅ Đã nhận lead");
+          const msg = raceStage === LEAD_RACE_STAGES.teamOffer
+            ? "✅ Team đã nhận lead.\n⏳ Bạn có *2 giờ* để cập nhật trạng thái + ghi chú khách."
+            : "✅ Quản lý đã nhận lead.\nVào CRM chia cho sale khi sẵn sàng.";
+          await sendTg(chatId, msg);
+          return res.json({ ok: true });
+        }
+
         const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
         if (!own.ok) {
           await answerCb(callback_query.id, "Lead đã chuyển sale khác");
@@ -12932,8 +12996,10 @@ async function handleTelegramWebhook(req, res) {
             [leadId, saleUser?.display_name || leadRow?.sale_name || "", "Nhận lead", nowAck, "", "Sale xác nhận đã nhận lead (Telegram)", nextSeq, "telegram-ack"]);
           emitDataChanged("lead-ack-telegram");
         }
+        const win = getInstantSlaWindowsForLead(leadRow || {});
+        const pauseLabel = win.labelHours ? `${win.labelHours} giờ` : "10 phút";
         await answerCb(callback_query.id, "✅ Đã nhận lead");
-        await sendTg(chatId, "✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA 10 phút cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.");
+        await sendTg(chatId, `✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA ${pauseLabel} cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.`);
         return res.json({ ok: true });
       }
 

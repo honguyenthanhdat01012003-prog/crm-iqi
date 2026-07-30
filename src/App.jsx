@@ -371,6 +371,21 @@ const SCHEDULED_SLA_MS = 24 * 60 * 60 * 1000;
 const SCHEDULED_SLA_WARN_MS = 12 * 60 * 60 * 1000;
 const INSTANT_SLA_MS = 10 * 60 * 1000;
 const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
+const INSTANT_SLA_TEAM_MS = 2 * 60 * 60 * 1000;
+const INSTANT_SLA_TEAM_WARN_MS = 90 * 60 * 1000;
+
+function getInstantSlaDurationMs(lead) {
+  return Number(lead?.teamId) > 0 ? INSTANT_SLA_TEAM_MS : INSTANT_SLA_MS;
+}
+
+function getInstantSlaWarnMs(lead) {
+  return Number(lead?.teamId) > 0 ? INSTANT_SLA_TEAM_WARN_MS : INSTANT_SLA_WARN_MS;
+}
+
+function isOpenRaceStage(lead) {
+  const stage = String(lead?.raceStage || "").trim();
+  return stage === "manager_race" || stage === "team_offer";
+}
 
 function getScheduledSlaInfo(lead) {
   if (!lead || lead.distributionKind !== "scheduled") return null;
@@ -401,30 +416,40 @@ function getScheduledSlaInfo(lead) {
 
 function getInstantSlaInfo(lead) {
   if (!lead || lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
+  if (isOpenRaceStage(lead)) return null;
   if (!isInstantSlaEligibleLeadClient(lead)) return null;
   const st = lead.status || "new";
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
   if (String(lead.instantSlaAcceptedAt || "").trim()) return null;
   const start = parseLeadDate(lead.assignedAt);
   if (!start) return null;
-  const deadline = new Date(start.getTime() + INSTANT_SLA_MS);
+  const slaMs = getInstantSlaDurationMs(lead);
+  const warnMs = getInstantSlaWarnMs(lead);
+  const deadline = new Date(start.getTime() + slaMs);
   const remain = deadline.getTime() - Date.now();
   const pad = (n) => String(n).padStart(2, "0");
+  const isTeam = Number(lead.teamId) > 0;
   const deadlineLabel = `${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
   if (remain <= 0) {
-    return { overdue: true, remainMs: remain, deadlineLabel, level: "overdue", text: "Quá hạn 10 phút — sẽ thu hồi" };
+    return { overdue: true, remainMs: remain, deadlineLabel, level: "overdue", text: isTeam ? "Quá hạn 2 giờ — sẽ thu hồi" : "Quá hạn 10 phút — sẽ thu hồi" };
   }
   const mins = Math.floor(remain / 60000);
   const secs = Math.floor((remain % 60000) / 1000);
-  const level = remain <= (INSTANT_SLA_MS - INSTANT_SLA_WARN_MS) ? "urgent" : "normal";
+  const hours = Math.floor(remain / 3600000);
+  const minsInHour = Math.floor((remain % 3600000) / 60000);
+  const level = remain <= (slaMs - warnMs) ? "urgent" : "normal";
   return {
     overdue: false,
     remainMs: remain,
     deadlineLabel,
     level,
-    text: level === "urgent"
-      ? `Lead New: còn ${mins}p${pad(secs)}s`
-      : `Lead New: hạn ${deadlineLabel} (còn ${mins}p)`,
+    text: isTeam
+      ? (level === "urgent"
+        ? `Lead New (team): còn ${hours}h${pad(minsInHour)}m`
+        : `Lead New (team): hạn ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · SLA 2 giờ)`)
+      : (level === "urgent"
+        ? `Lead New: còn ${mins}p${pad(secs)}s`
+        : `Lead New: hạn ${deadlineLabel} (còn ${mins}p)`),
   };
 }
 
@@ -5321,9 +5346,9 @@ const LeadsPage = (props) => {
         showToast(d.error || "Nhận lead thất bại", "error");
         return;
       }
-      if (d.updatedLead) applyApiData(d, { suppressNotifications: true });
+      if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
       if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
-      showToast("Đã nhận lead thành công", "success");
+      showToast(Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công", "success");
     } catch (e) {
       showToast("Lỗi kết nối: " + (e.message || e), "error");
     } finally {
@@ -5337,6 +5362,11 @@ const LeadsPage = (props) => {
 
   const acknowledgeLeadReceive = async (lead) => {
     if (!lead?.id || ackingLeadIds.has(lead.id)) return;
+    // Đang race claim → dùng chung nút xác nhận để claim, không tách 2 banner
+    if (isOpenRaceStage(lead)) {
+      await claimRaceLead(lead);
+      return;
+    }
     setAckingLeadIds((prev) => new Set(prev).add(lead.id));
     try {
       const r = await apiFetch(`${API}/leads/${lead.id}/ack-receive`, { method: "POST" });
@@ -5346,7 +5376,7 @@ const LeadsPage = (props) => {
         return;
       }
       if (typeof onRefreshLeadScope === "function") onRefreshLeadScope({ force: true });
-      showToast("Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
+      showToast(Number(lead.teamId) > 0 ? "Đã xác nhận nhận lead — tạm dừng thu hồi SLA 2 giờ" : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
     } catch (e) {
       showToast("Lỗi kết nối: " + (e.message || e), "error");
     } finally {
@@ -9084,30 +9114,29 @@ const LeadsPage = (props) => {
                     {(() => {
                       const stage = String(l.raceStage || "").trim();
                       const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
-                      const canTeamClaim = user.role === "sale" && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
+                      const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
                       if (!canManagerClaim && !canTeamClaim) return null;
-                      const isClaiming = claimingRaceLeadIds.has(l.id);
+                      const isClaiming = claimingRaceLeadIds.has(l.id) || ackingLeadIds.has(l.id);
                       const deadline = l.raceDeadlineAt ? parseLeadDate(l.raceDeadlineAt) : null;
                       const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
                       const mins = Math.floor(remainMs / 60000);
                       const secs = Math.floor((remainMs % 60000) / 1000);
-                      const roleLabel = canManagerClaim ? "Quản lý" : "Team";
                       return (
                         <div style={{ marginTop: 4, padding: "4px 8px", background: "#ecfeff", borderRadius: 6, border: "1px solid #67e8f9", fontSize: 11, color: "#0e7490", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <Shield size={11} style={{ flexShrink: 0 }} />
-                          <span><strong>{roleLabel} nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
+                          <Zap size={11} style={{ flexShrink: 0 }} />
+                          <span><strong>Xác nhận nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
                           <button
                             type="button"
                             disabled={isClaiming}
-                            onClick={(e) => { e.stopPropagation(); claimRaceLead(l); }}
+                            onClick={(e) => { e.stopPropagation(); acknowledgeLeadReceive(l); }}
                             style={{ border: "1px solid #67e8f9", background: isClaiming ? "#cffafe" : "#ffffff", color: "#0e7490", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
                           >
-                            {isClaiming ? "Đang nhận..." : "Nhận lead"}
+                            {isClaiming ? "Đang nhận..." : "Đã nhận lead"}
                           </button>
                         </div>
                       );
                     })()}
-                    {(isSale || isAdmin) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
+                    {(isSale || isAdmin) && !isOpenRaceStage(l) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
                       const ackedAt = String(l.instantSlaAcceptedAt || "").trim();
                       if (ackedAt) {
                         return (
@@ -9901,32 +9930,33 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {(() => {
         const stage = String(lead.raceStage || "").trim();
         const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
-        const canTeamClaim = user.role === "sale" && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
-        if (!canManagerClaim && !canTeamClaim) return null;
-        const isClaiming = claimingRaceLeadIds?.has(lead.id);
-        const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
-        const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
-        const mins = Math.floor(remainMs / 60000);
-        const secs = Math.floor((remainMs % 60000) / 1000);
-        return (
-          <div style={{ marginBottom: 10, padding: "10px 14px", background: "#eff6ff", borderRadius: 10, border: "1px solid #93c5fd", fontSize: 13, color: "#1d4ed8", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <Shield size={16} style={{ flexShrink: 0 }} />
-            <span><strong>{canManagerClaim ? "Quản lý nhận lead" : "Team nhận lead"}</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
-            {claimRaceLead && (
-              <button
-                type="button"
-                disabled={isClaiming}
-                onClick={(e) => { e.stopPropagation(); claimRaceLead(lead); }}
-                style={{ marginLeft: "auto", border: "1px solid #93c5fd", background: isClaiming ? "#dbeafe" : "#ffffff", color: "#1d4ed8", borderRadius: 999, fontSize: 12, fontWeight: 700, padding: "6px 14px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
-              >
-                {isClaiming ? "Đang nhận..." : "✅ Nhận lead"}
-              </button>
-            )}
-          </div>
-        );
-      })()}
-      {/* Ack lead banner — sale can confirm lead receipt to pause SLA recall */}
-      {isSale && lead.saleName && lead.assignedAt && lead.distributionKind !== "scheduled" && lead.distributionKind !== "sla_shuffle" && (() => {
+        const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+        if (canManagerClaim || canTeamClaim) {
+          const isClaiming = claimingRaceLeadIds?.has(lead.id) || ackingLeadIds?.has(lead.id);
+          const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
+          const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+          const mins = Math.floor(remainMs / 60000);
+          const secs = Math.floor((remainMs % 60000) / 1000);
+          const onConfirm = claimRaceLead || acknowledgeLeadReceive;
+          return (
+            <div style={{ marginBottom: 10, padding: "10px 14px", background: "#ecfeff", borderRadius: 10, border: "1px solid #67e8f9", fontSize: 13, color: "#0e7490", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Zap size={16} style={{ flexShrink: 0 }} />
+              <span><strong>Xác nhận nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
+              {onConfirm && (
+                <button
+                  type="button"
+                  disabled={isClaiming}
+                  onClick={(e) => { e.stopPropagation(); onConfirm(lead); }}
+                  style={{ marginLeft: "auto", border: "1px solid #67e8f9", background: isClaiming ? "#cffafe" : "#ffffff", color: "#0e7490", borderRadius: 999, fontSize: 12, fontWeight: 700, padding: "6px 14px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
+                >
+                  {isClaiming ? "Đang nhận..." : "✅ Đã nhận lead"}
+                </button>
+              )}
+            </div>
+          );
+        }
+
+        if (!(isSale && lead.saleName && lead.assignedAt && lead.distributionKind !== "scheduled" && lead.distributionKind !== "sla_shuffle")) return null;
         const ackedAt = String(lead.instantSlaAcceptedAt || "").trim();
         if (ackedAt) {
           return (
