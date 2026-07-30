@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-30-ack-claim-fast-team-sla";
+const BUILD_VERSION = "2026-07-30-team-claim-notify-teammates";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -12240,8 +12240,14 @@ async function claimLeadRace(db, leadId, user) {
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`, nextSeq, "race-team-claim"]
     );
-    // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh bấm tin cũ bị báo "đã chuyển"
+    // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh B/C còn nút nhận
     await deleteTelegramMsgsForLeadSale(db, leadId, team.leaderName || user.displayName || "", projectId);
+    await notifyTeamMembersAfterRaceClaim(db, {
+      lead,
+      team,
+      projectId,
+      claimedByName: user.displayName || "",
+    });
     lastSyncHash = "";
     emitDataChanged("race-claim-team");
     const updatedLead = await buildUpdatedLeadPayload(db, leadId, user);
@@ -12249,6 +12255,72 @@ async function claimLeadRace(db, leadId, user) {
   }
 
   return { status: 403, error: "Bạn không có quyền nhận lead ở trạng thái hiện tại" };
+}
+
+/** Sau khi 1 sale nhận lead cho team: báo claimer + đồng đội (Telegram + push). */
+async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, claimedByName = "" } = {}) {
+  if (!lead?.id || !team) return;
+  const claimer = String(claimedByName || "").trim();
+  const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
+  const projectName = projectRow?.name || "-";
+  const customer = lead.name || "Khách";
+  const activeBot = await getBotForProject(projectId);
+  const members = team.members || [];
+
+  for (const m of members) {
+    const dn = String(m.displayName || "").trim();
+    if (!dn) continue;
+    const isClaimer = claimer && dn.toLowerCase() === claimer.toLowerCase();
+
+    sendPushToDisplayName(dn, {
+      title: isClaimer ? "Team đã nhận lead" : "Đồng đội đã nhận lead",
+      body: isClaimer
+        ? `${projectName}: ${customer} — cập nhật trạng thái trong 2 giờ`
+        : `${claimer || "Đồng đội"} đã nhận ${customer}. Vào app cập nhật sau khi gọi.`,
+      tag: `race-team-claimed-${lead.id}-${m.id || dn}`,
+      sound: "sale",
+      data: { url: "/", type: "race_team_claimed", leadId: lead.id, projectId },
+      requireInteraction: true,
+    }).catch(() => {});
+
+    if (!activeBot?.token) continue;
+    const u = await get(db, "SELECT telegram_id FROM users WHERE id = ? AND TRIM(COALESCE(telegram_id,'')) != ''", [m.id]);
+    const chatId = String(u?.telegram_id || "").trim();
+    if (!chatId) continue;
+
+    const text = isClaimer
+      ? [
+          "✅ *TEAM ĐÃ NHẬN LEAD*",
+          `📋 Dự án: *${escMd(projectName)}*`,
+          `👤 Khách: *${escMd(customer)}*`,
+          "",
+          `🙋 Bạn đã nhận lead cho team *${escMd(team.name || "")}*.`,
+          "⏳ Team có *2 giờ* để cập nhật trạng thái + ghi chú khách trên app.",
+        ].join("\n")
+      : [
+          "👥 *ĐỒNG ĐỘI ĐÃ NHẬN LEAD*",
+          `📋 Dự án: *${escMd(projectName)}*`,
+          `👤 Khách: *${escMd(customer)}*`,
+          "",
+          `✅ *${escMd(claimer || "Sale cùng team")}* đã nhận lead cho team *${escMd(team.name || "")}*.`,
+          "➡️ Bạn hãy vào app CRM cập nhật trạng thái khách *sau khi gọi*.",
+          "⏳ Team còn *2 giờ* để cập nhật — không cần bấm nhận lại.",
+        ].join("\n");
+
+    try {
+      await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: "Markdown",
+        }),
+      });
+    } catch (err) {
+      console.warn(`[Telegram] team claim notify failed for ${dn}:`, err.message);
+    }
+  }
 }
 
 app.post("/api/leads/:id/race-claim", requireAuth, async (req, res) => {
@@ -13009,11 +13081,20 @@ async function handleTelegramWebhook(req, res) {
           displayName: tgUser.display_name || "",
         });
         if (!result.ok) {
-          await answerCb(callback_query.id, (result.error || "Nhận lead thất bại").slice(0, 180));
+          const errMsg = String(result.error || "Nhận lead thất bại");
+          await answerCb(callback_query.id, errMsg.slice(0, 180));
+          if (/đồng đội nhận|đã được xử lý|không còn ở trạng thái/i.test(errMsg)) {
+            await sendTg(chatId, [
+              "👥 *Đồng đội đã nhận lead rồi*",
+              "",
+              "➡️ Hãy vào app CRM cập nhật trạng thái khách *sau khi gọi*.",
+              "⏳ Team còn hạn *2 giờ* — không cần bấm nhận lại trên tin cũ.",
+            ].join("\n"));
+          }
           return res.json({ ok: true });
         }
-        await answerCb(callback_query.id, "✅ Đã nhận lead");
-        await sendTg(chatId, "✅ Team đã nhận lead thành công.\n⏳ Bạn có *2 giờ* để cập nhật trạng thái + ghi chú khách.");
+        await answerCb(callback_query.id, "✅ Đã nhận lead cho team");
+        // Tin chi tiết đã gửi trong claimLeadRace → notifyTeamMembersAfterRaceClaim
         return res.json({ ok: true });
       }
 
@@ -13034,14 +13115,19 @@ async function handleTelegramWebhook(req, res) {
             displayName: saleUser.display_name || "",
           });
           if (!result.ok) {
-            await answerCb(callback_query.id, (result.error || "Nhận lead thất bại").slice(0, 180));
+            const errMsg = String(result.error || "Nhận lead thất bại");
+            await answerCb(callback_query.id, errMsg.slice(0, 180));
+            if (/đồng đội nhận|đã được xử lý|không còn ở trạng thái/i.test(errMsg)) {
+              await sendTg(chatId, [
+                "👥 *Đồng đội đã nhận lead rồi*",
+                "",
+                "➡️ Hãy vào app CRM cập nhật trạng thái khách *sau khi gọi*.",
+                "⏳ Team còn hạn *2 giờ* — không cần bấm nhận lại trên tin cũ.",
+              ].join("\n"));
+            }
             return res.json({ ok: true });
           }
-          await answerCb(callback_query.id, "✅ Đã nhận lead");
-          const msg = raceStage === LEAD_RACE_STAGES.teamOffer
-            ? "✅ Team đã nhận lead.\n⏳ Bạn có *2 giờ* để cập nhật trạng thái + ghi chú khách."
-            : "✅ Quản lý đã nhận lead.\nVào CRM chia cho sale khi sẵn sàng.";
-          await sendTg(chatId, msg);
+          await answerCb(callback_query.id, "✅ Đã nhận lead cho team");
           return res.json({ ok: true });
         }
 
