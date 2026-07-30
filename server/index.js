@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-30-team-claim-notify-teammates";
+const BUILD_VERSION = "2026-07-31-manager-rr-race-5m-10m";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -534,7 +534,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 43; // Bump this when adding new DDL/migrations
+const DB_VERSION = 44; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -621,12 +621,14 @@ const PROJECT_DISTRIBUTION_MODES = {
 
 const LEAD_RACE_STAGES = {
   managerRace: "manager_race",
+  managerFeedback: "manager_feedback",
   teamOffer: "team_offer",
   claimed: "claimed",
   manualPool: "manual_pool",
 };
 
 const MANAGER_RACE_MS = 5 * 60 * 1000;
+const MANAGER_FEEDBACK_MS = 10 * 60 * 1000;
 const TEAM_RACE_MS = 10 * 60 * 1000;
 
 function getAssignmentNowStr() {
@@ -1381,6 +1383,10 @@ async function initDb() {
     try { await run(db, "ALTER TABLE leads ADD COLUMN race_team_index INTEGER DEFAULT 0"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_leads_race_stage_deadline ON leads(race_stage, race_deadline_at)"); } catch (_) {}
     try { await run(db, "CREATE INDEX IF NOT EXISTS idx_project_teams_project_order ON project_teams(project_id, sort_order)"); } catch (_) {}
+  }
+  if (dbVersion < 44) {
+    console.log("[DB] v44 migration: race_manager_cursor (RR offer 1 quan ly / lead)");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN race_manager_cursor INTEGER DEFAULT 0"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3520,6 +3526,14 @@ async function getProjectTeamMembersByOrder(projectId) {
 async function saleCanUpdateLead(leadRow, displayName) {
   if (!leadRow) return { ok: false, status: 404, error: "Lead không tồn tại" };
   if (matchSaleName(leadRow.sale_name, displayName)) return { ok: true };
+  const raceStage = String(leadRow.race_stage || "").trim();
+  // Quản lý đang được offer / đang trong cửa sổ feedback 10p
+  if (
+    (raceStage === LEAD_RACE_STAGES.managerRace || raceStage === LEAD_RACE_STAGES.managerFeedback)
+    && matchSaleName(leadRow.manager_name, displayName)
+  ) {
+    return { ok: true };
+  }
   const teamId = Number(leadRow.team_id) || 0;
   if (teamId) {
     try {
@@ -3549,16 +3563,19 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     params.push(...pids);
     parts.push(`(
       TRIM(COALESCE(race_stage, '')) = ''
-      OR race_stage IN (?, ?, ?)
+      OR race_stage IN (?, ?)
+      OR (race_stage IN (?, ?) AND LOWER(TRIM(COALESCE(manager_name, ''))) = LOWER(TRIM(?)))
       OR (race_stage = ? AND (
         TRIM(COALESCE(manager_name, '')) = ''
         OR LOWER(TRIM(COALESCE(manager_name, ''))) = LOWER(TRIM(?))
       ))
     )`);
     params.push(
-      LEAD_RACE_STAGES.managerRace,
       LEAD_RACE_STAGES.teamOffer,
       LEAD_RACE_STAGES.manualPool,
+      LEAD_RACE_STAGES.managerRace,
+      LEAD_RACE_STAGES.managerFeedback,
+      user.displayName || "",
       LEAD_RACE_STAGES.claimed,
       user.displayName || ""
     );
@@ -4226,7 +4243,7 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
     const targetName = mgr.display_name || "";
     if (mgr.id) {
       sendPushToUser(mgr.id, {
-        title: "Lead mới - xác nhận giữ lead",
+        title: "Lead mới - xác nhận giữ lead (5 phút)",
         body: `${projectName}: ${lead.name || "N/A"} • Hạn ${deadlineLabel}`,
         tag: `race-manager-${lead.id}-${mgr.id}`,
         sound: "manager",
@@ -4242,6 +4259,7 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
         `📞 SĐT: \`${lead.phone || "-"}\``,
         `🔗 Nhu cầu: ${escMd(lead.product || "-")}`,
         `⏳ Hạn xác nhận: *${deadlineLabel}*`,
+        `_Nếu không nhận, lead sẽ chuyển xuống team._`,
       ].join("\n");
       try {
         const teleRes = await fetch(`https://api.telegram.org/bot${activeBot.token}/sendMessage`, {
@@ -4265,6 +4283,54 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
     }
     if (targetName) appendPushLog({ ev: "race_manager_offer", name: targetName, leadId: lead.id, projectId });
   }
+}
+
+/** Offer lead mới cho đúng 1 quản lý theo RR cursor dự án. */
+async function offerRaceLeadToNextManager(db, projectId, lead, managers = [], projectName = "-") {
+  if (!lead?.id) return { ok: false, reason: "no_lead" };
+  if (!managers.length) return { ok: false, reason: "no_manager" };
+  const project = await get(db, "SELECT race_manager_cursor FROM projects WHERE id = ?", [projectId]);
+  let cursor = Number(project?.race_manager_cursor) || 0;
+  if (cursor < 0) cursor = 0;
+  const mgrIdx = cursor % managers.length;
+  const mgr = managers[mgrIdx];
+  const nextCursor = (mgrIdx + 1) % managers.length;
+  const nowIso = new Date().toISOString();
+  const deadlineIso = formatRaceDeadline(MANAGER_RACE_MS);
+  await run(
+    db,
+    `UPDATE leads
+     SET manager_name = ?, sale_name = '', sale_id = NULL, team_id = NULL,
+         race_stage = ?, race_started_at = ?, race_deadline_at = ?, race_team_id = NULL,
+         race_claimed_by = '', race_claimed_at = '',
+         instant_sla_warned_at = '', instant_sla_accepted_at = ''
+     WHERE id = ?`,
+    [mgr.display_name || "", LEAD_RACE_STAGES.managerRace, nowIso, deadlineIso, lead.id]
+  );
+  await run(db, "UPDATE projects SET race_manager_cursor = ? WHERE id = ?", [nextCursor, projectId]);
+  const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+  await sendRaceManagerOfferNotifications(db, projectId, refreshed || lead, [mgr], projectName);
+  return { ok: true, manager: mgr };
+}
+
+/** Feedback có nghĩa trong cửa sổ manager_feedback → khóa lead cho QL (claimed). */
+async function completeManagerRaceFeedbackIfNeeded(db, leadId, actorName = "") {
+  const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+  if (!lead) return false;
+  if (String(lead.race_stage || "").trim() !== LEAD_RACE_STAGES.managerFeedback) return false;
+  const actor = String(actorName || "").trim();
+  if (actor && !matchSaleName(lead.manager_name, actor) && !matchSaleName(lead.race_claimed_by, actor)) {
+    return false;
+  }
+  await run(
+    db,
+    `UPDATE leads
+     SET race_stage = ?, race_deadline_at = '', race_started_at = ?
+     WHERE id = ? AND race_stage = ?`,
+    [LEAD_RACE_STAGES.claimed, new Date().toISOString(), leadId, LEAD_RACE_STAGES.managerFeedback]
+  );
+  console.log(`[race] lead#${leadId} manager_feedback → claimed by ${actor || lead.manager_name || "?"}`);
+  return true;
 }
 
 async function sendRaceTeamOfferNotifications(db, projectId, lead, team, projectName = "-") {
@@ -4463,18 +4529,17 @@ async function syncProject(db, projectId, opts = {}) {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
           for (const lead of newLeads) {
-            const nowIso = new Date().toISOString();
-            const deadlineIso = formatRaceDeadline(MANAGER_RACE_MS);
-            await run(
-              db,
-              `UPDATE leads
-               SET manager_name = '', sale_name = '', sale_id = NULL, team_id = NULL,
-                   race_stage = ?, race_started_at = ?, race_deadline_at = ?, race_team_id = NULL,
-                   race_claimed_by = '', race_claimed_at = ''
-               WHERE id = ?`,
-              [LEAD_RACE_STAGES.managerRace, nowIso, deadlineIso, lead.id]
-            );
-            await sendRaceManagerOfferNotifications(db, projectId, lead, managers, projectName);
+            if (managers.length > 0) {
+              const offered = await offerRaceLeadToNextManager(db, projectId, lead, managers, projectName);
+              if (!offered.ok) {
+                await transitionLeadToTeamOffer(db, lead, { projectName });
+              }
+            } else {
+              const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName });
+              if (!movedTeam.ok) {
+                await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có quản lý/team" });
+              }
+            }
           }
           emitDataChanged("race-manager-offer");
         }
@@ -9565,8 +9630,8 @@ async function processInstantLeadSLA(db) {
          COALESCE(team_id, 0) > 0
          OR TRIM(COALESCE(instant_sla_accepted_at, '')) = ''
        )
-       AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?)`,
-    [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.teamOffer]
+       AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?, ?)`,
+    [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer]
   );
 
   let recalled = 0;
@@ -9642,12 +9707,12 @@ async function processLeadRace(db) {
   const expired = await all(
     db,
     `SELECT * FROM leads
-     WHERE race_stage IN (?, ?)
+     WHERE race_stage IN (?, ?, ?)
        AND TRIM(COALESCE(race_deadline_at, '')) != ''
        AND race_deadline_at <= ?
      ORDER BY id ASC
      LIMIT 100`,
-    [LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.teamOffer, nowIso]
+    [LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer, nowIso]
   );
   if (!expired.length) return { moved: 0, manualPool: 0 };
   let moved = 0;
@@ -9658,7 +9723,23 @@ async function processLeadRace(db) {
     if (mode !== PROJECT_DISTRIBUTION_MODES.race) continue;
     const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
     const stage = String(lead.race_stage || "");
-    if (stage === LEAD_RACE_STAGES.managerRace) {
+    if (stage === LEAD_RACE_STAGES.managerRace || stage === LEAD_RACE_STAGES.managerFeedback) {
+      const mgrName = (lead.manager_name || lead.race_claimed_by || "").trim();
+      await deleteTelegramMsgsForLeadSale(db, lead.id, mgrName, projectId);
+      if (mgrName) {
+        sendPushToDisplayName(mgrName, {
+          title: stage === LEAD_RACE_STAGES.managerFeedback
+            ? "Lead chuyển team (quá 10 phút chưa feedback)"
+            : "Lead chuyển team (quá 5 phút chưa nhận)",
+          body: `${projectRow?.name || "-"}: ${lead.name || "Khách"}`,
+          tag: `race-mgr-timeout-${lead.id}`,
+          sound: "sla_recall",
+          data: { url: "/", type: "race_manager_timeout", leadId: lead.id, projectId },
+        }).catch(() => {});
+      }
+      const reason = stage === LEAD_RACE_STAGES.managerFeedback
+        ? "Hết hạn 10 phút feedback quản lý, chuyển team"
+        : "Hết hạn 5 phút nhận quản lý, chuyển team";
       const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName: projectRow?.name || "-" });
       if (movedTeam.ok) {
         moved += 1;
@@ -9667,7 +9748,7 @@ async function processLeadRace(db) {
         await run(
           db,
           "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-          [lead.id, "", "Race team offer", getAssignmentNowStr(), "", `Hết hạn manager race, chuyển team ${movedTeam.team?.name || ""}`, nextSeq, "race-timeout-manager"]
+          [lead.id, mgrName, "Race team offer", getAssignmentNowStr(), "", `${reason} → ${movedTeam.team?.name || ""}`, nextSeq, "race-timeout-manager"]
         );
       } else {
         await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có team hợp lệ" });
@@ -12169,13 +12250,30 @@ async function claimLeadRace(db, leadId, user) {
   if ((user.role === "manager" || user.role === "admin") && stage === LEAD_RACE_STAGES.managerRace) {
     const ownProjectIds = user.role === "admin" ? [projectId] : await getUserProjectIds(user.userId);
     if (!ownProjectIds.includes(projectId)) return { status: 403, error: "Bạn không thuộc dự án của lead này" };
+    // Chỉ QL đang được offer (hoặc admin) được nhận
+    if (user.role !== "admin" && !matchSaleName(lead.manager_name, user.displayName || "")) {
+      return { status: 403, error: "Lead này đang được offer cho quản lý khác" };
+    }
+    const feedbackDeadline = formatRaceDeadline(MANAGER_FEEDBACK_MS);
+    const offeredName = (lead.manager_name || user.displayName || "").trim();
     const raceUpdate = await run(
       db,
       `UPDATE leads
        SET manager_name = ?, race_stage = ?, race_claimed_by = ?, race_claimed_at = ?,
-           race_started_at = ?, race_deadline_at = '', race_team_id = NULL
+           race_started_at = ?, race_deadline_at = ?, race_team_id = NULL,
+           instant_sla_accepted_at = ?, instant_sla_warned_at = ''
        WHERE id = ? AND race_stage = ?`,
-      [user.displayName || "", LEAD_RACE_STAGES.claimed, user.displayName || "", nowIso, nowIso, leadId, LEAD_RACE_STAGES.managerRace]
+      [
+        offeredName || user.displayName || "",
+        LEAD_RACE_STAGES.managerFeedback,
+        user.displayName || "",
+        nowIso,
+        nowIso,
+        feedbackDeadline,
+        nowVi,
+        leadId,
+        LEAD_RACE_STAGES.managerRace,
+      ]
     );
     if (!raceUpdate.changes) return { status: 409, error: "Lead đã có người nhận trước đó" };
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -12183,24 +12281,32 @@ async function claimLeadRace(db, leadId, user) {
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, user.displayName || "", "Race claim quản lý", nowVi, "", "Quản lý xác nhận giữ lead", nextSeq, "race-manager-claim"]
+      [leadId, user.displayName || "", "Race claim quản lý", nowVi, "", "Quản lý xác nhận nhận lead — còn 10 phút cập nhật trạng thái khách", nextSeq, "race-manager-claim"]
     );
-    const managers = await getProjectManagers(projectId);
-    const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
-    for (const mgr of managers) {
-      if (!mgr?.id || mgr.id === user.userId) continue;
-      sendPushToUser(mgr.id, {
-        title: "Lead đã có quản lý nhận",
-        body: `${projectRow?.name || "-"}: ${user.displayName || "Quản lý khác"} đã nhận lead ${lead.name || ""}`,
-        tag: `race-claimed-${leadId}-${mgr.id}`,
-        sound: "manager",
-        data: { url: "/", type: "race_manager_claimed", leadId, projectId },
-      }).catch(() => {});
-    }
+    await deleteTelegramMsgsForLeadSale(db, leadId, offeredName || user.displayName || "", projectId);
+    const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+    await sendTelegramNewLeadNotification(db, {
+      leadId,
+      saleName: offeredName || user.displayName || "",
+      lead: refreshed,
+      extraLines: [
+        "✅ _Bạn đã nhận lead._",
+        "⏳ _Còn 10 phút để cập nhật trạng thái + ghi chú. Có feedback → giữ lead cho bạn (chia sale tay). Hết hạn → chuyển team._",
+      ],
+      deadlineMinutes: 10,
+    });
+    sendPushToDisplayName(offeredName || user.displayName || "", {
+      title: "Đã nhận lead — còn 10 phút feedback",
+      body: `${refreshed?.name || lead.name || "Khách"} — cập nhật trạng thái để giữ lead`,
+      tag: `race-mgr-feedback-${leadId}`,
+      sound: "manager",
+      data: { url: "/", type: "race_manager_feedback", leadId, projectId },
+      requireInteraction: true,
+    }).catch(() => {});
     lastSyncHash = "";
     emitDataChanged("race-claim-manager");
     const updatedLead = await buildUpdatedLeadPayload(db, leadId, user);
-    return { ok: true, updatedLead };
+    return { ok: true, updatedLead, stage: LEAD_RACE_STAGES.managerFeedback };
   }
 
   // Team offer: bất kỳ thành viên team đang được offer (kể cả manager nếu thuộc team)
@@ -12350,6 +12456,14 @@ app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
       if (!result.ok) return res.status(result.status || 400).json({ error: result.error || "Không thể nhận lead" });
       console.log(`[ack-receive] lead#${leadId} routed to race-claim in ${Date.now() - t0}ms`);
       return res.json({ ok: true, raceClaimed: true, acknowledgedAt: getAssignmentNowStr(), updatedLead: result.updatedLead });
+    }
+    if (raceStage === LEAD_RACE_STAGES.managerFeedback) {
+      return res.json({
+        ok: true,
+        acknowledgedAt: String(lead.instant_sla_accepted_at || "").trim() || getAssignmentNowStr(),
+        updatedLead: await buildUpdatedLeadPayload(db, leadId, req.user),
+        message: "Đã nhận lead — hãy cập nhật trạng thái trong 10 phút",
+      });
     }
 
     if (req.user.role === "sale") {
@@ -12754,6 +12868,10 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       } catch (capiErr) { console.error("[CAPI] Hook error:", capiErr.message); }
     }
 
+    if (isMeaningfulFeedbackHistoryRow({ action: "Cập nhật", status: statusText, feedback: feedbackText })) {
+      await completeManagerRaceFeedbackIfNeeded(db, leadId, saleName);
+    }
+
     lastSyncHash = "";
     await refreshLeadTabDenorm(db, leadId);
     emitDataChanged("lead-history-update");
@@ -13083,24 +13201,29 @@ async function handleTelegramWebhook(req, res) {
         if (!result.ok) {
           const errMsg = String(result.error || "Nhận lead thất bại");
           await answerCb(callback_query.id, errMsg.slice(0, 180));
-          if (/đồng đội nhận|đã được xử lý|không còn ở trạng thái/i.test(errMsg)) {
+          if (/đồng đội nhận|đã được xử lý|không còn ở trạng thái|quản lý khác|hết hạn/i.test(errMsg)) {
             await sendTg(chatId, [
-              "👥 *Đồng đội đã nhận lead rồi*",
+              "👥 *Lead không còn chờ bạn nhận*",
               "",
-              "➡️ Hãy vào app CRM cập nhật trạng thái khách *sau khi gọi*.",
-              "⏳ Team còn hạn *2 giờ* — không cần bấm nhận lại trên tin cũ.",
+              "➡️ Có thể đã hết hạn hoặc đồng đội/quản lý khác đã xử lý.",
+              "Vào app CRM để kiểm tra.",
             ].join("\n"));
           }
           return res.json({ ok: true });
         }
-        await answerCb(callback_query.id, "✅ Đã nhận lead cho team");
-        // Tin chi tiết đã gửi trong claimLeadRace → notifyTeamMembersAfterRaceClaim
+        const claimedStage = String(result.stage || "").trim();
+        if (claimedStage === LEAD_RACE_STAGES.managerFeedback) {
+          await answerCb(callback_query.id, "✅ Đã nhận — còn 10 phút feedback");
+        } else {
+          await answerCb(callback_query.id, "✅ Đã nhận lead cho team");
+        }
+        // Chi tiết Telegram đã gửi trong claimLeadRace
         return res.json({ ok: true });
       }
 
       if (parts[0] === "ack" && parts.length === 2) {
         const leadId = Number(parts[1]);
-        const leadRow = await get(db, "SELECT id, sale_name, team_id, instant_sla_accepted_at, race_stage, race_team_id, project_id FROM leads WHERE id = ?", [leadId]);
+        const leadRow = await get(db, "SELECT id, sale_name, team_id, instant_sla_accepted_at, race_stage, race_team_id, project_id, manager_name FROM leads WHERE id = ?", [leadId]);
         const saleUser = await get(db, "SELECT id, role, display_name FROM users WHERE TRIM(COALESCE(telegram_id,'')) = ? LIMIT 1", [chatId]);
         if (!saleUser) {
           await answerCb(callback_query.id, "Không tìm thấy tài khoản CRM");
@@ -13108,6 +13231,11 @@ async function handleTelegramWebhook(req, res) {
         }
 
         const raceStage = String(leadRow?.race_stage || "").trim();
+        if (raceStage === LEAD_RACE_STAGES.managerFeedback) {
+          await answerCb(callback_query.id, "Đã nhận — hãy cập nhật trạng thái trong 10 phút");
+          await sendTg(chatId, "⏳ Bạn đã nhận lead.\nHãy bấm nút trạng thái + nhắn feedback trong *10 phút* để giữ lead.\nHết hạn sẽ chuyển xuống team.");
+          return res.json({ ok: true });
+        }
         if (raceStage === LEAD_RACE_STAGES.teamOffer || raceStage === LEAD_RACE_STAGES.managerRace) {
           const result = await claimLeadRace(db, leadId, {
             userId: Number(saleUser.id) || 0,
@@ -13342,8 +13470,14 @@ async function handleTelegramWebhook(req, res) {
           [statusKey, statusLabel2, leadId]
         );
 
+        if (isMeaningfulFeedbackHistoryRow({ action: "Cập nhật (Telegram)", status: statusLabel, feedback: feedbackText })) {
+          await completeManagerRaceFeedbackIfNeeded(db, leadId, saleName);
+        }
+
         if (lead?.sale_name && lead?.project_id) {
           await deleteTelegramMsgsForLeadSale(db, leadId, lead.sale_name, lead.project_id);
+        } else if (lead?.project_id) {
+          await deleteTelegramMsgsForLeadSale(db, leadId, saleName, lead.project_id);
         }
 
         // Clear pending

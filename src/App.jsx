@@ -387,6 +387,10 @@ function isOpenRaceStage(lead) {
   return stage === "manager_race" || stage === "team_offer";
 }
 
+function isManagerFeedbackStage(lead) {
+  return String(lead?.raceStage || "").trim() === "manager_feedback";
+}
+
 function getScheduledSlaInfo(lead) {
   if (!lead || lead.distributionKind !== "scheduled") return null;
   const st = lead.status || "new";
@@ -416,7 +420,7 @@ function getScheduledSlaInfo(lead) {
 
 function getInstantSlaInfo(lead) {
   if (!lead || lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
-  if (isOpenRaceStage(lead)) return null;
+  if (isOpenRaceStage(lead) || isManagerFeedbackStage(lead)) return null;
   if (!isInstantSlaEligibleLeadClient(lead)) return null;
   const st = lead.status || "new";
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
@@ -5361,7 +5365,13 @@ const LeadsPage = (props) => {
       }
       if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
       if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
-      showToast(Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công", "success");
+      const nextStage = String(d.stage || d.updatedLead?.raceStage || "").trim();
+      showToast(
+        nextStage === "manager_feedback" || String(lead.raceStage) === "manager_race"
+          ? "Đã nhận lead — còn 10 phút cập nhật trạng thái để giữ lead"
+          : (Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công"),
+        "success"
+      );
     } catch (e) {
       const msg = String(e?.message || e || "");
       showToast(/abort|timeout|timed out/i.test(msg) ? "Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa" : ("Lỗi kết nối: " + msg), "error");
@@ -9155,8 +9165,22 @@ const LeadsPage = (props) => {
                     })()}
                     {(() => {
                       const stage = String(l.raceStage || "").trim();
-                      const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
+                      const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
+                        && (user.role === "admin" || String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
                       const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
+                      if (stage === "manager_feedback" && (user.role === "manager" || user.role === "admin")
+                        && (user.role === "admin" || String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase())) {
+                        const deadline = l.raceDeadlineAt ? parseLeadDate(l.raceDeadlineAt) : null;
+                        const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+                        const mins = Math.floor(remainMs / 60000);
+                        const secs = Math.floor((remainMs % 60000) / 1000);
+                        return (
+                          <div style={{ marginTop: 4, padding: "4px 8px", background: "#fff7ed", borderRadius: 6, border: "1px solid #fed7aa", fontSize: 11, color: "#c2410c", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <Zap size={11} style={{ flexShrink: 0 }} />
+                            <span><strong>Còn {mins}p{String(secs).padStart(2, "0")}s cập nhật trạng thái</strong> · giữ lead cho bạn</span>
+                          </div>
+                        );
+                      }
                       if (!canManagerClaim && !canTeamClaim) return null;
                       const isClaiming = claimingRaceLeadIds.has(l.id) || ackingLeadIds.has(l.id);
                       const deadline = l.raceDeadlineAt ? parseLeadDate(l.raceDeadlineAt) : null;
@@ -9972,8 +9996,22 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
       {(() => {
         const stage = String(lead.raceStage || "").trim();
-        const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race";
+        const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
+          && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
         const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+        if (stage === "manager_feedback" && (user.role === "manager" || user.role === "admin")
+          && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase())) {
+          const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
+          const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+          const mins = Math.floor(remainMs / 60000);
+          const secs = Math.floor((remainMs % 60000) / 1000);
+          return (
+            <div style={{ marginBottom: 10, padding: "10px 14px", background: "#fff7ed", borderRadius: 10, border: "1px solid #fed7aa", fontSize: 13, color: "#c2410c", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Zap size={16} style={{ flexShrink: 0 }} />
+              <span><strong>Còn {mins}p{String(secs).padStart(2, "0")}s cập nhật trạng thái</strong> — có feedback sẽ giữ lead cho bạn (chia sale tay). Hết hạn chuyển team.</span>
+            </div>
+          );
+        }
         if (canManagerClaim || canTeamClaim) {
           const isClaiming = claimingRaceLeadIds?.has(lead.id) || ackingLeadIds?.has(lead.id);
           const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
@@ -9984,7 +10022,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           return (
             <div style={{ marginBottom: 10, padding: "10px 14px", background: "#ecfeff", borderRadius: 10, border: "1px solid #67e8f9", fontSize: 13, color: "#0e7490", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <Zap size={16} style={{ flexShrink: 0 }} />
-              <span><strong>Xác nhận nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}</span>
+              <span><strong>Xác nhận nhận lead</strong>{deadline ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s` : ""}{canManagerClaim ? " (5 phút)" : ""}</span>
               {onConfirm && (
                 <button
                   type="button"
