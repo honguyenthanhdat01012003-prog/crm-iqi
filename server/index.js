@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-31-require-claim-before-feedback";
+const BUILD_VERSION = "2026-08-01-team-sla-overnight-until-10";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -550,6 +550,133 @@ function getVnCalendarDay(date) {
   const d = date instanceof Date ? date : parseLeadDate(date);
   if (!d || isNaN(d.getTime())) return "";
   return d.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+}
+
+/** Phút từ nửa đêm theo giờ VN (0–1439). */
+function getVnMinutesSinceMidnight(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date instanceof Date ? date : new Date(date));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  return hour * 60 + minute;
+}
+
+/**
+ * Xáo tự động (auto-rotate + rổ SLA) chỉ chạy 07:30–22:00 VN.
+ * Ngoài khung: 22:00 → 07:30 hôm sau — không xáo (admin xáo tay vẫn được).
+ */
+const AUTO_SHUFFLE_WINDOW_START_MIN = 7 * 60 + 30; // 07:30
+const AUTO_SHUFFLE_WINDOW_END_MIN = 22 * 60; // 22:00 (exclusive)
+const TEAM_OVERNIGHT_SLA_HOUR = 10; // overnight claim → giữ đến 10:00 sáng
+function isWithinAutoShuffleHours(date = new Date()) {
+  const mins = getVnMinutesSinceMidnight(date);
+  return mins >= AUTO_SHUFFLE_WINDOW_START_MIN && mins < AUTO_SHUFFLE_WINDOW_END_MIN;
+}
+
+/** Khung xác nhận đêm: 22:00 → 07:30 (team SLA kéo đến 10:00). */
+function isOvernightClaimWindow(date = new Date()) {
+  return !isWithinAutoShuffleHours(date);
+}
+
+function getVnDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date instanceof Date ? date : new Date(date));
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+    second: get("second"),
+  };
+}
+
+/** VN không DST — luôn UTC+7. */
+function vnWallTimeToDate(year, month, day, hour = 0, minute = 0, second = 0) {
+  const iso = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:${String(second).padStart(2, "0")}+07:00`;
+  return new Date(iso);
+}
+
+function addVnCalendarDays(parts, days) {
+  const noon = vnWallTimeToDate(parts.year, parts.month, parts.day, 12, 0, 0);
+  return getVnDateParts(new Date(noon.getTime() + days * 86400000));
+}
+
+/**
+ * Hạn feedback team sau xác nhận:
+ * - Ban ngày (7h30–22h): +2 giờ
+ * - Đêm (22h–7h30): đến 10:00 sáng (cùng ngày nếu claim sau 0h, ngày kế nếu claim từ 22h)
+ */
+function getTeamInstantSlaDeadline(claimAt) {
+  const start = claimAt instanceof Date ? claimAt : parseLeadDate(claimAt);
+  if (!start || isNaN(start.getTime())) return null;
+  if (!isOvernightClaimWindow(start)) {
+    return new Date(start.getTime() + INSTANT_SLA_TEAM_RECALL_MS);
+  }
+  const p = getVnDateParts(start);
+  const mins = p.hour * 60 + p.minute;
+  let y = p.year;
+  let m = p.month;
+  let d = p.day;
+  if (mins >= AUTO_SHUFFLE_WINDOW_END_MIN) {
+    const next = addVnCalendarDays(p, 1);
+    y = next.year;
+    m = next.month;
+    d = next.day;
+  }
+  return vnWallTimeToDate(y, m, d, TEAM_OVERNIGHT_SLA_HOUR, 0, 0);
+}
+
+function getTeamInstantSlaTiming(claimAt) {
+  const start = claimAt instanceof Date ? claimAt : parseLeadDate(claimAt);
+  if (!start || isNaN(start.getTime())) {
+    return {
+      start: null,
+      deadline: null,
+      recallMs: INSTANT_SLA_TEAM_RECALL_MS,
+      warnMs: INSTANT_SLA_TEAM_WARN_MS,
+      overnight: false,
+      slaLabel: "2h",
+      deadlineLabel: "2 giờ",
+    };
+  }
+  const deadline = getTeamInstantSlaDeadline(start);
+  const recallMs = Math.max(0, deadline.getTime() - start.getTime());
+  const warnMs = Math.max(0, recallMs - 30 * 60 * 1000);
+  const overnight = isOvernightClaimWindow(start);
+  const dp = getVnDateParts(deadline);
+  const pad = (n) => String(n).padStart(2, "0");
+  const deadlineClock = `${pad(dp.hour)}:${pad(dp.minute)}`;
+  return {
+    start,
+    deadline,
+    recallMs,
+    warnMs,
+    overnight,
+    slaLabel: overnight ? "overnight-10h" : "2h",
+    deadlineLabel: overnight ? `đến ${deadlineClock}` : "2 giờ",
+  };
+}
+
+function formatTeamSlaHoldMessage(claimAt = new Date()) {
+  const t = getTeamInstantSlaTiming(claimAt);
+  if (t.overnight) {
+    return `Team giữ lead đến *${t.deadlineLabel.replace(/^đến /, "")}* để cập nhật trạng thái`;
+  }
+  return "Team có *2 giờ* để cập nhật trạng thái";
 }
 
 /** Lead có tag NEW trên UI — nhận trong ngày (VN), không phải lead ≤7 ngày. */
@@ -4244,12 +4371,25 @@ async function readData(db) {
   return result;
 }
 
-function getInstantSlaWindowsForLead(lead = {}) {
+function getInstantSlaWindowsForLead(lead = {}, claimAt = null) {
   const hasTeam = Number(lead.team_id || lead.teamId) > 0;
   if (hasTeam) {
-    return { warnMs: INSTANT_SLA_TEAM_WARN_MS, recallMs: INSTANT_SLA_TEAM_RECALL_MS, labelHours: 2 };
+    const start = claimAt
+      || parseLeadDate(lead.instant_sla_accepted_at || lead.instantSlaAcceptedAt)
+      || parseLeadDate(lead.assigned_at || lead.assignedAt)
+      || new Date();
+    const timing = getTeamInstantSlaTiming(start);
+    return {
+      warnMs: timing.warnMs,
+      recallMs: timing.recallMs,
+      labelHours: timing.overnight ? null : 2,
+      overnightUntil10: timing.overnight,
+      slaLabel: timing.slaLabel,
+      deadlineLabel: timing.deadlineLabel,
+      deadline: timing.deadline,
+    };
   }
-  return { warnMs: INSTANT_SLA_WARN_MS, recallMs: INSTANT_SLA_RECALL_MS, labelMinutes: 10 };
+  return { warnMs: INSTANT_SLA_WARN_MS, recallMs: INSTANT_SLA_RECALL_MS, labelMinutes: 10, slaLabel: "10m" };
 }
 
 function formatRaceDeadline(msFromNow) {
@@ -4464,7 +4604,7 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
       lead: { ...lead, sale_name: dn, assigned_at: nowStr, team_id: team.id },
       extraLines: [
         `👥 Team: *${escMd(team.name || "")}*`,
-        `⏳ _Bấm "✅ Đã nhận lead" để team giữ lead. Sau đó có 2 giờ cập nhật trạng thái._`,
+        `⏳ _Bấm "✅ Đã nhận lead" để team giữ lead. Ban ngày: 2 giờ cập nhật · Nhận đêm (22h–7h30): giữ đến 10:00 sáng._`,
       ],
       deadlineMinutes: 120,
     });
@@ -9320,15 +9460,20 @@ async function notifySaleBatchSlaRecallTelegram(db, saleName, recalls = []) {
     }
 
     const isScheduled = unique[0].kind === "scheduled";
+    const isOvernight = unique.some((r) => r.slaLabel === "overnight-10h");
     const isTeamHours = unique.some((r) => r.slaLabel === "2h");
     const title = isScheduled
       ? "🚫 *LEAD ĐẶT LỊCH BỊ THU HỒI (24H)*"
-      : (isTeamHours ? "🚫 *LEAD BỊ THU HỒI (2 GIỜ)*" : "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*");
+      : isOvernight
+        ? "🚫 *LEAD BỊ THU HỒI (QUÁ 10:00)*"
+        : (isTeamHours ? "🚫 *LEAD BỊ THU HỒI (2 GIỜ)*" : "🚫 *LEAD BỊ THU HỒI (10 PHÚT)*");
     const reason = isScheduled
       ? "❌ _Quá 24 giờ chưa cập nhật feedback._"
-      : (isTeamHours
-        ? "❌ _Quá 2 giờ chưa cập nhật trạng thái._"
-        : "❌ _Quá 10 phút chưa cập nhật trạng thái._");
+      : isOvernight
+        ? "❌ _Quá hạn đến 10:00 chưa cập nhật trạng thái._"
+        : (isTeamHours
+          ? "❌ _Quá 2 giờ chưa cập nhật trạng thái._"
+          : "❌ _Quá 10 phút chưa cập nhật trạng thái._");
     const singleProject = unique.every((r) => r.projectId === unique[0].projectId);
     const headerProject = singleProject && projectCache[unique[0].projectId]
       ? [`Dự án: *${escMd(projectCache[unique[0].projectId])}*`, "----------------------------------------------"]
@@ -9576,9 +9721,11 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
 
   const win = getInstantSlaWindowsForLead(lead);
-  const slaNote = win.labelHours
-    ? `Lead New quá ${win.labelHours} giờ chưa feedback — chuyển sale khác`
-    : "Lead New quá 10 phút chưa feedback — chuyển sale khác";
+  const slaNote = win.overnightUntil10
+    ? "Lead New quá hạn đến 10:00 chưa feedback — chuyển sale khác"
+    : win.labelHours
+      ? `Lead New quá ${win.labelHours} giờ chưa feedback — chuyển sale khác`
+      : "Lead New quá 10 phút chưa feedback — chuyển sale khác";
   const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeq?.m ?? -1) + 1;
   await db.batch([
@@ -9592,12 +9739,16 @@ async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
 
   // Lead của team: báo thu hồi cho CẢ NHÓM; lead lẻ: báo 1 sale
   const recallTeamNames = await getLeadTeamMemberNames(lead);
-  const pushTitle = win.labelHours
-    ? (recallTeamNames ? "Lead của team bị thu hồi (2 giờ)" : "Lead bị thu hồi (2 giờ)")
-    : (recallTeamNames ? "Lead của team bị thu hồi (10 phút)" : "Lead bị thu hồi (10 phút)");
-  const pushBody = win.labelHours
-    ? `${lead.name || "Khách"} — quá ${win.labelHours} giờ chưa feedback, đã chuyển sale khác`
-    : `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`;
+  const pushTitle = win.overnightUntil10
+    ? (recallTeamNames ? "Lead của team bị thu hồi (quá 10:00)" : "Lead bị thu hồi (quá 10:00)")
+    : win.labelHours
+      ? (recallTeamNames ? "Lead của team bị thu hồi (2 giờ)" : "Lead bị thu hồi (2 giờ)")
+      : (recallTeamNames ? "Lead của team bị thu hồi (10 phút)" : "Lead bị thu hồi (10 phút)");
+  const pushBody = win.overnightUntil10
+    ? `${lead.name || "Khách"} — quá hạn đến 10:00 chưa feedback, đã chuyển sale khác`
+    : win.labelHours
+      ? `${lead.name || "Khách"} — quá ${win.labelHours} giờ chưa feedback, đã chuyển sale khác`
+      : `${lead.name || "Khách"} — quá 10 phút chưa feedback, đã chuyển sale khác`;
   for (const target of (recallTeamNames || [saleName])) {
     sendPushToDisplayName(target, {
       title: pushTitle,
@@ -9764,22 +9915,27 @@ async function processInstantLeadSLA(db) {
     const assignedAt = await getInstantSlaAssignmentTime(db, lead);
     if (!assignedAt) continue;
     if (!(await isInstantSlaEligibleLead(db, lead, assignedAt))) continue;
-    const ageMs = now - assignedAt.getTime();
-    const win = getInstantSlaWindowsForLead(lead);
+
+    // Team: mốc SLA = lúc xác nhận nhận (accepted_at), fallback assigned_at
+    const isTeam = Number(lead.team_id) > 0;
+    const claimAt = isTeam
+      ? (parseLeadDate(lead.instant_sla_accepted_at) || assignedAt)
+      : assignedAt;
+    const ageMs = now - claimAt.getTime();
+    const win = getInstantSlaWindowsForLead(lead, claimAt);
 
     if (ageMs >= win.recallMs) {
       const ok = await recallInstantLeadToShufflePool(db, lead, saleName, nowStr);
       if (ok) {
         recalled += 1;
         const teamNames = await getLeadTeamMemberNames(lead);
-        const win = getInstantSlaWindowsForLead(lead);
         if (!recallBySale.has(saleName)) recallBySale.set(saleName, []);
         recallBySale.get(saleName).push({
           leadId: lead.id,
           name: lead.name,
           projectId: lead.project_id,
           kind: "instant",
-          slaLabel: win.labelHours ? "2h" : "10m",
+          slaLabel: win.slaLabel || (win.labelHours ? "2h" : "10m"),
           notifyNames: teamNames || [saleName],
         });
       }
@@ -9789,9 +9945,12 @@ async function processInstantLeadSLA(db) {
     if (ageMs >= win.warnMs && !lead.instant_sla_warned_at) {
       await run(db, "UPDATE leads SET instant_sla_warned_at = ? WHERE id = ?", [nowStr, lead.id]);
       const teamNames = await getLeadTeamMemberNames(lead);
-      const remainLabel = win.labelHours
-        ? `còn khoảng ${Math.max(1, Math.round((win.recallMs - ageMs) / 60000))} phút (hạn ${win.labelHours} giờ)`
-        : "còn 2 phút để cập nhật feedback (hạn 10 phút)";
+      const remainMin = Math.max(1, Math.round((win.recallMs - ageMs) / 60000));
+      const remainLabel = win.overnightUntil10
+        ? `còn khoảng ${remainMin} phút (hạn ${win.deadlineLabel || "10:00"})`
+        : win.labelHours
+          ? `còn khoảng ${remainMin} phút (hạn ${win.labelHours} giờ)`
+          : "còn 2 phút để cập nhật feedback (hạn 10 phút)";
       for (const target of (teamNames || [saleName])) {
         sendPushToDisplayName(target, {
           title: teamNames ? "Nhắc nhanh Lead New (team)" : "Nhắc nhanh Lead New",
@@ -9945,6 +10104,9 @@ async function processLeadRace(db) {
  * Rổ xáo 24h: gán lead thu hồi cho sale hiệu suất tốt nhất (chưa từng fail lead này) + Telegram lead mới.
  */
 async function processSlaShufflePool(db) {
+  if (!isWithinAutoShuffleHours()) {
+    return { assigned: 0, skipped: "outside_hours" };
+  }
   const poolLeads = await all(db,
     `SELECT id, name, phone, project_id, shuffle_pool_at FROM leads
      WHERE distribution_kind = ?
@@ -10042,6 +10204,9 @@ async function runMonthlyDisciplineReportIfDue(db) {
 }
 
 async function processAutoRotate(db) {
+  if (!isWithinAutoShuffleHours()) {
+    return 0;
+  }
   const enabledRows = await all(db, "SELECT key, value FROM settings WHERE key LIKE 'auto_rotate_project_%' AND value = '1'");
   if (!enabledRows.length) return 0;
   const enabledProjectIds = new Set(enabledRows.map(r => Number(r.key.replace('auto_rotate_project_', ''))));
@@ -12490,10 +12655,14 @@ async function claimLeadRace(db, leadId, user) {
     if (!raceUpdate.changes) return { status: 409, error: "Lead đã có đồng đội nhận trước đó" };
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
+    const claimNow = new Date();
+    const holdHistory = isOvernightClaimWindow(claimNow)
+      ? `${user.displayName || "Sale"} xác nhận cho team ${team.name} — ${getTeamInstantSlaTiming(claimNow).deadlineLabel} cập nhật trạng thái`
+      : `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`;
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`, nextSeq, "race-team-claim"]
+      [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", holdHistory, nextSeq, "race-team-claim"]
     );
     // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh B/C còn nút nhận
     await deleteTelegramMsgsForLeadSale(db, leadId, team.leaderName || user.displayName || "", projectId);
@@ -12502,6 +12671,7 @@ async function claimLeadRace(db, leadId, user) {
       team,
       projectId,
       claimedByName: user.displayName || "",
+      claimAt: claimNow,
     });
     lastSyncHash = "";
     emitDataChanged("race-claim-team");
@@ -12513,7 +12683,7 @@ async function claimLeadRace(db, leadId, user) {
 }
 
 /** Sau khi 1 sale nhận lead cho team: báo claimer + đồng đội (Telegram + push). */
-async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, claimedByName = "" } = {}) {
+async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, claimedByName = "", claimAt = null } = {}) {
   if (!lead?.id || !team) return;
   const claimer = String(claimedByName || "").trim();
   const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
@@ -12521,6 +12691,17 @@ async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, clai
   const customer = lead.name || "Khách";
   const activeBot = await getBotForProject(projectId);
   const members = team.members || [];
+  const at = claimAt instanceof Date ? claimAt : new Date();
+  const timing = getTeamInstantSlaTiming(at);
+  const holdPush = timing.overnight
+    ? `${projectName}: ${customer} — cập nhật ${timing.deadlineLabel}`
+    : `${projectName}: ${customer} — cập nhật trạng thái trong 2 giờ`;
+  const holdTeleClaimer = timing.overnight
+    ? `⏳ Team giữ lead *${timing.deadlineLabel}* để cập nhật trạng thái + ghi chú khách trên app.`
+    : "⏳ Team có *2 giờ* để cập nhật trạng thái + ghi chú khách trên app.";
+  const holdTeleMate = timing.overnight
+    ? `⏳ Team giữ lead *${timing.deadlineLabel}* để cập nhật — không cần bấm nhận lại.`
+    : "⏳ Team còn *2 giờ* để cập nhật — không cần bấm nhận lại.";
 
   for (const m of members) {
     const dn = String(m.displayName || "").trim();
@@ -12530,7 +12711,7 @@ async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, clai
     sendPushToDisplayName(dn, {
       title: isClaimer ? "Team đã nhận lead" : "Đồng đội đã nhận lead",
       body: isClaimer
-        ? `${projectName}: ${customer} — cập nhật trạng thái trong 2 giờ`
+        ? holdPush
         : `${claimer || "Đồng đội"} đã nhận ${customer}. Vào app cập nhật sau khi gọi.`,
       tag: `race-team-claimed-${lead.id}-${m.id || dn}`,
       sound: "sale",
@@ -12550,7 +12731,7 @@ async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, clai
           `👤 Khách: *${escMd(customer)}*`,
           "",
           `🙋 Bạn đã nhận lead cho team *${escMd(team.name || "")}*.`,
-          "⏳ Team có *2 giờ* để cập nhật trạng thái + ghi chú khách trên app.",
+          holdTeleClaimer,
         ].join("\n")
       : [
           "👥 *ĐỒNG ĐỘI ĐÃ NHẬN LEAD*",
@@ -12559,7 +12740,7 @@ async function notifyTeamMembersAfterRaceClaim(db, { lead, team, projectId, clai
           "",
           `✅ *${escMd(claimer || "Sale cùng team")}* đã nhận lead cho team *${escMd(team.name || "")}*.`,
           "➡️ Bạn hãy vào app CRM cập nhật trạng thái khách *sau khi gọi*.",
-          "⏳ Team còn *2 giờ* để cập nhật — không cần bấm nhận lại.",
+          holdTeleMate,
         ].join("\n");
 
     try {
@@ -13452,11 +13633,15 @@ async function handleTelegramWebhook(req, res) {
             [leadId, saleUser?.display_name || leadRow?.sale_name || "", "Nhận lead", nowAck, "", "Sale xác nhận đã nhận lead (Telegram)", nextSeq, "telegram-ack"]);
           emitDataChanged("lead-ack-telegram");
         }
-        const win = getInstantSlaWindowsForLead(leadRow || {});
-        const pauseLabel = win.labelHours ? `${win.labelHours} giờ cập nhật trạng thái` : "10 phút";
+        const win = getInstantSlaWindowsForLead(leadRow || {}, new Date());
+        const pauseLabel = win.overnightUntil10
+          ? `${win.deadlineLabel || "đến 10:00"} cập nhật trạng thái`
+          : win.labelHours
+            ? `${win.labelHours} giờ cập nhật trạng thái`
+            : "10 phút";
         await answerCb(callback_query.id, "✅ Đã nhận lead");
         await sendTg(chatId, Number(leadRow?.team_id) > 0
-          ? `✅ Đã xác nhận nhận lead.\n⏳ Team có *${pauseLabel}* để cập nhật trạng thái + ghi chú.`
+          ? `✅ Đã xác nhận nhận lead.\n⏳ Team: *${pauseLabel}* + ghi chú.`
           : `✅ Đã xác nhận nhận lead.\n⏸ Hệ thống tạm dừng thu hồi SLA ${pauseLabel} cho lead này.\n📝 Vui lòng cập nhật trạng thái + ghi chú sau khi tư vấn xong.`);
         return res.json({ ok: true });
       }
@@ -17567,13 +17752,14 @@ if (!process.env.VERCEL) {
   setInterval(async () => {
     if (!db) return;
     try {
+      if (!isWithinAutoShuffleHours()) return;
       const rotated = await processAutoRotate(db);
       if (rotated > 0) console.log(`[auto-rotate] Processed: ${rotated} leads rotated`);
     } catch (e) {
       console.error("[auto-rotate] Error:", e.message);
     }
   }, AUTO_ROTATE_INTERVAL);
-  console.log(`[auto-rotate] Enabled, interval=30min`);
+  console.log(`[auto-rotate] Enabled, interval=30min, window=07:30–22:00 Asia/Ho_Chi_Minh`);
 
   // Scheduled lead SLA: 12h warn, 24h recall to shuffle pool
   const SCHEDULED_SLA_INTERVAL = 10 * 60 * 1000;
@@ -17625,13 +17811,14 @@ if (!process.env.VERCEL) {
   setInterval(async () => {
     if (!db) return;
     try {
+      if (!isWithinAutoShuffleHours()) return;
       const r = await processSlaShufflePool(db);
       if (r.assigned > 0) console.log(`[sla-shuffle-pool] assigned=${r.assigned}`);
     } catch (e) {
       console.error("[sla-shuffle-pool] Error:", e.message);
     }
   }, SLA_SHUFFLE_POOL_INTERVAL);
-  console.log("[sla-shuffle-pool] Enabled, interval=5min");
+  console.log("[sla-shuffle-pool] Enabled, interval=5min, window=07:30–22:00 Asia/Ho_Chi_Minh");
 
   setInterval(async () => {
     if (!db) return;

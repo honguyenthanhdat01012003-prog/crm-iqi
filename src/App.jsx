@@ -373,6 +373,75 @@ const INSTANT_SLA_MS = 10 * 60 * 1000;
 const INSTANT_SLA_WARN_MS = 8 * 60 * 1000;
 const INSTANT_SLA_TEAM_MS = 2 * 60 * 60 * 1000;
 const INSTANT_SLA_TEAM_WARN_MS = 90 * 60 * 1000;
+const AUTO_SHUFFLE_WINDOW_START_MIN = 7 * 60 + 30;
+const AUTO_SHUFFLE_WINDOW_END_MIN = 22 * 60;
+const TEAM_OVERNIGHT_SLA_HOUR = 10;
+
+function getVnMinutesSinceMidnightClient(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date instanceof Date ? date : new Date(date));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value || 0);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+  return hour * 60 + minute;
+}
+
+function isOvernightClaimWindowClient(date = new Date()) {
+  const mins = getVnMinutesSinceMidnightClient(date);
+  return !(mins >= AUTO_SHUFFLE_WINDOW_START_MIN && mins < AUTO_SHUFFLE_WINDOW_END_MIN);
+}
+
+function getVnDatePartsClient(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date instanceof Date ? date : new Date(date));
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
+}
+
+function vnWallTimeToDateClient(year, month, day, hour = 0, minute = 0) {
+  return new Date(`${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00+07:00`);
+}
+
+function getTeamInstantSlaDeadlineClient(claimAt) {
+  const start = claimAt instanceof Date ? claimAt : parseLeadDate(claimAt);
+  if (!start || isNaN(start.getTime())) return null;
+  if (!isOvernightClaimWindowClient(start)) {
+    return new Date(start.getTime() + INSTANT_SLA_TEAM_MS);
+  }
+  const p = getVnDatePartsClient(start);
+  const mins = p.hour * 60 + p.minute;
+  let y = p.year;
+  let m = p.month;
+  let d = p.day;
+  if (mins >= AUTO_SHUFFLE_WINDOW_END_MIN) {
+    const noon = vnWallTimeToDateClient(p.year, p.month, p.day, 12, 0);
+    const next = getVnDatePartsClient(new Date(noon.getTime() + 86400000));
+    y = next.year;
+    m = next.month;
+    d = next.day;
+  }
+  return vnWallTimeToDateClient(y, m, d, TEAM_OVERNIGHT_SLA_HOUR, 0);
+}
+
+function getTeamSlaToastMessage(claimAt = new Date()) {
+  if (isOvernightClaimWindowClient(claimAt)) {
+    const d = getTeamInstantSlaDeadlineClient(claimAt);
+    const pad = (n) => String(n).padStart(2, "0");
+    const dp = d ? getVnDatePartsClient(d) : { hour: 10, minute: 0 };
+    return `Team đã nhận lead — giữ đến ${pad(dp.hour)}:${pad(dp.minute)} để cập nhật trạng thái`;
+  }
+  return "Team đã nhận lead — có 2 giờ cập nhật trạng thái";
+}
 
 function getInstantSlaDurationMs(lead) {
   return Number(lead?.teamId) > 0 ? INSTANT_SLA_TEAM_MS : INSTANT_SLA_MS;
@@ -426,21 +495,30 @@ function getInstantSlaInfo(lead) {
   if (st !== "new" || !lead.saleName || lead.saleName === "Chưa chia") return null;
   const isTeam = Number(lead.teamId) > 0;
   const acked = String(lead.instantSlaAcceptedAt || "").trim();
-  // Cá nhân đã ack → hết banner SLA nhận lead. Team vẫn hiện hạn cập nhật trạng thái 2h.
+  // Cá nhân đã ack → hết banner SLA nhận lead. Team vẫn hiện hạn cập nhật trạng thái.
   if (acked && !isTeam) return null;
-  const start = parseLeadDate(lead.assignedAt);
+  const start = isTeam
+    ? (parseLeadDate(lead.instantSlaAcceptedAt) || parseLeadDate(lead.assignedAt))
+    : parseLeadDate(lead.assignedAt);
   if (!start) return null;
-  const slaMs = getInstantSlaDurationMs(lead);
-  const warnMs = getInstantSlaWarnMs(lead);
-  const deadline = new Date(start.getTime() + slaMs);
+  const overnight = isTeam && isOvernightClaimWindowClient(start);
+  const deadline = isTeam
+    ? getTeamInstantSlaDeadlineClient(start)
+    : new Date(start.getTime() + getInstantSlaDurationMs(lead));
+  if (!deadline) return null;
+  const slaMs = deadline.getTime() - start.getTime();
+  const warnMs = isTeam ? Math.max(0, slaMs - 30 * 60 * 1000) : getInstantSlaWarnMs(lead);
   const remain = deadline.getTime() - Date.now();
   const pad = (n) => String(n).padStart(2, "0");
-  const deadlineLabel = `${pad(deadline.getHours())}:${pad(deadline.getMinutes())}`;
+  const dp = getVnDatePartsClient(deadline);
+  const deadlineLabel = `${pad(dp.hour)}:${pad(dp.minute)}`;
   const needsAck = !isTeam && !acked;
   if (remain <= 0) {
     return {
       overdue: true, remainMs: remain, deadlineLabel, level: "overdue", needsAck, acked: !!acked,
-      text: isTeam ? "Quá hạn 2 giờ — sẽ thu hồi nếu chưa cập nhật trạng thái" : "Quá hạn 10 phút — sẽ thu hồi",
+      text: isTeam
+        ? (overnight ? "Quá hạn đến 10:00 — sẽ thu hồi nếu chưa cập nhật trạng thái" : "Quá hạn 2 giờ — sẽ thu hồi nếu chưa cập nhật trạng thái")
+        : "Quá hạn 10 phút — sẽ thu hồi",
     };
   }
   const mins = Math.floor(remain / 60000);
@@ -458,7 +536,9 @@ function getInstantSlaInfo(lead) {
     text: isTeam
       ? (level === "urgent"
         ? `Team: còn ${hours}h${pad(minsInHour)}m cập nhật trạng thái`
-        : `Team: hạn cập nhật ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · SLA 2 giờ)`)
+        : overnight
+          ? `Team: hạn đến ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · nhận đêm)`
+          : `Team: hạn cập nhật ${deadlineLabel} (còn ${hours}h${pad(minsInHour)}m · SLA 2 giờ)`)
       : (level === "urgent"
         ? `Lead New: còn ${mins}p${pad(secs)}s`
         : `Lead New: hạn ${deadlineLabel} (còn ${mins}p)`),
@@ -5369,7 +5449,7 @@ const LeadsPage = (props) => {
       showToast(
         nextStage === "manager_feedback" || String(lead.raceStage) === "manager_race"
           ? "Đã nhận lead — còn 10 phút cập nhật trạng thái để giữ lead"
-          : (Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công"),
+          : (Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? getTeamSlaToastMessage() : "Đã nhận lead thành công"),
         "success"
       );
     } catch (e) {
@@ -5399,7 +5479,7 @@ const LeadsPage = (props) => {
     }
     // Lead team đã claim: không cần bấm ack lần 2 — chỉ cần cập nhật trạng thái trong 2h
     if (Number(lead.teamId) > 0 && String(lead.instantSlaAcceptedAt || "").trim()) {
-      showToast("Team đã nhận lead — hãy cập nhật trạng thái trong hạn 2 giờ", "info");
+      showToast(getTeamSlaToastMessage(parseLeadDate(lead.instantSlaAcceptedAt) || new Date()), "info");
       return;
     }
     setAckingLeadIds((prev) => new Set(prev).add(lead.id));
@@ -5423,9 +5503,9 @@ const LeadsPage = (props) => {
       }
       if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
       if (d.raceClaimed) {
-        showToast(Number(lead.teamId) > 0 || String(lead.raceStage) === "team_offer" ? "Team đã nhận lead — có 2 giờ cập nhật trạng thái" : "Đã nhận lead thành công", "success");
+        showToast(Number(lead.teamId) > 0 || String(lead.raceStage) === "team_offer" ? getTeamSlaToastMessage() : "Đã nhận lead thành công", "success");
       } else {
-        showToast(Number(lead.teamId) > 0 ? "Đã xác nhận — team có 2 giờ cập nhật trạng thái" : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
+        showToast(Number(lead.teamId) > 0 ? getTeamSlaToastMessage().replace("Team đã nhận lead — ", "Đã xác nhận — ") : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
       }
     } catch (e) {
       const msg = String(e?.message || e || "");
@@ -8986,7 +9066,7 @@ const LeadsPage = (props) => {
             const isOn = autoRotateProjects[selectedProject] || false;
             return (
               <div className="crm-leads-toolbar-toggle">
-                <span className={`crm-leads-toolbar-toggle-label${isOn ? " crm-leads-toolbar-toggle-label--on" : ""}`}>Tự động xáo lead</span>
+                <span className={`crm-leads-toolbar-toggle-label${isOn ? " crm-leads-toolbar-toggle-label--on" : ""}`} title="Chỉ xáo tự động 7h30–22h hàng ngày (VN)">Tự động xáo lead</span>
                 <div
                   role="switch"
                   aria-checked={isOn}
@@ -8997,7 +9077,7 @@ const LeadsPage = (props) => {
                       const data = await r.json();
                       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
                       setAutoRotateProjects(prev => ({ ...prev, [selectedProject]: data.enabled }));
-                      showToast(data.enabled ? "Đã BẬT tự động xáo lead (🔥24h / thường 2 ngày)" : "Đã TẮT tự động xáo lead cho dự án này", data.enabled ? "success" : "info");
+                      showToast(data.enabled ? "Đã BẬT tự động xáo (7h30–22h · 🔥24h / thường 2 ngày)" : "Đã TẮT tự động xáo lead cho dự án này", data.enabled ? "success" : "info");
                     } catch (err) { showToast("Lỗi: " + err.message, "error"); }
                   }}
                   className={`crm-switch${isOn ? " crm-switch--on crm-switch--green" : ""}`}
@@ -10058,7 +10138,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           {isClaiming ? "Đang xác nhận..." : "✅ Xác nhận nhận lead"}
         </button>
         <div style={{ fontSize: 12, color: "#94a3b8" }}>
-          {canManagerClaimGate ? "Sau khi nhận còn 10 phút cập nhật trạng thái" : "Sau khi nhận team có 2 giờ cập nhật trạng thái"}
+          {canManagerClaimGate
+            ? "Sau khi nhận còn 10 phút cập nhật trạng thái"
+            : (isOvernightClaimWindowClient()
+              ? "Nhận đêm: sau xác nhận team giữ đến 10:00 sáng để cập nhật"
+              : "Sau khi nhận team có 2 giờ cập nhật trạng thái")}
         </div>
       </div>
     );
