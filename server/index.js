@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-31-manager-rr-race-5m-10m";
+const BUILD_VERSION = "2026-07-31-team-offer-feedback-stops-rotate";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4331,6 +4331,88 @@ async function completeManagerRaceFeedbackIfNeeded(db, leadId, actorName = "") {
   );
   console.log(`[race] lead#${leadId} manager_feedback → claimed by ${actor || lead.manager_name || "?"}`);
   return true;
+}
+
+/**
+ * Sale/team cập nhật trạng thái khi đang team_offer (không bấm "Đã nhận")
+ * → coi như đã nhận, dừng luân chuyển sang team khác.
+ */
+async function completeTeamRaceOfferIfNeeded(db, leadId, actorName = "") {
+  const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+  if (!lead) return false;
+  if (String(lead.race_stage || "").trim() !== LEAD_RACE_STAGES.teamOffer) return false;
+  const offeredTeamId = Number(lead.race_team_id || lead.team_id) || 0;
+  if (!offeredTeamId) return false;
+
+  const actor = String(actorName || "").trim();
+  if (actor) {
+    const member = await get(
+      db,
+      "SELECT id FROM users WHERE team_id = ? AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?)) LIMIT 1",
+      [offeredTeamId, actor]
+    );
+    if (!member) {
+      // Admin cập nhật hộ cũng chấp nhận nếu lead đang offer team này
+      const admin = await get(
+        db,
+        "SELECT id, role FROM users WHERE LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?)) LIMIT 1",
+        [actor]
+      );
+      if (!admin || (admin.role !== "admin" && admin.role !== "manager")) return false;
+    }
+  }
+
+  const team = await getTeamWithMembers(offeredTeamId);
+  const nowIso = new Date().toISOString();
+  const nowVi = getAssignmentNowStr();
+  const leaderName = team?.leaderName || lead.sale_name || actor;
+  await run(
+    db,
+    `UPDATE leads
+     SET race_stage = ?, race_claimed_by = ?, race_claimed_at = ?, race_deadline_at = '',
+         team_id = ?, sale_name = COALESCE(NULLIF(TRIM(sale_name), ''), ?),
+         assigned_at = COALESCE(NULLIF(TRIM(assigned_at), ''), ?),
+         distribution_kind = ?,
+         instant_sla_accepted_at = COALESCE(NULLIF(TRIM(instant_sla_accepted_at), ''), ?),
+         instant_sla_warned_at = ''
+     WHERE id = ? AND race_stage = ?`,
+    [
+      LEAD_RACE_STAGES.claimed,
+      actor || leaderName,
+      nowIso,
+      offeredTeamId,
+      leaderName,
+      nowVi,
+      LEAD_DISTRIBUTION_KINDS.manual,
+      nowVi,
+      leadId,
+      LEAD_RACE_STAGES.teamOffer,
+    ]
+  );
+  const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
+  const nextSeq = (maxSeq?.m ?? -1) + 1;
+  await run(
+    db,
+    "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      leadId,
+      leaderName,
+      "Race claim team",
+      nowVi,
+      "",
+      `${actor || "Sale"} cập nhật trạng thái — tự nhận lead cho team (không bấm xác nhận)`,
+      nextSeq,
+      "race-team-implicit-claim",
+    ]
+  );
+  console.log(`[race] lead#${leadId} team_offer → claimed (implicit) by ${actor || leaderName}`);
+  return true;
+}
+
+async function completeRaceHoldAfterFeedback(db, leadId, actorName = "") {
+  const mgr = await completeManagerRaceFeedbackIfNeeded(db, leadId, actorName);
+  if (mgr) return true;
+  return completeTeamRaceOfferIfNeeded(db, leadId, actorName);
 }
 
 async function sendRaceTeamOfferNotifications(db, projectId, lead, team, projectName = "-") {
@@ -9757,6 +9839,14 @@ async function processLeadRace(db) {
       continue;
     }
     if (stage === LEAD_RACE_STAGES.teamOffer) {
+      // Đã có feedback từ team hiện tại → khóa claimed, không luân sang team khác
+      const saleName = (lead.sale_name || "").trim();
+      const teamId = Number(lead.race_team_id || lead.team_id) || 0;
+      if (await hasSlaFeedbackForCurrentSale(db, lead.id, saleName || "_team_", { teamId })) {
+        await completeTeamRaceOfferIfNeeded(db, lead.id, "");
+        moved += 1;
+        continue;
+      }
       const teams = await getProjectTeamMembersByOrder(projectId);
       const currentIdx = Number(lead.race_team_index) || 0;
       const nextIdx = currentIdx + 1;
@@ -12869,7 +12959,7 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     }
 
     if (isMeaningfulFeedbackHistoryRow({ action: "Cập nhật", status: statusText, feedback: feedbackText })) {
-      await completeManagerRaceFeedbackIfNeeded(db, leadId, saleName);
+      await completeRaceHoldAfterFeedback(db, leadId, saleName);
     }
 
     lastSyncHash = "";
@@ -13471,7 +13561,7 @@ async function handleTelegramWebhook(req, res) {
         );
 
         if (isMeaningfulFeedbackHistoryRow({ action: "Cập nhật (Telegram)", status: statusLabel, feedback: feedbackText })) {
-          await completeManagerRaceFeedbackIfNeeded(db, leadId, saleName);
+          await completeRaceHoldAfterFeedback(db, leadId, saleName);
         }
 
         if (lead?.sale_name && lead?.project_id) {
