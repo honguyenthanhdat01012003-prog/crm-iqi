@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-31-team-offer-feedback-stops-rotate";
+const BUILD_VERSION = "2026-07-31-lock-stops-race-rotate";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4450,6 +4450,7 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
 
 async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
   if (!lead?.id) return { ok: false, reason: "no_lead" };
+  if (Number(lead.is_locked) === 1) return { ok: false, reason: "locked" };
   const projectId = Number(lead.project_id) || 0;
   // Xóa tin Telegram cũ (manager race) trước khi gửi offer team mới
   await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", projectId);
@@ -4611,6 +4612,7 @@ async function syncProject(db, projectId, opts = {}) {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
           for (const lead of newLeads) {
+            if (Number(lead.is_locked) === 1) continue;
             if (managers.length > 0) {
               const offered = await offerRaceLeadToNextManager(db, projectId, lead, managers, projectName);
               if (!offered.ok) {
@@ -9786,10 +9788,29 @@ async function processInstantLeadSLA(db) {
 
 async function processLeadRace(db) {
   const nowIso = new Date().toISOString();
+  // Lead đã khóa mà vẫn còn deadline race → đóng race, không luân nữa
+  await run(
+    db,
+    `UPDATE leads
+     SET race_deadline_at = '',
+         race_stage = CASE
+           WHEN race_stage IN (?, ?, ?) THEN ?
+           ELSE race_stage
+         END
+     WHERE COALESCE(is_locked, 0) = 1
+       AND race_stage IN (?, ?, ?)
+       AND TRIM(COALESCE(race_deadline_at, '')) != ''`,
+    [
+      LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer, LEAD_RACE_STAGES.claimed,
+      LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer,
+    ]
+  ).catch(() => {});
+
   const expired = await all(
     db,
     `SELECT * FROM leads
      WHERE race_stage IN (?, ?, ?)
+       AND COALESCE(is_locked, 0) = 0
        AND TRIM(COALESCE(race_deadline_at, '')) != ''
        AND race_deadline_at <= ?
      ORDER BY id ASC
@@ -12325,6 +12346,9 @@ app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
 async function claimLeadRace(db, leadId, user) {
   const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
   if (!lead) return { status: 404, error: "Không tìm thấy lead" };
+  if (Number(lead.is_locked) === 1) {
+    return { status: 409, error: "Lead đã khóa — không thể nhận/luân chuyển race" };
+  }
   const projectId = Number(lead.project_id) || 0;
   const mode = await getProjectDistributionMode(projectId);
   if (mode !== PROJECT_DISTRIBUTION_MODES.race) {
@@ -13091,11 +13115,24 @@ app.put("/api/leads/:id/lock", requireAuth, requireAdmin, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     const { locked } = req.body; // true = lock, false = unlock
-    const lead = await get(db, "SELECT id, name, sale_name, is_locked FROM leads WHERE id = ?", [leadId]);
+    const lead = await get(db, "SELECT id, name, sale_name, is_locked, race_stage FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead không tồn tại" });
 
     const newLocked = locked ? 1 : 0;
-    await run(db, "UPDATE leads SET is_locked = ? WHERE id = ?", [newLocked, leadId]);
+    if (newLocked) {
+      // Khóa = dừng mọi luân chuyển race/SLA: gỡ deadline, đóng stage mở
+      const openRace = ["manager_race", "manager_feedback", "team_offer"].includes(String(lead.race_stage || "").trim());
+      await run(
+        db,
+        `UPDATE leads SET is_locked = 1,
+           race_deadline_at = '',
+           race_stage = CASE WHEN ? THEN ? ELSE race_stage END
+         WHERE id = ?`,
+        [openRace ? 1 : 0, LEAD_RACE_STAGES.claimed, leadId]
+      );
+    } else {
+      await run(db, "UPDATE leads SET is_locked = 0 WHERE id = ?", [leadId]);
+    }
 
     // Log in history
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
@@ -13103,14 +13140,13 @@ app.put("/api/leads/:id/lock", requireAuth, requireAdmin, async (req, res) => {
     const now = new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     await run(db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, req.user.displayName, locked ? "Khóa lead" : "Mở khóa lead", now, "", locked ? "Admin khóa lead" : "Admin mở khóa lead", nextSeq, "admin"]
+      [leadId, req.user.displayName, locked ? "Khóa lead" : "Mở khóa lead", now, "", locked ? "Admin khóa lead — dừng race/luân chuyển" : "Admin mở khóa lead", nextSeq, "admin"]
     );
 
     lastSyncHash = "";
     emitDataChanged("lock-lead");
-    const data = await readData(db);
-    await filterDataForRole(data, req.user);
-    res.json(data);
+    const updatedLead = await buildUpdatedLeadPayload(db, leadId, req.user);
+    res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
   } catch (err) {
     res.status(500).json({ error: err.message || "Lock/unlock failed" });
   }
