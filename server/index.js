@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-31-lock-stops-race-rotate";
+const BUILD_VERSION = "2026-07-31-lock-blocks-all-rotate";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -630,6 +630,20 @@ const LEAD_RACE_STAGES = {
 const MANAGER_RACE_MS = 5 * 60 * 1000;
 const MANAGER_FEEDBACK_MS = 10 * 60 * 1000;
 const TEAM_RACE_MS = 10 * 60 * 1000;
+
+function isLeadRowLocked(lead) {
+  return Number(lead?.is_locked) === 1;
+}
+
+/** Khóa lead = dừng mọi luân chuyển tự động + từ chối chia/xáo/race cho đến khi mở khóa. */
+async function assertLeadUnlockedForRotate(db, leadId, { allowManualAdmin = false } = {}) {
+  const lead = await get(db, "SELECT id, is_locked, name FROM leads WHERE id = ?", [leadId]);
+  if (!lead) return { ok: false, status: 404, error: "Lead không tồn tại" };
+  if (isLeadRowLocked(lead) && !allowManualAdmin) {
+    return { ok: false, status: 409, error: "Lead đã khóa — mở khóa trước khi luân chuyển/chia lại" };
+  }
+  return { ok: true, lead };
+}
 
 function getAssignmentNowStr() {
   return new Date().toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
@@ -4288,6 +4302,7 @@ async function sendRaceManagerOfferNotifications(db, projectId, lead, managers =
 /** Offer lead mới cho đúng 1 quản lý theo RR cursor dự án. */
 async function offerRaceLeadToNextManager(db, projectId, lead, managers = [], projectName = "-") {
   if (!lead?.id) return { ok: false, reason: "no_lead" };
+  if (isLeadRowLocked(lead)) return { ok: false, reason: "locked" };
   if (!managers.length) return { ok: false, reason: "no_manager" };
   const project = await get(db, "SELECT race_manager_cursor FROM projects WHERE id = ?", [projectId]);
   let cursor = Number(project?.race_manager_cursor) || 0;
@@ -4340,6 +4355,7 @@ async function completeManagerRaceFeedbackIfNeeded(db, leadId, actorName = "") {
 async function completeTeamRaceOfferIfNeeded(db, leadId, actorName = "") {
   const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
   if (!lead) return false;
+  if (isLeadRowLocked(lead)) return false;
   if (String(lead.race_stage || "").trim() !== LEAD_RACE_STAGES.teamOffer) return false;
   const offeredTeamId = Number(lead.race_team_id || lead.team_id) || 0;
   if (!offeredTeamId) return false;
@@ -4450,7 +4466,7 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
 
 async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
   if (!lead?.id) return { ok: false, reason: "no_lead" };
-  if (Number(lead.is_locked) === 1) return { ok: false, reason: "locked" };
+  if (isLeadRowLocked(lead)) return { ok: false, reason: "locked" };
   const projectId = Number(lead.project_id) || 0;
   // Xóa tin Telegram cũ (manager race) trước khi gửi offer team mới
   await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", projectId);
@@ -4487,6 +4503,7 @@ async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
 
 async function moveRaceLeadToManualPool(db, lead, { reason = "Hết vòng team không ai nhận" } = {}) {
   if (!lead?.id) return;
+  if (isLeadRowLocked(lead)) return;
   await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", lead.project_id);
   await run(
     db,
@@ -8771,7 +8788,11 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
     const pid = Number(projectId) || 1;
     // Get unassigned leads (sale_name is empty or 'Chưa chia')
     const leads = await all(db,
-      "SELECT id FROM leads WHERE project_id = ? AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL) ORDER BY id ASC",
+      `SELECT id FROM leads
+       WHERE project_id = ?
+         AND COALESCE(is_locked, 0) = 0
+         AND (sale_name = '' OR sale_name = 'Chưa chia' OR sale_name IS NULL)
+       ORDER BY id ASC`,
       [pid]
     );
     if (!leads.length) return res.json({ msg: "Không có lead nào cần xáo", assigned: 0 });
@@ -9504,6 +9525,7 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   pushTitle = "Lead từ rổ xáo 24h",
   pushBodySuffix = " — vui lòng cập nhật feedback",
 } = {}) {
+  if (isLeadRowLocked(lead)) return null;
   const excluded = [...new Set([...(await getLeadPoolExcludedSales(db, lead.id)), ...excludeSales].filter(Boolean))];
   const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
   if (!ranked.length) return null;
@@ -9541,6 +9563,7 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
 
 async function recallInstantLeadToShufflePool(db, lead, saleName, nowStr) {
   if (!saleName || saleName.toLowerCase() === "chưa chia") return false;
+  if (isLeadRowLocked(lead)) return false;
 
   // Xóa mọi tin Telegram gắn lead (cả team members), rồi mới báo thu hồi
   await deleteTelegramMsgsForLeadSale(db, lead.id, saleName, lead.project_id);
@@ -12347,7 +12370,7 @@ async function claimLeadRace(db, leadId, user) {
   const lead = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
   if (!lead) return { status: 404, error: "Không tìm thấy lead" };
   if (Number(lead.is_locked) === 1) {
-    return { status: 409, error: "Lead đã khóa — không thể nhận/luân chuyển race" };
+    return { status: 409, error: "Lead đã khóa — mở khóa trước khi nhận/luân chuyển race" };
   }
   const projectId = Number(lead.project_id) || 0;
   const mode = await getProjectDistributionMode(projectId);
@@ -12717,6 +12740,9 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     let managerChangeRequested = managerName !== undefined && saleName === undefined;
     let managerChangeApplied = false;
     if (req.user.role === "admin" || req.user.role === "manager") {
+      if (saleName !== undefined && isLeadRowLocked(existCheck)) {
+        return res.status(409).json({ error: "Lead đã khóa — mở khóa trước khi chia/luân chuyển sang sale hoặc team khác" });
+      }
       if (saleId !== undefined) { sets.push("sale_id = ?"); params.push(saleId); }
       if (saleName !== undefined) {
         sets.push("sale_name = ?"); params.push(saleName);
@@ -18738,7 +18764,7 @@ async function buildLeadSourceReport(db, projectIds, projectMap, days) {
   const countBy = (keyFn) => {
     const m = new Map();
     for (const l of leads) {
-      const k = keyFn(l) || "Không rõ";
+      const k = keyFn(l) || "Hệ thống";
       m.set(k, (m.get(k) || 0) + 1);
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);

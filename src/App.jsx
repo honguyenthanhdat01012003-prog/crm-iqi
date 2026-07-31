@@ -10601,7 +10601,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               <span style={{ fontWeight: 700, fontSize: isMobile ? 12.5 : 13, color: lead.isLocked ? "#dc2626" : "#6b7280" }}>
                 {lead.isLocked ? "Lead đã khóa" : "Lead chưa khóa"}
               </span>
-              {lead.isLocked && !isMobile && <span style={{ fontSize: 11, color: "#9ca3af" }}>Không tự luân chuyển sang sale khác</span>}
+              {lead.isLocked && !isMobile && <span style={{ fontSize: 11, color: "#9ca3af" }}>Mọi luân chuyển (race/SLA/xáo) bị chặn — mở khóa mới chia lại được</span>}
             </div>
             <button onClick={async () => {
               try {
@@ -10624,7 +10624,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {!isAdmin && lead.isLocked && (
         <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
           <Lock size={16} color="#dc2626" />
-          <span style={{ color: "#dc2626", fontWeight: 600 }}>Lead đã khóa luân chuyển — bạn vẫn có thể cập nhật tình trạng khách.</span>
+          <span style={{ color: "#dc2626", fontWeight: 600 }}>Lead đã khóa — không luân chuyển / chia lại được cho đến khi Admin mở khóa.</span>
         </div>
       )}
 
@@ -10710,9 +10710,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             const assignedBy = (h.feedback || "").replace(/^Admin\s+/, "").replace(/\s+chia lead$/, "") || "Admin";
             allEvents.push({ type: "chia", saleName: h.saleName, date: h.date, assignedBy, id: h.id, _ts: parseVNDate(h.date) });
           } else if (isRecall) {
-            allEvents.push({ type: "recall", action: h.action, saleName: h.saleName, date: h.date, feedback: h.feedback, id: h.id, _ts: parseVNDate(h.date) });
+            allEvents.push({ type: "recall", action: h.action, saleName: h.saleName || "Hệ thống", date: h.date, feedback: h.feedback, id: h.id, _ts: parseVNDate(h.date) });
           } else {
-            allEvents.push({ type: "contact", saleName: h.saleName || "Không rõ", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id, _ts: parseVNDate(h.date) });
+            allEvents.push({ type: "contact", saleName: h.saleName || "Hệ thống", date: h.date, status: h.status, feedback: h.feedback, source: h.source, id: h.id, _ts: parseVNDate(h.date) });
           }
         });
         allEvents.sort((a, b) => (a._ts || 0) - (b._ts || 0));
