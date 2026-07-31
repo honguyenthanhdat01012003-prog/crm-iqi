@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-07-31-lock-blocks-all-rotate";
+const BUILD_VERSION = "2026-07-31-require-claim-before-feedback";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -633,6 +633,12 @@ const TEAM_RACE_MS = 10 * 60 * 1000;
 
 function isLeadRowLocked(lead) {
   return Number(lead?.is_locked) === 1;
+}
+
+/** Đang chờ bấm nhận (manager_race / team_offer) — chưa được feedback. */
+function requiresRaceClaimBeforeFeedback(lead) {
+  const stage = String(lead?.race_stage || lead?.raceStage || "").trim();
+  return stage === LEAD_RACE_STAGES.managerRace || stage === LEAD_RACE_STAGES.teamOffer;
 }
 
 /** Khóa lead = dừng mọi luân chuyển tự động + từ chối chia/xáo/race cho đến khi mở khóa. */
@@ -3548,7 +3554,8 @@ async function saleCanUpdateLead(leadRow, displayName) {
   ) {
     return { ok: true };
   }
-  const teamId = Number(leadRow.team_id) || 0;
+  // Team đang được offer race: thành viên team (team_id hoặc race_team_id) được xem/claim
+  const teamId = Number(leadRow.team_id || leadRow.race_team_id) || 0;
   if (teamId) {
     try {
       const u = await get(
@@ -9646,7 +9653,7 @@ function isSystemGeneratedFeedbackText(text = "") {
 }
 
 function isMeaningfulFeedbackHistoryRow(row = {}) {
-  if (!row || !row.sale_name) return false;
+  if (!row) return false;
   const action = String(row.action || "").trim();
   if (action === "Chia lead" || action === "Thu hồi SLA") return false;
   const norm = normalizeStatus(row.status || "");
@@ -9661,14 +9668,19 @@ function isMeaningfulFeedbackHistoryRow(row = {}) {
  *  Lead thuộc team: bất kỳ thành viên nào cập nhật cũng được tính (sale_name history = tên thành viên, không phải leader).
  */
 async function hasSlaFeedbackForCurrentSale(db, leadId, saleName, { teamId = 0 } = {}) {
-  if (!leadId || !saleName) return false;
-  const chia = await get(db,
+  if (!leadId) return false;
+  // Ranh giới chu kỳ: Chia lead HOẶC Race claim / Race team offer gần nhất
+  const boundary = await get(db,
     `SELECT seq FROM lead_history
-     WHERE lead_id = ? AND action = 'Chia lead' AND LOWER(TRIM(sale_name)) = LOWER(TRIM(?))
+     WHERE lead_id = ?
+       AND (
+         (action = 'Chia lead' AND (? = '' OR LOWER(TRIM(sale_name)) = LOWER(TRIM(?))))
+         OR action IN ('Race claim team', 'Race team offer', 'Race claim quản lý')
+       )
      ORDER BY seq DESC LIMIT 1`,
-    [leadId, saleName]
+    [leadId, String(saleName || "").trim(), String(saleName || "").trim()]
   );
-  const minSeq = chia ? chia.seq : -1;
+  const minSeq = boundary ? boundary.seq : -1;
 
   const names = new Set([String(saleName || "").trim()].filter(Boolean));
   const tid = Number(teamId) || 0;
@@ -9685,7 +9697,7 @@ async function hasSlaFeedbackForCurrentSale(db, leadId, saleName, { teamId = 0 }
   if (!nameList.length) return false;
   const namePlaceholders = nameList.map(() => "LOWER(TRIM(?))").join(",");
   const rows = await all(db,
-    `SELECT action, status, feedback FROM lead_history
+    `SELECT action, status, feedback, sale_name FROM lead_history
      WHERE lead_id = ? AND seq > ? AND LOWER(TRIM(sale_name)) IN (${namePlaceholders})
        AND action NOT IN ('Chia lead', 'Thu hồi SLA', 'Nhận lead', 'Race claim quản lý', 'Race claim team', 'Race manual pool', 'Race team offer')
      ORDER BY seq DESC`,
@@ -9883,7 +9895,7 @@ async function processLeadRace(db) {
       continue;
     }
     if (stage === LEAD_RACE_STAGES.teamOffer) {
-      // Đã có feedback từ team hiện tại → khóa claimed, không luân sang team khác
+      // Đã có feedback từ team hiện tại (sau lần offer/claim) → khóa claimed, không luân sang team khác
       const saleName = (lead.sale_name || "").trim();
       const teamId = Number(lead.race_team_id || lead.team_id) || 0;
       if (await hasSlaFeedbackForCurrentSale(db, lead.id, saleName || "_team_", { teamId })) {
@@ -12703,8 +12715,17 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
-
-    let { status, notes, saleId, saleName, isHot, managerName, customerFbUrl, phone2, phone3, adminNote } = req.body;
+    // Bắt buộc claim trước khi sale/manager cập nhật status khi đang chờ nhận race
+    if (status !== undefined && req.user.role !== "admin") {
+      const raceLead = await get(db, "SELECT race_stage, status FROM leads WHERE id = ?", [actualLeadId]);
+      if (requiresRaceClaimBeforeFeedback(raceLead)) {
+        return res.status(409).json({
+          error: "Phải bấm \"Đã nhận lead\" trước khi cập nhật trạng thái — nếu không lead sẽ chuyển team khác khi hết hạn.",
+          code: "race_claim_required",
+          raceStage: raceLead?.race_stage || "",
+        });
+      }
+    }
 
     // Chia lead cho TEAM: sale chính = leader, cả nhóm cùng thấy + cùng nhận thông báo
     let assignTeam = null;
@@ -12952,8 +12973,13 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
       if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
 
-
-    const { status, feedback } = req.body;
+    if (requiresRaceClaimBeforeFeedback(lead) && req.user.role !== "admin") {
+      return res.status(409).json({
+        error: "Phải bấm \"Đã nhận lead\" trước khi cập nhật trạng thái — nếu không lead sẽ chuyển team khác khi hết hạn.",
+        code: "race_claim_required",
+        raceStage: lead.race_stage || "",
+      });
+    }
     const statusText = String(status || "").trim();
     const feedbackText = String(feedback || "").trim();
     if (!statusText && !feedbackText) {
@@ -13441,7 +13467,12 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
         console.log(`[telegram-webhook] Callback: chatId=${chatId}, leadId=${leadId}, status=${statusKey} (${statusLabel})`);
 
-        const leadRow = await get(db, "SELECT id, sale_name, team_id FROM leads WHERE id = ?", [leadId]);
+        const leadRow = await get(db, "SELECT id, sale_name, team_id, race_stage, manager_name FROM leads WHERE id = ?", [leadId]);
+        if (requiresRaceClaimBeforeFeedback(leadRow)) {
+          await answerCb(callback_query.id, "Phải bấm Đã nhận lead trước");
+          await sendTg(chatId, "⚠️ *Phải bấm \"✅ Đã nhận lead\" trước* rồi mới chọn trạng thái.\nNếu không nhận, lead sẽ chuyển team khác khi hết hạn.");
+          return res.json({ ok: true });
+        }
         const saleUser = await get(db, "SELECT display_name FROM users WHERE TRIM(COALESCE(telegram_id,'')) = ? LIMIT 1", [chatId]);
         const own = await saleCanUpdateLead(leadRow, saleUser?.display_name || "");
         if (!own.ok) {
@@ -13585,13 +13616,19 @@ async function handleTelegramWebhook(req, res) {
         const statusLabel = TELE_STATUS_LABELS[statusKey] || statusKey;
 
         // Get lead info — fallback by phone if lead_id is stale (sync may have re-created lead with new ID)
-        let lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id FROM leads WHERE id = ?", [leadId]);
+        let lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id, race_stage FROM leads WHERE id = ?", [leadId]);
         if (!lead && pending.phone) {
-          lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [pending.phone]);
+          lead = await get(db, "SELECT id, name, phone, sale_name, project_id, team_id, race_stage FROM leads WHERE phone = ? ORDER BY id DESC LIMIT 1", [pending.phone]);
           if (lead) {
             console.log(`[telegram-webhook] Lead#${leadId} not found, fallback by phone "${pending.phone}" → Lead#${lead.id}`);
             leadId = lead.id;
           }
+        }
+
+        if (requiresRaceClaimBeforeFeedback(lead)) {
+          await run(db, "DELETE FROM telegram_pending WHERE telegram_id = ?", [chatId]);
+          await sendTg(chatId, "⚠️ *Phải bấm \"✅ Đã nhận lead\" trước* rồi mới gửi feedback.\nNếu không nhận, lead sẽ chuyển team khác khi hết hạn.");
+          return res.json({ ok: true });
         }
 
         const saleUser = await get(db, "SELECT display_name FROM users WHERE telegram_id = ?", [chatId]);

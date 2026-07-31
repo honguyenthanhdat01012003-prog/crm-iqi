@@ -9992,6 +9992,78 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const mobilePanelPadding = isMobile ? 10 : 12;
   const layoutCompact = isMobile || inDrawer;
 
+  // Bắt buộc xác nhận nhận lead trước khi xem chi tiết / feedback (web + iOS cùng React)
+  const raceStageNow = String(lead.raceStage || "").trim();
+  const canManagerClaimGate = (user.role === "manager" || user.role === "admin") && raceStageNow === "manager_race"
+    && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
+  const canTeamClaimGate = (user.role === "sale" || user.role === "manager" || user.role === "admin") && raceStageNow === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+  const needsRaceClaimGate = (canManagerClaimGate || canTeamClaimGate) && user.role !== "admin";
+  if (needsRaceClaimGate) {
+    const isClaiming = claimingRaceLeadIds?.has(lead.id) || ackingLeadIds?.has(lead.id);
+    const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
+    const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+    const mins = Math.floor(remainMs / 60000);
+    const secs = Math.floor((remainMs % 60000) / 1000);
+    const onConfirm = claimRaceLead || acknowledgeLeadReceive;
+    return (
+      <div
+        className={inDrawer ? "crm-lead-detail--drawer" : undefined}
+        style={{
+          padding: isMobile ? "24px 16px" : inDrawer ? "32px 20px" : "48px 24px",
+          minHeight: isMobile ? "60vh" : 360,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          gap: 16,
+          background: "linear-gradient(180deg, #ecfeff 0%, #ffffff 55%)",
+        }}
+      >
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#cffafe", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Zap size={32} color="#0e7490" />
+        </div>
+        <div style={{ fontSize: isMobile ? 20 : 22, fontWeight: 800, color: "#0f172a", lineHeight: 1.3 }}>
+          Xác nhận nhận lead
+        </div>
+        <div style={{ fontSize: isMobile ? 15 : 16, fontWeight: 700, color: "#334155" }}>
+          {lead.name || "Khách hàng"}
+        </div>
+        <div style={{ fontSize: 13, color: "#64748b", maxWidth: 360, lineHeight: 1.5 }}>
+          Bấm xác nhận để giữ lead cho team và mở thông tin chi tiết.
+          {deadline ? <> Còn <strong style={{ color: "#0e7490" }}>{mins}p{String(secs).padStart(2, "0")}s</strong>.</> : null}
+          {" "}Chưa xác nhận thì không cập nhật được — hết hạn lead chuyển team khác.
+        </div>
+        <button
+          type="button"
+          disabled={isClaiming || !onConfirm}
+          onClick={(e) => { e.stopPropagation(); onConfirm?.(lead); }}
+          style={{
+            marginTop: 8,
+            width: "100%",
+            maxWidth: 320,
+            minHeight: isMobile ? 56 : 58,
+            border: "none",
+            borderRadius: 14,
+            background: isClaiming ? "#67e8f9" : "#0891b2",
+            color: "#fff",
+            fontSize: isMobile ? 17 : 18,
+            fontWeight: 800,
+            letterSpacing: 0.2,
+            cursor: isClaiming || !onConfirm ? "not-allowed" : "pointer",
+            boxShadow: "0 8px 24px rgba(8, 145, 178, 0.35)",
+            opacity: !onConfirm ? 0.6 : 1,
+          }}
+        >
+          {isClaiming ? "Đang xác nhận..." : "✅ Xác nhận nhận lead"}
+        </button>
+        <div style={{ fontSize: 12, color: "#94a3b8" }}>
+          {canManagerClaimGate ? "Sau khi nhận còn 10 phút cập nhật trạng thái" : "Sau khi nhận team có 2 giờ cập nhật trạng thái"}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
       {(() => {
