@@ -545,6 +545,146 @@ function getInstantSlaInfo(lead) {
   };
 }
 
+/** Trạng thái nút xác nhận nhận lead (race claim / ack SLA) — dùng chung web + iOS mobile. */
+function getLeadReceiveConfirmState(lead, user) {
+  if (!lead || !user) return null;
+  const stage = String(lead.raceStage || "").trim();
+  const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
+    && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
+  const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin")
+    && stage === "team_offer"
+    && Number(lead.raceTeamId || 0) > 0;
+  if (canManagerClaim || canTeamClaim) {
+    const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
+    const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
+    return {
+      kind: "race",
+      canManagerClaim,
+      canTeamClaim,
+      remainMs,
+      deadline,
+      title: "Xác nhận nhận lead",
+      subtitle: canManagerClaim
+        ? "Bấm để giữ lead — còn 10 phút cập nhật trạng thái"
+        : "Bấm để giữ lead cho team — hết hạn sẽ chuyển nhóm khác",
+    };
+  }
+  if (!(user.role === "sale" || user.role === "admin" || user.role === "manager")) return null;
+  if (isOpenRaceStage(lead) || isManagerFeedbackStage(lead)) return null;
+  if (lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
+  if (!lead.saleName || lead.saleName === "Chưa chia" || !lead.assignedAt) return null;
+  const isTeamLead = Number(lead.teamId) > 0;
+  const ackedAt = String(lead.instantSlaAcceptedAt || "").trim();
+  if (ackedAt && !isTeamLead) {
+    return { kind: "acked", ackedAt, title: "Đã nhận lead", subtitle: ackedAt };
+  }
+  const sla = getInstantSlaInfo(lead);
+  if (!sla) return null;
+  if (user.role === "sale" && sla.needsAck) {
+    return {
+      kind: "ack",
+      sla,
+      title: "Xác nhận nhận lead",
+      subtitle: sla.text || "Bấm xác nhận trong 10 phút — không xác nhận sẽ mất lead",
+    };
+  }
+  return { kind: "sla_info", sla, title: sla.text, subtitle: null };
+}
+
+function LeadReceiveConfirmBar({
+  lead,
+  user,
+  compact = false,
+  acknowledgeLeadReceive,
+  claimRaceLead,
+  ackingLeadIds,
+  claimingRaceLeadIds,
+}) {
+  const state = getLeadReceiveConfirmState(lead, user);
+  if (!state || state.kind === "sla_info") return null;
+  // Mobile list: chỉ hiện khi CẦN bấm xác nhận — tránh spam banner "đã nhận"
+  if (compact && state.kind === "acked") return null;
+  if (state.kind === "acked") {
+    return (
+      <div style={{
+        margin: compact ? "0 12px 10px" : "0 0 10px",
+        padding: compact ? "8px 10px" : "10px 14px",
+        background: "#ecfeff",
+        borderRadius: compact ? 10 : 10,
+        border: "1px solid #a5f3fc",
+        fontSize: compact ? 12 : 13,
+        color: "#0e7490",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+      }}>
+        <CheckCircle2 size={compact ? 14 : 16} style={{ flexShrink: 0 }} />
+        <span><strong>Đã nhận lead</strong>{state.ackedAt ? ` · ${state.ackedAt}` : ""}</span>
+      </div>
+    );
+  }
+
+  const busy = !!(ackingLeadIds?.has(lead.id) || claimingRaceLeadIds?.has(lead.id));
+  const onConfirm = () => {
+    if (state.kind === "race") (claimRaceLead || acknowledgeLeadReceive)?.(lead);
+    else acknowledgeLeadReceive?.(lead);
+  };
+  const mins = Math.floor((state.remainMs || 0) / 60000);
+  const secs = Math.floor(((state.remainMs || 0) % 60000) / 1000);
+  const timer = state.deadline
+    ? ` · còn ${mins}p${String(secs).padStart(2, "0")}s`
+    : (state.sla?.text ? ` · ${state.sla.text}` : "");
+
+  return (
+    <div style={{
+      margin: compact ? "0 12px 10px" : "0 0 10px",
+      padding: compact ? "10px" : "12px 14px",
+      background: "#ecfeff",
+      borderRadius: 12,
+      border: "2px solid #22d3ee",
+      boxShadow: compact ? "0 4px 14px rgba(8,145,178,.18)" : "none",
+      display: "flex",
+      flexDirection: "column",
+      gap: 8,
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+        <Zap size={compact ? 18 : 16} color="#0e7490" style={{ flexShrink: 0, marginTop: 1 }} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: compact ? 14 : 13, fontWeight: 800, color: "#0e7490", lineHeight: 1.3 }}>
+            {state.title}{timer}
+          </div>
+          {state.subtitle && (
+            <div style={{ marginTop: 2, fontSize: compact ? 11.5 : 12, color: "#155e75", lineHeight: 1.35, fontWeight: 600 }}>
+              {state.subtitle}
+            </div>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        disabled={busy || !(claimRaceLead || acknowledgeLeadReceive)}
+        onClick={(e) => { e.stopPropagation(); onConfirm(); }}
+        style={{
+          width: "100%",
+          minHeight: compact ? 48 : 44,
+          border: "none",
+          borderRadius: 12,
+          background: busy ? "#67e8f9" : "#0891b2",
+          color: "#fff",
+          fontSize: compact ? 16 : 14,
+          fontWeight: 800,
+          cursor: busy ? "not-allowed" : "pointer",
+          boxShadow: "0 6px 16px rgba(8,145,178,.28)",
+          opacity: busy ? 0.85 : 1,
+        }}
+      >
+        {busy ? "Đang xác nhận..." : "✅ Xác nhận nhận lead"}
+      </button>
+    </div>
+  );
+}
+
 function getTodayStr() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -9185,29 +9325,43 @@ const LeadsPage = (props) => {
                 isLocked ? "crm-lead-card--locked" : "",
               ].filter(Boolean).join(" ")} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : undefined}>
                 {isMobile ? (
-                  <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
-                    style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: isSale ? "1fr 76px 28px" : "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
-                    <span style={{ minWidth: 0 }}>
-                      <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
-                        {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
-                        {isRecentLead(l) && <NewLeadBadge />}
-                        {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
-                        {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
-                        {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
-                        <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                  <>
+                    <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
+                      style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: isSale ? "1fr 76px 28px" : "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
+                          {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
+                          {isRecentLead(l) && <NewLeadBadge />}
+                          {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
+                          {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
+                          {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
+                          <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                        </span>
+                        <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {l.phone || "-"} · {getLeadProjectName(l)}
+                        </span>
                       </span>
-                      <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {l.phone || "-"} · {getLeadProjectName(l)}
+                      <span style={{ minWidth: 0 }}>
+                        <StatusBadge status={l.status} size="sm" />
                       </span>
-                    </span>
-                    <span style={{ minWidth: 0 }}>
-                      <StatusBadge status={l.status} size="sm" />
-                    </span>
-                    <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
-                      {!isSale && formatMobileLeadTime(l.createdAt)}
-                      {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                    </span>
-                  </button>
+                      <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
+                        {!isSale && formatMobileLeadTime(l.createdAt)}
+                        {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      </span>
+                    </button>
+                    {/* iOS/mobile: nút xác nhận phải hiện trên danh sách — trước đây chỉ có trên desktop card */}
+                    {(isSale || isAdmin) && (
+                      <LeadReceiveConfirmBar
+                        lead={l}
+                        user={user}
+                        compact
+                        acknowledgeLeadReceive={acknowledgeLeadReceive}
+                        claimRaceLead={claimRaceLead}
+                        ackingLeadIds={ackingLeadIds}
+                        claimingRaceLeadIds={claimingRaceLeadIds}
+                      />
+                    )}
+                  </>
                 ) : (
                 <div onClick={() => setExpandedIdStable(isOpen ? null : l.id)}
                   style={{ padding: isMobile ? "10px 12px" : "12px 16px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
