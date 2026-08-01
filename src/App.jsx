@@ -9599,9 +9599,18 @@ const LeadsPage = (props) => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{ width: "100%", maxHeight: "92vh", background: "#f8fafc", borderRadius: "18px 18px 0 0", boxShadow: "0 -18px 48px rgba(15,23,42,.26)", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            style={{
+              width: "100%",
+              maxHeight: "min(92vh, calc(100dvh - env(safe-area-inset-top, 0px)))",
+              background: "#f8fafc",
+              borderRadius: "18px 18px 0 0",
+              boxShadow: "0 -18px 48px rgba(15,23,42,.26)",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+            }}
           >
-            <div style={{ padding: "12px 14px", background: "#fff", borderBottom: "1px solid #e2e8f0", display: "grid", gridTemplateColumns: "1fr 38px", gap: 10, alignItems: "center" }}>
+            <div style={{ padding: "12px 14px", background: "#fff", borderBottom: "1px solid #e2e8f0", display: "grid", gridTemplateColumns: "1fr 38px", gap: 10, alignItems: "center", flexShrink: 0 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ color: "#0f172a", fontSize: 14, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{mobileDetailLead.name || "Chi tiết khách hàng"}</div>
                 <div style={{ marginTop: 2, color: "#64748b", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -9612,7 +9621,13 @@ const LeadsPage = (props) => {
                 <X size={18} />
               </button>
             </div>
-            <div style={{ overflowY: "auto", WebkitOverflowScrolling: "touch", paddingBottom: "calc(18px + env(safe-area-inset-bottom))" }}>
+            <div style={{
+              overflowY: "auto",
+              WebkitOverflowScrolling: "touch",
+              flex: 1,
+              minHeight: 0,
+              paddingBottom: "calc(28px + env(safe-area-inset-bottom, 0px))",
+            }}>
               <LeadDetail
                 lead={mobileDetailLead}
                 projectName={getLeadProjectName(mobileDetailLead)}
@@ -9712,8 +9727,12 @@ function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, c
     <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
       <div onClick={onToggle} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 12px", cursor: "pointer", userSelect: "none", background: open ? "#f8fafc" : "#fff" }}>
         {icon}
-        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1f2937", flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
-        <span style={{ fontSize: 11.5, fontWeight: 600, color: summaryColor || "#9ca3af", maxWidth: "42%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#1f2937", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
+          {summary != null && summary !== "" && (
+            <div style={{ marginTop: 2, fontSize: 11.5, fontWeight: 600, color: summaryColor || "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summary}</div>
+          )}
+        </div>
         <span style={{ color: "#9ca3af", fontSize: 10, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s", flexShrink: 0 }}>▼</span>
       </div>
       {open && <div style={{ padding: "10px 12px 12px", borderTop: "1px solid #f1f5f9" }}>{children}</div>}
@@ -10416,18 +10435,26 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         );
       })()}
-      <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))", gap: layoutCompact ? 8 : 16, marginBottom: layoutCompact ? 10 : 12, fontSize: isMobile ? 12 : 13 }}>
-        <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
-        <div style={detailCellStyle}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: layoutCompact ? "1fr 1fr" : "repeat(auto-fill, minmax(140px, 1fr))",
+        gap: layoutCompact ? 8 : 16,
+        marginBottom: layoutCompact ? 10 : 12,
+        fontSize: isMobile ? 12 : 13,
+      }}>
+        {!isMobile && (
+          <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Khách hàng</span><br /><b style={detailValueStyle}>{lead.name}</b></div>
+        )}
+        <div style={{ ...detailCellStyle, gridColumn: isMobile ? "1 / -1" : undefined }}>
           <span style={{ color: "#6b7280", fontSize: 11 }}>SĐT</span><br />
           <b style={detailValueStyle}>{lead.phone || "-"}</b>
           {lead.phone && (
-            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "nowrap" }}>
               {telHref(lead.phone) && (
-                <a href={telHref(lead.phone)} onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#0f3d1e", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#ecfdf3", border: "1px solid #bbf7d0" }}>Gọi</a>
+                <a href={telHref(lead.phone)} onClick={(e) => e.stopPropagation()} style={{ flex: 1, textAlign: "center", fontSize: isMobile ? 13 : 11, color: "#0f3d1e", fontWeight: 800, textDecoration: "none", padding: isMobile ? "10px 8px" : "4px 8px", borderRadius: 8, background: "#ecfdf3", border: "1px solid #bbf7d0", minHeight: isMobile ? 42 : undefined, display: "flex", alignItems: "center", justifyContent: "center" }}>Gọi</a>
               )}
               {zaloHref(lead.phone) && (
-                <a href={zaloHref(lead.phone)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: 11, color: "#0068ff", fontWeight: 700, textDecoration: "none", padding: "4px 8px", borderRadius: 6, background: "#eff6ff", border: "1px solid #bfdbfe" }}>Zalo</a>
+                <a href={zaloHref(lead.phone)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} style={{ flex: 1, textAlign: "center", fontSize: isMobile ? 13 : 11, color: "#0068ff", fontWeight: 800, textDecoration: "none", padding: isMobile ? "10px 8px" : "4px 8px", borderRadius: 8, background: "#eff6ff", border: "1px solid #bfdbfe", minHeight: isMobile ? 42 : undefined, display: "flex", alignItems: "center", justifyContent: "center" }}>Zalo</a>
               )}
             </div>
           )}
@@ -10987,22 +11014,57 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         const formVisible = !isAdmin || showForm;
         return (
           <div style={{ marginBottom: isMobile ? 12 : 16 }}>
-            <h4 style={{ margin: isMobile ? "0 0 9px" : "0 0 12px", fontSize: isMobile ? 13 : 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <ClipboardList size={16} /> {isAdmin ? "Lịch sử đăng ký & Tương tác" : "Cập nhật thông tin khách hàng"}
+            {isMobile ? (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 800, color: "#0f172a", marginBottom: 8 }}>
+                  <ClipboardList size={16} />
+                  {isAdmin ? "Lịch sử đăng ký & Tương tác" : "Cập nhật thông tin khách hàng"}
+                </div>
                 {isAdmin && lead.saleName && lead.saleName !== "Chưa chia" && (
-                  <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 8, background: "#dbeafe", color: "#1e40af", fontWeight: 600 }}>
+                  <div style={{ marginBottom: 8, fontSize: 12, padding: "8px 10px", borderRadius: 10, background: "#dbeafe", color: "#1e40af", fontWeight: 700 }}>
                     Sale hiện tại: {lead.saleName}
-                  </span>
+                  </div>
                 )}
-              </span>
-              {isAdmin && (
-                <button onClick={() => setShowForm(!showForm)}
-                  style={{ ...btnPrimary, padding: isMobile ? "7px 10px" : "4px 12px", fontSize: 12 }}>
-                  {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật thông tin khách hàng</>}
-                </button>
-              )}
-            </h4>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setShowForm(!showForm)}
+                    style={{
+                      ...btnPrimary,
+                      width: "100%",
+                      minHeight: 46,
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      fontWeight: 800,
+                      borderRadius: 12,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                    }}
+                  >
+                    {showForm ? "Hủy cập nhật" : <><RefreshCw size={14} /> Cập nhật thông tin khách hàng</>}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <h4 style={{ margin: "0 0 12px", fontSize: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <ClipboardList size={16} /> {isAdmin ? "Lịch sử đăng ký & Tương tác" : "Cập nhật thông tin khách hàng"}
+                  {isAdmin && lead.saleName && lead.saleName !== "Chưa chia" && (
+                    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 8, background: "#dbeafe", color: "#1e40af", fontWeight: 600 }}>
+                      Sale hiện tại: {lead.saleName}
+                    </span>
+                  )}
+                </span>
+                {isAdmin && (
+                  <button onClick={() => setShowForm(!showForm)}
+                    style={{ ...btnPrimary, padding: "4px 12px", fontSize: 12 }}>
+                    {showForm ? "Hủy" : <><RefreshCw size={12} /> Cập nhật thông tin khách hàng</>}
+                  </button>
+                )}
+              </h4>
+            )}
             {(!isAdmin || formVisible) && (!isAdmin || showForm) && (
               <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: isMobile ? 10 : 12, marginBottom: isMobile ? 10 : 12 }}>
                 <div style={{ display: "flex", gap: isMobile ? 9 : 8, flexDirection: "column" }}>
