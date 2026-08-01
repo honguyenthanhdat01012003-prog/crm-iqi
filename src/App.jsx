@@ -11250,36 +11250,58 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   <div key={blockKey} style={{ marginBottom: 10, borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden", background: "#fff" }}>
                     {/* Block header */}
                     <div onClick={() => setExpandedSaleContact(isExpanded ? null : blockKey)}
-                      style={{ padding: isMobile ? 12 : 14, cursor: "pointer", background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)", borderBottom: isExpanded ? "1px solid #e5e7eb" : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14, color: "#1f2937", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          {(() => { const saleUser = allUsers.find(u => u.displayName === blk.saleName); return saleUser?.avatarUrl ? (
-                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "50%", background: `url(${saleUser.avatarUrl}) center/cover`, flexShrink: 0, border: "2px solid #e88a2e" }} />
+                      style={{
+                        padding: isMobile ? 12 : 14,
+                        cursor: "pointer",
+                        background: isExpanded ? "#f0fdf4" : "linear-gradient(135deg, #f8fafc, #f1f5f9)",
+                        borderBottom: isExpanded ? "1px solid #e5e7eb" : "none",
+                      }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: isMobile ? 10 : 12 }}>
+                        {(() => {
+                          const saleUser = allUsers.find(u => u.displayName === blk.saleName);
+                          return saleUser?.avatarUrl ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: isMobile ? 32 : 28, height: isMobile ? 32 : 28, borderRadius: "50%", background: `url(${saleUser.avatarUrl}) center/cover`, flexShrink: 0, border: "2px solid #e88a2e" }} />
                           ) : (
-                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: "50%", background: blk.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{(blk.saleName || "?")[0]?.toUpperCase()}</span>
-                          ); })()}
-                          <b style={{ color: "#e88a2e" }}>{blk.saleName}</b>
-                          {blk.isImplicit && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: "#f3f4f6", color: "#6b7280" }}>Giao ban đầu</span>}
-                          {ct.length > 0 && (
-                            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStColor + "18", color: lastStColor }}>
-                              {lastStLabel}
+                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: isMobile ? 32 : 28, height: isMobile ? 32 : 28, borderRadius: "50%", background: blk.isImplicit ? "#6b7280" : "#e88a2e", color: "#fff", fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{(blk.saleName || "?")[0]?.toUpperCase()}</span>
+                          );
+                        })()}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                            <b style={{ color: "#e88a2e", fontSize: isMobile ? 13 : 14, fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{blk.saleName}</b>
+                            <span style={{
+                              flexShrink: 0,
+                              fontSize: isMobile ? 11 : 11,
+                              color: "#64748b",
+                              fontWeight: 700,
+                              padding: isMobile ? "4px 8px" : 0,
+                              borderRadius: isMobile ? 8 : 0,
+                              background: isMobile ? "#fff" : "transparent",
+                              border: isMobile ? "1px solid #e2e8f0" : "none",
+                              whiteSpace: "nowrap",
+                            }}>
+                              {isExpanded ? (isMobile ? "Thu gọn ▲" : "Thu gọn ▲") : (isMobile ? "Chi tiết ▼" : "Xem chi tiết ▼")}
                             </span>
-                          )}
-                          {(blk.recalls?.length || 0) > 0 && (
-                            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
-                              Đã thu hồi SLA{blk.recalls.length > 1 ? ` ×${blk.recalls.length}` : ""}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                          {blk.chiaDate && <span>📅 {blk.chiaDate}</span>}
-                          {blk.chiaBy && <span>Người chia: {blk.chiaBy}</span>}
-                          <span>📞 {ct.length} lần gọi</span>
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+                            {blk.isImplicit && <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: "#f3f4f6", color: "#6b7280" }}>Giao ban đầu</span>}
+                            {ct.length > 0 && (
+                              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 600, background: lastStColor + "18", color: lastStColor }}>
+                                {lastStLabel}
+                              </span>
+                            )}
+                            {(blk.recalls?.length || 0) > 0 && (
+                              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 8, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca" }}>
+                                Đã thu hồi SLA{blk.recalls.length > 1 ? ` ×${blk.recalls.length}` : ""}
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap", lineHeight: 1.4 }}>
+                            {blk.chiaDate && <span>📅 {blk.chiaDate}</span>}
+                            {blk.chiaBy && <span>Người chia: {blk.chiaBy}</span>}
+                            <span>📞 {ct.length} lần gọi</span>
+                          </div>
                         </div>
                       </div>
-                      <span style={{ fontSize: 11, color: "#6b7280", flexShrink: 0, display: "flex", alignItems: "center", gap: 4 }}>
-                        {isExpanded ? "Thu gọn ▲" : "Xem chi tiết ▼"}
-                      </span>
                     </div>
 
                     {/* Expanded: calls inside this block */}
@@ -11287,16 +11309,16 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                       <div style={{ padding: isMobile ? "8px 12px 12px 12px" : "8px 14px 14px 14px" }}>
                         {/* Chia lead info line */}
                         {blk.chiaId && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
-                            <span style={{ fontSize: 10, color: "#e88a2e", fontWeight: 600, whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: isMobile ? "wrap" : "nowrap" }}>
+                            {!isMobile && <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />}
+                            <span style={{ fontSize: 10, color: "#e88a2e", fontWeight: 600, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", lineHeight: 1.4 }}>
                               <Share2 size={10} /> Chia lead cho <b>{blk.saleName}</b>
                               {blk.chiaBy && <span style={{ color: "#9ca3af", fontWeight: 400 }}>bởi {blk.chiaBy}</span>}
                               <span style={{ color: "#9ca3af", fontWeight: 400 }}>{blk.chiaDate || ""}</span>
                             </span>
-                            <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+                            {!isMobile && <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />}
                             <button onClick={(e) => { e.stopPropagation(); handleDeleteHistory(blk.chiaId); }}
-                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0 }}
+                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#dc2626", padding: "2px 4px", flexShrink: 0, marginLeft: "auto" }}
                               title="Xóa"><Trash2 size={10} /></button>
                           </div>
                         )}
@@ -11307,12 +11329,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                           const stLabel = STATUS_LABELS[c.status] || c.status || "Chưa feedback";
                           const stColor = STATUS_COLORS[c.status] || "#6b7280";
                           return (
-                            <div key={ci} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: ci < ct.length - 1 ? 6 : 0 }}>
+                            <div key={ci} style={{ position: "relative", paddingLeft: isMobile ? 20 : 24, marginBottom: ci < ct.length - 1 ? 8 : 0 }}>
                               <div style={{ position: "absolute", left: 8, top: 0, bottom: ci < ct.length - 1 ? 0 : "50%", width: 2, background: "#e5e7eb" }} />
                               <div style={{ position: "absolute", left: 8, top: 14, width: isMobile ? 10 : 12, height: 2, background: "#e5e7eb" }} />
                               <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: stColor + "30", border: `2px solid ${stColor}` }} />
                               <div style={{ background: ci % 2 ? "#f9fafb" : "#fff", border: "1px solid #f3f4f6", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 6 : 8 }}>
                                   <span style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                                     Gọi lần {c.num}
                                     <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
@@ -11334,7 +11356,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                                     )}
                                   </div>
                                 </div>
-                                <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4 }}>
+                                <div style={{ fontSize: isMobile ? 12 : 11, color: "#374151", marginTop: 4, overflowWrap: "anywhere", wordBreak: "break-word" }}>
                                   {c.feedback ? c.feedback : <span style={{ color: "#d97706", fontStyle: "italic" }}>Chưa có feedback</span>}
                                 </div>
                               </div>
@@ -11345,8 +11367,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                           <div key={`recall-${ri}`} style={{ marginTop: 8, position: "relative", paddingLeft: isMobile ? 20 : 24 }}>
                             <div style={{ position: "absolute", left: 4, top: 10, width: 10, height: 10, borderRadius: "50%", background: "#fecaca", border: "2px solid #dc2626" }} />
                             <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: isMobile ? "10px 12px" : "8px 10px" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <span style={{ fontWeight: 700, fontSize: 12, color: "#dc2626", display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", justifyContent: "space-between", alignItems: isMobile ? "stretch" : "center", gap: isMobile ? 6 : 8 }}>
+                                <span style={{ fontWeight: 700, fontSize: 12, color: "#dc2626", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                                   🔄 Thu hồi SLA
                                   <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>Đã thu hồi</span>
                                 </span>
@@ -11359,7 +11381,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                                   )}
                                 </div>
                               </div>
-                              <div style={{ fontSize: isMobile ? 12 : 11, color: "#7f1d1d", marginTop: 4 }}>
+                              <div style={{ fontSize: isMobile ? 12 : 11, color: "#7f1d1d", marginTop: 4, overflowWrap: "anywhere" }}>
                                 {r.feedback || "Lead quá hạn chưa feedback — đã chuyển sale khác"}
                               </div>
                             </div>
