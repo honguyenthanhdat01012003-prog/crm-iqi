@@ -10074,9 +10074,28 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
 
   // Bắt buộc xác nhận nhận lead trước khi xem chi tiết / feedback (web + iOS cùng React)
   const raceStageNow = String(lead.raceStage || "").trim();
+  const myTeamIdFromTeams = (() => {
+    const dn = String(user.displayName || "").trim().toLowerCase();
+    if (!dn) return 0;
+    for (const t of (teams || [])) {
+      const members = t.members || [];
+      if (members.some((m) => String(m.displayName || m.display_name || "").trim().toLowerCase() === dn)) {
+        return Number(t.id) || 0;
+      }
+      if (String(t.leaderName || "").trim().toLowerCase() === dn) return Number(t.id) || 0;
+    }
+    const u = (allUsers || []).find((x) => String(x.displayName || x.display_name || "").trim().toLowerCase() === dn);
+    return Number(u?.teamId || u?.team_id || 0) || 0;
+  })();
   const canManagerClaimGate = (user.role === "manager" || user.role === "admin") && raceStageNow === "manager_race"
     && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
-  const canTeamClaimGate = (user.role === "sale" || user.role === "manager" || user.role === "admin") && raceStageNow === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+  // Chỉ thành viên team được offer (hoặc sale) mới bắt gate — QL ngoài team xem chi tiết bình thường
+  const raceTeamIdNow = Number(lead.raceTeamId || 0);
+  const canTeamClaimGate = raceStageNow === "team_offer" && raceTeamIdNow > 0 && (
+    user.role === "sale"
+    || user.role === "admin"
+    || (user.role === "manager" && myTeamIdFromTeams > 0 && myTeamIdFromTeams === raceTeamIdNow)
+  );
   const needsRaceClaimGate = (canManagerClaimGate || canTeamClaimGate) && user.role !== "admin";
   if (needsRaceClaimGate) {
     const isClaiming = claimingRaceLeadIds?.has(lead.id) || ackingLeadIds?.has(lead.id);

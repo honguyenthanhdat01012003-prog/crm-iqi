@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-01-fix-status-undefined-fix";
+const BUILD_VERSION = "2026-08-01-team-bugs-sweep";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3191,13 +3191,21 @@ async function querySaleTabCountsDenorm(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
   const saleName = user.displayName || "";
+  const myTeamId = await getSaleTeamId(user.userId);
+  // Lead team: nếu sale chưa tự feedback thì dùng status chung của lead (đồng đội cập nhật)
   const rows = await all(
     db,
-    `SELECT ${tabStatusSqlExpr("s.sale_tab_status")} as tab_st, COUNT(*) as c
-     FROM (SELECT id FROM leads ${where}) vis
-     LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
+    `SELECT ${tabStatusSqlExpr(`CASE
+        WHEN s.lead_id IS NOT NULL AND LOWER(TRIM(COALESCE(s.sale_tab_status, ''))) NOT IN ('', 'new')
+          THEN s.sale_tab_status
+        WHEN ? > 0 AND COALESCE(l.team_id, 0) = ?
+          THEN l.status
+        ELSE COALESCE(s.sale_tab_status, 'new')
+      END`)} as tab_st, COUNT(*) as c
+     FROM (SELECT id, status, team_id FROM leads ${where}) l
+     LEFT JOIN lead_sale_summary s ON l.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
      GROUP BY tab_st`,
-    [...params, saleName]
+    [myTeamId, myTeamId, ...params, saleName]
   );
   const counts = { all: 0 };
   for (const r of rows) {
@@ -3901,13 +3909,21 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
 
     if (v36DenormReady && statusTab && statusTab !== "all") {
-      const tabExpr = tabStatusSqlExpr("s.sale_tab_status");
+      const myTeamId = await getSaleTeamId(user.userId);
+      // Cá nhân: theo lead_sale_summary; lead team chưa feedback cá nhân → theo status lead (đồng đội)
+      const tabExpr = tabStatusSqlExpr(`CASE
+        WHEN s.lead_id IS NOT NULL AND LOWER(TRIM(COALESCE(s.sale_tab_status, ''))) NOT IN ('', 'new')
+          THEN s.sale_tab_status
+        WHEN ? > 0 AND COALESCE(l.team_id, 0) = ?
+          THEN l.status
+        ELSE COALESCE(s.sale_tab_status, 'new')
+      END`);
       const scopeSql = `
         FROM (SELECT * FROM leads ${where}) l
         LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
           AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
         WHERE ${tabExpr} = ?`;
-      const scopeParams = [...params, saleName, statusTab];
+      const scopeParams = [...params, saleName, myTeamId, myTeamId, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
@@ -4569,6 +4585,20 @@ async function completeTeamRaceOfferIfNeeded(db, leadId, actorName = "") {
     ]
   );
   console.log(`[race] lead#${leadId} team_offer → claimed (implicit) by ${actor || leaderName}`);
+  try {
+    await deleteTelegramMsgsForLeadSale(db, leadId, leaderName || actor, Number(lead.project_id) || 0);
+    if (team) {
+      await notifyTeamMembersAfterRaceClaim(db, {
+        lead: { ...lead, team_id: offeredTeamId, sale_name: leaderName },
+        team,
+        projectId: Number(lead.project_id) || 0,
+        claimedByName: actor || leaderName,
+        claimAt: new Date(),
+      });
+    }
+  } catch (notifyErr) {
+    console.warn(`[race] implicit claim notify lead#${leadId}:`, notifyErr.message);
+  }
   return true;
 }
 
@@ -4597,11 +4627,12 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
   // Gửi Telegram chuẩn cho từng thành viên (cùng format hình 2)
   for (const m of (team.members || [])) {
     const dn = m.displayName || "";
-    if (!dn) continue;
+    if (!dn && !m.id) continue;
     await sendTelegramNewLeadNotification(db, {
       leadId: lead.id,
       saleName: dn,
-      lead: { ...lead, sale_name: dn, assigned_at: nowStr, team_id: team.id },
+      userId: Number(m.id) || 0,
+      lead: { ...lead, sale_name: dn || lead.sale_name, assigned_at: nowStr, team_id: team.id },
       extraLines: [
         `👥 Team: *${escMd(team.name || "")}*`,
         `⏳ _Bấm "✅ Đã nhận lead" để team giữ lead. Ban ngày: 2 giờ cập nhật · Nhận đêm (22h–7h30): giữ đến 10:00 sáng._`,
@@ -9199,13 +9230,34 @@ function buildTelegramNewLeadMessageText(lead, projectName, assignedAt, extraLin
 }
 
 /** Gửi tin Telegram lead mới + lưu message_id để xóa khi quá hạn / thu hồi. */
-async function sendTelegramNewLeadNotification(db, { leadId, saleName, lead = null, extraLines = [], deadlineMinutes = null } = {}) {
-  if (!leadId || !saleName) return null;
+async function sendTelegramNewLeadNotification(db, { leadId, saleName, userId = 0, lead = null, extraLines = [], deadlineMinutes = null } = {}) {
+  if (!leadId || (!saleName && !userId)) return null;
   try {
     const row = lead || await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!row) return null;
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
-    if (!saleUser?.telegram_id) return null;
+    let saleUser = null;
+    if (Number(userId) > 0) {
+      saleUser = await get(
+        db,
+        "SELECT telegram_id FROM users WHERE id = ? AND TRIM(COALESCE(telegram_id,'')) != '' LIMIT 1",
+        [Number(userId)]
+      );
+    }
+    if (!saleUser?.telegram_id && saleName) {
+      // Match không phân biệt hoa thường / khoảng trắng (tránh sót thành viên team)
+      saleUser = await get(
+        db,
+        `SELECT telegram_id FROM users
+         WHERE TRIM(COALESCE(telegram_id,'')) != ''
+           AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?))
+         LIMIT 1`,
+        [saleName]
+      );
+    }
+    if (!saleUser?.telegram_id) {
+      console.warn(`[Telegram] No telegram_id for sale="${saleName || ""}" userId=${userId || 0} lead#${leadId}`);
+      return null;
+    }
     const activeBot = await getBotForProject(row.project_id);
     if (!activeBot?.token) return null;
     const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [row.project_id]);
@@ -9242,7 +9294,14 @@ async function sendTelegramNewLeadNotification(db, { leadId, saleName, lead = nu
 
 async function notifyInstantSlaWarnTelegram(db, lead, saleName) {
   try {
-    const saleUser = await get(db, "SELECT telegram_id FROM users WHERE display_name = ? AND telegram_id != ''", [saleName]);
+    const saleUser = await get(
+      db,
+      `SELECT telegram_id FROM users
+       WHERE TRIM(COALESCE(telegram_id,'')) != ''
+         AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?))
+       LIMIT 1`,
+      [saleName]
+    );
     if (!saleUser?.telegram_id) return;
     const activeBot = await getBotForProject(lead.project_id);
     if (!activeBot?.token) return;
@@ -12637,7 +12696,11 @@ async function claimLeadRace(db, leadId, user) {
       return { status: 403, error: "Lead này không được offer cho team của bạn" };
     }
     const team = await getTeamWithMembers(offeredTeamId);
-    if (!team?.leaderName) return { status: 400, error: "Team chưa có leader để giữ lead" };
+    const leaderOrFallback = team?.leaderName
+      || (team?.members || []).find((m) => m.displayName)?.displayName
+      || user.displayName
+      || "";
+    if (!leaderOrFallback) return { status: 400, error: "Team chưa có thành viên để giữ lead" };
     // Claim = đã xác nhận nhận lead (không bắt bấm lần 2). SLA 2h còn chạy tới khi có feedback.
     const raceUpdate = await run(
       db,
@@ -12648,7 +12711,7 @@ async function claimLeadRace(db, leadId, user) {
        WHERE id = ? AND race_stage = ? AND race_team_id = ?`,
       [
         LEAD_RACE_STAGES.claimed, user.displayName || "", nowIso, nowIso,
-        offeredTeamId, team.leaderName, nowVi, LEAD_DISTRIBUTION_KINDS.manual, nowVi,
+        offeredTeamId, leaderOrFallback, nowVi, LEAD_DISTRIBUTION_KINDS.manual, nowVi,
         leadId, LEAD_RACE_STAGES.teamOffer, offeredTeamId,
       ]
     );
@@ -12656,19 +12719,20 @@ async function claimLeadRace(db, leadId, user) {
     const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [leadId]);
     const nextSeq = (maxSeq?.m ?? -1) + 1;
     const claimNow = new Date();
+    const teamLabel = team?.name || `Team#${offeredTeamId}`;
     const holdHistory = isOvernightClaimWindow(claimNow)
-      ? `${user.displayName || "Sale"} xác nhận cho team ${team.name} — ${getTeamInstantSlaTiming(claimNow).deadlineLabel} cập nhật trạng thái`
-      : `${user.displayName || "Sale"} xác nhận cho team ${team.name} — team có 2 giờ cập nhật trạng thái`;
+      ? `${user.displayName || "Sale"} xác nhận cho team ${teamLabel} — ${getTeamInstantSlaTiming(claimNow).deadlineLabel} cập nhật trạng thái`
+      : `${user.displayName || "Sale"} xác nhận cho team ${teamLabel} — team có 2 giờ cập nhật trạng thái`;
     await run(
       db,
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      [leadId, team.leaderName || user.displayName || "", "Race claim team", nowVi, "", holdHistory, nextSeq, "race-team-claim"]
+      [leadId, leaderOrFallback || user.displayName || "", "Race claim team", nowVi, "", holdHistory, nextSeq, "race-team-claim"]
     );
     // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh B/C còn nút nhận
-    await deleteTelegramMsgsForLeadSale(db, leadId, team.leaderName || user.displayName || "", projectId);
+    await deleteTelegramMsgsForLeadSale(db, leadId, leaderOrFallback || user.displayName || "", projectId);
     await notifyTeamMembersAfterRaceClaim(db, {
       lead,
-      team,
+      team: team || { id: offeredTeamId, name: teamLabel, leaderName: leaderOrFallback, members: [{ id: user.userId, displayName: user.displayName }] },
       projectId,
       claimedByName: user.displayName || "",
       claimAt: claimNow,
@@ -12843,7 +12907,7 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     // QUAN TRỌNG: khách đăng ký nhiều dự án có nhiều dòng lead cùng SĐT — phải khớp
     // ĐÚNG dự án đang thao tác, nếu không sẽ chia nhầm lead của dự án khác (bug chia
     // lead "báo thành công nhưng lead không qua, không có lịch sử").
-    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind, team_id, instant_sla_accepted_at";
+    const LEAD_LOOKUP_COLS = "id, project_id, phone, manager_name, sale_name, created_at, source, notes, ads_id, distribution_kind, team_id, race_stage, race_team_id, is_locked, instant_sla_accepted_at";
     let actualLeadId = leadId;
     let existCheck = await get(db, `SELECT ${LEAD_LOOKUP_COLS} FROM leads WHERE id = ?`, [leadId]);
     const projFilter = bodyProjectId ? " AND project_id = ?" : "";
@@ -12891,10 +12955,12 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
     }
 
     if (req.user.role === "sale") {
-      const lead = existCheck || await get(db, "SELECT sale_name, team_id FROM leads WHERE id = ?", [actualLeadId]);
+      const lead = existCheck || await get(db, "SELECT sale_name, team_id, race_stage, race_team_id, manager_name FROM leads WHERE id = ?", [actualLeadId]);
       const own = await saleCanUpdateLead(lead, req.user.displayName);
       if (!own.ok) return res.status(own.status).json({ error: own.error });
     }
+
+    let { status, notes, saleId, saleName, isHot, managerName, customerFbUrl, phone2, phone3, adminNote } = req.body || {};
 
     // Bắt buộc claim trước khi sale/manager cập nhật status khi đang chờ nhận race
     if (status !== undefined && req.user.role !== "admin") {
@@ -12915,7 +12981,12 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       if (tid) {
         assignTeam = await getTeamWithMembers(tid);
         if (!assignTeam) return res.status(404).json({ error: "Team không tồn tại — tải lại trang rồi thử lại" });
-        if (!assignTeam.leaderName) return res.status(400).json({ error: "Team chưa có leader — vào Quản lý tài khoản chọn leader trước" });
+        if (!assignTeam.leaderName) {
+          // Team chưa gắn leader: dùng thành viên đầu làm sale_name để vẫn chia được
+          const fallback = (assignTeam.members || []).find((m) => m.displayName)?.displayName || "";
+          if (!fallback) return res.status(400).json({ error: "Team chưa có thành viên — vào Quản lý tài khoản gắn sale vào team trước" });
+          assignTeam = { ...assignTeam, leaderName: fallback };
+        }
         saleName = assignTeam.leaderName;
       }
     }
@@ -12968,6 +13039,15 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           sets.push("sla_12h_warned_at = ?"); params.push("");
           sets.push("sla_recalled_at = ?"); params.push("");
           sets.push("instant_sla_accepted_at = ?"); params.push("");
+          // Đóng race đang mở — tránh timer race vẫn luân sau khi admin/QL chia tay
+          sets.push("race_stage = ?"); params.push(assignTeam ? LEAD_RACE_STAGES.claimed : "");
+          sets.push("race_deadline_at = ?"); params.push("");
+          sets.push("race_started_at = ?"); params.push("");
+          sets.push("race_team_id = ?"); params.push(assignTeam ? assignTeam.id : null);
+          sets.push("race_team_index = ?"); params.push(0);
+          sets.push("race_claimed_by = ?"); params.push(saleName || "");
+          sets.push("race_claimed_at = ?"); params.push(new Date().toISOString());
+          sets.push("instant_sla_warned_at = ?"); params.push("");
         }
       }
       // Admin can directly reassign manager (without changing sale)
@@ -13069,35 +13149,49 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       );
 
       setImmediate(() => {
-        sendTelegramNewLeadNotification(db, { leadId: actualLeadId, saleName, lead }).catch((teleErr) => {
-          console.error("[Telegram] Send failed:", teleErr.message);
-        });
         (async () => {
           try {
             const projectRow = lead ? await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]) : null;
-            // Team: push cho TẤT CẢ thành viên; sale lẻ: push 1 người như cũ
-            const pushTargets = assignTeam
-              ? assignTeam.members.map((m) => m.displayName).filter(Boolean)
-              : [saleName];
+            // Team: Telegram + push cho TẤT CẢ thành viên; sale lẻ: 1 người như cũ
+            const notifyTargets = assignTeam
+              ? assignTeam.members.map((m) => ({ name: m.displayName, id: m.id })).filter((m) => m.name || m.id)
+              : [{ name: saleName, id: 0 }];
             const pushTitle = assignTeam ? `Team ${assignTeam.name} có khách mới` : "Bạn có lead mới";
-            for (const target of pushTargets) {
-              sendPushToDisplayName(target, {
-                title: pushTitle,
-                body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
-                tag: `sale-lead-${actualLeadId}-${Date.now()}`,
-                sound: "sale",
-                data: {
-                  url: "/",
-                  type: "sale_new_lead",
-                  leadId: actualLeadId,
-                  phone: lead?.phone || "",
-                  projectId: lead?.project_id,
-                },
-                requireInteraction: true,
-              }).catch(err => console.error(`[Push] Sale notify failed for ${target}:`, err.message));
+            const teleExtra = assignTeam
+              ? [
+                  `👥 Team: *${escMd(assignTeam.name || "")}*`,
+                  `⏳ _Cả team cùng nhận — bấm xác nhận / cập nhật trạng thái trên app._`,
+                ]
+              : [];
+            for (const target of notifyTargets) {
+              await sendTelegramNewLeadNotification(db, {
+                leadId: actualLeadId,
+                saleName: target.name,
+                userId: Number(target.id) || 0,
+                lead: lead ? { ...lead, sale_name: target.name || saleName, team_id: assignTeam ? assignTeam.id : lead.team_id } : null,
+                extraLines: teleExtra,
+              }).catch((teleErr) => {
+                console.error(`[Telegram] Send failed for ${target.name}:`, teleErr.message);
+              });
+              if (target.name) {
+                sendPushToDisplayName(target.name, {
+                  title: pushTitle,
+                  body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
+                  tag: `sale-lead-${actualLeadId}-${target.name}-${Date.now()}`,
+                  sound: "sale",
+                  data: {
+                    url: "/",
+                    type: "sale_new_lead",
+                    leadId: actualLeadId,
+                    phone: lead?.phone || "",
+                    projectId: lead?.project_id,
+                  },
+                  requireInteraction: true,
+                }).catch(err => console.error(`[Push] Sale notify failed for ${target.name}:`, err.message));
+              }
             }
-          } catch (pushErr) {
-            console.error("[Push] Sale notify failed:", pushErr.message);
+          } catch (notifyErr) {
+            console.error("[Notify] Team/sale assign failed:", notifyErr.message);
           }
         })();
       });
