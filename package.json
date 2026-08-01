@@ -9,6 +9,7 @@
     "build:mobile": "vite build --mode capacitor",
     "build:capacitor": "vite build --mode capacitor",
     "preview": "vite preview",
+    "test:payload-slim": "node server/payload-slim.test.js",
     "server": "node server/keeper.js",
     "start": "node server/keeper.js",
     "start:raw": "node server/index.js",

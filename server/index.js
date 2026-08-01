@@ -22,6 +22,7 @@ import {
   parseInventoryQuestionWithGpt,
 } from "./inventoryAsk.js";
 import { syncInventorySource as syncInventorySourceCore } from "./inventorySync.js";
+import { slimCostData, slimSchedulesForList } from "./payload-slim.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -4330,7 +4331,8 @@ async function getBootstrapPayload(db, user) {
       name: p.name,
       leadUrl: user.role === "sale" ? "" : (p.lead_url || ""),
       costUrl: user.role === "sale" ? "" : (p.cost_url || ""),
-      costData: user.role === "sale" ? null : safeJsonParse(p.cost_data),
+      // Summary only — daily cost arrays live in DB; dashboard reads them server-side
+      costData: user.role === "sale" ? null : slimCostData(safeJsonParse(p.cost_data)),
       fbCode: user.role === "sale" ? "" : (p.fb_code || ""),
       fbPerson: user.role === "sale" ? "" : (p.fb_person || ""),
       dailyReportEnabled: Boolean(p.daily_report_enabled),
@@ -7453,98 +7455,67 @@ app.get("/api/data", requireAuth, async (req, res) => {
     }
 
     const { q, filters } = parseLeadsFilters(req);
-    const isLite = q.lite;
 
     // Lite đổi dự án: chờ sync rất ngắn — trước đây 3s làm sale/admin cảm giác đơ
     if (syncInProgress) {
       const waitStart = Date.now();
-      const maxWait = isLite ? 350 : 2000;
+      const maxWait = q.all ? 2000 : 350;
       while (syncInProgress && Date.now() - waitStart < maxWait) await new Promise(r => setTimeout(r, 50));
     }
 
-    // Legacy: admin shuffle tools request full lead list
+    // Legacy: admin tools that explicitly need full lead dump (no schedules/ranking mega-pack)
     if (q.all && (req.user.role === "admin" || req.user.role === "manager")) {
       const data = await readData(db);
       await filterDataForRole(data, req.user);
+      if (Array.isArray(data.projects)) {
+        data.projects = data.projects.map((p) => ({
+          ...p,
+          costData: slimCostData(p.costData),
+        }));
+      }
       const bootstrap = await getBootstrapPayload(db, req.user);
       const tabCounts = await queryLeadsTabCounts(db, req.user, filters);
-      const saleRanking = await querySaleRankingSummary(db, req.user, filters);
-      const payload = await buildDataPayloadExtras(db, req.user, { ...bootstrap, ...data, tabCounts, saleRanking, leadsTotal: data.leads.length, leadsPage: 1, leadsLimit: data.leads.length, paginated: false });
+      stripLeadsForClient(data);
+      const payload = {
+        ...bootstrap,
+        ...data,
+        tabCounts,
+        leadsTotal: data.leads.length,
+        leadsPage: 1,
+        leadsLimit: data.leads.length,
+        paginated: false,
+        hash: await ensureSyncHash(),
+        version: dataVersion,
+      };
       return res.json(payload);
     }
 
-    if (isLite) {
-      const pageData = await queryLeadsPage(db, req.user, filters, q.page, q.limit);
-      let tabCounts;
-      if (!q.skipTabCounts) {
-        tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
-          console.warn("[GET /api/data] tabCounts failed:", e.message);
-          return { all: pageData.leadsTotal || 0 };
-        });
-      }
-      const data = {
-        leads: pageData.leads,
-        leadsTotal: pageData.leadsTotal,
-        leadsPage: q.page,
-        leadsLimit: q.limit,
-        paginated: true,
-        phoneRegistrations: pageData.phoneRegistrations,
-        hash: String(dataVersion),
-        version: dataVersion,
-        noChange: false,
-      };
-      if (tabCounts) data.tabCounts = tabCounts;
-      stripLeadsForClient(data);
-      res.json(data);
-      const totalMs = Date.now() - t0;
-      if (totalMs > 500) {
-        console.log(`[GET /api/data] lite ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} (user=${req.user?.displayName})`);
-      }
-      return;
-    }
-
-    const [bootstrap, pageData, tabCounts, projectLeadCounts] = await Promise.all([
-      getBootstrapPayload(db, req.user).catch((e) => {
-        console.warn("[GET /api/data] bootstrap failed:", e.message);
-        return { leadUrl: "", costUrl: "", projectName: "", lastSync: "", campaigns: [], projects: [] };
-      }),
-      queryLeadsPage(db, req.user, filters, q.page, q.limit),
-      queryLeadsTabCounts(db, req.user, filters).catch((e) => {
+    // Default = lite page (ranking/schedules via /api/data/extras; bootstrap via bootstrapOnly)
+    const pageData = await queryLeadsPage(db, req.user, filters, q.page, q.limit);
+    let tabCounts;
+    if (!q.skipTabCounts) {
+      tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
         console.warn("[GET /api/data] tabCounts failed:", e.message);
-        return { all: 0 };
-      }),
-      queryProjectLeadCounts(db, req.user).catch((e) => {
-        console.error("[GET /api/data] projectLeadCounts failed:", e.message, e.stack);
-        return null;
-      }),
-    ]);
-    let saleRanking = [];
-    try {
-      saleRanking = await querySaleRankingSummary(db, req.user, filters);
-    } catch (e) {
-      console.warn("[GET /api/data] saleRanking skipped:", e.message);
+        return { all: pageData.leadsTotal || 0 };
+      });
     }
-
     const data = {
-      ...bootstrap,
       leads: pageData.leads,
       leadsTotal: pageData.leadsTotal,
       leadsPage: q.page,
       leadsLimit: q.limit,
       paginated: true,
-      tabCounts,
-      saleRanking,
-      projectLeadCounts: projectLeadCounts || undefined,
       phoneRegistrations: pageData.phoneRegistrations,
+      hash: String(dataVersion),
+      version: dataVersion,
+      noChange: false,
     };
+    if (tabCounts) data.tabCounts = tabCounts;
     stripLeadsForClient(data);
-    const payload = await buildDataPayloadExtras(db, req.user, data);
-    res.json(payload);
-
+    res.json(data);
     const totalMs = Date.now() - t0;
-    if (totalMs > 800) {
-      const mb = (Buffer.byteLength(JSON.stringify(payload)) / 1024 / 1024).toFixed(2);
-      console.log(`[GET /api/data] ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} leads, ~${mb}MB (user=${req.user?.displayName})`);
+    if (totalMs > 500) {
+      console.log(`[GET /api/data] lite ${totalMs}ms — page ${q.page}/${pageData.leadsTotal} (user=${req.user?.displayName})`);
     }
   } catch (err) {
     console.error("[GET /api/data]", err?.message || err, err?.stack);
@@ -12510,14 +12481,14 @@ function buildSalePenaltyInsertStmt({ saleName, leadId, leadName, leadPhone, pro
   };
 }
 
-async function enrichSchedulesForResponse(db, rows = []) {
+async function enrichSchedulesForResponse(db, rows = [], { slim = true } = {}) {
   const out = [];
   for (const row of rows) {
     const formatted = formatSchedule(row);
     formatted.progress = await computeScheduleProgress(db, row);
     out.push(formatted);
   }
-  return out;
+  return slim ? slimSchedulesForList(out) : out;
 }
 
 function formatSchedule(s) {

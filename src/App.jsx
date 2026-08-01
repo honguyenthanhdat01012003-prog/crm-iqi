@@ -6416,6 +6416,16 @@ const LeadsPage = (props) => {
 
   const closeAdminDeskMenu = () => setAdminDeskMenu(null);
 
+  /** Sau thao tác bulk — scope/lite, không kéo full /api/data. */
+  const refreshAfterBulkChange = async () => {
+    if (onRefreshLeadScope) await onRefreshLeadScope({ background: false, skipCacheRead: true });
+    else if (onLeadsQueryChange) await onLeadsQueryChange({});
+    else {
+      const r2 = await apiFetch(`${API}/data?lite=1&skipTabCounts=1`);
+      if (r2.ok) applyApiData(await r2.json(), { suppressNotifications: true });
+    }
+  };
+
   const handleRedistributeManagers = async () => {
     if (!selectedProject) { showToast("Chọn dự án trước", "error"); return; }
     if (!(await showConfirm("Phân chia lại TẤT CẢ lead cho các quản lý theo thứ tự xoay vòng?"))) return;
@@ -6426,8 +6436,7 @@ const LeadsPage = (props) => {
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       const distStr = Object.entries(data.distribution).map(([k, v]) => `${k}: ${v}`).join(", ");
       showToast(`Đã phân chia ${data.total} lead cho ${data.managers} quản lý (${distStr})`, "success");
-      const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json(), { suppressNotifications: true });
+      await refreshAfterBulkChange();
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     } finally {
@@ -6442,8 +6451,7 @@ const LeadsPage = (props) => {
       const data = await r.json();
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục xong: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái (${data.total} lead)`, "success");
-      const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json(), { suppressNotifications: true });
+      await refreshAfterBulkChange();
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -6457,8 +6465,7 @@ const LeadsPage = (props) => {
       if (data.error && data.total === 0) { showToast(data.error, "error"); return; }
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục từ backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử (${data.total} lead)`, "success");
-      const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json(), { suppressNotifications: true });
+      await refreshAfterBulkChange();
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -6471,8 +6478,7 @@ const LeadsPage = (props) => {
       const data = await r.json();
       if (!r.ok) { showToast(data.error || "Lỗi", "error"); return; }
       showToast(`Khôi phục từ DB backup: ${data.fixedSale} sale, ${data.fixedStatus} trạng thái, ${data.fixedHistory} lịch sử`, "success");
-      const r2 = await apiFetch(`${API}/data`);
-      applyApiData(await r2.json(), { suppressNotifications: true });
+      await refreshAfterBulkChange();
     } catch (e) {
       showToast("Lỗi: " + e.message, "error");
     }
@@ -7186,9 +7192,7 @@ const LeadsPage = (props) => {
                           const data = await r.json();
                           if (data.error) { showToast(data.error, "error"); setRestoreModal(prev => ({ ...prev, loading: false })); return; }
                           setRestoreModal(prev => ({ ...prev, step: 'done', result: data, loading: false }));
-                          const r2 = await apiFetch(`${API}/data`);
-                          const d2 = await r2.json();
-                          applyApiData(d2, { suppressNotifications: true });
+                          await refreshAfterBulkChange();
                         } catch (e) {
                           showToast("Lỗi: " + e.message, "error");
                           setRestoreModal(prev => ({ ...prev, loading: false }));
@@ -7350,8 +7354,7 @@ const LeadsPage = (props) => {
                           if (!r.ok) { showToast(data.error || "Lỗi", "error"); setRestoreFeedbackModal((prev) => ({ ...prev, loading: false })); return; }
                           setRestoreFeedbackModal((prev) => ({ ...prev, step: "done", result: data, loading: false }));
                           showToast(data.msg, "success");
-                          const r2 = await apiFetch(`${API}/data`);
-                          applyApiData(await r2.json(), { suppressNotifications: true });
+                          await refreshAfterBulkChange();
                         } catch (e) {
                           showToast("Lỗi: " + e.message, "error");
                           setRestoreFeedbackModal((prev) => ({ ...prev, loading: false }));
@@ -7457,9 +7460,7 @@ const LeadsPage = (props) => {
                           if (!r.ok) { showToast(d.error || "Lỗi", "error"); setRecoverModal(prev => ({ ...prev, loading: false })); return; }
                           showToast(`Khôi phục xong: ${d.fixedSale} sale, ${d.fixedStatus} trạng thái, ${d.fixedHistory} lịch sử (${d.total} lead)`, "success");
                           setRecoverModal(null);
-                          const r2 = await apiFetch(`${API}/data`);
-                          const d2 = await r2.json();
-                          applyApiData(d2, { suppressNotifications: true });
+                          await refreshAfterBulkChange();
                         } catch (e) { showToast("Lỗi: " + e.message, "error"); setRecoverModal(prev => ({ ...prev, loading: false })); }
                       }}
                       style={{ ...btnPrimary, padding: "8px 20px", borderRadius: 8, background: "linear-gradient(135deg, #d97706, #b45309)", opacity: recoverModal.selectedBackup && !recoverModal.loading ? 1 : 0.5 }}>
@@ -8243,7 +8244,7 @@ const LeadsPage = (props) => {
                     const totalTours = sch.totalTours || sch.saleNames.length || 1;
                     const curTour = sch.currentTour || 0;
                     const assignedLog = (sch.assignmentLog || []).filter(e => !e.skipped && !e.stopped && e.type !== "schedule_stopped" && e.type !== "sale_done");
-                    const skippedLog = (sch.assignmentLog || []).filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done");
+                    const skippedCount = sch.skippedCount ?? (sch.assignmentLog || []).filter(e => e.skipped || e.stopped || e.type === "schedule_stopped" || e.type === "sale_done").length;
                     const progress = sch.progress || {};
                     const overallDone = progress.assigned ?? assignedLog.filter(e => e.type === "assigned").length;
                     const overallTotal = sch.totalCount || 0;
@@ -8291,7 +8292,7 @@ const LeadsPage = (props) => {
                           Tour {Math.min(curTour + 1, totalTours)}/{totalTours} | Đã chia: {overallDone}/{overallTotal} ({distributePct}%)
                           {overallDone > 0 && ` | Phản hồi: ${feedbackCount}/${overallDone} (${feedbackPct}%)`}
                           {pendingCount > 0 && ` | Chưa FB: ${pendingCount}`}
-                          {skippedLog.length > 0 && ` | Bỏ qua/dừng: ${skippedLog.length}`}
+                          {skippedCount > 0 && ` | Bỏ qua/dừng: ${skippedCount}`}
                           {sch.lastProcessedDate && ` | Lần cuối: ${sch.lastProcessedDate}`}
                         </div>
                       </div>
@@ -15054,8 +15055,12 @@ function SalesPage({ ranking, leads, projects, isAdmin, apiFetch, applyApiData }
     try {
       const res = await apiFetch(`/api/leads/${dragId}`, { method: "PUT", body: JSON.stringify({ status: newStatus }) });
       if (res.ok) {
-        const r2 = await apiFetch("/api/data");
-        if (r2.ok) { const d = await r2.json(); applyApiData(d, { suppressNotifications: true }); }
+        const d = await res.json().catch(() => ({}));
+        if (d.updatedLead) {
+          applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
+        } else {
+          applyApiData({ updatedLead: { ...lead, status: newStatus } }, { suppressNotifications: true });
+        }
       }
     } catch {}
     setDragId(null);
