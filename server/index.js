@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-01-team-sla-overnight-until-10";
+const BUILD_VERSION = "2026-08-01-fix-status-undefined-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -13161,6 +13161,8 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
         raceStage: lead.race_stage || "",
       });
     }
+
+    const { status, feedback } = req.body || {};
     const statusText = String(status || "").trim();
     const feedbackText = String(feedback || "").trim();
     if (!statusText && !feedbackText) {
