@@ -5936,6 +5936,14 @@ const LeadsPage = (props) => {
     return [...projectLeadSales].sort();
   };
 
+  const getProjectAssignMeta = (projectId) => {
+    const p = (Array.isArray(projects) ? projects : []).find((x) => Number(x.id) === Number(projectId));
+    return {
+      distributionMode: p?.distributionMode || "log",
+      projectTeamIds: Array.isArray(p?.teamIdsOrdered) ? p.teamIdsOrdered : [],
+    };
+  };
+
   // Auto-default shuffleStartDate to earliest lead date when project changes
   useEffect(() => {
     if (!shuffleProject) { setShuffleStartDate(""); return; }
@@ -9373,7 +9381,7 @@ const LeadsPage = (props) => {
                 )}
                 {isOpen && !isMobile && (
                   <div style={{ borderTop: "1px solid #e5e7eb" }}>
-                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} acknowledgeLeadReceive={acknowledgeLeadReceive} ackingLeadIds={ackingLeadIds} claimRaceLead={claimRaceLead} claimingRaceLeadIds={claimingRaceLeadIds} />
+                    <LeadDetail lead={l} projectName={getLeadProjectName(l)} isAdmin={isAdmin} user={user} applyApiData={applyApiData} saleNames={getProjectSaleNames(l.projectId)} managerNames={allManagerNames} isMobile={isMobile} allUsers={allUsers} phoneRegistrations={phoneRegistrations} teams={teams} {...getProjectAssignMeta(l.projectId)} acknowledgeLeadReceive={acknowledgeLeadReceive} ackingLeadIds={ackingLeadIds} claimRaceLead={claimRaceLead} claimingRaceLeadIds={claimingRaceLeadIds} />
                   </div>
                 )}
               </div>
@@ -9418,6 +9426,7 @@ const LeadsPage = (props) => {
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
                 teams={teams}
+                {...getProjectAssignMeta(drawerLead.projectId)}
                 acknowledgeLeadReceive={acknowledgeLeadReceive}
                 ackingLeadIds={ackingLeadIds}
                 claimRaceLead={claimRaceLead}
@@ -9462,6 +9471,7 @@ const LeadsPage = (props) => {
                 allUsers={allUsers}
                 phoneRegistrations={phoneRegistrations}
                 teams={teams}
+                {...getProjectAssignMeta(mobileDetailLead.projectId)}
                 acknowledgeLeadReceive={acknowledgeLeadReceive}
                 ackingLeadIds={ackingLeadIds}
                 claimRaceLead={claimRaceLead}
@@ -9557,8 +9567,12 @@ function DetailAccordion({ icon, title, summary, summaryColor, open, onToggle, c
   );
 }
 
-function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [], acknowledgeLeadReceive, ackingLeadIds, claimRaceLead, claimingRaceLeadIds }) {
+function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames = [], managerNames = [], isMobile = false, inDrawer = false, allUsers = [], phoneRegistrations = {}, teams = [], distributionMode = "log", projectTeamIds = [], acknowledgeLeadReceive, ackingLeadIds, claimRaceLead, claimingRaceLeadIds }) {
   const isSale = user.role === "sale";
+  const isRaceProject = (distributionMode || "log") === "race";
+  const assignableTeams = isRaceProject
+    ? teams.filter((t) => !projectTeamIds.length || projectTeamIds.includes(t.id))
+    : [];
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [registrations, setRegistrations] = useState([]);
@@ -9568,7 +9582,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   const [saving, setSaving] = useState(false);
   const [editStatus, setEditStatus] = useState(lead.status || "new");
   const [savingStatus, setSavingStatus] = useState(false);
-  const [editSale, setEditSale] = useState(lead.saleName || "");
+  const [editSale, setEditSale] = useState(
+    lead.teamId ? `team:${lead.teamId}` : (lead.saleName || "")
+  );
   const [savingSale, setSavingSale] = useState(false);
   const [editManager, setEditManager] = useState("");
   const [savingManager, setSavingManager] = useState(false);
@@ -10556,23 +10572,24 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         );
       })()}
 
-      {/* Admin: Chia lead cho Sale */}
+      {/* Admin: Chia lead cho Sale / Team */}
       {isAdmin && (() => {
         const saleBody = (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select value={editSale} onChange={(e) => setEditSale(e.target.value)}
               style={{ padding: mobileControlPadding, borderRadius: 8, border: "1px solid #d1d5db", fontSize: isMobile ? 13 : 12, minWidth: 160, flex: isMobile ? "1 1 auto" : "none", minHeight: mobileControlHeight, background: "#fff", color: editSale ? "#1f2937" : "#9ca3af" }}>
-              <option value="">-- Chọn Sale --</option>
-              {teams.length > 0 && (
-                <optgroup label="Team (cả nhóm cùng nhận)">
-                  {teams.map(t => (
-                    <option key={`team-${t.id}`} value={`team:${t.id}`}>
-                      Team {t.name} — {t.members.length} người{t.leaderName ? ` (leader ${t.leaderName})` : ""}
-                    </option>
-                  ))}
-                </optgroup>
+              <option value="">{isRaceProject ? "-- Chọn Team --" : "-- Chọn Sale --"}</option>
+              {isRaceProject ? (
+                assignableTeams.length > 0
+                  ? assignableTeams.map((t) => (
+                      <option key={`team-${t.id}`} value={`team:${t.id}`}>
+                        Team {t.name} — {t.members.length} người{t.leaderName ? ` (leader ${t.leaderName})` : ""}
+                      </option>
+                    ))
+                  : <option value="" disabled>Chưa gắn team cho dự án này</option>
+              ) : (
+                saleNames.map((s) => <option key={s} value={s}>{s}</option>)
               )}
-              {saleNames.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <button onClick={handleAssignSale} disabled={savingSale || !editSale}
               style={{ ...btnPrimary, padding: mobileButtonPadding, fontSize: isMobile ? 12.5 : 12, background: !editSale ? "#c5d9c8" : "linear-gradient(135deg, #e88a2e, #d97706)", minHeight: mobileControlHeight, width: "auto" }}>
@@ -10584,7 +10601,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           return (
             <DetailAccordion
               icon={<Share2 size={14} color="#1a3c20" />}
-              title="Sale phụ trách"
+              title={isRaceProject ? "Team phụ trách" : "Sale phụ trách"}
               summary={(() => {
                 const t = lead.teamId ? teams.find(x => x.id === lead.teamId) : null;
                 return t ? `Team ${t.name} · ${lead.saleName || "?"}` : (lead.saleName || "Chưa chia");
@@ -10600,12 +10617,20 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         return (
           <div style={{ background: "#f0faf1", border: "1px solid #c5d9c8", borderRadius: 8, padding: mobilePanelPadding, marginBottom: 16, fontSize: 13 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-              <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> Sale phụ trách:</b>
-              {lead.saleName
-                ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
-                : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
-              }
-              {lead.teamId && (() => {
+              <b style={{ fontSize: 12, color: "#1a3c20", display: "flex", alignItems: "center", gap: 4 }}><Share2 size={14} /> {isRaceProject ? "Team phụ trách:" : "Sale phụ trách:"}</b>
+              {isRaceProject && lead.teamId ? (() => {
+                const t = teams.find(x => x.id === lead.teamId);
+                return t
+                  ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }} title={`Cả team cùng chăm: ${t.members.map(m => m.displayName).join(", ")}`}>Team {t.name} · {t.members.length} người</span>
+                  : (lead.saleName
+                    ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
+                    : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>);
+              })() : (
+                lead.saleName
+                  ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#e8f5e9", color: "#1a3c20" }}>{lead.saleName}</span>
+                  : <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#fef2f2", color: "#dc2626" }}>Chưa chia</span>
+              )}
+              {!isRaceProject && lead.teamId && (() => {
                 const t = teams.find(x => x.id === lead.teamId);
                 return t ? <span style={{ padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }} title={`Cả team cùng chăm: ${t.members.map(m => m.displayName).join(", ")}`}>Team {t.name} · {t.members.length} người</span> : null;
               })()}

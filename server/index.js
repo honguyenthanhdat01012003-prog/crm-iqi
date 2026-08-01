@@ -50,7 +50,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-01-team-bugs-sweep";
+const BUILD_VERSION = "2026-08-01-race-team-shuffle";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -789,6 +789,82 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
     args: [saleName, ts, kind || LEAD_DISTRIBUTION_KINDS.manual, leadId],
     now: ts,
   };
+}
+
+/** Gán lead cho TEAM (race): sale_name = leader, team_id gắn team, đóng race mở. */
+function buildLeadAssignTeamUpdateStmt(team, leadId, kind, now = null, { teamIndex = 0 } = {}) {
+  const ts = now || getAssignmentNowStr();
+  const leaderName = team?.leaderName || (team?.members || []).find((m) => m.displayName)?.displayName || "";
+  const teamId = Number(team?.id) || 0;
+  return {
+    sql: `UPDATE leads
+           SET sale_name = ?, sale_id = NULL, team_id = ?, status = 'new', raw_status = '',
+               assigned_at = ?, distribution_kind = ?,
+               race_stage = ?, race_deadline_at = '', race_started_at = '',
+               race_team_id = ?, race_team_index = ?,
+               race_claimed_by = ?, race_claimed_at = ?,
+               sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '',
+               instant_sla_warned_at = '', instant_sla_accepted_at = ?
+           WHERE id = ?`,
+    args: [
+      leaderName,
+      teamId || null,
+      ts,
+      kind || LEAD_DISTRIBUTION_KINDS.manual,
+      LEAD_RACE_STAGES.claimed,
+      teamId || null,
+      Number(teamIndex) || 0,
+      leaderName,
+      new Date().toISOString(),
+      ts,
+      leadId,
+    ],
+    now: ts,
+    leaderName,
+    teamId,
+  };
+}
+
+function teamMemberDisplayNames(team) {
+  return [...new Set((team?.members || []).map((m) => String(m.displayName || "").trim()).filter(Boolean))];
+}
+
+function teamNamesLowerSet(team) {
+  return new Set(teamMemberDisplayNames(team).map((n) => n.toLowerCase()));
+}
+
+/** Chọn team tiếp theo khi xáo/rotate trên dự án chia theo team (race). */
+function pickNextTeamForRotate(teams, { currentTeamId = 0, currentSaleName = "", pastSaleNames = new Set(), seed = 0 } = {}) {
+  if (!Array.isArray(teams) || !teams.length) return null;
+  const curId = Number(currentTeamId) || 0;
+  const curSale = String(currentSaleName || "").trim().toLowerCase();
+  const pastLower = new Set([...pastSaleNames].map((s) => String(s || "").trim().toLowerCase()).filter(Boolean));
+
+  const isCurrent = (t) => {
+    if (curId && Number(t.id) === curId) return true;
+    if (curSale && teamNamesLowerSet(t).has(curSale)) return true;
+    return false;
+  };
+  const receivedBefore = (t) => {
+    if (isCurrent(t)) return true;
+    const names = teamNamesLowerSet(t);
+    for (const s of pastLower) {
+      if (names.has(s)) return true;
+    }
+    return false;
+  };
+
+  const pick = (list) => {
+    if (!list.length) return null;
+    return list[Math.abs(Number(seed) || 0) % list.length];
+  };
+
+  const unreceived = teams.filter((t) => !receivedBefore(t));
+  if (unreceived.length) return pick(unreceived);
+
+  const others = teams.filter((t) => !isCurrent(t));
+  if (others.length) return pick(others);
+  return null; // chỉ 1 team / không còn team khác → không xáo
 }
 
 function buildLeadUnassignUpdateStmt(leadId) {
@@ -9726,7 +9802,8 @@ async function processScheduledLeadSLA(db) {
   return { recalled, warned };
 }
 
-/** Gán lead (từ rổ xáo / thu hồi SLA) cho sale hiệu suất tốt nhất — CRM hiện người phụ trách mới ngay. */
+/** Gán lead (từ rổ xáo / thu hồi SLA) cho sale hiệu suất tốt nhất — CRM hiện người phụ trách mới ngay.
+ *  Dự án race (chia theo team): gán sang team kế tiếp, không chia lẻ từng sale. */
 async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   excludeSales = [],
   source = "sla-shuffle-pool",
@@ -9738,6 +9815,61 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
 } = {}) {
   if (isLeadRowLocked(lead)) return null;
   const excluded = [...new Set([...(await getLeadPoolExcludedSales(db, lead.id)), ...excludeSales].filter(Boolean))];
+  const mode = await getProjectDistributionMode(lead.project_id);
+
+  if (mode === PROJECT_DISTRIBUTION_MODES.race) {
+    const teams = await getProjectTeamMembersByOrder(lead.project_id);
+    const nextTeam = pickNextTeamForRotate(teams, {
+      currentTeamId: Number(lead.team_id) || 0,
+      currentSaleName: lead.sale_name || "",
+      pastSaleNames: new Set(excluded),
+      seed: lead.id,
+    });
+    if (!nextTeam) return null;
+    const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, distributionKind, nowStr, {
+      teamIndex: Number(nextTeam.sortOrder) || 0,
+    });
+    if (!assign.leaderName) return null;
+    const teamNote = `Chia cho team ${nextTeam.name || assign.leaderName} — ${historyNote}`;
+    const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+    const nextSeq = (maxSeqRow?.m ?? -1) + 1;
+    await db.batch([
+      { sql: assign.sql, args: assign.args },
+      {
+        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        args: [lead.id, assign.leaderName, "Chia lead", nowStr, "", teamNote, nextSeq, source],
+      },
+    ], "write");
+
+    const updated = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+    const members = teamMemberDisplayNames(nextTeam);
+    const teleExtra = [
+      ...telegramExtraLines,
+      `👥 Team: *${escMd(nextTeam.name || "")}*`,
+      "⏳ _Cả team cùng nhận — cập nhật trạng thái trên app._",
+    ];
+    for (const dn of members) {
+      const member = (nextTeam.members || []).find((m) => String(m.displayName || "").trim() === dn);
+      await sendTelegramNewLeadNotification(db, {
+        leadId: lead.id,
+        saleName: dn,
+        userId: Number(member?.id) || 0,
+        lead: updated ? { ...updated, sale_name: dn, team_id: nextTeam.id } : null,
+        extraLines: teleExtra,
+      }).catch((err) => console.error(`[Telegram] SLA team assign failed for ${dn}:`, err.message));
+      sendPushToDisplayName(dn, {
+        title: pushTitle,
+        body: `Team ${nextTeam.name}: ${updated?.name || "Khách"}${pushBodySuffix}`,
+        tag: `sla-shuffle-pool-team-${nextTeam.id}-${lead.id}-${Date.now()}`,
+        sound: "sale",
+        data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id, teamId: nextTeam.id },
+        requireInteraction: true,
+      }).catch((err) => console.error(`[Push] SLA team assign failed for ${dn}:`, err.message));
+    }
+    await refreshLeadTabDenorm(db, lead.id);
+    return assign.leaderName;
+  }
+
   const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
   if (!ranked.length) return null;
 
@@ -10291,7 +10423,7 @@ async function processAutoRotate(db) {
 
   // Get candidate leads (assigned, not locked/booked)
   const candidates = await all(db,
-    `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id, l.distribution_kind
+    `SELECT l.id, l.name, l.phone, l.sale_name, l.status, l.project_id, l.distribution_kind, l.team_id
      FROM leads l
      WHERE l.sale_name != '' AND l.sale_name != 'Chưa chia' AND l.sale_name IS NOT NULL
        AND l.status NOT IN ('booked', 'booking_other', 'closed')
@@ -10304,7 +10436,18 @@ async function processAutoRotate(db) {
 
   let rotated = 0;
   const stmts = [];
-  const rotatedLeads = []; // { leadId, saleName, name, phone, projectId, isSprint }
+  const rotatedLeads = []; // { leadId, saleName, memberNames?, teamName?, name, phone, projectId, isSprint }
+
+  const distModeCache = new Map();
+  const projectTeamsCache = new Map();
+  const getCachedDistMode = async (pid) => {
+    if (!distModeCache.has(pid)) distModeCache.set(pid, await getProjectDistributionMode(pid));
+    return distModeCache.get(pid);
+  };
+  const getCachedProjectTeams = async (pid) => {
+    if (!projectTeamsCache.has(pid)) projectTeamsCache.set(pid, await getProjectTeamMembersByOrder(pid));
+    return projectTeamsCache.get(pid);
+  };
 
   // Helper: parse date from VN or ISO format (includes time)
   const parseDate = (dateStr) => {
@@ -10323,8 +10466,10 @@ async function processAutoRotate(db) {
 
   for (const lead of filtered) {
     const isSprint = sprintProjectIds.has(lead.project_id);
+    const distMode = await getCachedDistMode(lead.project_id);
+    const isRaceProject = distMode === PROJECT_DISTRIBUTION_MODES.race;
     const projectHotSales = hotSalesByProject[lead.project_id];
-    const hasHotConfig = projectHotSales && projectHotSales.size > 0;
+    const hasHotConfig = !isRaceProject && projectHotSales && projectHotSales.size > 0;
     const currentSaleIsHot = hasHotConfig && projectHotSales.has(lead.sale_name);
 
     // Skip rotating trash leads (pha/rac and related unreachable contacts)
@@ -10363,16 +10508,27 @@ async function processAutoRotate(db) {
       thresholdMs = 2 * 24 * 60 * 60 * 1000; // 2 days
     }
 
+    // Sale names dùng để đo thời gian cập nhật (lead team: bất kỳ thành viên nào)
+    let holderNames = [lead.sale_name].filter(Boolean);
+    if (Number(lead.team_id) > 0) {
+      try {
+        const curTeam = await getTeamWithMembers(lead.team_id);
+        const names = teamMemberDisplayNames(curTeam);
+        if (names.length) holderNames = names;
+      } catch (_) { /* ignore */ }
+    }
+    const holderPlaceholders = holderNames.map(() => "?").join(",");
+
     // --- Get the relevant date to check ---
     let checkDate = null;
 
     if (isSprint) {
-      // Sprint: count from the last "Chia lead" action for this sale
+      // Sprint: count from the last "Chia lead" action for this sale/team
       const chiaEntry = await get(db,
         `SELECT contact_date FROM lead_history
-         WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead'
+         WHERE lead_id = ? AND sale_name IN (${holderPlaceholders}) AND action = 'Chia lead'
          ORDER BY seq DESC LIMIT 1`,
-        [lead.id, lead.sale_name]
+        [lead.id, ...holderNames]
       );
       if (chiaEntry) checkDate = parseDate(chiaEntry.contact_date);
       if (!checkDate || isNaN(checkDate.getTime())) continue;
@@ -10380,9 +10536,9 @@ async function processAutoRotate(db) {
       // Normal: count from last update/status change
       const latestUpdate = await get(db,
         `SELECT contact_date, action FROM lead_history
-         WHERE lead_id = ? AND sale_name = ?
+         WHERE lead_id = ? AND sale_name IN (${holderPlaceholders})
          ORDER BY seq DESC LIMIT 1`,
-        [lead.id, lead.sale_name]
+        [lead.id, ...holderNames]
       );
       if (!latestUpdate) continue;
 
@@ -10392,9 +10548,9 @@ async function processAutoRotate(db) {
       // Use latest status change date if exists (not just "Chia lead")
       const latestStatusChange = await get(db,
         `SELECT contact_date FROM lead_history
-         WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead' AND status != ''
+         WHERE lead_id = ? AND sale_name IN (${holderPlaceholders}) AND action != 'Chia lead' AND status != ''
          ORDER BY seq DESC LIMIT 1`,
-        [lead.id, lead.sale_name]
+        [lead.id, ...holderNames]
       );
       if (latestStatusChange) {
         const d = parseDate(latestStatusChange.contact_date);
@@ -10404,17 +10560,68 @@ async function processAutoRotate(db) {
 
     if (now.getTime() - checkDate.getTime() < thresholdMs) continue;
 
-    // --- Find next sale (unified flow) ---
+    const pastSales = await all(db,
+      `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
+      [lead.id]
+    );
+    const pastSaleNames = new Set(pastSales.map(r => r.sale_name).filter(Boolean));
+    pastSaleNames.add(lead.sale_name);
+
+    // --- Race project: xáo theo TEAM (có cấu hình team) ---
+    if (isRaceProject) {
+      const projectTeams = await getCachedProjectTeams(lead.project_id);
+      if (projectTeams.length) {
+        const nextTeam = pickNextTeamForRotate(projectTeams, {
+          currentTeamId: Number(lead.team_id) || 0,
+          currentSaleName: lead.sale_name || "",
+          pastSaleNames,
+          seed: lead.id,
+        });
+        if (!nextTeam) continue;
+        const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, LEAD_DISTRIBUTION_KINDS.rotate, nowStr, {
+          teamIndex: Number(nextTeam.sortOrder) || 0,
+        });
+        if (!assign.leaderName) continue;
+
+        stmts.push({ sql: assign.sql, args: assign.args });
+        const maxSeq = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+        const nextSeq = (maxSeq?.m ?? -1) + 1;
+        const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
+        const source = isSprint ? "sprint-rotate" : "auto-rotate";
+        const fromLabel = Number(lead.team_id)
+          ? `team#${lead.team_id}`
+          : (lead.sale_name || "?");
+        const reason = isSprint
+          ? `Nước rút: team ${fromLabel} không chốt trong 12h → team ${nextTeam.name}`
+          : `Tự động xáo theo team (${fromLabel} không cập nhật >${thresholdLabel}) → team ${nextTeam.name}`;
+        stmts.push({
+          sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+          args: [lead.id, assign.leaderName, "Chia lead", nowStr, "", reason, nextSeq, source],
+        });
+        stmts.push({
+          sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, lead.sale_name || "", assign.leaderName, nowStr, source, reason],
+        });
+        rotatedLeads.push({
+          leadId: lead.id,
+          saleName: assign.leaderName,
+          memberNames: teamMemberDisplayNames(nextTeam),
+          teamName: nextTeam.name || "",
+          name: lead.name || "",
+          phone: lead.phone || "",
+          projectId: lead.project_id,
+          isSprint: !!isSprint,
+        });
+        rotated++;
+        continue;
+      }
+      // Race nhưng chưa gắn team → fallback chia theo sale bên dưới
+    }
+
+    // --- Find next sale (unified flow) — dự án chia theo sale ---
     let nextSale = null;
 
     if (hasHotConfig) {
-      const pastSales = await all(db,
-        `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
-        [lead.id]
-      );
-      const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
-      pastSaleNames.add(lead.sale_name);
-
       // Try hot sales first
       const allHotNames = [...projectHotSales];
       const unreceivedHot = allHotNames.filter(s => !pastSaleNames.has(s));
@@ -10442,13 +10649,6 @@ async function processAutoRotate(db) {
         }
       }
     } else {
-      const pastSales = await all(db,
-        `SELECT DISTINCT sale_name FROM lead_history WHERE lead_id = ? AND action = 'Chia lead'`,
-        [lead.id]
-      );
-      const pastSaleNames = new Set(pastSales.map(r => r.sale_name));
-      pastSaleNames.add(lead.sale_name);
-
       const projectSales = await all(db,
         `SELECT DISTINCT u.display_name FROM users u
          INNER JOIN user_projects up ON up.user_id = u.id
@@ -10502,12 +10702,22 @@ async function processAutoRotate(db) {
     emitDataChanged("auto-rotate");
     console.log(`[auto-rotate] Rotated ${rotated} leads`);
 
-    // Push / socket cho sale nhận lead xáo — trước đây chỉ emitDataChanged → điện thoại im
+    // Push / socket cho sale/team nhận lead xáo — trước đây chỉ emitDataChanged → điện thoại im
     try {
-      const bySale = new Map();
+      const notifyItems = [];
       for (const item of rotatedLeads) {
-        if (!bySale.has(item.saleName)) bySale.set(item.saleName, []);
-        bySale.get(item.saleName).push(item);
+        const targets = (item.memberNames && item.memberNames.length)
+          ? item.memberNames
+          : [item.saleName];
+        for (const dn of targets) {
+          if (!dn) continue;
+          notifyItems.push({ ...item, notifyName: dn });
+        }
+      }
+      const bySale = new Map();
+      for (const item of notifyItems) {
+        if (!bySale.has(item.notifyName)) bySale.set(item.notifyName, []);
+        bySale.get(item.notifyName).push(item);
       }
       for (const [saleName, items] of bySale.entries()) {
         const first = items[0];
@@ -10516,9 +10726,12 @@ async function processAutoRotate(db) {
           : null;
         const extra = items.length > 1 ? ` và ${items.length - 1} lead khác` : "";
         const kindLabel = first.isSprint ? "nước rút" : "tự động xáo";
+        const teamPrefix = first.teamName ? `Team ${first.teamName}: ` : "";
         sendPushToDisplayName(saleName, {
-          title: `Bạn có ${items.length} lead ${kindLabel}`,
-          body: `${projectRow ? projectRow.name : "-"}: ${first.name || "N/A"}${first.phone ? ` • ${first.phone}` : ""}${extra}`,
+          title: first.teamName
+            ? `Team ${first.teamName} có ${items.length} lead ${kindLabel}`
+            : `Bạn có ${items.length} lead ${kindLabel}`,
+          body: `${teamPrefix}${projectRow ? projectRow.name : "-"}: ${first.name || "N/A"}${first.phone ? ` • ${first.phone}` : ""}${extra}`,
           tag: `sale-rotate-${saleName}-${Date.now()}`,
           sound: "sale",
           data: {
