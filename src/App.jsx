@@ -295,8 +295,10 @@ function getVnCalendarDay(date) {
   return date.toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
 }
 
-/** Khớp tag NEW trên bảng — lead nhận trong ngày (VN). */
+/** Khớp tag NEW trên bảng — lead nhận trong ngày (VN) hoặc rotate_new (xáo từ team im). */
 function isNewTaggedLead(lead) {
+  const kind = String(lead?.distributionKind || lead?.distribution_kind || "").trim();
+  if (kind === "rotate_new") return true;
   const created = parseLeadDate(lead?.createdAt || lead?.created_at);
   if (!created) return false;
   return getVnCalendarDay(created) === getVnCalendarDay(new Date());
@@ -362,8 +364,9 @@ function sortLeadsForSaleView(leads, sortConfig) {
 }
 
 function isInstantSlaEligibleLeadClient(lead) {
-  if (!isNewTaggedLead(lead)) return false;
   const kind = String(lead?.distributionKind || "").trim();
+  if (kind === "rotate_new") return true;
+  if (!isNewTaggedLead(lead)) return false;
   return kind === "manual" || kind === "instant_chain";
 }
 

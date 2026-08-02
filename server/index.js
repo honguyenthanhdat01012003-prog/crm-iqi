@@ -23,6 +23,12 @@ import {
 } from "./inventoryAsk.js";
 import { syncInventorySource as syncInventorySourceCore } from "./inventorySync.js";
 import { slimCostData, slimSchedulesForList } from "./payload-slim.js";
+import {
+  shouldMultiHoldOnRotate,
+  formatTeamRotateLabel,
+  filterHistoryForTeamMembers,
+  rotateDistributionKind,
+} from "./leadTeamHolders.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -535,7 +541,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 44; // Bump this when adding new DDL/migrations
+const DB_VERSION = 45; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -693,9 +699,12 @@ async function isInstantSlaEligibleLead(db, lead, assignedAt) {
   const saleName = (lead.sale_name || lead.saleName || "").trim();
   if (!saleName) return false;
 
+  const kind = String(lead.distribution_kind || "").trim();
+  // Auto-rotate NEW path: re-arm SLA for receiving team even if created_at is old
+  if (kind === LEAD_DISTRIBUTION_KINDS.rotateNew) return true;
+
   if (!isNewTaggedLead(lead)) return false;
 
-  const kind = String(lead.distribution_kind || "").trim();
   if (kind !== LEAD_DISTRIBUTION_KINDS.manual && kind !== LEAD_DISTRIBUTION_KINDS.instantChain) {
     return false;
   }
@@ -737,6 +746,8 @@ const LEAD_DISTRIBUTION_KINDS = {
   manual: "manual",
   shuffle: "shuffle",
   rotate: "rotate",
+  /** Auto-rotate khi team cũ chưa feedback — UI/SLA coi như NEW cho team nhận */
+  rotateNew: "rotate_new",
   slaShuffle: "sla_shuffle",
   /** Lead MKT mới — chuyển sale B sau thu hồi 10p (vẫn trong chuỗi instant, không phải rổ xáo 24h) */
   instantChain: "instant_chain",
@@ -793,10 +804,39 @@ function buildLeadAssignUpdateStmt(saleName, leadId, kind, now = null) {
 }
 
 /** Gán lead cho TEAM (race): sale_name = leader, team_id gắn team, đóng race mở. */
-function buildLeadAssignTeamUpdateStmt(team, leadId, kind, now = null, { teamIndex = 0 } = {}) {
+function buildLeadAssignTeamUpdateStmt(team, leadId, kind, now = null, { teamIndex = 0, keepStatus = false } = {}) {
   const ts = now || getAssignmentNowStr();
   const leaderName = team?.leaderName || (team?.members || []).find((m) => m.displayName)?.displayName || "";
   const teamId = Number(team?.id) || 0;
+  if (keepStatus) {
+    return {
+      sql: `UPDATE leads
+           SET sale_name = ?, sale_id = NULL, team_id = ?,
+               assigned_at = ?, distribution_kind = ?,
+               race_stage = ?, race_deadline_at = '', race_started_at = '',
+               race_team_id = ?, race_team_index = ?,
+               race_claimed_by = ?, race_claimed_at = ?,
+               sla_12h_warned_at = '', sla_recalled_at = '', shuffle_pool_at = '',
+               instant_sla_warned_at = '', instant_sla_accepted_at = ?
+           WHERE id = ?`,
+      args: [
+        leaderName,
+        teamId || null,
+        ts,
+        kind || LEAD_DISTRIBUTION_KINDS.manual,
+        LEAD_RACE_STAGES.claimed,
+        teamId || null,
+        Number(teamIndex) || 0,
+        leaderName,
+        new Date().toISOString(),
+        ts,
+        leadId,
+      ],
+      now: ts,
+      leaderName,
+      teamId,
+    };
+  }
   return {
     sql: `UPDATE leads
            SET sale_name = ?, sale_id = NULL, team_id = ?, status = 'new', raw_status = '',
@@ -866,6 +906,67 @@ function pickNextTeamForRotate(teams, { currentTeamId = 0, currentSaleName = "",
   const others = teams.filter((t) => !isCurrent(t));
   if (others.length) return pick(others);
   return null; // chỉ 1 team / không còn team khác → không xáo
+}
+
+async function getActiveHolderTeamIds(dbConn, leadId) {
+  const id = Number(leadId) || 0;
+  if (!id) return [];
+  try {
+    const rows = await all(
+      dbConn,
+      `SELECT team_id FROM lead_team_holders
+       WHERE lead_id = ? AND TRIM(COALESCE(revoked_at, '')) = ''`,
+      [id]
+    );
+    return rows.map((r) => Number(r.team_id) || 0).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+async function syncLeadTeamHoldersPrimary(dbConn, leadId, teamId, joinKind, nowStr, { revokeOthers = false } = {}) {
+  const lid = Number(leadId) || 0;
+  const tid = Number(teamId) || 0;
+  if (!lid || !tid) return;
+  const ts = nowStr || getAssignmentNowStr();
+  const kind = String(joinKind || "").trim() || "manual";
+  if (revokeOthers) {
+    await run(
+      dbConn,
+      `UPDATE lead_team_holders SET is_primary = 0, revoked_at = ?
+       WHERE lead_id = ? AND team_id != ? AND TRIM(COALESCE(revoked_at, '')) = ''`,
+      [ts, lid, tid]
+    );
+  } else {
+    await run(dbConn, `UPDATE lead_team_holders SET is_primary = 0 WHERE lead_id = ?`, [lid]);
+  }
+  await run(
+    dbConn,
+    `INSERT INTO lead_team_holders(lead_id, team_id, is_primary, joined_at, join_kind, revoked_at)
+     VALUES(?, ?, 1, ?, ?, '')
+     ON CONFLICT(lead_id, team_id) DO UPDATE SET
+       is_primary = 1,
+       revoked_at = '',
+       join_kind = excluded.join_kind,
+       joined_at = excluded.joined_at`,
+    [lid, tid, ts, kind]
+  );
+}
+
+async function ensureLeadTeamHolder(dbConn, leadId, teamId, joinKind, nowStr) {
+  const lid = Number(leadId) || 0;
+  const tid = Number(teamId) || 0;
+  if (!lid || !tid) return;
+  const ts = nowStr || getAssignmentNowStr();
+  await run(
+    dbConn,
+    `INSERT INTO lead_team_holders(lead_id, team_id, is_primary, joined_at, join_kind, revoked_at)
+     VALUES(?, ?, 0, ?, ?, '')
+     ON CONFLICT(lead_id, team_id) DO UPDATE SET
+       revoked_at = '',
+       joined_at = CASE WHEN TRIM(COALESCE(lead_team_holders.joined_at, '')) = '' THEN excluded.joined_at ELSE lead_team_holders.joined_at END`,
+    [lid, tid, ts, String(joinKind || "manual")]
+  );
 }
 
 function buildLeadUnassignUpdateStmt(leadId) {
@@ -1611,6 +1712,36 @@ async function initDb() {
   if (dbVersion < 44) {
     console.log("[DB] v44 migration: race_manager_cursor (RR offer 1 quan ly / lead)");
     try { await run(db, "ALTER TABLE projects ADD COLUMN race_manager_cursor INTEGER DEFAULT 0"); } catch (_) {}
+  }
+  if (dbVersion < 45) {
+    console.log("[DB] v45 migration: lead_team_holders (multi-team keep on auto-rotate)");
+    await run(db, `CREATE TABLE IF NOT EXISTS lead_team_holders (
+      lead_id INTEGER NOT NULL,
+      team_id INTEGER NOT NULL,
+      is_primary INTEGER NOT NULL DEFAULT 0,
+      joined_at TEXT NOT NULL DEFAULT '',
+      join_kind TEXT NOT NULL DEFAULT '',
+      revoked_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (lead_id, team_id)
+    )`);
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lth_team ON lead_team_holders(team_id)"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_lth_lead_primary ON lead_team_holders(lead_id, is_primary)"); } catch (_) {}
+    // Backfill primary holder from current leads.team_id
+    const withTeam = await all(db, "SELECT id, team_id, assigned_at, distribution_kind FROM leads WHERE COALESCE(team_id, 0) > 0");
+    for (const row of withTeam) {
+      const tid = Number(row.team_id) || 0;
+      if (!tid) continue;
+      await run(
+        db,
+        `INSERT INTO lead_team_holders(lead_id, team_id, is_primary, joined_at, join_kind, revoked_at)
+         VALUES(?, ?, 1, ?, ?, '')
+         ON CONFLICT(lead_id, team_id) DO UPDATE SET
+           is_primary = 1,
+           revoked_at = '',
+           joined_at = COALESCE(NULLIF(TRIM(lead_team_holders.joined_at), ''), excluded.joined_at)`,
+        [row.id, tid, row.assigned_at || "", row.distribution_kind || "manual"]
+      );
+    }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3754,7 +3885,7 @@ async function getProjectTeamMembersByOrder(projectId) {
   return out;
 }
 
-/** Sale được cập nhật lead nếu: đang là sale phụ trách HOẶC là thành viên team của lead. */
+/** Sale được cập nhật lead nếu: đang là sale phụ trách HOẶC là thành viên team primary/co-holder. */
 async function saleCanUpdateLead(leadRow, displayName) {
   if (!leadRow) return { ok: false, status: 404, error: "Lead không tồn tại" };
   if (matchSaleName(leadRow.sale_name, displayName)) return { ok: true };
@@ -3766,9 +3897,13 @@ async function saleCanUpdateLead(leadRow, displayName) {
   ) {
     return { ok: true };
   }
-  // Team đang được offer race: thành viên team (team_id hoặc race_team_id) được xem/claim
-  const teamId = Number(leadRow.team_id || leadRow.race_team_id) || 0;
-  if (teamId) {
+  const teamIds = new Set();
+  const primaryTid = Number(leadRow.team_id || leadRow.race_team_id) || 0;
+  if (primaryTid) teamIds.add(primaryTid);
+  try {
+    for (const tid of await getActiveHolderTeamIds(db, leadRow.id)) teamIds.add(tid);
+  } catch (_) {}
+  for (const teamId of teamIds) {
     try {
       const u = await get(
         db,
@@ -3816,7 +3951,7 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     const dn = user.displayName || "";
     const teamId = await getSaleTeamId(user.userId);
     // Sale đang phụ trách HOẶC đã feedback thật (không còn tab "new") — sale bị thu hồi SLA không thấy lead
-    // Lead chia cho TEAM: mọi thành viên team cùng thấy (leads.team_id)
+    // Lead chia cho TEAM: primary team_id HOẶC co-holder trong lead_team_holders
     parts.push(`(
       LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
       OR EXISTS (
@@ -3827,9 +3962,14 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
       )
       ${teamId ? "OR (race_stage = ? AND race_team_id = ?)" : ""}
       ${teamId ? "OR leads.team_id = ?" : ""}
+      ${teamId ? `OR EXISTS (
+        SELECT 1 FROM lead_team_holders lth
+        WHERE lth.lead_id = leads.id AND lth.team_id = ?
+          AND TRIM(COALESCE(lth.revoked_at, '')) = ''
+      )` : ""}
     )`);
     params.push(dn, dn);
-    if (teamId) params.push(LEAD_RACE_STAGES.teamOffer, teamId, teamId);
+    if (teamId) params.push(LEAD_RACE_STAGES.teamOffer, teamId, teamId, teamId);
   }
 
   if (filters.projectId && filters.projectId !== "all") {
@@ -10045,7 +10185,7 @@ async function getInstantSlaAssignmentTime(db, lead) {
 async function processInstantLeadSLA(db) {
   const now = Date.now();
   const nowStr = getAssignmentNowStr();
-  const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain];
+  const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain, LEAD_DISTRIBUTION_KINDS.rotateNew];
   const placeholders = instantKinds.map(() => "?").join(",");
   // Cá nhân: thu hồi nếu chưa bấm "Đã nhận lead".
   // Team: sau khi claim vẫn thu hồi nếu quá 2h chưa cập nhật trạng thái/feedback (bỏ qua instant_sla_accepted_at).
@@ -10549,8 +10689,23 @@ async function processAutoRotate(db) {
           seed: lead.id,
         });
         if (!nextTeam) continue;
-        const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, LEAD_DISTRIBUTION_KINDS.rotate, nowStr, {
+
+        const priorTeamId = Number(lead.team_id) || 0;
+        let priorTeam = null;
+        if (priorTeamId) {
+          try { priorTeam = await getTeamWithMembers(priorTeamId); } catch (_) { priorTeam = null; }
+        }
+        const priorHadFeedback = await hasSlaFeedbackForCurrentSale(
+          db,
+          lead.id,
+          lead.sale_name || "",
+          { teamId: priorTeamId }
+        );
+        const multiHold = shouldMultiHoldOnRotate(priorHadFeedback);
+        const distKind = rotateDistributionKind(priorHadFeedback);
+        const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, distKind, nowStr, {
           teamIndex: Number(nextTeam.sortOrder) || 0,
+          keepStatus: multiHold,
         });
         if (!assign.leaderName) continue;
 
@@ -10559,12 +10714,15 @@ async function processAutoRotate(db) {
         const nextSeq = (maxSeq?.m ?? -1) + 1;
         const thresholdLabel = thresholdMs < 86400000 ? `${thresholdMs / 3600000}h` : `${thresholdMs / 86400000} ngày`;
         const source = isSprint ? "sprint-rotate" : "auto-rotate";
-        const fromLabel = Number(lead.team_id)
-          ? `team#${lead.team_id}`
-          : (lead.sale_name || "?");
-        const reason = isSprint
-          ? `Nước rút: team ${fromLabel} không chốt trong 12h → team ${nextTeam.name}`
-          : `Tự động xáo theo team (${fromLabel} không cập nhật >${thresholdLabel}) → team ${nextTeam.name}`;
+        const fromLabel = formatTeamRotateLabel(priorTeam || { id: priorTeamId, name: "" });
+        const toLabel = formatTeamRotateLabel(nextTeam);
+        const reason = multiHold
+          ? (isSprint
+            ? `Nước rút: ${fromLabel} im >12h — giữ team đã feedback, thêm ${toLabel}`
+            : `Tự động xáo: ${fromLabel} không cập nhật >${thresholdLabel} — giữ team đã feedback, thêm ${toLabel}`)
+          : (isSprint
+            ? `Nước rút: ${fromLabel} không nhận/feedback trong 12h → ${toLabel} (NEW)`
+            : `Tự động xáo: ${fromLabel} không nhận/cập nhật >${thresholdLabel} → ${toLabel} (NEW)`);
         stmts.push({
           sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
           args: [lead.id, assign.leaderName, "Chia lead", nowStr, "", reason, nextSeq, source],
@@ -10573,6 +10731,8 @@ async function processAutoRotate(db) {
           sql: "INSERT INTO auto_rotate_log(lead_id, lead_name, lead_phone, project_id, from_sale, to_sale, rotated_at, source, reason) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
           args: [lead.id, lead.name || "", lead.phone || "", lead.project_id, lead.sale_name || "", assign.leaderName, nowStr, source, reason],
         });
+
+        // Holders sync after batch — queue for post-commit
         rotatedLeads.push({
           leadId: lead.id,
           saleName: assign.leaderName,
@@ -10582,6 +10742,10 @@ async function processAutoRotate(db) {
           phone: lead.phone || "",
           projectId: lead.project_id,
           isSprint: !!isSprint,
+          multiHold,
+          nextTeamId: Number(nextTeam.id) || 0,
+          priorTeamId,
+          distKind,
         });
         rotated++;
         continue;
@@ -10669,6 +10833,26 @@ async function processAutoRotate(db) {
 
   if (stmts.length > 0) {
     await db.batch(stmts, "write");
+    // Sync multi-team holders after rotate batch
+    for (const item of rotatedLeads) {
+      if (!item.nextTeamId) continue;
+      try {
+        if (item.multiHold) {
+          if (item.priorTeamId) {
+            await ensureLeadTeamHolder(db, item.leadId, item.priorTeamId, "rotate-keep", nowStr);
+          }
+          await syncLeadTeamHoldersPrimary(db, item.leadId, item.nextTeamId, item.distKind || "rotate", nowStr, {
+            revokeOthers: false,
+          });
+        } else {
+          await syncLeadTeamHoldersPrimary(db, item.leadId, item.nextTeamId, item.distKind || "rotate_new", nowStr, {
+            revokeOthers: true,
+          });
+        }
+      } catch (holdErr) {
+        console.error(`[auto-rotate] holder sync lead#${item.leadId}:`, holdErr.message);
+      }
+    }
     lastSyncHash = "";
     emitDataChanged("auto-rotate");
     console.log(`[auto-rotate] Rotated ${rotated} leads`);
@@ -12749,9 +12933,18 @@ app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     let history = await fetchLeadHistoryFormatted(db, leadId);
     if (req.user.role === "sale") {
-      history = history.filter((h) =>
-        h.action === "Chia lead" || matchSaleName(h.saleName, req.user.displayName)
-      );
+      const teamId = await getSaleTeamId(req.user.userId);
+      let memberNames = [req.user.displayName || ""];
+      if (teamId) {
+        try {
+          const team = await getTeamWithMembers(teamId);
+          const names = teamMemberDisplayNames(team);
+          if (names.length) memberNames = names;
+        } catch (_) {}
+      }
+      history = filterHistoryForTeamMembers(history, memberNames, {
+        normalizeName: (s) => normalizePersonNameServer(s),
+      });
     }
     res.json({ history });
   } catch (err) {
@@ -13404,9 +13597,23 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
       const updatedLead = await buildUpdatedLeadPayload(db, actualLeadId, req.user);
       res.json(updatedLead ? { updatedLead, version: dataVersion } : { ok: true, version: dataVersion });
       setImmediate(() => {
-        refreshLeadTabDenorm(db, actualLeadId).catch((e) =>
-          console.error("[assign] refreshLeadTabDenorm:", e.message)
-        );
+        (async () => {
+          try {
+            await refreshLeadTabDenorm(db, actualLeadId);
+            if (assignTeam?.id) {
+              await syncLeadTeamHoldersPrimary(
+                db,
+                actualLeadId,
+                assignTeam.id,
+                LEAD_DISTRIBUTION_KINDS.manual,
+                getAssignmentNowStr(),
+                { revokeOthers: true }
+              );
+            }
+          } catch (e) {
+            console.error("[assign] post-assign sync:", e.message);
+          }
+        })();
       });
       return;
     }
