@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-manager-see-all-project";
+const BUILD_VERSION = "2026-08-03-race-sale-filter";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3981,15 +3981,37 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   }
 
   if (filters.saleFilter && filters.saleFilter !== "all") {
-    const sf = filters.saleFilter;
-    parts.push(`(
-      LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
-      OR EXISTS (
-        SELECT 1 FROM lead_history h
-        WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-      )
-    )`);
-    params.push(sf, sf);
+    const sf = String(filters.saleFilter || "").trim();
+    const teamMatch = /^team:(\d+)$/i.exec(sf);
+    if (teamMatch) {
+      // Race: lọc theo team nhận lead (primary / race offer / co-holder)
+      const tid = Number(teamMatch[1]) || 0;
+      parts.push(`(
+        CAST(COALESCE(team_id, 0) AS INTEGER) = ?
+        OR CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?
+        OR EXISTS (
+          SELECT 1 FROM lead_team_holders lth
+          WHERE lth.lead_id = leads.id AND lth.team_id = ?
+            AND TRIM(COALESCE(lth.revoked_at, '')) = ''
+        )
+      )`);
+      params.push(tid, tid, tid);
+    } else {
+      // Sale: tên phụ trách HOẶC từng cập nhật history/summary
+      // (race thường gắn sale_name = leader — vẫn tìm được member qua history)
+      parts.push(`(
+        LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+        OR EXISTS (
+          SELECT 1 FROM lead_history h
+          WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+        )
+        OR EXISTS (
+          SELECT 1 FROM lead_sale_summary lss
+          WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+        )
+      )`);
+      params.push(sf, sf, sf);
+    }
   }
 
   if (filters.products) {

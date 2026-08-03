@@ -2352,10 +2352,12 @@ function CRMApp({ user, updateUser, onLogout }) {
     const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
     const expectedCount = Number(projectLeadCounts?.byProject?.[Number(selectedProject)] || 0);
     const cachedLen = Array.isArray(cached?.data?.leads) ? cached.data.leads.length : 0;
-    // Count ngoài (13) > cache trong (12) → bỏ cache cũ, fetch mới ngay
+    // Chỉ so count tổng dự án khi KHÔNG lọc sale/QL — lọc race/sale luôn ít hơn tổng
     const countMismatch =
       selectedProject &&
       selectedProject !== "all" &&
+      managerFilter === "all" &&
+      saleFilter === "all" &&
       expectedCount > 0 &&
       cachedLen > 0 &&
       cachedLen < expectedCount;
@@ -2797,19 +2799,23 @@ function CRMApp({ user, updateUser, onLogout }) {
       });
     }
     if (managerFilter && managerFilter !== "all") {
-      list = list.filter((l) => (l.managerName || "") === managerFilter);
+      // Server đã lọc managerFilter qua /api/data + /api/data/scope — không lọc lại client
+      // (tránh lệch khi đổi filter trước khi fetch xong)
     }
     if (saleFilter && saleFilter !== "all") {
-      const saleFilterKey = normalizePersonName(saleFilter);
-      list = list.filter((l) =>
-        normalizePersonName(l.saleName) === saleFilterKey ||
-        (l.pastSaleNames || []).some((n) => normalizePersonName(n) === saleFilterKey)
-      );
-      list = list.map((l) => {
-        const fb = l.saleFeedbackStatus?.[saleFilterKey];
-        if (fb) return { ...l, status: fb.status, rawStatus: fb.rawStatus };
-        return l;
-      });
+      // Server đã lọc saleFilter / team:ID — KHÔNG lọc lại bằng pastSaleNames
+      // (lite/scope để pastSaleNames=[] → lọc client làm list "hiện rồi mất")
+      if (String(saleFilter).startsWith("team:")) {
+        // no-op: trust server
+      } else {
+        // Chỉ map status theo góc nhìn sale nếu có saleFeedbackStatus (sale login)
+        list = list.map((l) => {
+          const saleFilterKey = normalizePersonName(saleFilter);
+          const fb = l.saleFeedbackStatus?.[saleFilterKey];
+          if (fb) return { ...l, status: fb.status, rawStatus: fb.rawStatus };
+          return l;
+        });
+      }
     }
     return list;
   }, [leads, selectedProject, statusFilter, searchText, dateFrom, dateTo, managerFilter, saleFilter]);
@@ -6172,6 +6178,37 @@ const LeadsPage = (props) => {
     return [...s].filter(Boolean).sort((a, b) => a.localeCompare(b, "vi"));
   }, [saleNames, allSaleUsers]);
 
+  /** Race project: tùy chọn lọc theo team (+ số lead đang có trong list khi đang xem full). */
+  const raceTeamFilterOptions = useMemo(() => {
+    const pid = Number(selectedProject);
+    if (!pid || selectedProject === "all" || selectedProject === "personal") return [];
+    const proj = (Array.isArray(projects) ? projects : []).find((p) => Number(p.id) === pid);
+    if ((proj?.distributionMode || "log") !== "race") return [];
+    const ordered = Array.isArray(proj?.teamIdsOrdered) ? proj.teamIdsOrdered.map(Number) : [];
+    let list = (Array.isArray(teams) ? teams : []).filter((t) => t && t.id);
+    if (ordered.length) {
+      list = list.filter((t) => ordered.includes(Number(t.id)));
+      list.sort((a, b) => ordered.indexOf(Number(a.id)) - ordered.indexOf(Number(b.id)));
+    } else {
+      list = [...list].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "vi"));
+    }
+    const leadList = Array.isArray(leads) ? leads : [];
+    return list.map((t) => {
+      const tid = Number(t.id);
+      const members = (t.members || []).map((m) => m.displayName || m.display_name).filter(Boolean);
+      const count = saleFilter === "all" || saleFilter === `team:${tid}`
+        ? leadList.filter((l) => Number(l.teamId) === tid || Number(l.raceTeamId) === tid).length
+        : null;
+      const memberLabel = members.length ? ` (${members.join("/")})` : "";
+      const countLabel = count != null ? ` · ${count} lead` : "";
+      return {
+        value: `team:${tid}`,
+        label: `Team ${t.name || tid}${memberLabel}${countLabel}`,
+        shortLabel: `Team ${t.name || tid}${count != null ? ` (${count})` : ""}`,
+      };
+    });
+  }, [selectedProject, projects, teams, leads, saleFilter]);
+
   const [restoreScopeLoading, setRestoreScopeLoading] = useState(false);
 
   const allManagerNames = useMemo(() => {
@@ -9260,22 +9297,26 @@ const LeadsPage = (props) => {
               onClick={() => setSaleFilterOpen(!saleFilterOpen)}
               style={{ padding: "8px 12px", borderRadius: 8, border: saleFilter !== "all" ? "2px solid #16a34a" : "1px solid #d1d5db", fontSize: 13, minHeight: 44, background: saleFilter !== "all" ? "#f0fdf4" : "#fff", color: "#1f2937", minWidth: isMobile ? 0 : 160, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
             >
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{saleFilter === "all" ? "Tất cả sale" : saleFilter}</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {saleFilter === "all"
+                  ? "Tất cả sale"
+                  : (raceTeamFilterOptions.find((t) => t.value === saleFilter)?.shortLabel || saleFilter)}
+              </span>
               <span style={{ fontSize: 10, color: "#9ca3af" }}>▼</span>
             </div>
             {saleFilterOpen && (
-              <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 999, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.12)", minWidth: 220, maxHeight: 320, display: "flex", flexDirection: "column" }}>
+              <div style={{ position: "absolute", top: "100%", left: 0, zIndex: 999, background: "#fff", border: "1px solid #d1d5db", borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,.12)", minWidth: 260, maxHeight: 360, display: "flex", flexDirection: "column" }}>
                 <div style={{ padding: 8, borderBottom: "1px solid #e5e7eb" }}>
                   <input
                     autoFocus
-                    placeholder="Tìm sale..."
+                    placeholder="Tìm sale / team..."
                     value={saleFilterSearch}
                     onChange={(e) => setSaleFilterSearch(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
                     style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13, outline: "none", boxSizing: "border-box" }}
                   />
                 </div>
-                <div style={{ overflowY: "auto", maxHeight: 260 }}>
+                <div style={{ overflowY: "auto", maxHeight: 300 }}>
                   <div
                     onClick={() => { setSaleFilter("all"); setSaleFilterOpen(false); setSaleFilterSearch(""); setCurrentPage(1); }}
                     style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", background: saleFilter === "all" ? "#f0f9ff" : "transparent", fontWeight: saleFilter === "all" ? 600 : 400 }}
@@ -9284,6 +9325,30 @@ const LeadsPage = (props) => {
                   >
                     Tất cả sale
                   </div>
+                  {raceTeamFilterOptions.length > 0 && (
+                    <>
+                      <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                        Team (race)
+                      </div>
+                      {raceTeamFilterOptions
+                        .filter((t) => !saleFilterSearch || t.label.toLowerCase().includes(saleFilterSearch.toLowerCase()))
+                        .map((t) => (
+                          <div
+                            key={t.value}
+                            onClick={() => { setSaleFilter(t.value); setSaleFilterOpen(false); setSaleFilterSearch(""); setCurrentPage(1); }}
+                            style={{ padding: "8px 12px", fontSize: 13, cursor: "pointer", background: saleFilter === t.value ? "#f0fdf4" : "transparent", fontWeight: saleFilter === t.value ? 700 : 500, color: saleFilter === t.value ? "#15803d" : "#0f172a" }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+                            onMouseLeave={(e) => e.currentTarget.style.background = saleFilter === t.value ? "#f0fdf4" : "transparent"}
+                            title={t.label}
+                          >
+                            {t.label}
+                          </div>
+                        ))}
+                      <div style={{ padding: "6px 12px 2px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                        Sale
+                      </div>
+                    </>
+                  )}
                   {saleFilterOptions.filter(s => !saleFilterSearch || s.toLowerCase().includes(saleFilterSearch.toLowerCase())).map(s => (
                     <div
                       key={s}
@@ -9299,7 +9364,7 @@ const LeadsPage = (props) => {
               </div>
             )}
           </div>
-          {isAdminOnly && saleFilter && saleFilter !== "all" && (
+          {isAdminOnly && saleFilter && saleFilter !== "all" && !String(saleFilter).startsWith("team:") && (
             <button
               type="button"
               disabled={restoreScopeLoading}
