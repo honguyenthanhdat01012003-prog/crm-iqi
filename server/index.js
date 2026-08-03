@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-lead-report-consulting";
+const BUILD_VERSION = "2026-08-03-manager-see-all-project";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3928,28 +3928,11 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
   const params = [];
 
   if (user.role === "manager") {
+    // Cùng dự án được gán → thấy hết lead như admin (không lọc theo race_stage / manager_name)
     const pids = await getUserProjectIds(user.userId);
     if (!pids.length) return { where: "WHERE 1=0", params: [] };
     parts.push(`project_id IN (${pids.map(() => "?").join(",")})`);
     params.push(...pids);
-    parts.push(`(
-      TRIM(COALESCE(race_stage, '')) = ''
-      OR race_stage IN (?, ?)
-      OR (race_stage IN (?, ?) AND LOWER(TRIM(COALESCE(manager_name, ''))) = LOWER(TRIM(?)))
-      OR (race_stage = ? AND (
-        TRIM(COALESCE(manager_name, '')) = ''
-        OR LOWER(TRIM(COALESCE(manager_name, ''))) = LOWER(TRIM(?))
-      ))
-    )`);
-    params.push(
-      LEAD_RACE_STAGES.teamOffer,
-      LEAD_RACE_STAGES.manualPool,
-      LEAD_RACE_STAGES.managerRace,
-      LEAD_RACE_STAGES.managerFeedback,
-      user.displayName || "",
-      LEAD_RACE_STAGES.claimed,
-      user.displayName || ""
-    );
   } else if (user.role === "sale") {
     const dn = user.displayName || "";
     const teamId = await getSaleTeamId(user.userId);
