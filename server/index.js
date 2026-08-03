@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-team-ever-sale-scope";
+const BUILD_VERSION = "2026-08-03-team-holder-keep-repair";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -969,6 +969,110 @@ async function ensureLeadTeamHolder(dbConn, leadId, teamId, joinKind, nowStr) {
        joined_at = CASE WHEN TRIM(COALESCE(lead_team_holders.joined_at, '')) = '' THEN excluded.joined_at ELSE lead_team_holders.joined_at END`,
     [lid, tid, ts, String(joinKind || "manual")]
   );
+}
+
+/** Team từng có feedback thật trên lead → giữ co-holder (rule B). */
+async function teamHasLifetimeFeedbackOnLead(dbConn, leadId, memberNames = []) {
+  const lid = Number(leadId) || 0;
+  const names = [...new Set((memberNames || []).map((n) => String(n || "").trim()).filter(Boolean))];
+  if (!lid || !names.length) return false;
+  const ph = names.map(() => "LOWER(TRIM(?))").join(",");
+  const rows = await all(
+    dbConn,
+    `SELECT action, status, feedback FROM lead_history
+     WHERE lead_id = ? AND LOWER(TRIM(COALESCE(sale_name, ''))) IN (${ph})
+       AND action NOT IN ('Chia lead', 'Thu hồi SLA', 'Nhận lead', 'Race claim quản lý', 'Race claim team', 'Race manual pool', 'Race team offer')`,
+    [lid, ...names]
+  );
+  return rows.some(isMeaningfulFeedbackHistoryRow);
+}
+
+/**
+ * Gán lead sang team kế (race) kèm multi-hold:
+ * team cũ đã feedback → giữ co-holder (xem + cập nhật); chưa feedback → revoke.
+ */
+async function assignLeadToTeamWithHolders(dbConn, lead, nextTeam, {
+  nowStr = "",
+  source = "team-assign",
+  historyNote = "",
+  distributionKind = null,
+} = {}) {
+  if (!lead?.id || !nextTeam?.id) return null;
+  const ts = nowStr || getAssignmentNowStr();
+  const priorTeamId = Number(lead.team_id) || 0;
+  const priorHadFeedback = await hasSlaFeedbackForCurrentSale(
+    dbConn,
+    lead.id,
+    lead.sale_name || "",
+    { teamId: priorTeamId }
+  );
+  const multiHold = shouldMultiHoldOnRotate(priorHadFeedback);
+  const distKind = distributionKind || rotateDistributionKind(priorHadFeedback);
+  const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, distKind, ts, {
+    teamIndex: Number(nextTeam.sortOrder) || 0,
+    keepStatus: multiHold,
+  });
+  if (!assign.leaderName) return null;
+  const maxSeqRow = await get(dbConn, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
+  const nextSeq = (maxSeqRow?.m ?? -1) + 1;
+  const note = historyNote || `Chia cho team ${nextTeam.name || assign.leaderName}`;
+  await dbConn.batch([
+    { sql: assign.sql, args: assign.args },
+    {
+      sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+      args: [lead.id, assign.leaderName, "Chia lead", ts, "", note, nextSeq, source],
+    },
+  ], "write");
+  if (multiHold && priorTeamId) {
+    await ensureLeadTeamHolder(dbConn, lead.id, priorTeamId, "rotate-keep", ts);
+  }
+  await syncLeadTeamHoldersPrimary(dbConn, lead.id, nextTeam.id, distKind || source, ts, {
+    revokeOthers: !multiHold,
+  });
+  return { leaderName: assign.leaderName, multiHold, priorTeamId, teamId: Number(nextTeam.id) || 0 };
+}
+
+/** One-shot: khôi phục co-holder cho team đã feedback nhưng bị mất khi xáo (thiếu sync holders). */
+async function repairFeedbackTeamHoldersKeep(dbConn) {
+  const flag = await get(dbConn, "SELECT value FROM settings WHERE key = ?", ["holders_feedback_keep_repair_v1"]);
+  if (String(flag?.value || "") === "1") return { skipped: true };
+  const projects = await all(
+    dbConn,
+    `SELECT id FROM projects WHERE LOWER(TRIM(COALESCE(distribution_mode, ''))) = 'race'`
+  );
+  let restored = 0;
+  const nowStr = getAssignmentNowStr();
+  for (const p of projects) {
+    const pid = Number(p.id) || 0;
+    if (!pid) continue;
+    let teams = [];
+    try {
+      teams = await getProjectTeamMembersByOrder(pid);
+    } catch (_) {
+      continue;
+    }
+    if (!teams.length) continue;
+    const leads = await all(dbConn, "SELECT id, team_id FROM leads WHERE project_id = ?", [pid]);
+    for (const lead of leads) {
+      const lid = Number(lead.id) || 0;
+      if (!lid) continue;
+      for (const team of teams) {
+        const tid = Number(team.id) || 0;
+        if (!tid) continue;
+        const names = teamMemberDisplayNames(team);
+        if (!(await teamHasLifetimeFeedbackOnLead(dbConn, lid, names))) continue;
+        await ensureLeadTeamHolder(dbConn, lid, tid, "repair-feedback-keep", nowStr);
+        restored += 1;
+      }
+      const cur = Number(lead.team_id) || 0;
+      if (cur) {
+        await syncLeadTeamHoldersPrimary(dbConn, lid, cur, "repair-primary", nowStr, { revokeOthers: false });
+      }
+    }
+  }
+  await upsertSetting(dbConn, "holders_feedback_keep_repair_v1", "1");
+  console.log(`[DB] holders feedback-keep repair done: restored=${restored}`);
+  return { restored };
 }
 
 function buildLeadUnassignUpdateStmt(leadId) {
@@ -4053,9 +4157,20 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
       params.push(tid, tid, tid);
       for (const n of memberNames) params.push(n, n, n);
     } else {
-      // Sale: tên phụ trách HOẶC từng cập nhật history/summary
-      // (race thường gắn sale_name = leader — vẫn tìm được member qua history)
-      parts.push(`(
+      // Sale: lead cá nhân (tên/history) + nếu sale thuộc team race thì gồm lead team đã từng nhận
+      // (vd: lọc "Ngà" vẫn thấy đủ lead Team T3 đã nhận, không chỉ 2 lead Ngà tự cập nhật)
+      let saleTeamId = 0;
+      try {
+        const urow = await get(
+          db,
+          `SELECT team_id FROM users
+           WHERE role = 'sale' AND LOWER(TRIM(COALESCE(display_name, ''))) = LOWER(TRIM(?))
+           LIMIT 1`,
+          [sf]
+        );
+        saleTeamId = Number(urow?.team_id) || 0;
+      } catch (_) { /* ignore */ }
+      const personClause = `(
         LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
         OR EXISTS (
           SELECT 1 FROM lead_history h
@@ -4065,8 +4180,43 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
           SELECT 1 FROM lead_sale_summary lss
           WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
         )
-      )`);
-      params.push(sf, sf, sf);
+      )`;
+      if (saleTeamId > 0) {
+        let memberNames = [];
+        try {
+          const team = await getTeamWithMembers(saleTeamId);
+          memberNames = [...new Set(
+            (team?.members || []).map((m) => String(m.displayName || "").trim()).filter(Boolean)
+          )];
+        } catch (_) { /* ignore */ }
+        const memberOr = [];
+        for (const _n of memberNames) {
+          memberOr.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
+          memberOr.push(`EXISTS (
+            SELECT 1 FROM lead_history h
+            WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+          )`);
+          memberOr.push(`EXISTS (
+            SELECT 1 FROM lead_sale_summary lss
+            WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+          )`);
+        }
+        parts.push(`(
+          ${personClause}
+          OR CAST(COALESCE(team_id, 0) AS INTEGER) = ?
+          OR CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?
+          OR EXISTS (
+            SELECT 1 FROM lead_team_holders lth
+            WHERE lth.lead_id = leads.id AND lth.team_id = ?
+          )
+          ${memberOr.length ? `OR (${memberOr.join(" OR ")})` : ""}
+        )`);
+        params.push(sf, sf, sf, saleTeamId, saleTeamId, saleTeamId);
+        for (const n of memberNames) params.push(n, n, n);
+      } else {
+        parts.push(personClause);
+        params.push(sf, sf, sf);
+      }
     }
   }
 
@@ -4887,6 +5037,11 @@ async function completeTeamRaceOfferIfNeeded(db, leadId, actorName = "") {
       "race-team-implicit-claim",
     ]
   );
+  try {
+    await syncLeadTeamHoldersPrimary(db, leadId, offeredTeamId, "race-implicit-claim", nowVi, { revokeOthers: false });
+  } catch (holdErr) {
+    console.warn(`[race] implicit claim holder sync lead#${leadId}:`, holdErr.message);
+  }
   console.log(`[race] lead#${leadId} team_offer → claimed (implicit) by ${actor || leaderName}`);
   try {
     await deleteTelegramMsgsForLeadSale(db, leadId, leaderName || actor, Number(lead.project_id) || 0);
@@ -5596,6 +5751,12 @@ let dbInitError = null;
 try {
   db = await initDb();
   console.log("[DB] Connected successfully");
+  try {
+    const repair = await repairFeedbackTeamHoldersKeep(db);
+    if (!repair?.skipped) console.log("[DB] feedback team holders repair:", repair);
+  } catch (repairErr) {
+    console.error("[DB] holders feedback-keep repair failed:", repairErr.message);
+  }
   try {
     await initPushNotifications(db);
   } catch (pushErr) {
@@ -10045,20 +10206,14 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
       seed: lead.id,
     });
     if (!nextTeam) return null;
-    const assign = buildLeadAssignTeamUpdateStmt(nextTeam, lead.id, distributionKind, nowStr, {
-      teamIndex: Number(nextTeam.sortOrder) || 0,
+    const teamNote = `Chia cho team ${nextTeam.name || nextTeam.leaderName || ""} — ${historyNote}`;
+    const assigned = await assignLeadToTeamWithHolders(db, lead, nextTeam, {
+      nowStr,
+      source,
+      historyNote: teamNote,
+      distributionKind,
     });
-    if (!assign.leaderName) return null;
-    const teamNote = `Chia cho team ${nextTeam.name || assign.leaderName} — ${historyNote}`;
-    const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
-    const nextSeq = (maxSeqRow?.m ?? -1) + 1;
-    await db.batch([
-      { sql: assign.sql, args: assign.args },
-      {
-        sql: "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        args: [lead.id, assign.leaderName, "Chia lead", nowStr, "", teamNote, nextSeq, source],
-      },
-    ], "write");
+    if (!assigned?.leaderName) return null;
 
     const updated = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
     const members = teamMemberDisplayNames(nextTeam);
@@ -10086,7 +10241,7 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
       }).catch((err) => console.error(`[Push] SLA team assign failed for ${dn}:`, err.message));
     }
     await refreshLeadTabDenorm(db, lead.id);
-    return assign.leaderName;
+    return assigned.leaderName;
   }
 
   const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
@@ -10494,6 +10649,28 @@ async function processLeadRace(db) {
             lead.id, LEAD_RACE_STAGES.teamOffer,
           ]
         );
+        try {
+          const failedTid = Number(lead.race_team_id || lead.team_id) || 0;
+          await syncLeadTeamHoldersPrimary(db, lead.id, nextTeam.id, "race-timeout", nowStr, { revokeOthers: false });
+          // Chỉ revoke team vừa hết hạn offer nếu team đó chưa từng feedback thật
+          if (failedTid && failedTid !== Number(nextTeam.id)) {
+            let failedNames = [];
+            try {
+              const failedTeam = await getTeamWithMembers(failedTid);
+              failedNames = teamMemberDisplayNames(failedTeam);
+            } catch (_) {}
+            if (!(await teamHasLifetimeFeedbackOnLead(db, lead.id, failedNames))) {
+              await run(
+                db,
+                `UPDATE lead_team_holders SET is_primary = 0, revoked_at = ?
+                 WHERE lead_id = ? AND team_id = ? AND TRIM(COALESCE(revoked_at, '')) = ''`,
+                [nowStr, lead.id, failedTid]
+              );
+            }
+          }
+        } catch (holdErr) {
+          console.warn(`[race] timeout holder sync lead#${lead.id}:`, holdErr.message);
+        }
         const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
         await sendRaceTeamOfferNotifications(db, projectId, refreshed || lead, nextTeam, projectRow?.name || "-");
         moved += 1;
@@ -13220,6 +13397,11 @@ async function claimLeadRace(db, leadId, user) {
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       [leadId, leaderOrFallback || user.displayName || "", "Race claim team", nowVi, "", holdHistory, nextSeq, "race-team-claim"]
     );
+    try {
+      await syncLeadTeamHoldersPrimary(db, leadId, offeredTeamId, "race-claim", nowVi, { revokeOthers: false });
+    } catch (holdErr) {
+      console.warn(`[race] claim holder sync lead#${leadId}:`, holdErr.message);
+    }
     // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh B/C còn nút nhận
     await deleteTelegramMsgsForLeadSale(db, leadId, leaderOrFallback || user.displayName || "", projectId);
     await notifyTeamMembersAfterRaceClaim(db, {

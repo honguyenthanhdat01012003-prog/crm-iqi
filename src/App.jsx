@@ -6211,17 +6211,21 @@ const LeadsPage = (props) => {
       const tid = Number(t.id);
       const members = (t.members || []).map((m) => m.displayName || m.display_name).filter(Boolean);
       const memberKeys = new Set(members.map((n) => normalizePersonName(n)).filter(Boolean));
-      const count = saleFilter === "all" || saleFilter === `team:${tid}`
-        ? leadList.filter((l) => {
-            if (Number(l.teamId) === tid || Number(l.raceTeamId) === tid) return true;
-            if ((l.pastTeamIds || []).some((id) => Number(id) === tid)) return true;
-            if (!memberKeys.size) return false;
-            const names = [l.saleName, ...(l.pastSaleNames || [])]
-              .map((n) => normalizePersonName(n))
-              .filter(Boolean);
-            return names.some((n) => memberKeys.has(n));
-          }).length
-        : null;
+      let count = null;
+      if (saleFilter === `team:${tid}`) {
+        // Server đã lọc ever-received — dùng đúng số đang hiện (tránh đếm lại thiếu vì pastSaleNames=[])
+        count = leadList.length;
+      } else if (saleFilter === "all") {
+        count = leadList.filter((l) => {
+          if (Number(l.teamId) === tid || Number(l.raceTeamId) === tid) return true;
+          if ((l.pastTeamIds || []).some((id) => Number(id) === tid)) return true;
+          if (!memberKeys.size) return false;
+          const names = [l.saleName, ...(l.pastSaleNames || [])]
+            .map((n) => normalizePersonName(n))
+            .filter(Boolean);
+          return names.some((n) => memberKeys.has(n));
+        }).length;
+      }
       const memberLabel = members.length ? ` (${members.join("/")})` : "";
       const countLabel = count != null ? ` · ${count} lead` : "";
       return {
