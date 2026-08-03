@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-race-team-filter-fix";
+const BUILD_VERSION = "2026-08-03-team-ever-sale-scope";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3727,7 +3727,37 @@ async function loadPastSaleNamesForLeads(db, leadIds) {
   return map;
 }
 
-function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = [], feedbackHistorySummary = [], saleFeedbackStatus = {}) {
+/** Team từng nhận lead (kể cả đã revoke / xào đi) — dùng badge filter + pastTeamIds. */
+async function loadPastTeamIdsForLeads(db, leadIds) {
+  if (!leadIds.length) return {};
+  const map = {};
+  const BATCH = 400;
+  for (let i = 0; i < leadIds.length; i += BATCH) {
+    const batch = leadIds.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    let rows = [];
+    try {
+      rows = await all(
+        db,
+        `SELECT lead_id, team_id FROM lead_team_holders
+         WHERE lead_id IN (${ph}) AND COALESCE(team_id, 0) > 0`,
+        batch
+      );
+    } catch (_) {
+      rows = [];
+    }
+    for (const r of rows) {
+      const lid = r.lead_id;
+      const tid = Number(r.team_id) || 0;
+      if (!tid) continue;
+      if (!map[lid]) map[lid] = [];
+      if (!map[lid].includes(tid)) map[lid].push(tid);
+    }
+  }
+  return map;
+}
+
+function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = [], feedbackHistorySummary = [], saleFeedbackStatus = {}, pastTeamIds = []) {
   const mktXaoMeta = getMktXaoMeta(l);
   const phone = (l.phone || "").replace(/[^0-9+]/g, "");
   const allRegs = phone ? (phoneRegMap[phone] || []) : [];
@@ -3787,6 +3817,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
     pastSaleNames,
+    pastTeamIds: Array.isArray(pastTeamIds) ? pastTeamIds.filter((n) => Number(n) > 0).map(Number) : [],
     feedbackHistorySummary,
     saleFeedbackStatus,
     adminTabStatus: normalizeStatus(l.admin_tab_status || l.status || "new"),
@@ -3988,18 +4019,39 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     const sf = String(filters.saleFilter || "").trim();
     const teamMatch = /^team:(\d+)$/i.exec(sf);
     if (teamMatch) {
-      // Race: lọc theo team nhận lead (primary / race offer / co-holder)
+      // Race: lead team ĐÃ TỪNG nhận (kể cả đã xào đi) — holders kể cả revoked
+      // + lịch sử/summary của thành viên team (lead cũ trước khi có holders)
       const tid = Number(teamMatch[1]) || 0;
+      let memberNames = [];
+      try {
+        const team = await getTeamWithMembers(tid);
+        memberNames = [...new Set(
+          (team?.members || []).map((m) => String(m.displayName || "").trim()).filter(Boolean)
+        )];
+      } catch (_) { /* ignore */ }
+      const memberOr = [];
+      for (const _n of memberNames) {
+        memberOr.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
+        memberOr.push(`EXISTS (
+          SELECT 1 FROM lead_history h
+          WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+        )`);
+        memberOr.push(`EXISTS (
+          SELECT 1 FROM lead_sale_summary lss
+          WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+        )`);
+      }
       parts.push(`(
         CAST(COALESCE(team_id, 0) AS INTEGER) = ?
         OR CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?
         OR EXISTS (
           SELECT 1 FROM lead_team_holders lth
           WHERE lth.lead_id = leads.id AND lth.team_id = ?
-            AND TRIM(COALESCE(lth.revoked_at, '')) = ''
         )
+        ${memberOr.length ? `OR (${memberOr.join(" OR ")})` : ""}
       )`);
       params.push(tid, tid, tid);
+      for (const n of memberNames) params.push(n, n, n);
     } else {
       // Sale: tên phụ trách HOẶC từng cập nhật history/summary
       // (race thường gắn sale_name = leader — vẫn tìm được member qua history)
@@ -4278,6 +4330,7 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
 
   let feedbackMap = {};
   let phoneRegMap = {};
+  let pastTeamMap = {};
 
   if (skipHistory) {
     // Chỉ đếm history theo lead trong page/scope — không full-scan lead_history (rất chậm khi mở dự án)
@@ -4294,26 +4347,37 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
     if (user?.role === "sale" && user.displayName) saleNames.add(user.displayName);
     if (viewOpts.salePerspectiveName) saleNames.add(viewOpts.salePerspectiveName);
     const saleJobs = [...saleNames].map((sn) => loadSaleSummariesForLeads(db, leadIds, sn));
-    const saleResults = await Promise.all(saleJobs);
+    const [saleResults, phoneRegs, pastTeams] = await Promise.all([
+      Promise.all(saleJobs),
+      buildPhoneRegMapForPage(db, leadRows, projectMap),
+      loadPastTeamIdsForLeads(db, leadIds),
+    ]);
     for (const sm of saleResults) {
       for (const [lid, fb] of Object.entries(sm)) {
         if (!feedbackMap[lid]) feedbackMap[lid] = { historyCount: 0, pastSaleNames: [], feedbackHistorySummary: [], saleFeedbackStatus: {} };
         feedbackMap[lid].saleFeedbackStatus = { ...feedbackMap[lid].saleFeedbackStatus, ...fb };
       }
     }
-    phoneRegMap = await buildPhoneRegMapForPage(db, leadRows, projectMap);
+    phoneRegMap = phoneRegs;
+    pastTeamMap = pastTeams;
   } else {
     const loaded = await Promise.all([
       loadFeedbackSummariesForLeads(db, leadIds),
       buildPhoneRegMapForPage(db, leadRows, projectMap),
+      loadPastTeamIdsForLeads(db, leadIds),
     ]);
     feedbackMap = loaded[0];
     phoneRegMap = loaded[1];
+    pastTeamMap = loaded[2];
   }
 
   let leads = leadRows.map((l) => {
     const fb = feedbackMap[l.id] || {};
     const historyCountMap = { [l.id]: fb.historyCount || 0 };
+    const pastTeams = pastTeamMap[l.id] || [];
+    // Bổ sung team hiện tại nếu chưa có trong holders
+    const cur = Number(l.team_id || l.race_team_id) || 0;
+    const teamIds = cur && !pastTeams.includes(cur) ? [...pastTeams, cur] : pastTeams;
     return mapLeadFromRow(
       l,
       projectLegacyMap,
@@ -4321,7 +4385,8 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
       historyCountMap,
       fb.pastSaleNames || [],
       fb.feedbackHistorySummary || [],
-      fb.saleFeedbackStatus || {}
+      fb.saleFeedbackStatus || {},
+      teamIds
     );
   });
 
@@ -4582,11 +4647,19 @@ async function readData(db) {
   }
 
   const leadIds = leads.map((l) => l.id);
-  const pastSaleMap = await loadPastSaleNamesForLeads(db, leadIds);
+  const [pastSaleMap, pastTeamMap] = await Promise.all([
+    loadPastSaleNamesForLeads(db, leadIds),
+    loadPastTeamIdsForLeads(db, leadIds),
+  ]);
 
   const result = {
     phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
-    leads: leads.map((l) => mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || [])),
+    leads: leads.map((l) => {
+      const pastTeams = pastTeamMap[l.id] || [];
+      const cur = Number(l.team_id || l.race_team_id) || 0;
+      const teamIds = cur && !pastTeams.includes(cur) ? [...pastTeams, cur] : pastTeams;
+      return mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || [], [], {}, teamIds);
+    }),
     campaigns: campaigns.map((c) => ({
       id: c.id,
       name: c.name,

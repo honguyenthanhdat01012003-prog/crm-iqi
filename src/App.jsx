@@ -6173,12 +6173,26 @@ const LeadsPage = (props) => {
     return (Array.isArray(allUsers) ? allUsers : []).filter(u => u.role === "sale" && u.displayName).map(u => u.displayName);
   }, [allUsers]);
 
+  /** Dropdown lọc sale: đã chọn dự án → chỉ sale được gán dự án đó (không lấy hết sale hệ thống). */
   const saleFilterOptions = useMemo(() => {
+    const pid = Number(selectedProject);
+    if (pid && selectedProject !== "all" && selectedProject !== "personal") {
+      const projectSales = (Array.isArray(allUsers) ? allUsers : [])
+        .filter((u) => u.role === "sale" && u.displayName && Array.isArray(u.projectIds) && u.projectIds.includes(pid))
+        .map((u) => u.displayName);
+      if (projectSales.length > 0) {
+        return [...new Set(projectSales)].sort((a, b) => a.localeCompare(b, "vi"));
+      }
+      // Fallback: sale xuất hiện trên lead của dự án đang xem
+      return saleNames
+        .filter((n) => n && String(n).toLowerCase() !== "chưa chia")
+        .sort((a, b) => a.localeCompare(b, "vi"));
+    }
     const s = new Set([...saleNames, ...allSaleUsers]);
     return [...s].filter(Boolean).sort((a, b) => a.localeCompare(b, "vi"));
-  }, [saleNames, allSaleUsers]);
+  }, [selectedProject, allUsers, saleNames, allSaleUsers]);
 
-  /** Race project: tùy chọn lọc theo team (+ số lead đang có trong list khi đang xem full). */
+  /** Race project: tùy chọn lọc theo team (+ số lead từng nhận, kể cả đã xào). */
   const raceTeamFilterOptions = useMemo(() => {
     const pid = Number(selectedProject);
     if (!pid || selectedProject === "all" || selectedProject === "personal") return [];
@@ -6196,8 +6210,17 @@ const LeadsPage = (props) => {
     return list.map((t) => {
       const tid = Number(t.id);
       const members = (t.members || []).map((m) => m.displayName || m.display_name).filter(Boolean);
+      const memberKeys = new Set(members.map((n) => normalizePersonName(n)).filter(Boolean));
       const count = saleFilter === "all" || saleFilter === `team:${tid}`
-        ? leadList.filter((l) => Number(l.teamId) === tid || Number(l.raceTeamId) === tid).length
+        ? leadList.filter((l) => {
+            if (Number(l.teamId) === tid || Number(l.raceTeamId) === tid) return true;
+            if ((l.pastTeamIds || []).some((id) => Number(id) === tid)) return true;
+            if (!memberKeys.size) return false;
+            const names = [l.saleName, ...(l.pastSaleNames || [])]
+              .map((n) => normalizePersonName(n))
+              .filter(Boolean);
+            return names.some((n) => memberKeys.has(n));
+          }).length
         : null;
       const memberLabel = members.length ? ` (${members.join("/")})` : "";
       const countLabel = count != null ? ` · ${count} lead` : "";
