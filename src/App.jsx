@@ -7956,7 +7956,7 @@ const LeadsPage = (props) => {
                     width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width .5s ease",
                   });
 
-                  const interestedReportLabel = "Quan tâm (Quan tâm + QT hời hợt)";
+                  const interestedReportLabel = grps.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
                   const rows = [
                     { ...grps.interested, label: interestedReportLabel, color: "#16a34a", emoji: "✅" },
                     ...(grps.appointment ? [{ ...grps.appointment, color: "#8b5cf6", emoji: "📅" }] : []),

@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-lazy-history";
+const BUILD_VERSION = "2026-08-03-lead-report-consulting";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2105,7 +2105,8 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
     if (!isReportFeedbackHistory(h)) continue;
     const key = normalizeStatus(h.status);
     if (key === "appointment") return "appointment";
-    if (key === "interested") hasInterested = true;
+    // Quan tâm bucket: QT / QT hời hợt / Đang tư vấn / QT DA khác
+    if (key === "interested" || key === "consulting" || key === "other_project") hasInterested = true;
     if (key === "low_interest") hasLowInterest = true;
   }
   if (hasInterested) return "interested";
@@ -7417,12 +7418,17 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
     }));
 
     // Groupings based on report status. Interested/appointment scan all feedback history first.
-    const interested = reportLeads.filter(l => ["interested", "low_interest"].includes(l.reportStatus));
+    const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "consulting", "other_project"];
+    const interested = reportLeads.filter(l => INTERESTED_REPORT_STATUSES.includes(l.reportStatus));
     const appointment = reportLeads.filter(l => l.reportStatus === "appointment");
     const notInterested = reportLeads.filter(l => ["not_interested", "spam", "sale", "callback"].includes(l.reportStatus));
     const noFeedback = reportLeads.filter(l => l.reportStatus === "new" || !l.reportStatus);
     const booked = reportLeads.filter(l => ["booked", "booking_other", "closed"].includes(l.reportStatus));
-    const knownReportStatuses = new Set(["interested", "low_interest", "appointment", "not_interested", "spam", "sale", "callback", "new", "booked", "booking_other", "closed", null, undefined, ""]);
+    const knownReportStatuses = new Set([
+      ...INTERESTED_REPORT_STATUSES,
+      "appointment", "not_interested", "spam", "sale", "callback", "new",
+      "booked", "booking_other", "closed", null, undefined, "",
+    ]);
     const other = reportLeads.filter(l => !knownReportStatuses.has(l.reportStatus));
 
     const total = reportLeads.length;
@@ -7460,6 +7466,7 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
 
     const cpLead = total > 0 ? Math.round(totalSpent / total) : 0;
 
+    const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
     res.json({
       projectName: project?.name || "",
       startDate: startDate || null,
@@ -7467,7 +7474,7 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
       total,
       groups: {
         appointment: { count: appointment.length, pct: pct(appointment.length), label: "Hẹn gặp/Hẹn xem" },
-        interested: { count: interested.length, pct: pct(interested.length), label: "Quan tâm (Quan tâm + QT hời hợt)" },
+        interested: { count: interested.length, pct: pct(interested.length), label: interestedLabel },
         notInterested: { count: notInterested.length, pct: pct(notInterested.length), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
         noFeedback: { count: noFeedback.length, pct: pct(noFeedback.length), label: "Chưa nhập feedback (Mới)" },
         booked: { count: booked.length, pct: pct(booked.length), label: "Booking/Cọc/Chốt" },
