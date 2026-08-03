@@ -28,6 +28,7 @@ import {
   formatTeamRotateLabel,
   filterHistoryForTeamMembers,
   rotateDistributionKind,
+  resolveSaleHistoryMemberNames,
 } from "./leadTeamHolders.js";
 import { buildAuthUserFromRow, isJwtRoleStale } from "./authUser.js";
 
@@ -58,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-auth-role-relogin";
+const BUILD_VERSION = "2026-08-03-lazy-history";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -12947,19 +12948,26 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
 app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
   try {
     const leadId = Number(req.params.id);
-    const lead = await get(db, "SELECT id FROM leads WHERE id = ?", [leadId]);
+    const lead = await get(db, "SELECT id, project_id FROM leads WHERE id = ?", [leadId]);
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     let history = await fetchLeadHistoryFormatted(db, leadId);
     if (req.user.role === "sale") {
-      const teamId = await getSaleTeamId(req.user.userId);
-      let memberNames = [req.user.displayName || ""];
-      if (teamId) {
-        try {
-          const team = await getTeamWithMembers(teamId);
-          const names = teamMemberDisplayNames(team);
-          if (names.length) memberNames = names;
-        } catch (_) {}
+      const mode = await getProjectDistributionMode(lead.project_id);
+      let teamMemberNames = [];
+      if (mode === "race") {
+        const teamId = await getSaleTeamId(req.user.userId);
+        if (teamId) {
+          try {
+            const team = await getTeamWithMembers(teamId);
+            teamMemberNames = teamMemberDisplayNames(team);
+          } catch (_) {}
+        }
       }
+      const memberNames = resolveSaleHistoryMemberNames({
+        mode,
+        displayName: req.user.displayName || "",
+        teamMemberNames,
+      });
       history = filterHistoryForTeamMembers(history, memberNames, {
         normalizeName: (s) => normalizePersonNameServer(s),
       });

@@ -64,3 +64,15 @@ export function rotateDistributionKind(priorPrimaryHadFeedback) {
 export function isRotateNewKind(kind) {
   return String(kind || "").trim() === "rotate_new";
 }
+
+/**
+ * Who a sale may see in lead history:
+ * - log → only themselves
+ * - race → their team members (fallback to self if no team list)
+ */
+export function resolveSaleHistoryMemberNames({ mode, displayName, teamMemberNames = [] } = {}) {
+  const self = String(displayName || "").trim();
+  const team = (teamMemberNames || []).map((n) => String(n || "").trim()).filter(Boolean);
+  if (String(mode || "log").trim() === "race" && team.length) return team;
+  return self ? [self] : [];
+}

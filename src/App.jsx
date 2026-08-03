@@ -9870,6 +9870,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     : [];
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [registrations, setRegistrations] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [histStatus, setHistStatus] = useState("");
@@ -9953,6 +9954,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   };
 
   useEffect(() => {
+    setHistoryOpen(false);
+    setHistory([]);
+    setHistoryLoading(false);
+    setExpandedSaleContact(null);
+  }, [lead.id]);
+
+  // Lazy: chỉ query lịch sử khi bấm "Mở xem" (giống Chat Messenger)
+  useEffect(() => {
+    if (!historyOpen) return;
     let cancelled = false;
     setHistoryLoading(true);
     apiFetch(`${API}/leads/${lead.id}/history`)
@@ -9961,7 +9971,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       .catch(() => { if (!cancelled) setHistory([]); })
       .finally(() => { if (!cancelled) setHistoryLoading(false); });
     return () => { cancelled = true; };
-  }, [lead.id, lead.historyCount]);
+  }, [historyOpen, lead.id, lead.historyCount]);
 
   useEffect(() => {
     setEditFbUrl(lead.customerFbUrl || "");
@@ -10110,7 +10120,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       feedback: savedFeedback,
       source: isSale ? "sale" : "admin",
     };
-    setHistory((prev) => [...(Array.isArray(prev) ? prev : []), optimisticEntry]);
+    if (historyOpen) {
+      setHistory((prev) => [...(Array.isArray(prev) ? prev : []), optimisticEntry]);
+    }
     applyApiData({
       updatedLead: {
         id: lead.id,
@@ -10133,10 +10145,12 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       if (!r.ok) {
         showToast(data.error || "Không thể lưu cập nhật khách hàng", "error");
         // Rollback timeline: refetch
-        const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
-        if (hr.ok) {
-          const hd = await hr.json();
-          setHistory(hd.history || []);
+        if (historyOpen) {
+          const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
+          if (hr.ok) {
+            const hd = await hr.json();
+            setHistory(hd.history || []);
+          }
         }
         return;
       }
@@ -10157,11 +10171,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           },
         }, { suppressNotifications: true });
       }
-      // Refetch history thật từ server (đổi temp id → id DB)
-      const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
-      if (hr.ok) {
-        const hd = await hr.json();
-        setHistory(hd.history || []);
+      // Refetch history thật từ server (đổi temp id → id DB) — chỉ khi panel đang mở
+      if (historyOpen) {
+        const hr = await apiFetch(`${API}/leads/${lead.id}/history`);
+        if (hr.ok) {
+          const hd = await hr.json();
+          setHistory(hd.history || []);
+        }
       }
       showToast("Đã lưu cập nhật khách hàng", "success");
     } catch (e) {
@@ -11216,8 +11232,42 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
         );
       })()}
 
-      {/* === CONTACT HISTORY === */}
-      {(() => {
+      {/* === CONTACT HISTORY (lazy — Mở xem mới query) === */}
+      <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden", marginBottom: isMobile ? 12 : 16 }}>
+        <div
+          onClick={() => setHistoryOpen((v) => !v)}
+          style={{
+            padding: isMobile ? "12px 14px" : "10px 14px",
+            background: "linear-gradient(135deg, #f8fafc, #f1f5f9)",
+            cursor: "pointer",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 13, color: "#0f172a", display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <ClipboardList size={16} color="#e88a2e" />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              Lịch sử đăng ký & Tương tác
+            </span>
+            {(Number(lead.historyCount) > 0 || history.length > 0) && (
+              <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 10, background: "#e88a2e", color: "#fff", fontWeight: 700, flexShrink: 0 }}>
+                {Math.max(Number(lead.historyCount) || 0, history.length || 0)}
+              </span>
+            )}
+          </span>
+          <span style={{ fontSize: 11, color: "#3b82f6", fontWeight: 700, flexShrink: 0, whiteSpace: "nowrap" }}>
+            {historyOpen ? "Thu gọn ▲" : "Mở xem ▼"}
+          </span>
+        </div>
+        {historyOpen && (
+          <div style={{ padding: isMobile ? "10px 12px 4px" : "12px 14px 4px", background: "#fff" }}>
+            {historyLoading ? (
+              <div style={{ color: "#94a3b8", fontSize: 13, padding: "16px 0", textAlign: "center", fontWeight: 600 }}>
+                Đang tải lịch sử...
+              </div>
+            ) : (() => {
         // Parse Vietnamese date to sortable timestamp
         const parseVNDate = (s) => {
           if (!s) return 0;
@@ -11518,8 +11568,8 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           );
         }
 
-        // === SALE VIEW: single consolidated list (unchanged) ===
-        const saleContacts = allEvents.filter(e => e.type === "contact" && e.saleName === user?.displayName);
+        // === SALE VIEW: timeline từ API (log = chỉ mình, race = cả team — đã lọc server) ===
+        const saleContacts = allEvents.filter(e => e.type === "contact");
         let saleNum = 0;
         saleContacts.forEach(e => { saleNum++; e.num = saleNum; });
 
@@ -11529,6 +11579,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           : null;
         const lastStatusLabel = lastContact ? (STATUS_LABELS[lastContact.status] || lastContact.status || "Chưa feedback") : "Chưa feedback";
         const lastStatusColor = lastContact ? (STATUS_COLORS[lastContact.status] || "#6b7280") : "#6b7280";
+        const showSaleNames = isRaceProject || saleContacts.some((c) => c.saleName && c.saleName !== user?.displayName);
 
         if (saleContacts.length === 0) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
 
@@ -11573,6 +11624,11 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                             <span style={{ fontWeight: 600, fontSize: 12, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                               Gọi lần {evt.num}
+                              {showSaleNames && evt.saleName && (
+                                <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, fontWeight: 700, background: "#fff7ed", color: "#c2410c" }}>
+                                  {evt.saleName}
+                                </span>
+                              )}
                               <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 8, background: stColor + "18", color: stColor, fontWeight: 600 }}>{stLabel}</span>
                               {evt.source && (
                                 <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 6, fontWeight: 600,
@@ -11598,6 +11654,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           </div>
         );
       })()}
+          </div>
+        )}
+      </div>
 
       </div>
       {/* --- RIGHT COLUMN: Chat Messenger --- */}

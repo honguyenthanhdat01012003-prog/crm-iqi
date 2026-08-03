@@ -5,6 +5,7 @@ import {
   filterHistoryForTeamMembers,
   rotateDistributionKind,
   isRotateNewKind,
+  resolveSaleHistoryMemberNames,
 } from "./leadTeamHolders.js";
 
 assert.strictEqual(shouldMultiHoldOnRotate(true), true);
@@ -17,6 +18,19 @@ assert.strictEqual(rotateDistributionKind(true), "rotate");
 assert.strictEqual(rotateDistributionKind(false), "rotate_new");
 assert.strictEqual(isRotateNewKind("rotate_new"), true);
 assert.strictEqual(isRotateNewKind("rotate"), false);
+
+assert.deepStrictEqual(
+  resolveSaleHistoryMemberNames({ mode: "log", displayName: "duybao", teamMemberNames: ["a", "b"] }),
+  ["duybao"]
+);
+assert.deepStrictEqual(
+  resolveSaleHistoryMemberNames({ mode: "race", displayName: "duybao", teamMemberNames: ["duybao", "tiến"] }),
+  ["duybao", "tiến"]
+);
+assert.deepStrictEqual(
+  resolveSaleHistoryMemberNames({ mode: "race", displayName: "duybao", teamMemberNames: [] }),
+  ["duybao"]
+);
 
 const history = [
   { action: "Chia lead", saleName: "Nguyễn Thị Kim Lời", feedback: "Admin chia team T2" },
