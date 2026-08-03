@@ -30,8 +30,8 @@ export function filterLeadsScope(leads, opts = {}) {
     selectedProject,
     searchText = "",
     statusFilter = "all",
-    managerFilter = "all",
-    saleFilter = "all",
+    // managerFilter / saleFilter: server lọc trên scope/lite — không lọc lại client
+    // (team:ID còn khớp lead_team_holders; pastSaleNames=[] trên lite → lọc client = 0 khách)
     activeTab = "all",
     productFilter = [],
     dateFrom = "",
@@ -77,19 +77,6 @@ export function filterLeadsScope(leads, opts = {}) {
       const d = parseLeadDateLocal(l.createdAt);
       return d && d <= to;
     });
-  }
-
-  if (managerFilter && managerFilter !== "all") {
-    list = list.filter((l) => (l.managerName || "") === managerFilter);
-  }
-
-  if (saleFilter && saleFilter !== "all") {
-    const saleKey = normalizePersonName(saleFilter);
-    list = list.filter(
-      (l) =>
-        normalizePersonName(l.saleName) === saleKey ||
-        (l.pastSaleNames || []).some((n) => normalizePersonName(n) === saleKey)
-    );
   }
 
   if (productFilter.length) {

@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-race-sale-filter";
+const BUILD_VERSION = "2026-08-03-race-team-filter-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3364,7 +3364,11 @@ function tabStatusSqlExpr(col = "admin_tab_status") {
 }
 
 function isAdminSalePerspective(filters = {}) {
-  return !!(filters.saleFilter && filters.saleFilter !== "all");
+  const sf = String(filters.saleFilter || "").trim();
+  if (!sf || sf === "all") return false;
+  // team:ID là lọc team race — không phải góc nhìn 1 sale
+  if (/^team:\d+$/i.test(sf)) return false;
+  return true;
 }
 
 async function queryAdminTabCountsDenorm(db, user, filters = {}) {
