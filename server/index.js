@@ -29,6 +29,7 @@ import {
   filterHistoryForTeamMembers,
   rotateDistributionKind,
 } from "./leadTeamHolders.js";
+import { buildAuthUserFromRow, isJwtRoleStale } from "./authUser.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,7 +58,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-01-ios-history-ui";
+const BUILD_VERSION = "2026-08-03-auth-role-relogin";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -5523,12 +5524,29 @@ try {
 }
 
 /* ---------- Auth middleware ---------- */
-function requireAuth(req, res, next) {
+/** JWT proves identity; role/displayName from DB. Stale JWT role → force re-login. */
+async function requireAuth(req, res, next) {
   if (!db) return res.status(503).json({ error: "Database not ready", dbError: dbInitError });
   const token = (req.headers.authorization || "").replace("Bearer ", "");
   if (!token) return res.status(401).json({ error: "Unauthorized" });
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, JWT_SECRET);
+    const userId = Number(payload?.userId);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+    const row = await get(
+      db,
+      "SELECT id, username, role, display_name, must_change_password FROM users WHERE id = ?",
+      [userId]
+    );
+    const user = buildAuthUserFromRow(row);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    if (isJwtRoleStale(payload, user.role)) {
+      return res.status(401).json({
+        error: "Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại",
+        code: "role_changed",
+      });
+    }
+    req.user = user;
     next();
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
@@ -18117,12 +18135,24 @@ if (!process.env.VERCEL) {
   const server = http.createServer(app);
   io = new SocketIOServer(server, { cors: corsOptions });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth?.token
         || String(socket.handshake.headers?.authorization || "").replace(/^Bearer\s+/i, "");
-      if (!token) return next();
-      socket.user = jwt.verify(token, JWT_SECRET);
+      if (!token || !db) return next();
+      const payload = jwt.verify(token, JWT_SECRET);
+      const userId = Number(payload?.userId);
+      if (!userId) return next();
+      const row = await get(
+        db,
+        "SELECT id, username, role, display_name, must_change_password FROM users WHERE id = ?",
+        [userId]
+      );
+      const user = buildAuthUserFromRow(row);
+      if (!user) return next();
+      // Stale role: do not attach user (no privileged rooms) — client must re-login
+      if (isJwtRoleStale(payload, user.role)) return next();
+      socket.user = user;
       next();
     } catch {
       next();

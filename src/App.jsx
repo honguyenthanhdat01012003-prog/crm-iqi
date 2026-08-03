@@ -742,6 +742,21 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
+  const [sessionReady, setSessionReady] = useState(() => !localStorage.getItem("crm_token"));
+  const [sessionNotice, setSessionNotice] = useState("");
+  const [sessionVerifyError, setSessionVerifyError] = useState("");
+  const [sessionCheckTick, setSessionCheckTick] = useState(0);
+
+  const clearSession = useCallback((notice = "") => {
+    localStorage.removeItem("crm_token");
+    localStorage.removeItem("crm_user");
+    localStorage.removeItem("crm_page");
+    localStorage.removeItem("crm_selected_project");
+    setUser(null);
+    setToken("");
+    setSessionVerifyError("");
+    if (notice) setSessionNotice(notice);
+  }, []);
 
   const updateUser = (u, t) => {
     setUser(u);
@@ -749,18 +764,121 @@ export default function App() {
     localStorage.setItem("crm_user", JSON.stringify(u));
   };
 
+  // Bắt buộc xác thực role từ server trước khi vào app — lệch JWT/cache → đá về login.
+  useEffect(() => {
+    if (!token) {
+      setSessionReady(true);
+      setSessionVerifyError("");
+      return;
+    }
+    let cancelled = false;
+    setSessionReady(false);
+    setSessionVerifyError("");
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/me`, { timeoutMs: 15000 });
+        if (cancelled) return;
+        if (r.status === 401) {
+          let notice = "Phiên đăng nhập hết hạn — vui lòng đăng nhập lại";
+          try {
+            const body = await r.json();
+            if (body?.code === "role_changed" || /quyền tài khoản đã thay đổi/i.test(String(body?.error || ""))) {
+              notice = String(body.error || "Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
+            }
+          } catch { /* ignore */ }
+          clearSession(notice);
+          setSessionReady(true);
+          return;
+        }
+        if (!r.ok) {
+          setSessionVerifyError(`Không xác thực được phiên (HTTP ${r.status}). Thử lại trước khi vào app.`);
+          return;
+        }
+        const data = await r.json();
+        const next = data?.user;
+        if (!next?.userId || !next?.role) {
+          clearSession("Không xác thực được phiên — vui lòng đăng nhập lại");
+          setSessionReady(true);
+          return;
+        }
+        let cachedRole = "";
+        try {
+          cachedRole = String(JSON.parse(localStorage.getItem("crm_user") || "{}")?.role || "");
+        } catch { cachedRole = ""; }
+        if (cachedRole && cachedRole !== String(next.role)) {
+          clearSession("Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
+          setSessionReady(true);
+          return;
+        }
+        const merged = {
+          userId: next.userId,
+          username: next.username,
+          role: next.role,
+          displayName: next.displayName,
+          mustChangePassword: !!next.mustChangePassword,
+          projectIds: next.projectIds || [],
+        };
+        localStorage.setItem("crm_user", JSON.stringify(merged));
+        setUser(merged);
+        setSessionNotice("");
+        setSessionVerifyError("");
+        setSessionReady(true);
+      } catch {
+        if (cancelled) return;
+        setSessionVerifyError("Không kết nối được server. Thử lại trước khi vào app.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token, clearSession, sessionCheckTick]);
+
+  if (token && !sessionReady) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "#0f172a", color: "#94a3b8", fontSize: 14, fontWeight: 600, padding: 24, textAlign: "center" }}>
+        {sessionVerifyError ? (
+          <>
+            <div style={{ color: "#fca5a5", maxWidth: 360 }}>{sessionVerifyError}</div>
+            <button
+              type="button"
+              onClick={() => setSessionCheckTick((n) => n + 1)}
+              style={{ marginTop: 8, padding: "10px 18px", borderRadius: 8, border: "none", background: "#22c55e", color: "#fff", fontWeight: 700, cursor: "pointer" }}
+            >
+              Thử lại
+            </button>
+            <button
+              type="button"
+              onClick={() => { clearSession(); setSessionReady(true); }}
+              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #334155", background: "transparent", color: "#94a3b8", fontWeight: 600, cursor: "pointer" }}
+            >
+              Đăng nhập lại
+            </button>
+          </>
+        ) : (
+          <div>Đang xác thực quyền truy cập...</div>
+        )}
+      </div>
+    );
+  }
+
   if (!user || !token) {
-    return <ErrorBoundary><LoginPage onLogin={(u, t) => { setUser(u); setToken(t); }} /></ErrorBoundary>;
+    return (
+      <ErrorBoundary>
+        <LoginPage
+          sessionNotice={sessionNotice}
+          onLogin={(u, t) => {
+            setSessionNotice("");
+            setUser(u);
+            setToken(t);
+            setSessionReady(false);
+          }}
+        />
+      </ErrorBoundary>
+    );
   }
 
   if (user.mustChangePassword) {
     return <ErrorBoundary><ForceChangePasswordPage user={user} onChanged={(u, t) => updateUser(u, t)} onLogout={() => {
-      localStorage.removeItem("crm_token");
-      localStorage.removeItem("crm_user");
-      localStorage.removeItem("crm_page");
-      localStorage.removeItem("crm_selected_project");
-      setUser(null);
-      setToken("");
+      clearSession();
+      setSessionReady(true);
     }} /></ErrorBoundary>;
   }
 
@@ -768,21 +886,21 @@ export default function App() {
     unregisterNativePushNotifications(apiFetch, API).catch(() => {});
     apiFetch(`${API}/logout`, { method: "POST" }).catch(() => {});
     void clearAllScopeDiskCache();
-    localStorage.removeItem("crm_token");
-    localStorage.removeItem("crm_user");
-    localStorage.removeItem("crm_page");
-    localStorage.removeItem("crm_selected_project");
-    setUser(null);
-    setToken("");
+    clearSession();
+    setSessionReady(true);
   }} /></ErrorBoundary>;
 }
 
-function LoginPage({ onLogin }) {
+function LoginPage({ onLogin, sessionNotice = "" }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(sessionNotice || "");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (sessionNotice) setError(sessionNotice);
+  }, [sessionNotice]);
 
   // Đánh thức kết nối server ngay khi mở màn đăng nhập (DNS/TLS/keepalive)
   // để lần bấm "Đăng nhập" đầu tiên không bị lỗi kết nối do cold start.

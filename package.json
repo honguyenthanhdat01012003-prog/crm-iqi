@@ -10,6 +10,7 @@
     "build:capacitor": "vite build --mode capacitor",
     "preview": "vite preview",
     "test:payload-slim": "node server/payload-slim.test.js",
+    "test:auth-user": "node server/authUser.test.js",
     "server": "node server/keeper.js",
     "start": "node server/keeper.js",
     "start:raw": "node server/index.js",
