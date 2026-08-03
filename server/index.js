@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-team-holder-keep-repair";
+const BUILD_VERSION = "2026-08-03-admin-filter-active-holdings";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3831,7 +3831,7 @@ async function loadPastSaleNamesForLeads(db, leadIds) {
   return map;
 }
 
-/** Team từng nhận lead (kể cả đã revoke / xào đi) — dùng badge filter + pastTeamIds. */
+/** Team đang giữ lead (co-holder còn hiệu lực) — dùng badge filter / pastTeamIds. */
 async function loadPastTeamIdsForLeads(db, leadIds) {
   if (!leadIds.length) return {};
   const map = {};
@@ -3844,7 +3844,8 @@ async function loadPastTeamIdsForLeads(db, leadIds) {
       rows = await all(
         db,
         `SELECT lead_id, team_id FROM lead_team_holders
-         WHERE lead_id IN (${ph}) AND COALESCE(team_id, 0) > 0`,
+         WHERE lead_id IN (${ph}) AND COALESCE(team_id, 0) > 0
+           AND TRIM(COALESCE(revoked_at, '')) = ''`,
         batch
       );
     } catch (_) {
@@ -4123,42 +4124,23 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
     const sf = String(filters.saleFilter || "").trim();
     const teamMatch = /^team:(\d+)$/i.exec(sf);
     if (teamMatch) {
-      // Race: lead team ĐÃ TỪNG nhận (kể cả đã xào đi) — holders kể cả revoked
-      // + lịch sử/summary của thành viên team (lead cũ trước khi có holders)
+      // Team đang GIỮ (trùng app sale): primary / đang offer / co-holder còn hiệu lực
+      // Không lấy lead đã xào mất (revoked) hay chỉ còn trong history
       const tid = Number(teamMatch[1]) || 0;
-      let memberNames = [];
-      try {
-        const team = await getTeamWithMembers(tid);
-        memberNames = [...new Set(
-          (team?.members || []).map((m) => String(m.displayName || "").trim()).filter(Boolean)
-        )];
-      } catch (_) { /* ignore */ }
-      const memberOr = [];
-      for (const _n of memberNames) {
-        memberOr.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
-        memberOr.push(`EXISTS (
-          SELECT 1 FROM lead_history h
-          WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-        )`);
-        memberOr.push(`EXISTS (
-          SELECT 1 FROM lead_sale_summary lss
-          WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
-        )`);
-      }
       parts.push(`(
         CAST(COALESCE(team_id, 0) AS INTEGER) = ?
-        OR CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?
+        OR (race_stage = ? AND CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?)
         OR EXISTS (
           SELECT 1 FROM lead_team_holders lth
           WHERE lth.lead_id = leads.id AND lth.team_id = ?
+            AND TRIM(COALESCE(lth.revoked_at, '')) = ''
         )
-        ${memberOr.length ? `OR (${memberOr.join(" OR ")})` : ""}
       )`);
-      params.push(tid, tid, tid);
-      for (const n of memberNames) params.push(n, n, n);
+      params.push(tid, LEAD_RACE_STAGES.teamOffer, tid, tid);
     } else {
-      // Sale: lead cá nhân (tên/history) + nếu sale thuộc team race thì gồm lead team đã từng nhận
-      // (vd: lọc "Ngà" vẫn thấy đủ lead Team T3 đã nhận, không chỉ 2 lead Ngà tự cập nhật)
+      // Sale: khớp quyền thấy trên app của sale đó
+      // — cá nhân (sale_name / summary đã feedback)
+      // — nếu thuộc team: + lead team đang giữ (primary / offer / co-holder active)
       let saleTeamId = 0;
       try {
         const urow = await get(
@@ -4170,51 +4152,37 @@ async function buildLeadsSqlFilters(db, user, filters = {}) {
         );
         saleTeamId = Number(urow?.team_id) || 0;
       } catch (_) { /* ignore */ }
-      const personClause = `(
-        LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
-        OR EXISTS (
-          SELECT 1 FROM lead_history h
-          WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-        )
-        OR EXISTS (
-          SELECT 1 FROM lead_sale_summary lss
-          WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
-        )
-      )`;
       if (saleTeamId > 0) {
-        let memberNames = [];
-        try {
-          const team = await getTeamWithMembers(saleTeamId);
-          memberNames = [...new Set(
-            (team?.members || []).map((m) => String(m.displayName || "").trim()).filter(Boolean)
-          )];
-        } catch (_) { /* ignore */ }
-        const memberOr = [];
-        for (const _n of memberNames) {
-          memberOr.push(`LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))`);
-          memberOr.push(`EXISTS (
-            SELECT 1 FROM lead_history h
-            WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
-          )`);
-          memberOr.push(`EXISTS (
-            SELECT 1 FROM lead_sale_summary lss
-            WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
-          )`);
-        }
         parts.push(`(
-          ${personClause}
+          LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+          OR EXISTS (
+            SELECT 1 FROM lead_sale_summary lss
+            WHERE lss.lead_id = leads.id
+              AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+              AND LOWER(TRIM(COALESCE(lss.sale_tab_status, ''))) NOT IN ('', 'new')
+          )
+          OR (race_stage = ? AND CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?)
           OR CAST(COALESCE(team_id, 0) AS INTEGER) = ?
-          OR CAST(COALESCE(race_team_id, 0) AS INTEGER) = ?
           OR EXISTS (
             SELECT 1 FROM lead_team_holders lth
             WHERE lth.lead_id = leads.id AND lth.team_id = ?
+              AND TRIM(COALESCE(lth.revoked_at, '')) = ''
           )
-          ${memberOr.length ? `OR (${memberOr.join(" OR ")})` : ""}
         )`);
-        params.push(sf, sf, sf, saleTeamId, saleTeamId, saleTeamId);
-        for (const n of memberNames) params.push(n, n, n);
+        params.push(sf, sf, LEAD_RACE_STAGES.teamOffer, saleTeamId, saleTeamId, saleTeamId);
       } else {
-        parts.push(personClause);
+        // Sale không thuộc team: tên phụ trách HOẶC từng cập nhật history/summary (tra cứu admin)
+        parts.push(`(
+          LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+          OR EXISTS (
+            SELECT 1 FROM lead_history h
+            WHERE h.lead_id = leads.id AND LOWER(TRIM(COALESCE(h.sale_name, ''))) = LOWER(TRIM(?))
+          )
+          OR EXISTS (
+            SELECT 1 FROM lead_sale_summary lss
+            WHERE lss.lead_id = leads.id AND LOWER(TRIM(COALESCE(lss.sale_name, ''))) = LOWER(TRIM(?))
+          )
+        )`);
         params.push(sf, sf, sf);
       }
     }

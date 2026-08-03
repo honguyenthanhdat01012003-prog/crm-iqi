@@ -6192,7 +6192,7 @@ const LeadsPage = (props) => {
     return [...s].filter(Boolean).sort((a, b) => a.localeCompare(b, "vi"));
   }, [selectedProject, allUsers, saleNames, allSaleUsers]);
 
-  /** Race project: tùy chọn lọc theo team (+ số lead từng nhận, kể cả đã xào). */
+  /** Race project: đếm lead team ĐANG giữ (trùng app sale — không đếm lead đã xào mất). */
   const raceTeamFilterOptions = useMemo(() => {
     const pid = Number(selectedProject);
     if (!pid || selectedProject === "all" || selectedProject === "personal") return [];
@@ -6210,20 +6210,13 @@ const LeadsPage = (props) => {
     return list.map((t) => {
       const tid = Number(t.id);
       const members = (t.members || []).map((m) => m.displayName || m.display_name).filter(Boolean);
-      const memberKeys = new Set(members.map((n) => normalizePersonName(n)).filter(Boolean));
       let count = null;
       if (saleFilter === `team:${tid}`) {
-        // Server đã lọc ever-received — dùng đúng số đang hiện (tránh đếm lại thiếu vì pastSaleNames=[])
         count = leadList.length;
       } else if (saleFilter === "all") {
         count = leadList.filter((l) => {
           if (Number(l.teamId) === tid || Number(l.raceTeamId) === tid) return true;
-          if ((l.pastTeamIds || []).some((id) => Number(id) === tid)) return true;
-          if (!memberKeys.size) return false;
-          const names = [l.saleName, ...(l.pastSaleNames || [])]
-            .map((n) => normalizePersonName(n))
-            .filter(Boolean);
-          return names.some((n) => memberKeys.has(n));
+          return (l.pastTeamIds || []).some((id) => Number(id) === tid);
         }).length;
       }
       const memberLabel = members.length ? ` (${members.join("/")})` : "";
