@@ -45,7 +45,6 @@ export function filterHistoryForTeamMembers(history, memberNames = [], options =
       action === "Thu hồi SLA" ||
       action === "Race claim team" ||
       action === "Race team offer" ||
-      action === "Race claim quản lý" ||
       action === "Nhận lead"
     ) {
       if (includeAllChia) return true;

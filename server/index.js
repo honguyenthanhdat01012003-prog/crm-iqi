@@ -13194,8 +13194,13 @@ app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
         const teamId = await getSaleTeamId(req.user.userId);
         if (teamId) {
           try {
-            const team = await getTeamWithMembers(teamId);
-            teamMemberNames = teamMemberDisplayNames(team);
+            // Sale chỉ thấy lịch sử của các SALE trong team (không lộ dòng của quản lý/admin).
+            const saleRows = await all(
+              db,
+              "SELECT display_name FROM users WHERE team_id = ? AND role = 'sale' ORDER BY id",
+              [teamId]
+            );
+            teamMemberNames = saleRows.map((r) => String(r.display_name || "").trim()).filter(Boolean);
           } catch (_) {}
         }
       }
