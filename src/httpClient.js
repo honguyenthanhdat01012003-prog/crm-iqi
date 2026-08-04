@@ -125,16 +125,27 @@ export async function apiFetch(url, opts = {}) {
         data = opts.body;
       }
     }
-    const resp = await CapacitorHttp.request({
-      url: fullUrl,
-      method,
-      headers,
-      data,
-      connectTimeout: opts.timeoutMs || 60000,
-      readTimeout: opts.timeoutMs || 60000,
-    });
-    const out = toFetchLikeResponse(resp.status || 0, resp.data, resp.headers);
-    if (out.status === 401 && opts.skipAuth !== true) {
+    let resp;
+    try {
+      resp = await CapacitorHttp.request({
+        url: fullUrl,
+        method,
+        headers,
+        data,
+        connectTimeout: opts.timeoutMs || 60000,
+        readTimeout: opts.timeoutMs || 60000,
+      });
+    } catch (err) {
+      const msg = err?.message || String(err || "Network request failed");
+      throw new Error(msg);
+    }
+    const status = Number(resp?.status) || 0;
+    // status 0 = lỗi mạng / TLS / DNS — throw để caller retry
+    if (status === 0) {
+      throw new Error("Không kết nối được server (network)");
+    }
+    const out = toFetchLikeResponse(status, resp.data, resp.headers);
+    if (out.status === 401 && opts.skipAuth !== true && opts.skipUnauthorizedReload !== true) {
       localStorage.removeItem("crm_token");
       localStorage.removeItem("crm_user");
       window.location.reload();

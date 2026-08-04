@@ -551,10 +551,12 @@ function getInstantSlaInfo(lead) {
 /** Trạng thái nút xác nhận nhận lead (race claim / ack SLA) — dùng chung web + iOS mobile. */
 function getLeadReceiveConfirmState(lead, user) {
   if (!lead || !user) return null;
+  // Admin giám sát — không cần (và không hiện) xác nhận nhận lead
+  if (user.role === "admin") return null;
   const stage = String(lead.raceStage || "").trim();
-  const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
-    && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
-  const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin")
+  const canManagerClaim = user.role === "manager" && stage === "manager_race"
+    && String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase();
+  const canTeamClaim = (user.role === "sale" || user.role === "manager")
     && stage === "team_offer"
     && Number(lead.raceTeamId || 0) > 0;
   if (canManagerClaim || canTeamClaim) {
@@ -572,7 +574,7 @@ function getLeadReceiveConfirmState(lead, user) {
         : "Bấm để giữ lead cho team — hết hạn sẽ chuyển nhóm khác",
     };
   }
-  if (!(user.role === "sale" || user.role === "admin" || user.role === "manager")) return null;
+  if (user.role !== "sale" && user.role !== "manager") return null;
   if (isOpenRaceStage(lead) || isManagerFeedbackStage(lead)) return null;
   if (lead.distributionKind === "scheduled" || lead.distributionKind === "sla_shuffle") return null;
   if (!lead.saleName || lead.saleName === "Chưa chia" || !lead.assignedAt) return null;
@@ -725,6 +727,25 @@ const ElapsedTimer = ({ estimatedTime }) => {
   );
 };
 
+function SessionAutoRetry({ enabled, onRetry }) {
+  const onRetryRef = useRef(onRetry);
+  onRetryRef.current = onRetry;
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let n = 0;
+    const id = setInterval(() => {
+      n += 1;
+      if (n > 3) {
+        clearInterval(id);
+        return;
+      }
+      onRetryRef.current?.();
+    }, 2500);
+    return () => clearInterval(id);
+  }, [enabled]);
+  return null;
+}
+
 function resetCrmNavigationForRole(role) {
   try {
     if (role === "admin" || role === "manager") {
@@ -765,6 +786,7 @@ export default function App() {
   };
 
   // Bắt buộc xác thực role từ server trước khi vào app — lệch JWT/cache → đá về login.
+  // Native iOS: warmup + retry nhiều lần (cold start / mạng chập chờn hay fail 1 lần đầu).
   useEffect(() => {
     if (!token) {
       setSessionReady(true);
@@ -774,58 +796,89 @@ export default function App() {
     let cancelled = false;
     setSessionReady(false);
     setSessionVerifyError("");
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const native = isNativePlatform();
+    const attempts = native ? 4 : 2;
+    const timeouts = native ? [12000, 16000, 22000, 28000] : [12000, 18000];
+
     (async () => {
+      // Đánh thức TLS/DNS trước /me — giảm lỗi lần mở app đầu trên iOS
       try {
-        const r = await apiFetch(`${API}/me`, { timeoutMs: 15000 });
+        await apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: native ? 10000 : 6000 });
+      } catch { /* ignore warmup */ }
+      if (cancelled) return;
+
+      let lastErrMsg = "";
+      for (let i = 0; i < attempts; i += 1) {
         if (cancelled) return;
-        if (r.status === 401) {
-          let notice = "Phiên đăng nhập hết hạn — vui lòng đăng nhập lại";
-          try {
-            const body = await r.json();
-            if (body?.code === "role_changed" || /quyền tài khoản đã thay đổi/i.test(String(body?.error || ""))) {
-              notice = String(body.error || "Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
-            }
-          } catch { /* ignore */ }
-          clearSession(notice);
-          setSessionReady(true);
-          return;
-        }
-        if (!r.ok) {
-          setSessionVerifyError(`Không xác thực được phiên (HTTP ${r.status}). Thử lại trước khi vào app.`);
-          return;
-        }
-        const data = await r.json();
-        const next = data?.user;
-        if (!next?.userId || !next?.role) {
-          clearSession("Không xác thực được phiên — vui lòng đăng nhập lại");
-          setSessionReady(true);
-          return;
-        }
-        let cachedRole = "";
         try {
-          cachedRole = String(JSON.parse(localStorage.getItem("crm_user") || "{}")?.role || "");
-        } catch { cachedRole = ""; }
-        if (cachedRole && cachedRole !== String(next.role)) {
-          clearSession("Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
+          const r = await apiFetch(`${API}/me`, {
+            timeoutMs: timeouts[i] || 20000,
+            skipUnauthorizedReload: true,
+          });
+          if (cancelled) return;
+          if (r.status === 401) {
+            let notice = "Phiên đăng nhập hết hạn — vui lòng đăng nhập lại";
+            try {
+              const body = await r.json();
+              if (body?.code === "role_changed" || /quyền tài khoản đã thay đổi/i.test(String(body?.error || ""))) {
+                notice = String(body.error || "Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
+              }
+            } catch { /* ignore */ }
+            clearSession(notice);
+            setSessionReady(true);
+            return;
+          }
+          if (!r.ok) {
+            lastErrMsg = `Không xác thực được phiên (HTTP ${r.status || 0})`;
+            if (i < attempts - 1) {
+              await sleep(400 * (i + 1));
+              continue;
+            }
+            setSessionVerifyError(`${lastErrMsg}. Thử lại trước khi vào app.`);
+            return;
+          }
+          const data = await r.json();
+          const next = data?.user;
+          if (!next?.userId || !next?.role) {
+            clearSession("Không xác thực được phiên — vui lòng đăng nhập lại");
+            setSessionReady(true);
+            return;
+          }
+          let cachedRole = "";
+          try {
+            cachedRole = String(JSON.parse(localStorage.getItem("crm_user") || "{}")?.role || "");
+          } catch { cachedRole = ""; }
+          if (cachedRole && cachedRole !== String(next.role)) {
+            clearSession("Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
+            setSessionReady(true);
+            return;
+          }
+          const merged = {
+            userId: next.userId,
+            username: next.username,
+            role: next.role,
+            displayName: next.displayName,
+            mustChangePassword: !!next.mustChangePassword,
+            projectIds: next.projectIds || [],
+          };
+          localStorage.setItem("crm_user", JSON.stringify(merged));
+          setUser(merged);
+          setSessionNotice("");
+          setSessionVerifyError("");
           setSessionReady(true);
           return;
+        } catch (err) {
+          lastErrMsg = err?.message || "Không kết nối được server";
+          if (i < attempts - 1) {
+            await sleep(500 * (i + 1));
+            continue;
+          }
+          if (!cancelled) {
+            setSessionVerifyError("Không kết nối được server. Thử lại trước khi vào app.");
+          }
         }
-        const merged = {
-          userId: next.userId,
-          username: next.username,
-          role: next.role,
-          displayName: next.displayName,
-          mustChangePassword: !!next.mustChangePassword,
-          projectIds: next.projectIds || [],
-        };
-        localStorage.setItem("crm_user", JSON.stringify(merged));
-        setUser(merged);
-        setSessionNotice("");
-        setSessionVerifyError("");
-        setSessionReady(true);
-      } catch {
-        if (cancelled) return;
-        setSessionVerifyError("Không kết nối được server. Thử lại trước khi vào app.");
       }
     })();
     return () => { cancelled = true; };
@@ -851,6 +904,11 @@ export default function App() {
             >
               Đăng nhập lại
             </button>
+            {/* iOS: tự thử lại nền khi lỗi mạng tạm thời */}
+            <SessionAutoRetry
+              enabled={isNativePlatform()}
+              onRetry={() => setSessionCheckTick((n) => n + 1)}
+            />
           </>
         ) : (
           <div>Đang xác thực quyền truy cập...</div>
@@ -1285,10 +1343,10 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [notifications]);
 
   useEffect(() => {
-    managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3");
-    saleLeadAudioRef.current = new Audio("/sounds/lead-sale.mp3");
-    recallLeadAudioRef.current = new Audio("/sounds/lead-recall.mp3");
-    updateLeadAudioRef.current = new Audio("/sounds/lead-update.mp3");
+    managerLeadAudioRef.current = new Audio("/sounds/lead-manager.mp3?v=20260804c");
+    saleLeadAudioRef.current = new Audio("/sounds/lead-sale.mp3?v=20260804c");
+    recallLeadAudioRef.current = new Audio("/sounds/lead-recall.mp3?v=20260804");
+    updateLeadAudioRef.current = new Audio("/sounds/lead-update.mp3?v=20260804c");
     managerLeadAudioRef.current.preload = "auto";
     saleLeadAudioRef.current.preload = "auto";
     recallLeadAudioRef.current.preload = "auto";
@@ -1373,11 +1431,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     const first = fresh[0];
     // Đã có FCM: để hệ thống hiện tray (kể cả tắt app). LocalNotification chỉ gây double khi app mở.
     if (nativeLocalSupported && !nativePushSupported && !skipLocal) {
+      const title = user.role === "sale"
+        ? "Bạn có lead mới"
+        : user.role === "admin"
+          ? "Có lead mới — vào chia cho sale"
+          : "Có lead mới về quản lý";
       showNativeLeadNotification({
-        title: user.role === "sale" ? "Bạn có lead mới" : "Có lead mới về quản lý",
+        title,
         body: first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới"),
         leadId: first.leadId || first.id,
-        sound: soundKind,
+        sound: soundKind === "sale" ? "sale" : soundKind === "update" ? "update" : "manager",
       }).catch(() => {});
     }
     setNotifications((n) => {
@@ -9613,12 +9676,14 @@ const LeadsPage = (props) => {
                       );
                     })()}
                     {(() => {
+                      // Admin không hiện banner xác nhận nhận lead
+                      if (user.role === "admin") return null;
                       const stage = String(l.raceStage || "").trim();
-                      const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
-                        && (user.role === "admin" || String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
-                      const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
-                      if (stage === "manager_feedback" && (user.role === "manager" || user.role === "admin")
-                        && (user.role === "admin" || String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase())) {
+                      const canManagerClaim = user.role === "manager" && stage === "manager_race"
+                        && String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase();
+                      const canTeamClaim = (user.role === "sale" || user.role === "manager") && stage === "team_offer" && Number(l.raceTeamId || 0) > 0;
+                      if (stage === "manager_feedback" && user.role === "manager"
+                        && String(l.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase()) {
                         const deadline = l.raceDeadlineAt ? parseLeadDate(l.raceDeadlineAt) : null;
                         const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
                         const mins = Math.floor(remainMs / 60000);
@@ -9643,7 +9708,7 @@ const LeadsPage = (props) => {
                           <button
                             type="button"
                             disabled={isClaiming}
-                            onClick={(e) => { e.stopPropagation(); acknowledgeLeadReceive(l); }}
+                            onClick={(e) => { e.stopPropagation(); (claimRaceLead || acknowledgeLeadReceive)?.(l); }}
                             style={{ border: "1px solid #67e8f9", background: isClaiming ? "#cffafe" : "#ffffff", color: "#0e7490", borderRadius: 999, fontSize: 10, fontWeight: 700, padding: "2px 8px", cursor: isClaiming ? "not-allowed" : "pointer", opacity: isClaiming ? 0.7 : 1 }}
                           >
                             {isClaiming ? "Đang nhận..." : "Đã nhận lead"}
@@ -9652,6 +9717,8 @@ const LeadsPage = (props) => {
                       );
                     })()}
                     {(isSale || isAdmin) && !isOpenRaceStage(l) && l.distributionKind !== "scheduled" && l.distributionKind !== "sla_shuffle" && l.saleName && l.saleName !== "Chưa chia" && l.assignedAt && (() => {
+                      // Admin: không hiện nút xác nhận SLA / "Đã nhận lead"
+                      if (user.role === "admin") return null;
                       const isTeamLead = Number(l.teamId) > 0;
                       const ackedAt = String(l.instantSlaAcceptedAt || "").trim();
                       if (ackedAt && !isTeamLead) {
@@ -10499,16 +10566,15 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
     const u = (allUsers || []).find((x) => String(x.displayName || x.display_name || "").trim().toLowerCase() === dn);
     return Number(u?.teamId || u?.team_id || 0) || 0;
   })();
-  const canManagerClaimGate = (user.role === "manager" || user.role === "admin") && raceStageNow === "manager_race"
-    && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
-  // Chỉ thành viên team được offer (hoặc sale) mới bắt gate — QL ngoài team xem chi tiết bình thường
+  const canManagerClaimGate = user.role === "manager" && raceStageNow === "manager_race"
+    && String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase();
+  // Chỉ thành viên team được offer (hoặc sale) mới bắt gate — admin/QL ngoài team xem chi tiết bình thường
   const raceTeamIdNow = Number(lead.raceTeamId || 0);
   const canTeamClaimGate = raceStageNow === "team_offer" && raceTeamIdNow > 0 && (
     user.role === "sale"
-    || user.role === "admin"
     || (user.role === "manager" && myTeamIdFromTeams > 0 && myTeamIdFromTeams === raceTeamIdNow)
   );
-  const needsRaceClaimGate = (canManagerClaimGate || canTeamClaimGate) && user.role !== "admin";
+  const needsRaceClaimGate = canManagerClaimGate || canTeamClaimGate;
   if (needsRaceClaimGate) {
     const isClaiming = claimingRaceLeadIds?.has(lead.id) || ackingLeadIds?.has(lead.id);
     const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
@@ -10582,12 +10648,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   return (
     <div className={inDrawer ? "crm-lead-detail--drawer" : undefined} style={{ padding: isMobile ? "10px" : inDrawer ? "12px 16px 20px" : "16px 24px" }}>
       {(() => {
+        if (user.role === "admin") return null;
         const stage = String(lead.raceStage || "").trim();
-        const canManagerClaim = (user.role === "manager" || user.role === "admin") && stage === "manager_race"
-          && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase());
-        const canTeamClaim = (user.role === "sale" || user.role === "manager" || user.role === "admin") && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
-        if (stage === "manager_feedback" && (user.role === "manager" || user.role === "admin")
-          && (user.role === "admin" || String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase())) {
+        const canManagerClaim = user.role === "manager" && stage === "manager_race"
+          && String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase();
+        const canTeamClaim = (user.role === "sale" || user.role === "manager") && stage === "team_offer" && Number(lead.raceTeamId || 0) > 0;
+        if (stage === "manager_feedback" && user.role === "manager"
+          && String(lead.managerName || "").trim().toLowerCase() === String(user.displayName || "").trim().toLowerCase()) {
           const deadline = lead.raceDeadlineAt ? parseLeadDate(lead.raceDeadlineAt) : null;
           const remainMs = deadline ? Math.max(0, deadline.getTime() - Date.now()) : 0;
           const mins = Math.floor(remainMs / 60000);

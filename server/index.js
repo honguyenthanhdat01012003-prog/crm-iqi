@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-03-admin-filter-active-holdings";
+const BUILD_VERSION = "2026-08-04-new-voice-files-v6";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -280,10 +280,11 @@ function stringifyFcmData(data = {}) {
 
 function getNativeNotificationSound(sound) {
   // iosSound: tên file .caf nằm trong bundle app iOS. Nếu app không có file, iOS tự phát tiếng mặc định.
+  // Bump channel version khi đổi file âm — Android không cập nhật sound nếu giữ nguyên channelId.
   if (sound === "sla_recall") return { channelId: "lead_notifications_recall_v2", soundName: "lead_recall", iosSound: "lead_recall.caf" };
-  if (sound === "sale") return { channelId: "lead_notifications_sale_v4", soundName: "lead_sale", iosSound: "lead_sale.caf" };
-  if (sound === "manager") return { channelId: "lead_notifications_manager_v4", soundName: "lead_manager", iosSound: "lead_manager.caf" };
-  if (sound === "update") return { channelId: "lead_notifications_update_v1", soundName: "lead_update", iosSound: "lead_update.caf" };
+  if (sound === "sale") return { channelId: "lead_notifications_sale_v6", soundName: "lead_sale", iosSound: "lead_sale.caf" };
+  if (sound === "manager") return { channelId: "lead_notifications_manager_v6", soundName: "lead_manager", iosSound: "lead_manager.caf" };
+  if (sound === "update") return { channelId: "lead_notifications_update_v3", soundName: "lead_update", iosSound: "lead_update.caf" };
   return { channelId: "lead_notifications", soundName: "default", iosSound: "default" };
 }
 
@@ -5342,11 +5343,12 @@ async function syncProject(db, projectId, opts = {}) {
               .catch(err => console.error(`[Push] Manager notify failed for ${mgr.display_name}:`, err.message));
           }
 
-          // Admin: chỉ báo app (không Telegram) — báo tổng lead mới của dự án
+          // Admin: luôn báo app (push + âm quản lý) — tổng lead mới của dự án
           try {
             const adminUsers = await all(db, "SELECT id, display_name FROM users WHERE role = 'admin'");
+            console.log(`[syncProject] 🔔 admin push recipients=${adminUsers.length} leads=${newLeads.length}`);
             for (const adm of adminUsers) {
-              sendPushToUser(adm.id, buildNewLeadPush(newLeads, `admin-new-${projectId}-${adm.id}`, "admin_new_leads"))
+              sendPushToUser(adm.id, buildNewLeadPush(newLeads, `admin-new-${projectId}-${adm.id}-${Date.now()}`, "admin_new_leads"))
                 .catch(err => console.error(`[Push] Admin notify failed for ${adm.display_name}:`, err.message));
             }
           } catch (admErr) {
