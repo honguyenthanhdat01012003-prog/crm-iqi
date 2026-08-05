@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-04-new-voice-files-v6";
+const BUILD_VERSION = "2026-08-05-junk-export-business-hours";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -767,6 +767,8 @@ const LEAD_RACE_STAGES = {
   teamOffer: "team_offer",
   claimed: "claimed",
   manualPool: "manual_pool",
+  /** Lead mới sync ngoài 7h30–22h — chờ giờ hành chính mới bắt đầu race/offer. */
+  hoursHold: "hours_hold",
 };
 
 const MANAGER_RACE_MS = 5 * 60 * 1000;
@@ -4889,6 +4891,11 @@ async function offerRaceLeadToNextManager(db, projectId, lead, managers = [], pr
   if (!lead?.id) return { ok: false, reason: "no_lead" };
   if (isLeadRowLocked(lead)) return { ok: false, reason: "locked" };
   if (!managers.length) return { ok: false, reason: "no_manager" };
+  // Không offer / push QL ngoài giờ hành chính (lead mới → hours_hold ở sync)
+  if (!isWithinAutoShuffleHours()) {
+    console.log(`[race] skip manager offer outside hours lead#${lead.id}`);
+    return { ok: false, reason: "outside_hours" };
+  }
   const project = await get(db, "SELECT race_manager_cursor FROM projects WHERE id = ?", [projectId]);
   let cursor = Number(project?.race_manager_cursor) || 0;
   if (cursor < 0) cursor = 0;
@@ -4911,6 +4918,95 @@ async function offerRaceLeadToNextManager(db, projectId, lead, managers = [], pr
   const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
   await sendRaceManagerOfferNotifications(db, projectId, refreshed || lead, [mgr], projectName);
   return { ok: true, manager: mgr };
+}
+
+/** Lead race mới ngoài 7h30–22h: giữ trong DB, không offer / không push / không Telegram. */
+async function holdRaceLeadUntilBusinessHours(db, lead) {
+  if (!lead?.id) return { ok: false, reason: "no_lead" };
+  if (isLeadRowLocked(lead)) return { ok: false, reason: "locked" };
+  const nowIso = new Date().toISOString();
+  await run(
+    db,
+    `UPDATE leads
+     SET manager_name = '', sale_name = '', sale_id = NULL, team_id = NULL,
+         race_stage = ?, race_started_at = ?, race_deadline_at = '', race_team_id = NULL,
+         race_claimed_by = '', race_claimed_at = '',
+         instant_sla_warned_at = '', instant_sla_accepted_at = '',
+         distribution_kind = COALESCE(NULLIF(TRIM(distribution_kind), ''), ?)
+     WHERE id = ?`,
+    [LEAD_RACE_STAGES.hoursHold, nowIso, LEAD_DISTRIBUTION_KINDS.manual, lead.id]
+  );
+  console.log(`[race] lead#${lead.id} hours_hold — chờ 07:30–22:00 VN mới offer`);
+  return { ok: true };
+}
+
+/**
+ * Đến giờ hành chính: nhả lead hours_hold → bắt đầu race (offer QL / team).
+ * Gọi mỗi phút cùng cron lead-race.
+ */
+async function flushHoursHoldRaceLeads(db) {
+  if (!isWithinAutoShuffleHours()) return { offered: 0, skipped: "outside_hours" };
+  const held = await all(
+    db,
+    `SELECT * FROM leads
+     WHERE race_stage = ?
+       AND COALESCE(is_locked, 0) = 0
+     ORDER BY id ASC
+     LIMIT 80`,
+    [LEAD_RACE_STAGES.hoursHold]
+  );
+  if (!held.length) return { offered: 0 };
+
+  let offered = 0;
+  const byProject = new Map();
+  for (const lead of held) {
+    const pid = Number(lead.project_id) || 0;
+    if (!byProject.has(pid)) byProject.set(pid, []);
+    byProject.get(pid).push(lead);
+  }
+
+  for (const [projectId, leads] of byProject) {
+    const mode = await getProjectDistributionMode(projectId);
+    if (mode !== PROJECT_DISTRIBUTION_MODES.race) {
+      for (const lead of leads) {
+        await run(db, "UPDATE leads SET race_stage = '' WHERE id = ? AND race_stage = ?", [lead.id, LEAD_RACE_STAGES.hoursHold]);
+      }
+      continue;
+    }
+    const managers = await all(db,
+      `SELECT DISTINCT u.id, u.display_name, u.telegram_id FROM users u
+       JOIN user_projects up ON u.id = up.user_id
+       WHERE up.project_id = ? AND u.role IN ('manager', 'admin')
+       ORDER BY u.id ASC`, [projectId]);
+    const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
+    const projectName = projectRow?.name || "-";
+    for (const lead of leads) {
+      if (managers.length > 0) {
+        const r = await offerRaceLeadToNextManager(db, projectId, lead, managers, projectName);
+        if (!r.ok) {
+          const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName });
+          if (!movedTeam.ok) {
+            await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có quản lý/team (sau hours_hold)" });
+            continue;
+          }
+        }
+      } else {
+        const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName });
+        if (!movedTeam.ok) {
+          await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có quản lý/team (sau hours_hold)" });
+          continue;
+        }
+      }
+      offered += 1;
+    }
+  }
+
+  if (offered > 0) {
+    lastSyncHash = "";
+    emitDataChanged("race-hours-hold-flush");
+    console.log(`[race] flush hours_hold → offered=${offered}`);
+  }
+  return { offered };
 }
 
 /** Feedback có nghĩa trong cửa sổ manager_feedback → khóa lead cho QL (claimed). */
@@ -5072,6 +5168,11 @@ async function sendRaceTeamOfferNotifications(db, projectId, lead, team, project
 async function transitionLeadToTeamOffer(db, lead, { projectName = "-" } = {}) {
   if (!lead?.id) return { ok: false, reason: "no_lead" };
   if (isLeadRowLocked(lead)) return { ok: false, reason: "locked" };
+  // Không offer / push team (sale) ngoài giờ hành chính 07:30–22:00
+  if (!isWithinAutoShuffleHours()) {
+    console.log(`[race] skip team offer outside hours lead#${lead.id}`);
+    return { ok: false, reason: "outside_hours" };
+  }
   const projectId = Number(lead.project_id) || 0;
   // Xóa tin Telegram cũ (manager race) trước khi gửi offer team mới
   await deleteTelegramMsgsForLeadSale(db, lead.id, lead.sale_name || "", projectId);
@@ -5233,21 +5334,35 @@ async function syncProject(db, projectId, opts = {}) {
         if (newLeads.length > 0) {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
-          for (const lead of newLeads) {
-            if (Number(lead.is_locked) === 1) continue;
-            if (managers.length > 0) {
-              const offered = await offerRaceLeadToNextManager(db, projectId, lead, managers, projectName);
-              if (!offered.ok) {
-                await transitionLeadToTeamOffer(db, lead, { projectName });
-              }
-            } else {
-              const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName });
-              if (!movedTeam.ok) {
-                await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có quản lý/team" });
+          const withinHours = isWithinAutoShuffleHours();
+          if (!withinHours) {
+            let held = 0;
+            for (const lead of newLeads) {
+              if (Number(lead.is_locked) === 1) continue;
+              const stage = String(lead.race_stage || "").trim();
+              // Chỉ giữ lead mới chưa vào race; không đụng lead đang offer/claimed
+              if (stage && stage !== LEAD_RACE_STAGES.hoursHold) continue;
+              await holdRaceLeadUntilBusinessHours(db, lead);
+              held += 1;
+            }
+            console.log(`[syncProject] project=${projectId} outside 07:30–22:00 VN — hours_hold=${held}/${newLeads.length} (không gửi QL/team)`);
+          } else {
+            for (const lead of newLeads) {
+              if (Number(lead.is_locked) === 1) continue;
+              if (managers.length > 0) {
+                const offered = await offerRaceLeadToNextManager(db, projectId, lead, managers, projectName);
+                if (!offered.ok) {
+                  await transitionLeadToTeamOffer(db, lead, { projectName });
+                }
+              } else {
+                const movedTeam = await transitionLeadToTeamOffer(db, lead, { projectName });
+                if (!movedTeam.ok) {
+                  await moveRaceLeadToManualPool(db, lead, { reason: "Race mode không có quản lý/team" });
+                }
               }
             }
+            emitDataChanged("race-manager-offer");
           }
-          emitDataChanged("race-manager-offer");
         }
       }
     } else if (managers.length > 0) {
@@ -5299,8 +5414,11 @@ async function syncProject(db, projectId, opts = {}) {
       }
 
       // Step 3: Notify managers about NEW leads via Telegram
-      // Notify about NEW leads
+      // Notify about NEW leads — chỉ trong giờ hành chính 7h30–22h (cùng rule race/xáo)
       if (newPhones && newPhones.length > 0) {
+        if (!isWithinAutoShuffleHours()) {
+          console.log(`[syncProject] project=${projectId} outside 07:30–22:00 VN — hoãn notify ${newPhones.length} lead mới (log mode)`);
+        } else {
         console.log(`[syncProject] 🔔 project=${projectId} newPhones=${newPhones.length}: [${newPhones.slice(0, 5).join(', ')}${newPhones.length > 5 ? '...' : ''}]`);
         const normPhone = normalizePhoneKey;
         const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
@@ -5386,6 +5504,7 @@ async function syncProject(db, projectId, opts = {}) {
               }
             }
           }
+        }
         }
       }
     }
@@ -7577,6 +7696,150 @@ app.get("/api/sla-audit/recalls/export", requireAuth, requireAdmin, async (req, 
     console.error("[GET /api/sla-audit/recalls/export]", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+const JUNK_EXPORT_DEFAULT_STATUSES = ["spam", "wrong_phone", "hung_up", "not_interested", "sale"];
+const JUNK_EXPORT_MAX_ROWS = 50000;
+const JUNK_EXPORT_STATUS_LABELS = {
+  ...STATUS_LABELS_VI,
+  not_interested: "Không quan tâm",
+  unreachable: "Chưa liên lạc được",
+  weak_finance: "Tài chính yếu",
+  low_interest: "Quan tâm hời hợt",
+  other_project: "Quan tâm DA khác",
+  appointment: "Hẹn gặp/hẹn xem dự án",
+  callback: "Liên lạc lại sau",
+};
+
+function csvEscapeCell(value) {
+  const s = String(value ?? "");
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function buildJunkLeadsCsv(rows) {
+  const header = ["Dự án", "Tên khách", "Số điện thoại", "Nhu cầu", "Trạng thái"];
+  const lines = [header.map(csvEscapeCell).join(",")];
+  for (const r of rows) {
+    lines.push([
+      r.projectName,
+      r.name,
+      r.phone,
+      r.product,
+      r.statusLabel,
+    ].map(csvEscapeCell).join(","));
+  }
+  return "\uFEFF" + lines.join("\r\n");
+}
+
+function slugifyFilePart(name = "") {
+  return String(name || "du-an")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "du-an";
+}
+
+/* POST /api/leads/export-junk — Admin xuất CSV lead tệ theo dự án + trạng thái */
+app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const projectIdsRaw = Array.isArray(req.body?.projectIds) ? req.body.projectIds : [];
+    const statusesRaw = Array.isArray(req.body?.statuses) ? req.body.statuses : JUNK_EXPORT_DEFAULT_STATUSES;
+    const mode = String(req.body?.mode || "single").trim() === "per_project" ? "per_project" : "single";
+
+    const projectIds = [...new Set(projectIdsRaw.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+    const statuses = [...new Set(statusesRaw.map((s) => normalizeStatus(String(s || "").trim())).filter((s) => VALID_STATUS_KEYS.has(s)))];
+
+    if (!projectIds.length) return res.status(400).json({ error: "Chọn ít nhất 1 dự án" });
+    if (!statuses.length) return res.status(400).json({ error: "Chọn ít nhất 1 trạng thái" });
+
+    const projPlaceholders = projectIds.map(() => "?").join(",");
+    const projects = await all(db, `SELECT id, name FROM projects WHERE id IN (${projPlaceholders})`, projectIds);
+    const projectMap = Object.fromEntries(projects.map((p) => [Number(p.id), p.name || `Dự án #${p.id}`]));
+    if (!projects.length) return res.status(400).json({ error: "Không tìm thấy dự án hợp lệ" });
+
+    const statusPlaceholders = statuses.map(() => "?").join(",");
+    const labelArgs = statuses.map((s) => JUNK_EXPORT_STATUS_LABELS[s] || STATUS_LABELS_VI[s] || s);
+    const labelPlaceholders = labelArgs.map(() => "?").join(",");
+    const rows = await all(
+      db,
+      `SELECT l.id, l.name, l.phone, l.product, l.status, l.admin_tab_status, l.project_id
+       FROM leads l
+       WHERE l.project_id IN (${projPlaceholders})
+         AND (
+           LOWER(TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, ''))) IN (${statusPlaceholders})
+           OR TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, '')) IN (${labelPlaceholders})
+         )
+       ORDER BY l.project_id ASC, l.id ASC
+       LIMIT ?`,
+      [...projectIds, ...statuses.map((s) => s.toLowerCase()), ...labelArgs, JUNK_EXPORT_MAX_ROWS + 1]
+    );
+
+    if (rows.length > JUNK_EXPORT_MAX_ROWS) {
+      return res.status(413).json({
+        error: `Quá ${JUNK_EXPORT_MAX_ROWS.toLocaleString("vi-VN")} dòng — hãy chọn ít dự án/trạng thái hơn`,
+      });
+    }
+
+    const mapped = rows.map((l) => {
+      const st = normalizeStatus(l.admin_tab_status || l.status || "");
+      return {
+        projectId: Number(l.project_id) || 0,
+        projectName: projectMap[Number(l.project_id)] || `Dự án #${l.project_id}`,
+        name: l.name || "",
+        phone: l.phone || "",
+        product: l.product || "",
+        statusKey: st,
+        statusLabel: JUNK_EXPORT_STATUS_LABELS[st] || st || "",
+      };
+    }).filter((r) => statuses.includes(r.statusKey));
+
+    const stamp = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Ho_Chi_Minh" }).replace(/[-: ]/g, "").slice(0, 12);
+
+    if (mode === "per_project") {
+      const byProject = new Map();
+      for (const r of mapped) {
+        if (!byProject.has(r.projectId)) byProject.set(r.projectId, []);
+        byProject.get(r.projectId).push(r);
+      }
+      const files = [];
+      for (const pid of projectIds) {
+        const pname = projectMap[pid] || `project-${pid}`;
+        const list = byProject.get(pid) || [];
+        files.push({
+          filename: `lead-te-${slugifyFilePart(pname)}-${stamp}.csv`,
+          projectId: pid,
+          projectName: pname,
+          count: list.length,
+          csv: buildJunkLeadsCsv(list),
+        });
+      }
+      return res.json({
+        mode: "per_project",
+        total: mapped.length,
+        files,
+      });
+    }
+
+    const csv = buildJunkLeadsCsv(mapped);
+    const fname = `lead-te-${stamp}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    res.setHeader("X-Export-Count", String(mapped.length));
+    res.send(csv);
+  } catch (err) {
+    console.error("[POST /api/leads/export-junk]", err);
+    res.status(500).json({ error: err.message || "Xuất CSV thất bại" });
+  }
+});
+
+app.get("/api/leads/export-junk/defaults", requireAuth, requireAdmin, (_req, res) => {
+  res.json({
+    defaultStatuses: JUNK_EXPORT_DEFAULT_STATUSES,
+    statusLabels: JUNK_EXPORT_STATUS_LABELS,
+    maxRows: JUNK_EXPORT_MAX_ROWS,
+  });
 });
 
 // ========== LEAD QUALITY REPORT ==========
@@ -10164,6 +10427,11 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   pushBodySuffix = " — vui lòng cập nhật feedback",
 } = {}) {
   if (isLeadRowLocked(lead)) return null;
+  // Tự động chia/chuyển lead cho sale/team chỉ trong 07:30–22:00 VN
+  if (!isWithinAutoShuffleHours()) {
+    console.log(`[assign] skip outside 07:30–22:00 lead#${lead?.id} source=${source}`);
+    return null;
+  }
   const excluded = [...new Set([...(await getLeadPoolExcludedSales(db, lead.id)), ...excludeSales].filter(Boolean))];
   const mode = await getProjectDistributionMode(lead.project_id);
 
@@ -10416,6 +10684,10 @@ async function getInstantSlaAssignmentTime(db, lead) {
  * Lead cũ từ rổ xáo 24h / xáo / rotate → không áp dụng (chỉ luân chuyển qua nút xáo).
  */
 async function processInstantLeadSLA(db) {
+  // Ngoài 7h30–22h: không thu hồi / không chuyển lead cho sale khác (tránh gửi sale lúc đêm)
+  if (!isWithinAutoShuffleHours()) {
+    return { recalled: 0, warned: 0, skipped: "outside_hours" };
+  }
   const now = Date.now();
   const nowStr = getAssignmentNowStr();
   const instantKinds = [LEAD_DISTRIBUTION_KINDS.manual, LEAD_DISTRIBUTION_KINDS.instantChain, LEAD_DISTRIBUTION_KINDS.rotateNew];
@@ -10435,8 +10707,8 @@ async function processInstantLeadSLA(db) {
          COALESCE(team_id, 0) > 0
          OR TRIM(COALESCE(instant_sla_accepted_at, '')) = ''
        )
-       AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?, ?)`,
-    [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer]
+       AND TRIM(COALESCE(race_stage, '')) NOT IN (?, ?, ?, ?)`,
+    [...instantKinds, LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer, LEAD_RACE_STAGES.hoursHold]
   );
 
   let recalled = 0;
@@ -10534,6 +10806,11 @@ async function processLeadRace(db) {
       LEAD_RACE_STAGES.managerRace, LEAD_RACE_STAGES.managerFeedback, LEAD_RACE_STAGES.teamOffer,
     ]
   ).catch(() => {});
+
+  // Ngoài 7h30–22h: không luân race / không offer team mới (tránh gửi lead lúc 3–4h sáng)
+  if (!isWithinAutoShuffleHours()) {
+    return { moved: 0, manualPool: 0, skipped: "outside_hours" };
+  }
 
   const expired = await all(
     db,
@@ -18564,19 +18841,21 @@ if (!process.env.VERCEL) {
       console.error("[instant-sla] Error:", e.message);
     }
   }, INSTANT_SLA_INTERVAL);
-  console.log("[instant-sla] Enabled, interval=2min (8m warn / 10m recall to shuffle pool)");
+  console.log("[instant-sla] Enabled, interval=2min (chỉ 07:30–22:00 VN — không chuyển sale ngoài giờ)");
 
   const LEAD_RACE_INTERVAL = 60 * 1000;
   setInterval(async () => {
     if (!db) return;
     try {
+      const flushed = await flushHoursHoldRaceLeads(db);
+      if (flushed.offered > 0) console.log(`[lead-race] hours_hold flushed=${flushed.offered}`);
       const r = await processLeadRace(db);
       if (r.moved > 0 || r.manualPool > 0) console.log(`[lead-race] moved=${r.moved}, manual_pool=${r.manualPool}`);
     } catch (e) {
       console.error("[lead-race] Error:", e.message);
     }
   }, LEAD_RACE_INTERVAL);
-  console.log("[lead-race] Enabled, interval=60s");
+  console.log("[lead-race] Enabled, interval=60s (hours_hold flush + race timeouts chỉ 07:30–22:00 VN)");
 
   const SLA_SHUFFLE_POOL_INTERVAL = 5 * 60 * 1000;
   setInterval(async () => {

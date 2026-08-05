@@ -47,7 +47,7 @@ Prefill theo filter dự án đang chọn trên trang Khách hàng. Admin chọn
 2. **Trạng thái** — multi-select, mặc định bộ trên.
 3. **Kiểu xuất**
    - `single` — 1 file CSV chung (mọi dự án), luôn có cột **Dự án**.
-   - `per_project` — mỗi dự án 1 file CSV; nếu > 1 file thì gói **ZIP**.
+   - `per_project` — mỗi dự án 1 file CSV (client tải lần lượt từng file).
 4. Nút **Xuất** → download; hiện số dòng sẽ xuất (preview count) nếu làm được nhẹ.
 
 ## CSV columns (phase 1)
@@ -89,7 +89,7 @@ Behavior:
 - Query leads where `project_id IN (...)` AND normalized status IN selected set.
 - Status matching uses the same normalize/tab-status rules as admin lead tabs (so history-denorm / `admin_tab_status` stays consistent if that is what list uses).
 - `single` → `Content-Type: text/csv; charset=utf-8` + attachment.
-- `per_project` with 1 project → one CSV; with 2+ → `application/zip`.
+- `per_project` with 1+ projects → JSON `{ files: [{ filename, csv, count, projectName }] }` for client multi-download.
 - Empty result → `200` with header-only CSV (or zip of empty per-project CSVs) + clear UI toast “Không có lead khớp”.
 
 Optional helper: `POST /api/leads/export-junk/count` returning `{ total, byProject }` for preview — nice-to-have, not blocking.
@@ -120,5 +120,5 @@ Optional helper: `POST /api/leads/export-junk/count` returning `{ total, byProje
 1. Non-admin never sees the button / API returns 403.
 2. Default ticks include phá/rác, thuê bao, tắt máy ngang, không quan tâm, sale.
 3. CSV always includes project source column (single mode) or filename+content scoped per project (per_project mode).
-4. Choosing 2+ projects + `per_project` downloads a ZIP.
+4. Choosing 2+ projects + `per_project` downloads one CSV per project.
 5. Choosing statuses/projects with zero matches shows empty-friendly UX, no crash.

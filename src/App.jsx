@@ -12,7 +12,7 @@ import {
   AlertCircle, MessageSquare, Hash, CircleOff, BadgePlus, Zap, Filter, MoreHorizontal,
   ExternalLink, Shield, Globe, Layers, TrendingUp, Activity,
   FolderOpen, ArrowLeft, Gauge, MapPin, DollarSign, Radar, Award, BarChart2, TrendingDown, Crown, Crosshair, Newspaper,
-  Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2
+  Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2, Download
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
@@ -227,6 +227,9 @@ const STATUS_LABELS = {
   has_sale: "Đang có sale khác chăm",
   lost: "Mất",
 };
+
+/** Bộ trạng thái mặc định khi Admin xuất CSV lead tệ */
+const DEFAULT_JUNK_EXPORT_STATUSES = ["spam", "wrong_phone", "hung_up", "not_interested", "sale"];
 
 const STATUS_COLORS = {
   new: "#f59e0b",
@@ -5684,6 +5687,11 @@ const LeadsPage = (props) => {
   const [shuffleOpen, setShuffleOpen] = useState(false);
   const [adminToolsOpen, setAdminToolsOpen] = useState(false);
   const [adminDeskMenu, setAdminDeskMenu] = useState(null);
+  const [junkExportOpen, setJunkExportOpen] = useState(false);
+  const [junkExportProjectIds, setJunkExportProjectIds] = useState([]);
+  const [junkExportStatuses, setJunkExportStatuses] = useState(() => [...DEFAULT_JUNK_EXPORT_STATUSES]);
+  const [junkExportMode, setJunkExportMode] = useState("single");
+  const [junkExportLoading, setJunkExportLoading] = useState(false);
   const adminDeskMenuRef = React.useRef(null);
   React.useEffect(() => {
     if (!adminDeskMenu) return;
@@ -6657,6 +6665,89 @@ const LeadsPage = (props) => {
 
   const closeAdminDeskMenu = () => setAdminDeskMenu(null);
 
+  const openJunkExportModal = () => {
+    closeAdminDeskMenu();
+    const pid = Number(selectedProject);
+    const initial = Number.isFinite(pid) && pid > 0
+      ? [pid]
+      : (projects || []).map((p) => Number(p.id)).filter((id) => id > 0).slice(0, 1);
+    setJunkExportProjectIds(initial);
+    setJunkExportStatuses([...DEFAULT_JUNK_EXPORT_STATUSES]);
+    setJunkExportMode("single");
+    setJunkExportOpen(true);
+  };
+
+  const downloadTextFile = (filename, text, mime = "text/csv;charset=utf-8") => {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleJunkExport = async () => {
+    if (!junkExportProjectIds.length) {
+      showToast("Chọn ít nhất 1 dự án", "error");
+      return;
+    }
+    if (!junkExportStatuses.length) {
+      showToast("Chọn ít nhất 1 trạng thái", "error");
+      return;
+    }
+    setJunkExportLoading(true);
+    try {
+      const res = await apiFetch(`${API}/leads/export-junk`, {
+        method: "POST",
+        body: JSON.stringify({
+          projectIds: junkExportProjectIds,
+          statuses: junkExportStatuses,
+          mode: junkExportMode,
+        }),
+      });
+      const ctype = String(res.headers.get("content-type") || "");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Xuất CSV thất bại");
+      }
+      if (ctype.includes("application/json")) {
+        const data = await res.json();
+        const files = Array.isArray(data.files) ? data.files : [];
+        if (!files.length) {
+          showToast("Không có lead khớp bộ lọc", "info");
+          return;
+        }
+        for (const f of files) {
+          downloadTextFile(f.filename || "lead-te.csv", f.csv || "\uFEFF");
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        showToast(`Đã tải ${files.length} file (${Number(data.total) || 0} lead)`, "success");
+        setJunkExportOpen(false);
+        return;
+      }
+      const blob = await res.blob();
+      const count = Number(res.headers.get("X-Export-Count") || 0);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lead-te-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast(count > 0 ? `Đã xuất ${count} lead` : "Đã xuất CSV (không có lead khớp)", count > 0 ? "success" : "info");
+      setJunkExportOpen(false);
+    } catch (e) {
+      showToast(e.message || "Xuất CSV thất bại", "error");
+    } finally {
+      setJunkExportLoading(false);
+    }
+  };
+
   /** Sau thao tác bulk — scope/lite, không kéo full /api/data. */
   const refreshAfterBulkChange = async () => {
     if (onRefreshLeadScope) await onRefreshLeadScope({ background: false, skipCacheRead: true });
@@ -7241,6 +7332,12 @@ const LeadsPage = (props) => {
               <ClipboardList size={16} /> Đối chiếu form KH
             </button>
           )}
+          {isAdminOnly && (
+            <button onClick={openJunkExportModal}
+              style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #b45309, #92400e)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
+              <Download size={16} /> Xuất lead tệ
+            </button>
+          )}
         </div>
         ) : (
         <div className="crm-admin-toolbar" ref={adminDeskMenuRef}>
@@ -7268,6 +7365,12 @@ const LeadsPage = (props) => {
               >
                 <ClipboardList size={15} />
                 Đối chiếu form
+              </button>
+            )}
+            {isAdminOnly && (
+              <button type="button" className="crm-admin-toolbar-action" onClick={openJunkExportModal}>
+                <Download size={15} />
+                Xuất lead tệ
               </button>
             )}
             <span className="crm-admin-toolbar-spacer" />
@@ -7711,6 +7814,95 @@ const LeadsPage = (props) => {
                 </div>
               </>)}
             </Modal>
+          )}
+
+          {/* Admin: xuất CSV lead tệ */}
+          {junkExportOpen && (
+            <div onClick={() => !junkExportLoading && setJunkExportOpen(false)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)", display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease" }}>
+              <div onClick={(e) => e.stopPropagation()}
+                style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 28px" : 24, width: isMobile ? "100%" : 560, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Download size={20} /> Xuất lead tệ (CSV)
+                  </h3>
+                  <button type="button" disabled={junkExportLoading} onClick={() => setJunkExportOpen(false)}
+                    style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}>
+                    <X size={18} />
+                  </button>
+                </div>
+                <p style={{ margin: "0 0 12px", fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
+                  Xuất tên khách, SĐT, nhu cầu, trạng thái và nguồn dự án. Mặc định: Phá/rác, Thuê bao, Tắt máy ngang, Không quan tâm, Sale.
+                </p>
+
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Dự án</label>
+                <div style={{ maxHeight: 160, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, marginBottom: 12 }}>
+                  {(projects || []).map((p) => {
+                    const id = Number(p.id);
+                    const checked = junkExportProjectIds.includes(id);
+                    return (
+                      <label key={id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setJunkExportProjectIds((prev) => checked ? prev.filter((x) => x !== id) : [...prev, id])}
+                        />
+                        <span>{p.name || `Dự án #${id}`}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setJunkExportProjectIds((projects || []).map((p) => Number(p.id)).filter((id) => id > 0))}
+                    style={{ fontSize: 11, padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer" }}>Chọn tất cả</button>
+                  <button type="button" onClick={() => setJunkExportProjectIds([])}
+                    style={{ fontSize: 11, padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer" }}>Bỏ chọn</button>
+                </div>
+
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Trạng thái</label>
+                <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 4, marginBottom: 12, maxHeight: 220, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 10, padding: 8 }}>
+                  {Object.entries(STATUS_LABELS).map(([key, label]) => {
+                    const checked = junkExportStatuses.includes(key);
+                    return (
+                      <label key={key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 2px", fontSize: 12.5, cursor: "pointer" }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setJunkExportStatuses((prev) => checked ? prev.filter((x) => x !== key) : [...prev, key])}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => setJunkExportStatuses([...DEFAULT_JUNK_EXPORT_STATUSES])}
+                    style={{ fontSize: 11, padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer" }}>Reset mặc định</button>
+                </div>
+
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Kiểu xuất</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                    <input type="radio" name="junkExportMode" checked={junkExportMode === "single"} onChange={() => setJunkExportMode("single")} style={{ marginTop: 3 }} />
+                    <span><b>1 file CSV chung</b><br /><span style={{ color: "#64748b", fontSize: 12 }}>Có cột nguồn dự án</span></span>
+                  </label>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, cursor: "pointer" }}>
+                    <input type="radio" name="junkExportMode" checked={junkExportMode === "per_project"} onChange={() => setJunkExportMode("per_project")} style={{ marginTop: 3 }} />
+                    <span><b>Tách theo dự án</b><br /><span style={{ color: "#64748b", fontSize: 12 }}>Mỗi dự án 1 file CSV</span></span>
+                  </label>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button type="button" disabled={junkExportLoading} onClick={() => setJunkExportOpen(false)}
+                    style={{ ...btnSecondary, padding: "10px 16px" }}>Hủy</button>
+                  <button type="button" disabled={junkExportLoading} onClick={handleJunkExport}
+                    style={{ ...btnPrimary, padding: "10px 16px", display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #b45309, #92400e)" }}>
+                    {junkExportLoading ? <RefreshCw size={15} style={{ animation: "spin 1s linear infinite" }} /> : <Download size={15} />}
+                    {junkExportLoading ? "Đang xuất..." : "Xuất CSV"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Cross-reference form modal */}
