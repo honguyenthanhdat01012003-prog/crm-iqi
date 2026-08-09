@@ -111,7 +111,9 @@ export function getLeadTabStatus(lead, isSale) {
     if (own?.status) return own.status;
     return "new";
   }
-  const currentKey = normalizeLeadStatusKey(lead?.status || "new");
-  if (["booked", "closed", "booking_other"].includes(currentKey)) return currentKey;
-  return getLeadReportStatus(lead);
+  // Admin/manager tabs: exact current status (server denorm or lead.status).
+  // Do NOT use getLeadReportStatus — that collapses consulting/other_project into interested for reports only.
+  const denorm = lead?.tabStatus || lead?.adminTabStatus;
+  if (denorm) return normalizeLeadStatusKey(denorm);
+  return normalizeLeadStatusKey(lead?.status || "new");
 }

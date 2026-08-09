@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-05-junk-export-business-hours";
+const BUILD_VERSION = "2026-08-09-admin-tab-exact-status";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -1076,6 +1076,36 @@ async function repairFeedbackTeamHoldersKeep(dbConn) {
   await upsertSetting(dbConn, "holders_feedback_keep_repair_v1", "1");
   console.log(`[DB] holders feedback-keep repair done: restored=${restored}`);
   return { restored };
+}
+
+/** One-shot: admin_tab_status = trạng thái hiện tại (không còn gom QT/tư vấn như báo cáo). */
+async function repairAdminTabStatusExact(dbConn) {
+  const flag = await get(dbConn, "SELECT value FROM settings WHERE key = ?", ["admin_tab_status_exact_v1"]);
+  if (String(flag?.value || "") === "1") return { skipped: true, updated: 0 };
+  const rows = await all(dbConn, "SELECT id, status, admin_tab_status FROM leads");
+  let updated = 0;
+  const BATCH = 200;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH);
+    const stmts = [];
+    for (const row of chunk) {
+      const exact = normalizeStatus(row.status || "new");
+      const prev = normalizeStatus(row.admin_tab_status || "");
+      if (exact === prev) continue;
+      stmts.push({ sql: "UPDATE leads SET admin_tab_status = ? WHERE id = ?", args: [exact, row.id] });
+      updated += 1;
+    }
+    if (stmts.length) await dbConn.batch(stmts, "write");
+  }
+  await upsertSetting(dbConn, "admin_tab_status_exact_v1", "1");
+  console.log(`[DB] admin_tab_status_exact_v1 repaired ${updated}/${rows.length} leads`);
+  try {
+    invalidateBootstrapCache();
+    invalidateLeadAuxCache();
+    invalidateProjectCountsCache();
+    invalidateScopeResponseCache();
+  } catch (_) {}
+  return { updated, total: rows.length };
 }
 
 function buildLeadUnassignUpdateStmt(leadId) {
@@ -2222,9 +2252,18 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
 }
 
 function getAdminLeadTabStatus(lead = {}, history = []) {
-  const currentKey = normalizeStatus(lead?.status || "new");
-  if (TERMINAL_DEAL_STATUSES.has(currentKey)) return currentKey;
-  return getLeadReportStatusFromHistory(lead, history);
+  // Tab lọc trên UI: đúng trạng thái hiện tại (không gom QT/tư vấn/DA khác như báo cáo).
+  // Báo cáo vẫn dùng getLeadReportStatusFromHistory.
+  const currentKey = normalizeStatus(lead?.status || lead?.raw_status || "new");
+  if (currentKey && currentKey !== "new") return currentKey;
+  // Fallback: feedback gần nhất nếu status cột còn trống/new nhưng đã có cập nhật
+  const rows = Array.isArray(history) ? history : [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (!isReportFeedbackHistory(rows[i])) continue;
+    const key = normalizeStatus(rows[i].status);
+    if (key) return key;
+  }
+  return currentKey || "new";
 }
 
 function extractSaleBlocks(rawHeaders) {
@@ -5845,6 +5884,12 @@ try {
     if (!repair?.skipped) console.log("[DB] feedback team holders repair:", repair);
   } catch (repairErr) {
     console.error("[DB] holders feedback-keep repair failed:", repairErr.message);
+  }
+  try {
+    const tabRepair = await repairAdminTabStatusExact(db);
+    if (!tabRepair?.skipped) console.log("[DB] admin_tab_status exact repair:", tabRepair);
+  } catch (tabRepairErr) {
+    console.error("[DB] admin_tab_status exact repair failed:", tabRepairErr.message);
   }
   try {
     await initPushNotifications(db);
