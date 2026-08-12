@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-09-admin-tab-exact-status";
+const BUILD_VERSION = "2026-08-12-auth-fast-silent-spam";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -5162,6 +5162,118 @@ async function completeTeamRaceOfferIfNeeded(db, leadId, actorName = "") {
     console.warn(`[race] implicit claim notify lead#${leadId}:`, notifyErr.message);
   }
   return true;
+}
+
+function isEmptyLeadAssignee(name = "") {
+  const s = String(name || "").trim();
+  if (!s) return true;
+  const low = s.toLowerCase();
+  return low === "chưa chia" || low === "chua chia";
+}
+
+/** Lead chưa gán QL/sale/team — dùng để admin đánh phá/rác im lặng. */
+function isVirginUnassignedLead(lead = {}) {
+  if (!lead) return false;
+  if (!isEmptyLeadAssignee(lead.manager_name) || !isEmptyLeadAssignee(lead.managerName)) return false;
+  if (!isEmptyLeadAssignee(lead.sale_name) || !isEmptyLeadAssignee(lead.saleName)) return false;
+  if (Number(lead.team_id || lead.teamId) > 0) return false;
+  return true;
+}
+
+async function leadHasPriorMeaningfulFeedback(dbConn, leadId, { ignoreNewest = false } = {}) {
+  const rows = await all(
+    dbConn,
+    `SELECT id, action, status, feedback, source, sale_name FROM lead_history
+     WHERE lead_id = ? ORDER BY seq ASC, id ASC`,
+    [leadId]
+  );
+  const list = ignoreNewest && rows.length ? rows.slice(0, -1) : rows;
+  return list.some((h) => isMeaningfulFeedbackHistoryRow({
+    action: h.action,
+    status: h.status,
+    feedback: h.feedback,
+    source: h.source,
+    saleName: h.sale_name,
+  }));
+}
+
+function isOpenRaceStage(lead = {}) {
+  const s = String(lead?.race_stage || "").trim();
+  return [
+    LEAD_RACE_STAGES.managerRace,
+    LEAD_RACE_STAGES.managerFeedback,
+    LEAD_RACE_STAGES.teamOffer,
+    LEAD_RACE_STAGES.hoursHold,
+  ].includes(s);
+}
+
+/**
+ * Admin đánh Phá/rác lead chưa từng có feedback thật
+ * (chưa gán thật / hoặc đang race offer tạm) → đóng race im lặng,
+ * gỡ gán tạm, không push/Telegram QL hay sale (không implicit-claim).
+ */
+async function closeRaceQuietForAdminJunk(dbConn, leadId) {
+  const nowIso = new Date().toISOString();
+  const lead = await get(dbConn, "SELECT * FROM leads WHERE id = ?", [leadId]);
+  const clearTempAssign = !lead || isVirginUnassignedLead(lead) || isOpenRaceStage(lead);
+  await run(
+    dbConn,
+    `UPDATE leads
+     SET race_deadline_at = '',
+         race_stage = CASE
+           WHEN race_stage IN (?, ?, ?, ?) THEN ?
+           ELSE race_stage
+         END,
+         race_claimed_at = COALESCE(NULLIF(TRIM(race_claimed_at), ''), ?),
+         race_claimed_by = COALESCE(NULLIF(TRIM(race_claimed_by), ''), 'admin-junk'),
+         race_team_id = CASE WHEN ? THEN NULL ELSE race_team_id END,
+         race_team_index = CASE WHEN ? THEN 0 ELSE race_team_index END,
+         manager_name = CASE WHEN ? THEN '' ELSE manager_name END,
+         sale_name = CASE WHEN ? THEN '' ELSE sale_name END,
+         sale_id = CASE WHEN ? THEN NULL ELSE sale_id END,
+         team_id = CASE WHEN ? THEN NULL ELSE team_id END,
+         assigned_at = CASE WHEN ? THEN '' ELSE assigned_at END
+     WHERE id = ?`,
+    [
+      LEAD_RACE_STAGES.managerRace,
+      LEAD_RACE_STAGES.managerFeedback,
+      LEAD_RACE_STAGES.teamOffer,
+      LEAD_RACE_STAGES.hoursHold,
+      LEAD_RACE_STAGES.claimed,
+      nowIso,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      clearTempAssign ? 1 : 0,
+      leadId,
+    ]
+  );
+  // Gỡ holder tạm nếu còn offer — tránh team vẫn thấy lead rác
+  if (clearTempAssign) {
+    try {
+      await run(
+        dbConn,
+        `UPDATE lead_team_holders SET is_primary = 0, revoked_at = ?
+         WHERE lead_id = ? AND TRIM(COALESCE(revoked_at, '')) = ''`,
+        [nowIso, leadId]
+      );
+    } catch (_) { /* bảng có thể chưa có trên bản cũ */ }
+  }
+  console.log(`[race] lead#${leadId} admin junk (phá/rác) — đóng race im lặng, không notify QL/sale`);
+}
+
+/**
+ * Im lặng khi: chưa từng có feedback thật + (chưa gán QL/sale/team HOẶC đang race offer).
+ * Tránh completeRaceHoldAfterFeedback → implicit claim + push team.
+ */
+async function shouldSilentAdminSpam(dbConn, lead, { ignoreNewestHistory = false } = {}) {
+  if (await leadHasPriorMeaningfulFeedback(dbConn, lead.id, { ignoreNewest: ignoreNewestHistory })) return false;
+  if (isVirginUnassignedLead(lead)) return true;
+  if (isOpenRaceStage(lead)) return true;
+  return false;
 }
 
 async function completeRaceHoldAfterFeedback(db, leadId, actorName = "") {
@@ -10862,6 +10974,7 @@ async function processLeadRace(db) {
     `SELECT * FROM leads
      WHERE race_stage IN (?, ?, ?)
        AND COALESCE(is_locked, 0) = 0
+       AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('spam', 'wrong_number', 'blocked', 'lost')
        AND TRIM(COALESCE(race_deadline_at, '')) != ''
        AND race_deadline_at <= ?
      ORDER BY id ASC
@@ -14102,6 +14215,20 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
           }
         } catch (capiErr) { console.error("[CAPI] Hook error:", capiErr.message); }
       }
+
+      // Admin đánh phá/rác lead chưa gán / đang race + chưa từng feedback → đóng race, không notify
+      if (status !== undefined && req.user.role === "admin" && normalizedStatus === "spam") {
+        const preAssign = {
+          id: actualLeadId,
+          manager_name: existCheck?.manager_name,
+          sale_name: existCheck?.sale_name,
+          team_id: existCheck?.team_id,
+          race_stage: existCheck?.race_stage,
+        };
+        if (await shouldSilentAdminSpam(db, preAssign, { ignoreNewestHistory: true })) {
+          await closeRaceQuietForAdminJunk(db, actualLeadId);
+        }
+      }
     }
 
     // When admin/manager assigns lead to a sale: save history + notify (notify nền)
@@ -14297,7 +14424,15 @@ app.post("/api/leads/:id/history", requireAuth, async (req, res) => {
     }
 
     if (isMeaningfulFeedbackHistoryRow({ action: "Cập nhật", status: statusText, feedback: feedbackText })) {
-      await completeRaceHoldAfterFeedback(db, leadId, saleName);
+      const newNorm = statusNorm;
+      const silentJunk = req.user.role === "admin"
+        && newNorm === "spam"
+        && await shouldSilentAdminSpam(db, lead, { ignoreNewestHistory: true });
+      if (silentJunk) {
+        await closeRaceQuietForAdminJunk(db, leadId);
+      } else {
+        await completeRaceHoldAfterFeedback(db, leadId, saleName);
+      }
     }
 
     lastSyncHash = "";

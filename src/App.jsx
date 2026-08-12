@@ -789,7 +789,7 @@ export default function App() {
   };
 
   // Bắt buộc xác thực role từ server trước khi vào app — lệch JWT/cache → đá về login.
-  // Native iOS: warmup + retry nhiều lần (cold start / mạng chập chờn hay fail 1 lần đầu).
+  // Không chờ warmup tuần tự (trước đây dễ 20–30s+). /me chạy ngay, timeout ngắn, ít retry.
   useEffect(() => {
     if (!token) {
       setSessionReady(true);
@@ -802,22 +802,20 @@ export default function App() {
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const native = isNativePlatform();
-    const attempts = native ? 4 : 2;
-    const timeouts = native ? [12000, 16000, 22000, 28000] : [12000, 18000];
+    // Web: 2 lần × ~4–8s. Native: 2 lần × ~5–9s. Không chờ /version; fail nhanh hiện nút Thử lại.
+    const attempts = 2;
+    const timeouts = native ? [5000, 9000] : [4000, 8000];
 
     (async () => {
-      // Đánh thức TLS/DNS trước /me — giảm lỗi lần mở app đầu trên iOS
-      try {
-        await apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: native ? 10000 : 6000 });
-      } catch { /* ignore warmup */ }
-      if (cancelled) return;
+      // Warmup song song — không block /me
+      apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: native ? 4000 : 2500 }).catch(() => {});
 
       let lastErrMsg = "";
       for (let i = 0; i < attempts; i += 1) {
         if (cancelled) return;
         try {
           const r = await apiFetch(`${API}/me`, {
-            timeoutMs: timeouts[i] || 20000,
+            timeoutMs: timeouts[i] || 8000,
             skipUnauthorizedReload: true,
           });
           if (cancelled) return;
@@ -836,7 +834,7 @@ export default function App() {
           if (!r.ok) {
             lastErrMsg = `Không xác thực được phiên (HTTP ${r.status || 0})`;
             if (i < attempts - 1) {
-              await sleep(400 * (i + 1));
+              await sleep(250 * (i + 1));
               continue;
             }
             setSessionVerifyError(`${lastErrMsg}. Thử lại trước khi vào app.`);
@@ -875,7 +873,7 @@ export default function App() {
         } catch (err) {
           lastErrMsg = err?.message || "Không kết nối được server";
           if (i < attempts - 1) {
-            await sleep(500 * (i + 1));
+            await sleep(250 * (i + 1));
             continue;
           }
           if (!cancelled) {
