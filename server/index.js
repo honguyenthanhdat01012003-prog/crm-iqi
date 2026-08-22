@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-12-auth-fast-silent-spam";
+const BUILD_VERSION = "2026-08-22-sheet-404-hint";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2039,6 +2039,11 @@ async function fetchCsvText(csvUrl, opts = {}) {
     }
   }
   const msg = String(lastErr?.message || lastErr || "unknown");
+  if (/\b404\b/.test(msg)) {
+    throw new Error(
+      "Không mở được Google Sheet (404). Vào Dự án → Sửa → dán lại Lead URL dạng Publish to web (CSV): File → Chia sẻ → Xuất bản lên web → CSV. Không dùng link /edit."
+    );
+  }
   throw new Error(`Sheet request failed after ${maxRetries} attempts: ${msg}`);
 }
 
