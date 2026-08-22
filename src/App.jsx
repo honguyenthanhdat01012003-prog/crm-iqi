@@ -3662,6 +3662,9 @@ function CRMApp({ user, updateUser, onLogout }) {
             onChange={(e) => setDraftProject({ ...draftProject, leadUrl: e.target.value })}
             placeholder="https://docs.google.com/spreadsheets/d/e/.../pub?gid=0&single=true&output=csv"
           />
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: -6, marginBottom: 10, lineHeight: 1.45 }}>
+            File → Chia sẻ → Xuất bản lên web → tab <b>Liên kết</b> (không dùng tab Nhúng) → chọn sheet có lead → định dạng <b>CSV</b> → copy link rồi Lưu lại dự án.
+          </div>
           <label style={labelStyle}>Cost URL (Google Sheets CSV)</label>
           <input
             style={inputStyle}

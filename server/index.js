@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-22-sheet-404-hint";
+const BUILD_VERSION = "2026-08-22-fix-pubhtml-sanitize";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2005,6 +2005,11 @@ async function curlGetSheetText(url, { timeoutMs = 20000 } = {}) {
 
 async function fetchCsvText(csvUrl, opts = {}) {
   const normalizedUrl = sanitizeSheetUrl(csvUrl);
+  if (/\/spreadsheets\/d\/e\/export\b/i.test(normalizedUrl) || /\/spreadsheets\/d\/e\/?(\?|$)/i.test(normalizedUrl)) {
+    throw new Error(
+      "Lead URL đang bị lưu sai (thiếu mã 2PACX). Vào Dự án → Sửa → dán lại link Publish tab Liên kết (CSV), rồi Lưu và Sync."
+    );
+  }
   const timeoutMs = Number(opts.timeoutMs || process.env.SHEET_FETCH_TIMEOUT_MS || 20000);
   const maxRetries = Number(opts.retries || process.env.SHEET_FETCH_RETRIES || 3);
   const parsed = assertSheetSourceUrl(normalizedUrl);
@@ -2041,7 +2046,7 @@ async function fetchCsvText(csvUrl, opts = {}) {
   const msg = String(lastErr?.message || lastErr || "unknown");
   if (/\b404\b/.test(msg)) {
     throw new Error(
-      "Không mở được Google Sheet (404). Vào Dự án → Sửa → dán lại Lead URL dạng Publish to web (CSV): File → Chia sẻ → Xuất bản lên web → CSV. Không dùng link /edit."
+      "Không mở được Google Sheet (404). Vào Dự án → Sửa → dán lại Lead URL từ tab Liên kết (CSV), không dùng tab Nhúng. File → Chia sẻ → Xuất bản lên web."
     );
   }
   throw new Error(`Sheet request failed after ${maxRetries} attempts: ${msg}`);
@@ -2730,7 +2735,10 @@ function parseCostSheet(rawHeaders, rawRows) {
 
 /**
  * Normalise any Google Sheets URL the user pastes.
- * Handles pubhtml links, &amp; entities, missing output=csv, edit URLs etc.
+ * Handles pubhtml links, iframe embed, &amp; entities, missing output=csv, edit URLs etc.
+ *
+ * Quan trọng: link Publish dạng /d/e/2PACX-.../pubhtml KHÔNG được nhầm thành /d/e/export
+ * (regex cũ chỉ bắt id="e" → 404).
  */
 function sanitizeSheetUrl(raw) {
   if (!raw) return "";
@@ -2738,12 +2746,26 @@ function sanitizeSheetUrl(raw) {
   // decode HTML entities
   url = url.replace(/&amp;/g, "&");
 
-  // Link /edit hoặc /d/{id} thường → export CSV (không cần Publish to web nếu sheet public/link)
-  const sheetIdMatch = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/i);
+  // User dán cả thẻ iframe từ tab "Nhúng" → lấy src
+  const iframeSrc = url.match(/src=["']([^"']+)["']/i);
+  if (iframeSrc?.[1]) url = iframeSrc[1].trim();
+
+  // Publish to web: /d/e/2PACX-.../pub|pubhtml — giữ nguyên ID 2PACX
+  const pubMatch = url.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)\/(pubhtml|pub)\b/i);
+  if (pubMatch) {
+    const pubId = pubMatch[1];
+    const gidMatch = url.match(/[?#&]gid=([0-9]+)/i);
+    const gid = gidMatch ? gidMatch[1] : "0";
+    return `https://docs.google.com/spreadsheets/d/e/${pubId}/pub?gid=${gid}&single=true&output=csv`;
+  }
+
+  // Link /edit hoặc /d/{id} thường → export CSV (không cần Publish nếu sheet public)
+  // Bỏ qua /d/e/... (đã xử lý ở trên)
+  const sheetIdMatch = url.match(/\/spreadsheets\/d\/(?!e\/)([a-zA-Z0-9-_]+)/i);
   const isEditOrBare = sheetIdMatch && (
     /\/edit\b/i.test(url) ||
     /\/view\b/i.test(url) ||
-    (!/\/pub\b/i.test(url) && !/\/export\b/i.test(url) && !/gviz\/tq/i.test(url))
+    (!/\/pub(html)?\b/i.test(url) && !/\/export\b/i.test(url) && !/gviz\/tq/i.test(url))
   );
   if (isEditOrBare) {
     const gidMatch = url.match(/[?#&]gid=([0-9]+)/i);
