@@ -4,7 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 PORT="${PORT:-4000}"
-EXPECTED_VERSION_PREFIX="2026-07-30-team-sla-2h-unify-ack"
+EXPECTED_VERSION_PREFIX="$(grep -oE 'BUILD_VERSION = \"[^\"]+\"' server/index.js | head -1 | sed 's/BUILD_VERSION = \"//;s/\"//' || true)"
+if [ -z "$EXPECTED_VERSION_PREFIX" ]; then
+  EXPECTED_VERSION_PREFIX="2026-"
+fi
 
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
@@ -12,6 +15,9 @@ rm -f dist/assets/index-*.js dist/assets/index-*.css dist/assets/web-*.js 2>/dev
 
 echo "==> Pull latest code"
 git pull origin main
+
+echo "==> Install dependencies (redis, etc.)"
+npm install --no-audit --no-fund
 
 echo "==> Verify commit"
 git log -1 --oneline

@@ -1,14 +1,26 @@
 /**
  * Redis L2 cache — optional, fallback to RAM-only if Redis chưa cài / lỗi kết nối.
  * Invalidation: mỗi payload gắn dataVersion; emitDataChanged() tăng version → cache cũ miss.
+ * Dynamic import: thiếu package redis vẫn chạy CRM bình thường (chỉ RAM cache).
  */
-import { createClient } from "redis";
-
+let createClientFn = null;
 let client = null;
 let ready = false;
 let lastError = "";
 
 const DEFAULT_TTL_SEC = Math.max(15, Number(process.env.REDIS_CACHE_TTL_SEC) || 60);
+
+async function loadRedisModule() {
+  if (createClientFn) return createClientFn;
+  try {
+    const mod = await import("redis");
+    createClientFn = mod.createClient;
+    return createClientFn;
+  } catch (err) {
+    lastError = err?.message || String(err);
+    return null;
+  }
+}
 
 export function redisDefaultTtlSec() {
   return DEFAULT_TTL_SEC;
@@ -41,6 +53,11 @@ export async function initRedisCache() {
 
   const url = (process.env.REDIS_URL || "").trim() || "redis://127.0.0.1:6379";
   try {
+    const createClient = await loadRedisModule();
+    if (!createClient) {
+      console.warn("[redis] package chưa cài — chạy: npm install (CRM vẫn dùng RAM cache)");
+      return { ok: false, reason: "no_package" };
+    }
     client = createClient({ url });
     client.on("error", (err) => {
       lastError = err?.message || String(err);
