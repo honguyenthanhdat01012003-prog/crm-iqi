@@ -22,6 +22,14 @@ import {
   parseInventoryQuestionWithGpt,
 } from "./inventoryAsk.js";
 import { syncInventorySource as syncInventorySourceCore } from "./inventorySync.js";
+import {
+  getRedisStatus,
+  initRedisCache,
+  redisCacheKey,
+  redisDefaultTtlSec,
+  redisGetCached,
+  redisSetCached,
+} from "./redisCache.js";
 import { slimCostData, slimSchedulesForList } from "./payload-slim.js";
 import {
   shouldMultiHoldOnRotate,
@@ -59,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-28-customer-portrait";
+const BUILD_VERSION = "2026-08-29-redis-cache";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4337,6 +4345,13 @@ async function queryProjectLeadCounts(db, user) {
     return projectCountsCache.data;
   }
 
+  const redisKey = redisCacheKey("projcounts", cacheKey);
+  const fromRedis = await redisGetCached(redisKey, dataVersion);
+  if (fromRedis) {
+    projectCountsCache = { at: now, key: cacheKey, data: fromRedis };
+    return fromRedis;
+  }
+
   let rows;
   if (user.role === "admin") {
     rows = await all(db, "SELECT project_id, COUNT(*) as c FROM leads GROUP BY project_id");
@@ -4361,6 +4376,7 @@ async function queryProjectLeadCounts(db, user) {
   }
   const data = { byProject, all: allCount };
   projectCountsCache = { at: now, key: cacheKey, data };
+  void redisSetCached(redisKey, data, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
   return data;
 }
 
@@ -4708,6 +4724,13 @@ async function getBootstrapPayload(db, user) {
     return bootstrapCache.data;
   }
 
+  const redisKey = redisCacheKey("bootstrap", cacheKey);
+  const fromRedis = await redisGetCached(redisKey, dataVersion);
+  if (fromRedis) {
+    bootstrapCache = { at: now, key: cacheKey, data: fromRedis };
+    return fromRedis;
+  }
+
   const [campaigns, projectRows, config, projectTeamRows] = await Promise.all([
     all(db, "SELECT * FROM campaigns ORDER BY id ASC"),
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
@@ -4761,6 +4784,7 @@ async function getBootstrapPayload(db, user) {
   };
 
   bootstrapCache = { at: now, key: cacheKey, data: payload };
+  void redisSetCached(redisKey, payload, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
   return payload;
 }
 
@@ -5960,7 +5984,14 @@ app.get("/api/version", async (req, res) => {
     autoSync: lastAutoSyncMeta,
     telegramMenuButtons: true,
     telegramPerplexity: true,
+    redis: getRedisStatus(),
   });
+});
+
+// Public: Redis connectivity (no secrets)
+app.get("/api/health/redis", async (_req, res) => {
+  const status = getRedisStatus();
+  res.status(status.ready ? 200 : 503).json({ version: BUILD_VERSION, redis: status });
 });
 
 // Public: test VPS → Google Sheet connectivity (no secrets)
@@ -8376,10 +8407,17 @@ app.get("/api/projects/lead-counts", requireAuth, async (req, res) => {
 app.get("/api/data/tab-counts", requireAuth, async (req, res) => {
   try {
     const { filters } = parseLeadsFilters(req);
+    const tabCacheKey = scopeCacheKey(req.user, filters);
+    const redisKey = redisCacheKey("tabs", tabCacheKey);
+    const fromRedis = await redisGetCached(redisKey, dataVersion);
+    if (fromRedis) {
+      return res.json({ tabCounts: fromRedis, version: dataVersion, cached: true, redis: true });
+    }
     const tabCounts = await queryLeadsTabCounts(db, req.user, filters).catch((e) => {
       console.warn("[GET /api/data/tab-counts] failed:", e.message);
       return { all: 0 };
     });
+    void redisSetCached(redisKey, tabCounts, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
     res.json({ tabCounts, version: dataVersion });
   } catch (err) {
     console.error("[GET /api/data/tab-counts]", err?.message || err);
@@ -8416,7 +8454,13 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     const cacheKey = scopeCacheKey(req.user, f);
     const now = Date.now();
     if (scopeResponseCache.key === cacheKey && scopeResponseCache.data && now - scopeResponseCache.at < SCOPE_RESPONSE_CACHE_MS) {
-      return res.json({ ...scopeResponseCache.data, cached: true });
+      return res.json({ ...scopeResponseCache.data, cached: true, cacheLayer: "memory" });
+    }
+    const redisKey = redisCacheKey("scope", cacheKey);
+    const fromRedis = await redisGetCached(redisKey, dataVersion);
+    if (fromRedis) {
+      scopeResponseCache = { at: now, key: cacheKey, data: fromRedis };
+      return res.json({ ...fromRedis, cached: true, redis: true, cacheLayer: "redis" });
     }
     scopeInflightCount += 1;
     let scopeData;
@@ -8442,6 +8486,7 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     // Không cache bản truncated/huge — tránh giữ payload lớn trong RAM lâu
     if (!tooLarge) {
       scopeResponseCache = { at: now, key: cacheKey, data: payload };
+      void redisSetCached(redisKey, payload, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
     }
     res.json(payload);
     const totalMs = Date.now() - t0;
@@ -18922,8 +18967,12 @@ if (!process.env.VERCEL) {
     });
   });
 
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`CRM API running at http://localhost:${PORT} [BUILD ${BUILD_VERSION}]`);
+    const redisInit = await initRedisCache();
+    if (redisInit.ok) {
+      console.log(`[redis] L2 cache active (shared across Node restarts)`);
+    }
     console.log(`[scope] hard max=${SCOPE_HARD_MAX} concurrent=${SCOPE_MAX_CONCURRENT}`);
     const distCheck = verifyDistBundle();
     if (distCheck.ok) {
