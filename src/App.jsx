@@ -10146,6 +10146,7 @@ const LeadsPage = (props) => {
 function MobileLeadSummary({ lead, isAdmin, isSale, onCall, onZalo, onToggleDetail }) {
   const summaryRows = [
     { label: "Nhu cầu", value: lead.product || "-" },
+    ...(lead.customerPortrait ? [{ label: "Chân dung KH", value: lead.customerPortrait }] : []),
     ...(!isSale ? [{ label: "Thời gian nhận lead", value: lead.createdAt || "-" }] : []),
     ...(lead.phone2 ? [{ label: "SĐT phụ 1", value: lead.phone2 }] : []),
     ...(lead.phone3 ? [{ label: "SĐT phụ 2", value: lead.phone3 }] : []),
@@ -10947,6 +10948,14 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Nguồn data</span><br /><b style={detailValueStyle}>{lead.sourceProjectName}</b></div>
         )}
         <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Sản phẩm</span><br /><b style={detailValueStyle}>{lead.product || "-"}</b></div>
+        {lead.customerPortrait && (
+          <div style={{ ...detailCellStyle, gridColumn: isMobile ? "1 / -1" : undefined }}>
+            <span style={{ color: "#6b7280", fontSize: 11 }}>Chân dung khách hàng</span><br />
+            <div style={{ ...detailValueStyle, marginTop: 4, padding: "8px 10px", borderRadius: 8, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", whiteSpace: "pre-wrap", lineHeight: 1.45, fontWeight: 600 }}>
+              {lead.customerPortrait}
+            </div>
+          </div>
+        )}
         {!isSale && <div style={detailCellStyle}><span style={{ color: "#6b7280", fontSize: 11 }}>Ngày nhận lead</span><br /><b style={detailValueStyle}>{lead.createdAt || "-"}</b></div>}
         {!isSale && <div style={detailCellStyle}>
           <span style={{ color: "#6b7280", fontSize: 11 }}>Trạng thái lead</span><br />

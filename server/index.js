@@ -59,7 +59,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-22-fix-pubhtml-sanitize";
+const BUILD_VERSION = "2026-08-28-customer-portrait";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -544,7 +544,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 45; // Bump this when adding new DDL/migrations
+const DB_VERSION = 46; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1882,6 +1882,10 @@ async function initDb() {
       );
     }
   }
+  if (dbVersion < 46) {
+    console.log("[DB] v46 migration: customer_portrait on leads (Chân dung khách hàng từ Sheet)");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN customer_portrait TEXT DEFAULT ''"); } catch (_) {}
+  }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
   console.log(`[DB] Migrations complete, version=${DB_VERSION}`);
@@ -2500,20 +2504,23 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
   // Anchor mapping by stable form fields, avoid positional drift when questions change.
   const nameHeaderIdx = findHeaderIndex(["full_name", "full name", "ho ten", "ten day du"]);
   const phoneHeaderIdx = findHeaderIndex(["phone_number", "phone number", "phone", "so dien thoai", "sdt"]);
+  const portraitHeaderIdx = findHeaderIndex(["chan dung khach hang", "customer portrait", "chan dung khach", "chan dung"]);
 
   // Detect "nhu cầu khách" (question) columns.
   // Anchor: questions are BETWEEN phone_number col and "Thời gian lead về" col.
-  // Skip inbox_url and lead_status which sit in between.
+  // Skip inbox_url, lead_status, chân dung khách hàng.
   // Fallback: old structure where questions are BEFORE full_name/phone_number (after platform).
   const questionColIndices = [];
   const _skipExactTokens = new Set(["lead status", "inbox url", "inbox", "inbox_url"]);
 
   if (phoneHeaderIdx >= 0 && tgLeadVeIdx > phoneHeaderIdx && rawHeaders) {
     for (let _ci = phoneHeaderIdx + 1; _ci < tgLeadVeIdx; _ci++) {
+      if (_ci === portraitHeaderIdx) continue;
       const hn = foldedRawHeaders[_ci] || "";
       if (!hn) continue;
       // Skip exact-matched system cols that sit between phone and questions
       if (_skipExactTokens.has(hn)) continue;
+      if (hn.includes("chan dung") && hn.includes("khach")) continue;
       if (hn === foldText("lead_status") || hn === "lead status") continue;
       questionColIndices.push(_ci);
     }
@@ -2560,6 +2567,9 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
       const product = questionColIndices.length > 0
         ? questionColIndices.map(ci => (_rawRow[ci] || "").trim()).filter(Boolean).join(" | ")
         : findVal(r, ["product", "loai"]);
+      const customerPortrait = portraitHeaderIdx >= 0
+        ? ((_rawRow[portraitHeaderIdx] || "").trim())
+        : findVal(r, ["chan dung khach hang", "customer portrait", "chan dung khach"]);
       const fbStatus = findVal(r, ["lead_status"]);
       // Prefer column R (system date right after lead_status) over header-based lookup
       const colRDate = dateColIdx >= 0 && rawRows && rawRows[i] ? (rawRows[i][dateColIdx] || "").trim() : "";
@@ -2593,6 +2603,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         adName: adName || "-",
         formName: formName || "-",
         product: product || "-",
+        customerPortrait: customerPortrait || "",
         rawStatus,
         saleStatus: saleStatus || "",
         status,
@@ -2665,6 +2676,7 @@ function mapLeads(rows, headers, rawRows, rawHeaders) {
         adName,
         formName,
         product: product || "-",
+        customerPortrait: "",
         rawStatus,
         saleStatus: saleStatus || "",
         status,
@@ -3097,7 +3109,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       stmts.push({
         sql: `UPDATE leads SET
           name = ?, phone = ?, ads_id = ?, campaign = ?, campaign_id = NULL,
-          adset_name = ?, ad_name = ?, form_name = ?, product = ?,
+          adset_name = ?, ad_name = ?, form_name = ?, product = ?, customer_portrait = ?,
           raw_status = CASE
             WHEN TRIM(COALESCE(sale_name,'')) != '' AND TRIM(COALESCE(sale_name,'')) != TRIM(COALESCE(?,''))
             THEN raw_status
@@ -3131,7 +3143,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           WHERE id = ?`,
         args: [
           l.name, l.phone, lAdsId || "", l.campaign,
-          l.adsetName || "-", l.adName || "-", l.formName || "-", l.product,
+          l.adsetName || "-", l.adName || "-", l.formName || "-", l.product, l.customerPortrait || "",
           prev.sale_name || "", status, rawStatus,
           prev.sale_name || "", status, status,
           l.createdAt, l.inboxUrl,
@@ -3156,14 +3168,14 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       stmts.push({
         sql: `INSERT INTO leads(
           project_id, name, phone, ads_id, campaign, campaign_id, adset_name, ad_name, form_name,
-          product, raw_status, status,
+          product, customer_portrait, raw_status, status,
           created_at, inbox_url, customer_fb_url, phone2, phone3, admin_note,
           is_hot, sale_id, sale_name, manager_name, source, budget, sync_at, notes, deal_value, is_locked
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           projectId, l.name, l.phone, lAdsId || "", l.campaign, null,
           l.adsetName || "-", l.adName || "-", l.formName || "-",
-          l.product, rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
+          l.product, l.customerPortrait || "", rawStatus, status, l.createdAt, l.inboxUrl, customerFbUrl,
           phone2, phone3, adminNote,
           isHot, saleId, saleName, managerName,
           l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
@@ -3951,6 +3963,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     adName: l.ad_name || "-",
     formName: l.form_name || "-",
     product: l.product,
+    customerPortrait: l.customer_portrait || "",
     rawStatus: displayRawStatus,
     status: displayStatus,
     createdAt: l.created_at,
