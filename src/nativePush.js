@@ -241,3 +241,24 @@ export async function setupNativePushListeners({ onNotification, onAction } = {}
   }));
   return () => handles.forEach((h) => h?.remove?.());
 }
+
+/** Đồng bộ badge icon với server (+ silent APNs). count=0 khi đã xem hết lead. */
+export async function syncNativeAppBadge(apiFetch, apiBase = "/api", count = 0) {
+  const n = Math.max(0, Math.min(99, Number(count) || 0));
+  try {
+    const { setNativeAppIconBadge } = await import("./nativeLocalNotifications.js");
+    await setNativeAppIconBadge(n);
+  } catch { /* ignore */ }
+  if (!isNativePushSupported() || typeof apiFetch !== "function") return { ok: true, count: n, localOnly: true };
+  try {
+    const res = await apiFetch(`${apiBase}/native-push/badge`, {
+      method: "POST",
+      body: JSON.stringify({ count: n }),
+      timeoutMs: 8000,
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, count: n, ...data };
+  } catch (err) {
+    return { ok: false, count: n, error: err?.message };
+  }
+}

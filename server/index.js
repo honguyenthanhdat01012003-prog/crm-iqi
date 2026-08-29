@@ -309,6 +309,31 @@ function appendPushLog(entry) {
   } catch { /* không để log làm hỏng flow gửi */ }
 }
 
+async function getUserPushBadgeCount(userId) {
+  try {
+    const row = await get(db, "SELECT push_badge_count FROM users WHERE id = ?", [userId]);
+    return Math.max(0, Number(row?.push_badge_count) || 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** Tăng / gán badge icon app theo số lead chưa xem. badgeOnly=true → chỉ sync badge (không hiện alert). */
+async function setUserPushBadgeCount(userId, count) {
+  const n = Math.max(0, Math.min(99, Number(count) || 0));
+  try {
+    await run(db, "UPDATE users SET push_badge_count = ? WHERE id = ?", [n, userId]);
+  } catch (err) {
+    console.warn("[NativePush] set badge failed:", err.message);
+  }
+  return n;
+}
+
+async function bumpUserPushBadgeCount(userId, delta = 1) {
+  const cur = await getUserPushBadgeCount(userId);
+  return setUserPushBadgeCount(userId, cur + Math.max(0, Number(delta) || 0));
+}
+
 async function sendNativePushToUser(userId, payload) {
   const cfg = getFirebaseConfig();
   if (!cfg.projectId || !cfg.clientEmail || !cfg.privateKey) {
@@ -322,6 +347,17 @@ async function sendNativePushToUser(userId, payload) {
     return { sent: 0 };
   }
 
+  const badgeOnly = payload.badgeOnly === true;
+  let badgeCount = Number(payload.badge);
+  if (!Number.isFinite(badgeCount)) {
+    badgeCount = badgeOnly
+      ? await getUserPushBadgeCount(userId)
+      : await bumpUserPushBadgeCount(userId, Number(payload.badgeDelta) || 1);
+  } else {
+    badgeCount = await setUserPushBadgeCount(userId, badgeCount);
+  }
+  badgeCount = Math.max(0, Math.min(99, badgeCount));
+
   const accessToken = await getFcmAccessToken();
   let sent = 0;
   const notificationSound = getNativeNotificationSound(payload.sound);
@@ -331,6 +367,7 @@ async function sendNativePushToUser(userId, payload) {
     body: payload.body || "Ban co thong bao moi",
     sound: payload.sound || "manager",
     channelId: notificationSound.channelId,
+    badge: String(badgeCount),
   });
   for (const row of tokens) {
     const isAndroid = String(row.platform || "").toLowerCase() === "android";
@@ -344,42 +381,66 @@ async function sendNativePushToUser(userId, payload) {
     // Android: gửi cả notification + data để hệ thống hiện tray khi app tắt/background.
     // data giữ để LeadFirebaseMessagingService xử lý khi app đang mở.
     if (isAndroid) {
-      message.notification = { title, body };
-      if (payload.sound === "sla_recall") {
-        message.android.notification = {
-          channel_id: notificationSound.channelId,
-          priority: "HIGH",
-          default_vibrate_timings: true,
-          default_sound: false,
-        };
+      if (!badgeOnly) {
+        message.notification = { title, body };
+        if (payload.sound === "sla_recall") {
+          message.android.notification = {
+            channel_id: notificationSound.channelId,
+            priority: "HIGH",
+            default_vibrate_timings: true,
+            default_sound: false,
+            notification_count: badgeCount,
+          };
+        } else {
+          message.android.notification = {
+            channel_id: notificationSound.channelId,
+            sound: "default",
+            priority: "HIGH",
+            default_vibrate_timings: true,
+            default_sound: true,
+            notification_count: badgeCount,
+          };
+        }
       } else {
-        message.android.notification = {
-          channel_id: notificationSound.channelId,
-          sound: "default",
-          priority: "HIGH",
-          default_vibrate_timings: true,
-          default_sound: true,
-        };
+        // Chỉ cập nhật badge/count — không spam tray
+        message.android.priority = "NORMAL";
       }
     } else {
-      // iOS (TestFlight/App Store = production APNs): alert rõ ràng, không content-available (tránh silent)
-      const iosBody = payload.body || "Bạn có thông báo mới";
-      message.notification = { title, body: iosBody };
       const collapseId = String(payload.tag || payload.data?.leadId || `crm-${Date.now()}`).slice(0, 64);
-      message.apns = {
-        headers: {
-          "apns-priority": "10",
-          "apns-push-type": "alert",
-          "apns-collapse-id": collapseId,
-        },
-        payload: {
-          aps: {
-            alert: { title, body: iosBody },
-            sound: notificationSound.iosSound,
-            badge: 1,
+      if (badgeOnly) {
+        // Silent APNs: chỉ set badge icon, không hiện banner
+        message.apns = {
+          headers: {
+            "apns-priority": "5",
+            "apns-push-type": "background",
+            "apns-collapse-id": `badge-${userId}`,
           },
-        },
-      };
+          payload: {
+            aps: {
+              badge: badgeCount,
+              "content-available": 1,
+            },
+          },
+        };
+      } else {
+        // iOS: alert + badge = số lead chưa xem (không hardcode 1)
+        const iosBody = payload.body || "Bạn có thông báo mới";
+        message.notification = { title, body: iosBody };
+        message.apns = {
+          headers: {
+            "apns-priority": "10",
+            "apns-push-type": "alert",
+            "apns-collapse-id": collapseId,
+          },
+          payload: {
+            aps: {
+              alert: { title, body: iosBody },
+              sound: notificationSound.iosSound,
+              badge: badgeCount,
+            },
+          },
+        };
+      }
     }
     // Retry 1 lần khi lỗi mạng / FCM 5xx — tránh mất thông báo vì trục trặc tạm thời
     let lastFailure = "";
@@ -552,7 +613,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 46; // Bump this when adding new DDL/migrations
+const DB_VERSION = 47; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1893,6 +1954,10 @@ async function initDb() {
   if (dbVersion < 46) {
     console.log("[DB] v46 migration: customer_portrait on leads (Chân dung khách hàng từ Sheet)");
     try { await run(db, "ALTER TABLE leads ADD COLUMN customer_portrait TEXT DEFAULT ''"); } catch (_) {}
+  }
+  if (dbVersion < 47) {
+    console.log("[DB] v47 migration: users.push_badge_count (iOS app icon badge = số lead chưa xem)");
+    try { await run(db, "ALTER TABLE users ADD COLUMN push_badge_count INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -6253,6 +6318,7 @@ app.post("/api/native-push/test", requireAuth, async (req, res) => {
       sound,
       data: { url: "/", type: "native_push_test" },
       requireInteraction: true,
+      badge: 1,
     });
     const tokens = await all(db,
       `SELECT id, platform, last_error, updated_at FROM native_push_tokens WHERE user_id = ? ORDER BY updated_at DESC`,
@@ -6261,6 +6327,30 @@ app.post("/api/native-push/test", requireAuth, async (req, res) => {
     res.json({ ok: true, ...result, tokens });
   } catch (err) {
     console.error("[NativePush] Test failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/native-push/badge", requireAuth, async (req, res) => {
+  try {
+    const raw = req.body?.count;
+    const count = raw === undefined || raw === null ? 0 : Math.max(0, Math.min(99, Number(raw) || 0));
+    await setUserPushBadgeCount(req.user.userId, count);
+    // Sync icon: silent badge push (iOS) + local fallback client-side
+    let pushed = { sent: 0 };
+    try {
+      pushed = await sendNativePushToUser(req.user.userId, {
+        badge: count,
+        badgeOnly: true,
+        tag: `badge-sync-${req.user.userId}`,
+        data: { type: "badge_sync", badge: String(count) },
+      });
+    } catch (err) {
+      console.warn("[NativePush] badge sync push:", err.message);
+    }
+    res.json({ ok: true, count, ...pushed });
+  } catch (err) {
+    console.error("[NativePush] Badge failed:", err.message);
     res.status(500).json({ error: err.message });
   }
 });

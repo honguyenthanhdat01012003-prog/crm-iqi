@@ -416,6 +416,20 @@
   padding: 2px 8px;
 }
 
+.crm-status-badge--xs {
+  font-size: 9px;
+  font-weight: 750;
+  padding: 1px 5px;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
 .crm-status-badge--md {
   font-size: 12px;
 }
@@ -929,15 +943,57 @@
 
 .crm-lead-cards-mobile-header {
   display: grid;
-  grid-template-columns: 1fr 80px 36px;
-  gap: 8px;
-  padding: 9px 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 34%) 36px;
+  gap: 6px;
+  padding: 7px 10px;
   background: #f1f3f5;
   border-bottom: 1px solid var(--crm-border);
   color: var(--crm-text-secondary);
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 800;
   text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.crm-lead-cards-mobile-header--sale {
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 38%) 22px;
+}
+
+.crm-lead-row-mobile {
+  width: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 34%) 36px;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.crm-lead-row-mobile--sale {
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 38%) 22px;
+}
+
+.crm-lead-row-mobile__status {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.crm-lead-row-mobile__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 750;
+  line-height: 1.15;
 }
 
 /* ===== Skeleton ===== */

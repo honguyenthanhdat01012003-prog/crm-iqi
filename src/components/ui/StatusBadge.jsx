@@ -16,6 +16,7 @@ export function StatusBadge({ status, size = "md", className = "" }) {
     <span
       className={`crm-status-badge crm-status-badge--${size} ${className}`.trim()}
       style={{ "--status-color": color }}
+      title={label}
     >
       {label}
     </span>

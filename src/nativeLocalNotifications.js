@@ -72,3 +72,43 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
     }],
   });
 }
+
+/** Cập nhật số trên icon app (iOS LocalNotifications.badge + clear delivered khi = 0). */
+export async function setNativeAppIconBadge(count = 0) {
+  if (!isNativeLocalNotificationSupported()) return { ok: false };
+  try {
+    const { LocalNotifications } = await import("@capacitor/local-notifications");
+    const n = Math.max(0, Math.min(99, Number(count) || 0));
+    const badgeId = 88001442;
+    try {
+      await LocalNotifications.cancel({ notifications: [{ id: badgeId }] });
+    } catch { /* ignore */ }
+    if (n <= 0) {
+      try {
+        await LocalNotifications.removeAllDeliveredNotifications();
+      } catch { /* ignore */ }
+    }
+    // iOS: schedule ephemeral notif để gán badge, rồi huỷ khỏi notification center
+    await LocalNotifications.schedule({
+      notifications: [{
+        id: badgeId,
+        title: n > 0 ? "LUX IQI CRM" : " ",
+        body: n > 0 ? `Bạn có ${n} lead mới` : " ",
+        badge: n,
+        channelId: "lead_notifications",
+        extra: { silentBadge: true },
+        schedule: { at: new Date(Date.now() + 80) },
+      }],
+    });
+    if (n <= 0) {
+      setTimeout(() => {
+        LocalNotifications.cancel({ notifications: [{ id: badgeId }] }).catch(() => {});
+        LocalNotifications.removeAllDeliveredNotifications?.().catch(() => {});
+      }, 400);
+    }
+    return { ok: true, count: n };
+  } catch (err) {
+    console.warn("[badge] setNativeAppIconBadge:", err?.message || err);
+    return { ok: false, error: err?.message };
+  }
+}

@@ -15,8 +15,8 @@ import {
   Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2, Download
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications } from "./nativePush.js";
-import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification } from "./nativeLocalNotifications.js";
+import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge } from "./nativePush.js";
+import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification, setNativeAppIconBadge } from "./nativeLocalNotifications.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
 import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
 import { useServerConnection } from "./useServerConnection.js";
@@ -1475,7 +1475,9 @@ function CRMApp({ user, updateUser, onLogout }) {
         return key && !seenLeadKeys.has(key) && !current.some((x) => leadKey(x) === key);
       });
       if (!stillFresh.length) return current;
-      return [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
+      const next = [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
+      void setNativeAppIconBadge(next.length);
+      return next;
     });
   }, [nativeLocalSupported, nativePushSupported, playLeadSound, seenLeadKeys, user.role]);
 
@@ -1840,7 +1842,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [seenLeadKeys, user.role, user.displayName, triggerLeadAlerts]);
 
-  // Mark notifications as seen
+  // Mark notifications as seen → xóa badge icon app
   const markAllSeen = useCallback(() => {
     setSeenLeadKeys(prev => {
       const next = new Set(prev);
@@ -1854,6 +1856,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     setNotifications([]);
     setShowNotif(false);
     setShowMobileNotif(false);
+    void syncNativeAppBadge(apiFetch, API, 0);
+    void setNativeAppIconBadge(0);
+  }, [notifications]);
+
+  // Badge icon = số thông báo lead chưa xem (trong app)
+  useEffect(() => {
+    const n = Array.isArray(notifications) ? notifications.length : 0;
+    void setNativeAppIconBadge(n);
+    if (n === 0) void syncNativeAppBadge(apiFetch, API, 0);
   }, [notifications]);
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
@@ -3159,7 +3170,26 @@ function CRMApp({ user, updateUser, onLogout }) {
               <div key={n.id} style={{
                 padding: "10px 12px", borderRadius: 8, marginBottom: 4, cursor: "pointer",
                 background: "#f0faf1", border: "1px solid #e8f5e9", transition: "background .15s",
-              }} onClick={() => { setHighlightLeadId(n.id); setPage("leads"); closePanel(); }}>
+              }} onClick={() => {
+                const key = leadKey(n);
+                if (key) {
+                  setSeenLeadKeys((prev) => {
+                    const next = new Set(prev);
+                    next.add(key);
+                    localStorage.setItem("crm_seen_keys", JSON.stringify([...next]));
+                    return next;
+                  });
+                }
+                setNotifications((list) => {
+                  const next = list.filter((x) => leadKey(x) !== key);
+                  void setNativeAppIconBadge(next.length);
+                  if (next.length === 0) void syncNativeAppBadge(apiFetch, API, 0);
+                  return next;
+                });
+                setHighlightLeadId(n.id);
+                setPage("leads");
+                closePanel();
+              }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                   <span style={{ background: "#10b981", color: "#fff", padding: "1px 8px", borderRadius: 8, fontSize: 10, fontWeight: 700, animation: "fadeIn .5s ease" }}>MỚI</span>
                   <span style={{ fontWeight: 700, fontSize: 13 }}>{n.name}</span>
@@ -9837,10 +9867,10 @@ const LeadsPage = (props) => {
       ) : (!isAdmin || isMobile) ? (
         <div className={isMobile ? "crm-lead-cards-mobile-shell" : "crm-lead-cards-stack"}>
           {isMobile && (
-            <div className="crm-lead-cards-mobile-header" style={!isSale ? undefined : { gridTemplateColumns: "1fr 76px" }}>
+            <div className={`crm-lead-cards-mobile-header${isSale ? " crm-lead-cards-mobile-header--sale" : ""}`}>
               <span>Khách hàng</span>
-              <span>Trạng thái</span>
-              {!isSale && <span style={{ textAlign: "right" }}>Giờ</span>}
+              <span style={{ textAlign: "right" }}>Trạng thái</span>
+              {!isSale ? <span style={{ textAlign: "right" }}>Giờ</span> : <span />}
             </div>
           )}
           {paginatedLeads.map((l) => {
@@ -9855,26 +9885,29 @@ const LeadsPage = (props) => {
               ].filter(Boolean).join(" ")} style={isMobile ? { background: isLocked ? "#fff7f7" : isOpen ? "#f8fafc" : "#fff", borderBottom: "1px solid #eef2f7", overflow: "hidden", borderLeft: isLocked ? "3px solid #dc2626" : isOpen ? "3px solid #0f3d1e" : "3px solid transparent" } : undefined}>
                 {isMobile ? (
                   <>
-                    <button onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
-                      style={{ width: "100%", border: "none", background: "transparent", cursor: "pointer", display: "grid", gridTemplateColumns: isSale ? "1fr 76px 28px" : "1fr 76px 34px", gap: 8, alignItems: "center", padding: "10px 12px", textAlign: "left" }}>
+                    <button
+                      type="button"
+                      onClick={() => { setExpandedIdStable(isOpen ? null : l.id); if (isOpen) setMobileDetailId(null); }}
+                      className={`crm-lead-row-mobile${isSale ? " crm-lead-row-mobile--sale" : ""}`}
+                    >
                       <span style={{ minWidth: 0 }}>
-                        <span style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, marginBottom: 4 }}>
-                          {isLocked && <Lock size={10} style={{ color: "#dc2626", flexShrink: 0 }} />}
+                        <span style={{ display: "flex", alignItems: "center", gap: 3, minWidth: 0, marginBottom: 2 }}>
+                          {isLocked && <Lock size={9} style={{ color: "#dc2626", flexShrink: 0 }} />}
                           {isRecentLead(l) && <NewLeadBadge />}
                           {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
                           {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
-                          {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 800, padding: "1px 6px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
-                          <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
+                          {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, padding: "0 4px", borderRadius: 6, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
+                          <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                         </span>
-                        <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {l.phone || "-"} · {getLeadProjectName(l)}
                         </span>
                       </span>
-                      <span style={{ minWidth: 0 }}>
-                        <StatusBadge status={isSale ? getLeadTabStatus(l, true) : l.status} size="sm" />
+                      <span className="crm-lead-row-mobile__status">
+                        <StatusBadge status={isSale ? getLeadTabStatus(l, true) : l.status} size="xs" />
                       </span>
-                      <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
-                        {!isSale && formatMobileLeadTime(l.createdAt)}
+                      <span className="crm-lead-row-mobile__meta">
+                        {!isSale && <span>{formatMobileLeadTime(l.createdAt)}</span>}
                         {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </span>
                     </button>
@@ -10210,45 +10243,65 @@ const LeadsPage = (props) => {
 }
 
 function MobileLeadSummary({ lead, isAdmin, isSale, onCall, onZalo, onToggleDetail }) {
+  const formatVal = (v) => String(v || "-").replace(/_/g, " ");
   const summaryRows = [
-    { label: "Nhu cầu", value: lead.product || "-" },
-    ...(lead.customerPortrait ? [{ label: "Chân dung KH", value: lead.customerPortrait }] : []),
-    ...(!isSale ? [{ label: "Thời gian nhận lead", value: lead.createdAt || "-" }] : []),
+    { label: "Nhu cầu", value: formatVal(lead.product) },
+    ...(lead.customerPortrait ? [{ label: "Chân dung KH", value: formatVal(lead.customerPortrait) }] : []),
+    ...(!isSale ? [{ label: "Thời gian nhận", value: lead.createdAt || "-" }] : []),
     ...(lead.phone2 ? [{ label: "SĐT phụ 1", value: lead.phone2 }] : []),
     ...(lead.phone3 ? [{ label: "SĐT phụ 2", value: lead.phone3 }] : []),
     ...(lead.adminNote ? [{ label: "Ghi chú Admin", value: lead.adminNote }] : []),
     { label: "Link FB khách", value: lead.customerFbUrl || "Chưa có link", isLink: !!lead.customerFbUrl },
   ];
+  const btnBase = {
+    flex: "1 1 0",
+    minWidth: 0,
+    minHeight: 34,
+    borderRadius: 8,
+    fontSize: 11,
+    fontWeight: 750,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    cursor: "pointer",
+    padding: "0 6px",
+    whiteSpace: "nowrap",
+  };
   return (
-    <div style={{ padding: "10px 12px 12px", background: "#fff", borderTop: "1px solid #eef2f7" }}>
-      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "8px 10px", marginBottom: 10 }}>
+    <div style={{ padding: "8px 10px 10px", background: "#fff", borderTop: "1px solid #eef2f7" }}>
+      <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "6px 8px", marginBottom: 8 }}>
         {summaryRows.map((row) => (
-          <div key={row.label} style={{ display: "grid", gridTemplateColumns: "112px 1fr", gap: 8, fontSize: 11, lineHeight: 1.35, padding: "4px 0", alignItems: "start" }}>
-            <span style={{ color: "#64748b", fontWeight: 800 }}>{row.label}</span>
+          <div key={row.label} style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: 6, fontSize: 10.5, lineHeight: 1.3, padding: "3px 0", alignItems: "start" }}>
+            <span style={{ color: "#64748b", fontWeight: 700 }}>{row.label}</span>
             {row.isLink ? (
-              <a href={row.value} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#2563eb", fontWeight: 850, overflowWrap: "anywhere", textDecoration: "underline" }}>Mở link</a>
+              <a href={row.value} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ color: "#2563eb", fontWeight: 700, overflowWrap: "anywhere", textDecoration: "underline" }}>Mở link</a>
             ) : (
-              <span style={{ color: "#0f172a", fontWeight: 800, overflowWrap: "anywhere" }}>{row.value}</span>
+              <span style={{ color: "#0f172a", fontWeight: 650, overflowWrap: "anywhere" }}>{row.value}</span>
             )}
           </div>
         ))}
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button onClick={onCall} style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #c5d9c8", borderRadius: 9, background: "#fff", color: "#0f3d1e", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
-          <Phone size={14} /> Gọi
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${[true, !!zaloHref(lead.phone), isAdmin, true].filter(Boolean).length}, minmax(0, 1fr))`,
+        gap: 6,
+      }}>
+        <button type="button" onClick={onCall} style={{ ...btnBase, border: "1px solid #c5d9c8", background: "#fff", color: "#0f3d1e" }}>
+          <Phone size={13} /> Gọi
         </button>
-        {zaloHref(lead.phone) && (
-          <button onClick={onZalo} style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #93c5fd", borderRadius: 9, background: "#eff6ff", color: "#0068ff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
-            <MessageSquare size={14} /> Zalo
+        {!!zaloHref(lead.phone) && (
+          <button type="button" onClick={onZalo} style={{ ...btnBase, border: "1px solid #93c5fd", background: "#eff6ff", color: "#0068ff" }}>
+            <MessageSquare size={13} /> Zalo
           </button>
         )}
         {isAdmin && (
-          <button disabled style={{ flex: "1 1 72px", minHeight: 36, border: "1px solid #e2e8f0", borderRadius: 9, background: "#f8fafc", color: "#94a3b8", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "not-allowed" }} title="Chưa nối Page Facebook">
-            <MessageSquare size={14} /> Chat
+          <button type="button" disabled style={{ ...btnBase, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#94a3b8", cursor: "not-allowed" }} title="Chưa nối Page Facebook">
+            <MessageSquare size={13} /> Chat
           </button>
         )}
-        <button onClick={onToggleDetail} style={{ flex: "1.2 1 96px", minHeight: 36, border: "1px solid #0f3d1e", borderRadius: 9, background: "#0f3d1e", color: "#fff", fontSize: 12, fontWeight: 850, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, cursor: "pointer" }}>
-          <Eye size={14} /> Xem chi tiết
+        <button type="button" onClick={onToggleDetail} style={{ ...btnBase, border: "1px solid #0f3d1e", background: "#0f3d1e", color: "#fff" }}>
+          <Eye size={13} /> Chi tiết
         </button>
       </div>
     </div>
@@ -12211,102 +12264,143 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       {/* Ad Preview Modal */}
       {showAdPreview && (
         <div onClick={() => setShowAdPreview(false)} style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", zIndex: 9999,
+          position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 9999,
           display: "flex", justifyContent: "center", alignItems: isMobile ? "flex-end" : "center", padding: isMobile ? 0 : 16,
         }}>
           <div onClick={e => e.stopPropagation()} style={{
-            background: "#fff", borderRadius: isMobile ? "16px 16px 0 0" : 16, width: "100%", maxWidth: isMobile ? "100%" : 600, maxHeight: isMobile ? "92vh" : "90vh",
-            overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+            background: "#fff", borderRadius: isMobile ? "14px 14px 0 0" : 14, width: "100%", maxWidth: isMobile ? "100%" : 560, maxHeight: isMobile ? "90vh" : "90vh",
+            overflow: "auto", boxShadow: "0 16px 48px rgba(0,0,0,.28)",
             WebkitOverflowScrolling: "touch",
           }}>
-            <div style={{ padding: isMobile ? "14px 16px" : "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
-              <h3 style={{ margin: 0, fontSize: isMobile ? 15 : 16, display: "flex", alignItems: "center", gap: 8 }}>
-                <Eye size={18} /> Xem quảng cáo
+            <div style={{ padding: isMobile ? "12px 14px" : "14px 18px", borderBottom: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: "#fff", zIndex: 1 }}>
+              <h3 style={{ margin: 0, fontSize: isMobile ? 14 : 15, display: "flex", alignItems: "center", gap: 6, fontWeight: 750 }}>
+                <Eye size={16} /> Xem quảng cáo
               </h3>
-              <button onClick={() => setShowAdPreview(false)} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}><X size={18} /></button>
+              <button type="button" onClick={() => setShowAdPreview(false)} style={{ background: "#f1f5f9", border: "none", cursor: "pointer", padding: 6, borderRadius: 999, display: "flex" }}><X size={16} /></button>
             </div>
-            <div style={{ padding: isMobile ? 14 : 20 }}>
+            <div style={{ padding: isMobile ? 12 : 16 }}>
               {loadingAdPreview ? (
-                <div style={{ textAlign: "center", padding: 40, color: "#6b7280" }}>
-                  <RefreshCw size={24} style={{ animation: "spin 1s linear infinite" }} />
+                <div style={{ textAlign: "center", padding: 32, color: "#6b7280", fontSize: 13 }}>
+                  <RefreshCw size={20} style={{ animation: "spin 1s linear infinite" }} />
                   <div style={{ marginTop: 8 }}>Đang tải quảng cáo...</div>
                 </div>
               ) : adPreview?.error && !adPreview?.adId ? (
-                <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
-                  <AlertCircle size={32} style={{ color: "#f59e0b", marginBottom: 8 }} />
+                <div style={{ textAlign: "center", padding: 32, color: "#9ca3af", fontSize: 13 }}>
+                  <AlertCircle size={28} style={{ color: "#f59e0b", marginBottom: 8 }} />
                   <div>{adPreview.error}</div>
                 </div>
               ) : adPreview?.adId ? (
                 <div>
-                  <div style={{ marginBottom: 12, padding: isMobile ? "10px 12px" : "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
-                    <div style={{ fontSize: isMobile ? 14 : 13, fontWeight: 600, color: "#166534", wordBreak: "break-word" }}>{adPreview.adName}</div>
-                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, wordBreak: "break-all" }}>
-                      Trạng thái: <span style={{ fontWeight: 600, color: adPreview.status === "ACTIVE" ? "#16a34a" : "#dc2626" }}>{adPreview.status}</span>
-                      {" · "}Ad ID: {adPreview.adId}
+                  <div style={{ marginBottom: 10, padding: "8px 10px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontSize: isMobile ? 13 : 13, fontWeight: 700, color: "#166534", wordBreak: "break-word" }}>{adPreview.adName}</div>
+                    <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 2, wordBreak: "break-all" }}>
+                      Trạng thái: <span style={{ fontWeight: 700, color: adPreview.status === "ACTIVE" ? "#16a34a" : "#dc2626" }}>{String(adPreview.status || "").replace(/_/g, " ")}</span>
+                      {" · "}ID: {adPreview.adId}
                     </div>
                   </div>
                   {adPreview.imageUrl && (
-                    <div style={{ marginBottom: 12, textAlign: "center" }}>
-                      <img src={adPreview.imageUrl} alt="Ad Creative" style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid #e5e7eb" }} />
+                    <div style={{ marginBottom: 10, textAlign: "center" }}>
+                      <img src={adPreview.imageUrl} alt="Ad Creative" style={{ maxWidth: "100%", maxHeight: isMobile ? 220 : 360, objectFit: "contain", borderRadius: 8, border: "1px solid #e5e7eb" }} />
                     </div>
                   )}
-                  {adPreview.previews?.length > 0 && adPreview.previews.map((p, pi) => {
-                    // Inject responsive CSS into the preview HTML for mobile
-                    const responsiveHtml = isMobile
-                      ? `<style>
-                          * { max-width: 100% !important; box-sizing: border-box !important; }
-                          body { margin: 0 !important; padding: 4px !important; overflow-x: hidden !important; width: 100% !important; }
+                  {(adPreview.previews || [])
+                    .filter((p) => {
+                      if (!isMobile) return true;
+                      // Mobile: ưu tiên Mobile Feed; Desktop Feed chỉ hiện nếu không có bản mobile
+                      const hasMobile = (adPreview.previews || []).some((x) => String(x.format || "").includes("MOBILE"));
+                      if (hasMobile && String(p.format || "") === "DESKTOP_FEED_STANDARD") return false;
+                      return true;
+                    })
+                    .map((p, pi) => {
+                      const isDesktop = String(p.format || "") === "DESKTOP_FEED_STANDARD";
+                      const scale = isMobile && isDesktop ? 0.58 : 1;
+                      const frameW = isMobile ? (isDesktop ? 540 : "100%") : "100%";
+                      const responsiveHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+                        <style>
+                          html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; overflow-x: hidden !important; }
+                          * { box-sizing: border-box !important; max-width: 100% !important; }
                           img, video, iframe, canvas { max-width: 100% !important; height: auto !important; }
-                          div, span, p, a, section, article { max-width: 100% !important; word-wrap: break-word !important; overflow-wrap: break-word !important; }
-                          table { max-width: 100% !important; table-layout: fixed !important; }
-                          td, th { word-wrap: break-word !important; }
-                        </style>${p.html}`
-                      : p.html;
-                    return (
-                      <div key={pi} style={{ marginBottom: 12 }}>
-                        <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
-                          {p.format === "DESKTOP_FEED_STANDARD" ? "📺 Desktop Feed" : "📱 Mobile Feed"}
+                          [style*="width"] { max-width: 100% !important; }
+                        </style></head><body>${p.html || ""}</body></html>`;
+                      return (
+                        <div key={pi} style={{ marginBottom: 12 }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", marginBottom: 4 }}>
+                            {isDesktop ? "Desktop Feed" : "Mobile Feed"}
+                          </div>
+                          <div style={{
+                            width: "100%",
+                            overflow: "hidden",
+                            borderRadius: 8,
+                            border: "1px solid #e5e7eb",
+                            background: "#f8fafc",
+                            maxHeight: isMobile ? "52vh" : 640,
+                          }}>
+                            <div style={{
+                              width: "100%",
+                              transform: scale !== 1 ? `scale(${scale})` : undefined,
+                              transformOrigin: "top left",
+                              height: scale !== 1 ? undefined : undefined,
+                            }}>
+                              <iframe
+                                title={`ad-preview-${pi}`}
+                                srcDoc={responsiveHtml}
+                                style={{
+                                  width: frameW,
+                                  minHeight: isMobile ? (isDesktop ? 320 : 280) : (isDesktop ? 420 : 480),
+                                  border: "none",
+                                  background: "#fff",
+                                  display: "block",
+                                }}
+                                sandbox="allow-scripts allow-same-origin allow-popups"
+                                scrolling="no"
+                                onLoad={(e) => {
+                                  try {
+                                    const iframe = e.target;
+                                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                                    if (!doc?.body) return;
+                                    const resize = () => {
+                                      const h = Math.max(doc.body.scrollHeight || 0, doc.documentElement?.scrollHeight || 0);
+                                      if (h > 80) {
+                                        iframe.style.height = `${h + 8}px`;
+                                        if (scale !== 1 && iframe.parentElement) {
+                                          iframe.parentElement.style.height = `${Math.ceil((h + 8) * scale)}px`;
+                                          iframe.parentElement.style.width = `${Math.ceil(100 / scale)}%`;
+                                        }
+                                      }
+                                    };
+                                    resize();
+                                    setTimeout(resize, 400);
+                                    setTimeout(resize, 1200);
+                                  } catch { /* ignore */ }
+                                }}
+                              />
+                            </div>
+                          </div>
                         </div>
-                        <div style={{ width: "100%", overflow: "hidden", borderRadius: 8, border: "1px solid #e5e7eb" }}>
-                          <iframe
-                            srcDoc={responsiveHtml}
-                            style={{ width: "100%", minHeight: isMobile ? 400 : (p.format === "DESKTOP_FEED_STANDARD" ? 500 : 600), border: "none", background: "#fff", display: "block" }}
-                            sandbox="allow-scripts allow-same-origin allow-popups"
-                            scrolling={isMobile ? "auto" : "no"}
-                            onLoad={e => {
-                              try {
-                                const doc = e.target.contentDocument || e.target.contentWindow?.document;
-                                if (doc?.body) {
-                                  const h = doc.body.scrollHeight;
-                                  if (h > 100) e.target.style.height = (h + 20) + "px";
-                                }
-                              } catch(err) {}
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                   {!adPreview.imageUrl && (!adPreview.previews || adPreview.previews.length === 0) && (
-                    <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 13 }}>
+                    <div style={{ textAlign: "center", padding: 16, color: "#9ca3af", fontSize: 12 }}>
                       Không có preview cho quảng cáo này
                     </div>
                   )}
                   {adPreview.allAds?.length > 1 && (
-                    <div style={{ marginTop: 12, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>Các ad liên quan ({adPreview.allAds.length})</div>
+                    <div style={{ marginTop: 10, padding: "8px 10px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>Các ad liên quan ({adPreview.allAds.length})</div>
                       {adPreview.allAds.map((a, ai) => (
-                        <div key={ai} style={{ fontSize: 12, padding: "2px 0", display: "flex", justifyContent: "space-between" }}>
-                          <span>{a.name}</span>
-                          <span style={{ fontSize: 10, color: a.status === "ACTIVE" ? "#16a34a" : "#9ca3af", fontWeight: 600 }}>{a.status}</span>
+                        <div key={ai} style={{ fontSize: 11.5, padding: "4px 0", display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                          <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.name}</span>
+                          <span style={{ fontSize: 9.5, color: a.status === "ACTIVE" ? "#16a34a" : "#94a3b8", fontWeight: 700, flexShrink: 0, textTransform: "uppercase" }}>
+                            {String(a.status || "").replace(/_/g, " ")}
+                          </span>
                         </div>
                       ))}
                     </div>
                   )}
                 </div>
               ) : (
-                <div style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
-                  <AlertCircle size={32} style={{ marginBottom: 8 }} />
+                <div style={{ textAlign: "center", padding: 32, color: "#9ca3af", fontSize: 13 }}>
+                  <AlertCircle size={28} style={{ marginBottom: 8 }} />
                   <div>Không tìm thấy quảng cáo</div>
                 </div>
               )}
