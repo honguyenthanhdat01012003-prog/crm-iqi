@@ -12,6 +12,9 @@ fi
 echo "==> Reset dist conflicts"
 git checkout -- dist/index.html dist/assets/ 2>/dev/null || true
 rm -f dist/assets/index-*.js dist/assets/index-*.css dist/assets/web-*.js 2>/dev/null || true
+# Untracked local files that block git pull (common on VPS after npm install)
+rm -f package-lock.json
+rm -f dist/assistants/iqi-sales-bot.png 2>/dev/null || true
 
 echo "==> Pull latest code"
 git pull origin main
