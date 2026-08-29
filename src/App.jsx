@@ -761,12 +761,24 @@ function resetCrmNavigationForRole(role) {
   } catch {}
 }
 
+function hasUsableCachedUser(u) {
+  return !!(u && u.userId && u.role);
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
   });
   const [token, setToken] = useState(() => localStorage.getItem("crm_token") || "");
-  const [sessionReady, setSessionReady] = useState(() => !localStorage.getItem("crm_token"));
+  // Có token + user cache → vào app ngay (optimistic); /me xác thực nền.
+  const [sessionReady, setSessionReady] = useState(() => {
+    if (!localStorage.getItem("crm_token")) return true;
+    try {
+      return hasUsableCachedUser(JSON.parse(localStorage.getItem("crm_user") || "null"));
+    } catch {
+      return false;
+    }
+  });
   const [sessionNotice, setSessionNotice] = useState("");
   const [sessionVerifyError, setSessionVerifyError] = useState("");
   const [sessionCheckTick, setSessionCheckTick] = useState(0);
@@ -788,8 +800,8 @@ export default function App() {
     localStorage.setItem("crm_user", JSON.stringify(u));
   };
 
-  // Bắt buộc xác thực role từ server trước khi vào app — lệch JWT/cache → đá về login.
-  // Không chờ warmup tuần tự (trước đây dễ 20–30s+). /me chạy ngay, timeout ngắn, ít retry.
+  // Optimistic: có cache user → vào CRM ngay. /me chạy nền; 401 / đổi role mới đá login.
+  // Không có cache → vẫn chặn tới khi /me OK (hoặc lỗi + Thử lại).
   useEffect(() => {
     if (!token) {
       setSessionReady(true);
@@ -797,17 +809,28 @@ export default function App() {
       return;
     }
     let cancelled = false;
-    setSessionReady(false);
-    setSessionVerifyError("");
+    let cachedUser = null;
+    try {
+      cachedUser = JSON.parse(localStorage.getItem("crm_user") || "null");
+    } catch {
+      cachedUser = null;
+    }
+    const optimistic = hasUsableCachedUser(cachedUser);
+    if (optimistic) {
+      setSessionReady(true);
+      setSessionVerifyError("");
+      if (!hasUsableCachedUser(user)) setUser(cachedUser);
+    } else {
+      setSessionReady(false);
+      setSessionVerifyError("");
+    }
 
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const native = isNativePlatform();
-    // Web: 2 lần × ~4–8s. Native: 2 lần × ~5–9s. Không chờ /version; fail nhanh hiện nút Thử lại.
-    const attempts = 2;
-    const timeouts = native ? [5000, 9000] : [4000, 8000];
+    const attempts = optimistic ? (native ? 3 : 2) : 2;
+    const timeouts = native ? [4000, 7000, 10000] : [4000, 8000];
 
     (async () => {
-      // Warmup song song — không block /me
       apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: native ? 4000 : 2500 }).catch(() => {});
 
       let lastErrMsg = "";
@@ -837,7 +860,9 @@ export default function App() {
               await sleep(250 * (i + 1));
               continue;
             }
-            setSessionVerifyError(`${lastErrMsg}. Thử lại trước khi vào app.`);
+            if (!optimistic) {
+              setSessionVerifyError(`${lastErrMsg}. Thử lại trước khi vào app.`);
+            }
             return;
           }
           const data = await r.json();
@@ -847,10 +872,7 @@ export default function App() {
             setSessionReady(true);
             return;
           }
-          let cachedRole = "";
-          try {
-            cachedRole = String(JSON.parse(localStorage.getItem("crm_user") || "{}")?.role || "");
-          } catch { cachedRole = ""; }
+          let cachedRole = String(cachedUser?.role || "");
           if (cachedRole && cachedRole !== String(next.role)) {
             clearSession("Quyền tài khoản đã thay đổi — vui lòng đăng nhập lại");
             setSessionReady(true);
@@ -873,10 +895,11 @@ export default function App() {
         } catch (err) {
           lastErrMsg = err?.message || "Không kết nối được server";
           if (i < attempts - 1) {
-            await sleep(250 * (i + 1));
+            await sleep(300 * (i + 1));
             continue;
           }
-          if (!cancelled) {
+          // Optimistic: giữ app mở với cache; chỉ báo lỗi khi chưa có user để vào.
+          if (!cancelled && !optimistic) {
             setSessionVerifyError("Không kết nối được server. Thử lại trước khi vào app.");
           }
         }
@@ -905,7 +928,6 @@ export default function App() {
             >
               Đăng nhập lại
             </button>
-            {/* iOS: tự thử lại nền khi lỗi mạng tạm thời */}
             <SessionAutoRetry
               enabled={isNativePlatform()}
               onRetry={() => setSessionCheckTick((n) => n + 1)}
@@ -927,7 +949,9 @@ export default function App() {
             setSessionNotice("");
             setUser(u);
             setToken(t);
-            setSessionReady(false);
+            localStorage.setItem("crm_token", t);
+            localStorage.setItem("crm_user", JSON.stringify(u));
+            setSessionReady(true);
           }}
         />
       </ErrorBoundary>
@@ -2126,6 +2150,37 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
         applyApiData(data, { suppressNotifications: true });
         if (Array.isArray(data.leads)) leadsRef.current = data.leads;
+        // Persist lite page → disk (đặc biệt mobile/iOS cold start ngày hôm sau)
+        if (Array.isArray(data.leads) && data.leads.length > 0) {
+          const userKey = scopeUserKey(user);
+          if (
+            userKey &&
+            selectedProject &&
+            selectedProject !== "personal" &&
+            (user.role !== "sale" || !!selectedProject)
+          ) {
+            const cacheKey = buildScopeCacheKey({
+              selectedProject,
+              managerFilter,
+              saleFilter,
+              userRole: user.role,
+              userId: userKey,
+            });
+            const diskPayload = {
+              leads: data.leads,
+              leadsTotal: data.leadsTotal,
+              tabCounts: data.tabCounts,
+              phoneRegistrations: data.phoneRegistrations,
+              // Mobile: đánh dấu paginated để không bật full local-scope mode
+              paginated: true,
+              scope: false,
+            };
+            setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, diskPayload, {
+              userKey,
+              persist: true,
+            });
+          }
+        }
         if (refreshTabCounts && Array.isArray(data.leads) && data.leads.length > 0) {
           fetchTabCounts();
         }
@@ -2143,18 +2198,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (!isBoot && applyResult && seq === fetchSeqRef.current) setLeadsFetching(false);
       if (isBoot) setDataLoadAttempted(true);
     }
-  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk, fetchTabCounts]);
+  }, [applyApiData, buildDataUrl, markInitialDataLoaded, markApiOk, fetchTabCounts, user, selectedProject, managerFilter, saleFilter]);
 
   const runBootLoad = useCallback(async () => {
     clearBootFailed();
 
-    const canScope =
+    const canUseProjectCache =
       selectedProject !== "personal" &&
-      (user.role !== "sale" || !!selectedProject) &&
-      !isMobile;
+      (user.role !== "sale" || !!selectedProject);
+    // Desktop: full scope mode. Mobile: vẫn hydrate disk + persist lite (không bật full scope nặng).
+    const canScope = canUseProjectCache && !isMobile;
 
-    // 1) Hydrate disk ngay — mở app là thấy data lần trước
-    if (canScope) {
+    // 1) Hydrate disk ngay — mở app (web + iOS) là thấy data lần trước
+    if (canUseProjectCache) {
       const userKey = scopeUserKey(user);
       const cacheKey = buildScopeCacheKey({
         selectedProject,
@@ -2177,13 +2233,16 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     }
 
-    // 2) Không có cache: lite page paint ngay + scope full nền
+    // 2) Không có cache: lite page paint ngay + scope full nền (desktop)
     const hadCache = bootDoneRef.current;
     const bootP = fetchCrmData({ isBoot: true });
     let liteP = Promise.resolve(null);
-    if (canScope && !hadCache) {
+    if (canUseProjectCache && !hadCache) {
       // Hiện 50 lead đầu ngay — không chờ full scope
       liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+    } else if (isMobile && canUseProjectCache && hadCache) {
+      // Mobile đã có disk: refresh lite nền, không block UI
+      void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
     }
     const [bootData, liteData] = await Promise.all([bootP, liteP]);
 
@@ -2668,11 +2727,18 @@ function CRMApp({ user, updateUser, onLogout }) {
     };
     poll();
     const pollIv = setInterval(poll, pollMs);
-    const onVisible = () => { if (!document.hidden) poll(); };
+    const onVisible = () => {
+      if (document.hidden) return;
+      // iOS/WKWebView: đánh thức TLS/DNS trước khi poll — tránh lần đầu vào lại bị đơ
+      apiFetch(`${API}/version`, { skipAuth: true, timeoutMs: 4000 }).catch(() => {});
+      poll();
+    };
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onVisible);
     return () => {
       clearInterval(pollIv);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
     };
   }, [syncHash, applyApiData, markApiOk, markConnectivityFailure, fetchLeadScope, fetchCrmData, fetchProjectLeadCounts, user, selectedProject, nativePushSupported, isMobile]);
 
@@ -9805,7 +9871,7 @@ const LeadsPage = (props) => {
                         </span>
                       </span>
                       <span style={{ minWidth: 0 }}>
-                        <StatusBadge status={l.status} size="sm" />
+                        <StatusBadge status={isSale ? getLeadTabStatus(l, true) : l.status} size="sm" />
                       </span>
                       <span style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 2, color: "#64748b", fontSize: 9, fontWeight: 850 }}>
                         {!isSale && formatMobileLeadTime(l.createdAt)}
@@ -9837,7 +9903,7 @@ const LeadsPage = (props) => {
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       {l.teamId && teamNameMap[l.teamId] && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
-                      <StatusBadge status={l.status} size="sm" />
+                      <StatusBadge status={isSale ? getLeadTabStatus(l, true) : l.status} size="sm" />
                       {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
                       {l.isLocked && <Lock size={12} color="#dc2626" title="Lead đã khóa" />}
                     </div>

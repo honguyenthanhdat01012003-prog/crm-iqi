@@ -3599,21 +3599,14 @@ async function querySaleTabCountsDenorm(db, user, filters = {}) {
   const f = { ...filters, statusTab: "all", statusFilter: "all" };
   const { where, params } = await buildLeadsSqlFilters(db, user, f);
   const saleName = user.displayName || "";
-  const myTeamId = await getSaleTeamId(user.userId);
-  // Lead team: nếu sale chưa tự feedback thì dùng status chung của lead (đồng đội cập nhật)
+  // Sale tab = chỉ feedback của chính sale (không lộ status sheet/lead chung hay đồng đội)
   const rows = await all(
     db,
-    `SELECT ${tabStatusSqlExpr(`CASE
-        WHEN s.lead_id IS NOT NULL AND LOWER(TRIM(COALESCE(s.sale_tab_status, ''))) NOT IN ('', 'new')
-          THEN s.sale_tab_status
-        WHEN ? > 0 AND COALESCE(l.team_id, 0) = ?
-          THEN l.status
-        ELSE COALESCE(s.sale_tab_status, 'new')
-      END`)} as tab_st, COUNT(*) as c
-     FROM (SELECT id, status, team_id FROM leads ${where}) l
+    `SELECT ${tabStatusSqlExpr("COALESCE(s.sale_tab_status, 'new')")} as tab_st, COUNT(*) as c
+     FROM (SELECT id FROM leads ${where}) l
      LEFT JOIN lead_sale_summary s ON l.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
      GROUP BY tab_st`,
-    [myTeamId, myTeamId, ...params, saleName]
+    [...params, saleName]
   );
   const counts = { all: 0 };
   for (const r of rows) {
@@ -4406,21 +4399,13 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
 
     if (v36DenormReady && statusTab && statusTab !== "all") {
-      const myTeamId = await getSaleTeamId(user.userId);
-      // Cá nhân: theo lead_sale_summary; lead team chưa feedback cá nhân → theo status lead (đồng đội)
-      const tabExpr = tabStatusSqlExpr(`CASE
-        WHEN s.lead_id IS NOT NULL AND LOWER(TRIM(COALESCE(s.sale_tab_status, ''))) NOT IN ('', 'new')
-          THEN s.sale_tab_status
-        WHEN ? > 0 AND COALESCE(l.team_id, 0) = ?
-          THEN l.status
-        ELSE COALESCE(s.sale_tab_status, 'new')
-      END`);
+      const tabExpr = tabStatusSqlExpr("COALESCE(s.sale_tab_status, 'new')");
       const scopeSql = `
         FROM (SELECT * FROM leads ${where}) l
         LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
           AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
         WHERE ${tabExpr} = ?`;
-      const scopeParams = [...params, saleName, myTeamId, myTeamId, statusTab];
+      const scopeParams = [...params, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
@@ -4537,6 +4522,27 @@ async function loadSaleSummariesForLeads(db, leadIds, saleName) {
   return map;
 }
 
+async function resolveSaleViewOpts(db, user, viewOpts = {}) {
+  const isSaleUser = user?.role === "sale" && user.displayName;
+  const perspective = viewOpts.salePerspectiveName;
+  if (!isSaleUser && !perspective) return {};
+  let teamMemberNames = [];
+  if (isSaleUser && user.userId) {
+    try {
+      const teamId = await getSaleTeamId(user.userId);
+      if (teamId) {
+        const saleRows = await all(
+          db,
+          "SELECT display_name FROM users WHERE team_id = ? AND role = 'sale' ORDER BY id",
+          [teamId]
+        );
+        teamMemberNames = saleRows.map((r) => String(r.display_name || "").trim()).filter(Boolean);
+      }
+    } catch (_) {}
+  }
+  return { teamMemberNames };
+}
+
 async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = null, user = null, viewOpts = {}) {
   const skipHistory = !!viewOpts.skipHistory;
   const projectRows = projectRowsCached || await all(db, "SELECT * FROM projects ORDER BY id ASC");
@@ -4607,9 +4613,11 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
   });
 
   if (user?.role === "sale") {
-    leads = leads.map((l) => applySaleLeadView(l, user.displayName));
+    const saleViewOpts = await resolveSaleViewOpts(db, user, viewOpts);
+    leads = leads.map((l) => applySaleLeadView(l, user.displayName, saleViewOpts));
   } else if (viewOpts.salePerspectiveName) {
-    leads = leads.map((l) => applySaleLeadView(l, viewOpts.salePerspectiveName));
+    const saleViewOpts = await resolveSaleViewOpts(db, user, viewOpts);
+    leads = leads.map((l) => applySaleLeadView(l, viewOpts.salePerspectiveName, saleViewOpts));
   }
 
   leads = leads.map((l) => ({
@@ -13550,13 +13558,25 @@ function assertCurrentSaleOwnsLead(leadRow, displayName) {
   return { ok: true };
 }
 
-function applySaleLeadView(lead, displayName) {
+function countSaleVisibleHistorySummary(summary, displayName, teamMemberNames = []) {
+  const memberNames = resolveSaleHistoryMemberNames({
+    mode: teamMemberNames.length > 1 ? "race" : "log",
+    displayName,
+    teamMemberNames,
+  });
+  return filterHistoryForTeamMembers(summary, memberNames, {
+    normalizeName: (s) => normalizePersonNameServer(s),
+  }).length;
+}
+
+function applySaleLeadView(lead, displayName, viewOpts = {}) {
   const saleKey = normalizePersonNameServer(displayName);
   const fbMap = lead.saleFeedbackStatus || {};
   const myFb = fbMap[saleKey];
 
   const summary = Array.isArray(lead.feedbackHistorySummary) ? lead.feedbackHistorySummary : [];
   const hasSummary = summary.length > 0;
+  const teamMemberNames = viewOpts.teamMemberNames || [];
   const myHistory = hasSummary
     ? summary.filter((h) => {
         if (!h || h.action === "Chia lead" || !h.status) return false;
@@ -13564,13 +13584,17 @@ function applySaleLeadView(lead, displayName) {
       })
     : [];
 
-  const status = myFb?.status || (hasSummary ? "new" : (lead.status || "new"));
-  const rawStatus = myFb?.rawStatus || myFb?.status || lead.rawStatus || status;
+  // Sale chỉ thấy trạng thái do chính mình cập nhật — không lộ status sheet/lead chung
+  const status = myFb?.status
+    || (myHistory.length ? normalizeStatus(myHistory[myHistory.length - 1].status) : "new");
+  const rawStatus = myFb?.rawStatus || myFb?.status
+    || (myHistory.length ? myHistory[myHistory.length - 1].status : "")
+    || status;
 
-  // skipHistory: summary rỗng — KHÔNG đè historyCount = 0 (làm client không refetch timeline)
+  // Badge lịch sử phải khớp GET /api/leads/:id/history (đã lọc theo sale/team), không dùng tổng DB
   const historyCount = hasSummary
-    ? myHistory.length
-    : (Number(lead.historyCount) || 0);
+    ? countSaleVisibleHistorySummary(summary, displayName, teamMemberNames)
+    : (myFb && myFb.status && myFb.status !== "new" ? 1 : 0);
 
   let lastSaleUpdate = lead.lastSaleUpdate || null;
   if (!lastSaleUpdate && myFb && myFb.status && myFb.status !== "new") {
@@ -13586,8 +13610,8 @@ function applySaleLeadView(lead, displayName) {
     ...lead,
     status: normalizeStatus(status) || "new",
     rawStatus: rawStatus || status,
-    feedbackHistorySummary: hasSummary ? myHistory : summary,
-    saleFeedbackStatus: myFb ? { [saleKey]: myFb } : fbMap,
+    feedbackHistorySummary: hasSummary ? myHistory : [],
+    saleFeedbackStatus: myFb ? { [saleKey]: myFb } : (saleKey && fbMap[saleKey] ? { [saleKey]: fbMap[saleKey] } : {}),
     historyCount,
     lastSaleUpdate,
   };
