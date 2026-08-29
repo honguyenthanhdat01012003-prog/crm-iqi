@@ -1,5 +1,5 @@
 import assert from "assert";
-import { compareSemver, isVersionBelow } from "../src/utils/semver.js";
+import { compareSemver, isVersionBelow } from "./semver.js";
 
 assert.strictEqual(compareSemver("1.3", "1.3.0"), 0);
 assert.strictEqual(compareSemver("1.3.0", "1.4.0"), -1);
