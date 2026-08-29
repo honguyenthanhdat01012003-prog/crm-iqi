@@ -49,6 +49,7 @@ import {
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
 import { apiFetch, authHeaders, getApiBase, getSocketUrl, isNativePlatform } from "./httpClient.js";
+import { checkForceAppUpdate, openStoreUrl } from "./forceAppUpdate.js";
 
 const API = getApiBase();
 const SOCKET_URL = getSocketUrl();
@@ -765,6 +766,61 @@ function hasUsableCachedUser(u) {
   return !!(u && u.userId && u.role);
 }
 
+function ForceUpdateScreen({ info, onRetry }) {
+  const installed = info?.installed?.version || "?";
+  const minVersion = info?.minVersion || "?";
+  const storeUrl = info?.storeUrl || "";
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      gap: 14, background: "linear-gradient(160deg, #0f172a 0%, #1e293b 100%)", color: "#e2e8f0",
+      fontSize: 14, fontWeight: 600, padding: 28, textAlign: "center",
+    }}>
+      <div style={{
+        width: 64, height: 64, borderRadius: 16, background: "linear-gradient(135deg, #e88a2e, #d97706)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 8px 28px rgba(232,138,46,0.35)", marginBottom: 4,
+      }}>
+        <span style={{ color: "#fff", fontSize: 20, fontWeight: 800 }}>IQI</span>
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "#fff" }}>Cần cập nhật ứng dụng</div>
+      <div style={{ maxWidth: 340, color: "#94a3b8", fontWeight: 550, lineHeight: 1.45, fontSize: 13.5 }}>
+        {info?.message || "Phiên bản hiện tại đã cũ. Vui lòng cập nhật để tiếp tục dùng CRM."}
+      </div>
+      <div style={{ fontSize: 12, color: "#64748b", fontWeight: 650 }}>
+        Bản đang dùng: <span style={{ color: "#fca5a5" }}>{installed}</span>
+        {" · "}Yêu cầu tối thiểu: <span style={{ color: "#86efac" }}>{minVersion}</span>
+      </div>
+      {storeUrl ? (
+        <button
+          type="button"
+          onClick={() => openStoreUrl(storeUrl)}
+          style={{
+            marginTop: 8, padding: "12px 22px", borderRadius: 10, border: "none",
+            background: "#22c55e", color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer",
+          }}
+        >
+          Cập nhật ngay
+        </button>
+      ) : (
+        <div style={{ marginTop: 6, fontSize: 12, color: "#fbbf24", maxWidth: 320, lineHeight: 1.4 }}>
+          Mở TestFlight / App Store và cập nhật app <strong>LUX IQI CRM</strong>, rồi mở lại.
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRetry}
+        style={{
+          marginTop: 4, padding: "8px 14px", borderRadius: 8, border: "1px solid #334155",
+          background: "transparent", color: "#94a3b8", fontWeight: 650, cursor: "pointer", fontSize: 12,
+        }}
+      >
+        Đã cập nhật — Kiểm tra lại
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem("crm_user")); } catch { return null; }
@@ -782,6 +838,23 @@ export default function App() {
   const [sessionNotice, setSessionNotice] = useState("");
   const [sessionVerifyError, setSessionVerifyError] = useState("");
   const [sessionCheckTick, setSessionCheckTick] = useState(0);
+  const [forceUpdate, setForceUpdate] = useState(null); // null=checking | false | {required, ...}
+  const [forceUpdateTick, setForceUpdateTick] = useState(0);
+
+  useEffect(() => {
+    if (!isNativePlatform()) {
+      setForceUpdate(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setForceUpdate(null);
+    (async () => {
+      const result = await checkForceAppUpdate();
+      if (cancelled) return;
+      setForceUpdate(result?.required ? result : false);
+    })();
+    return () => { cancelled = true; };
+  }, [forceUpdateTick]);
 
   const clearSession = useCallback((notice = "") => {
     localStorage.removeItem("crm_token");
@@ -907,6 +980,26 @@ export default function App() {
     })();
     return () => { cancelled = true; };
   }, [token, clearSession, sessionCheckTick]);
+
+  if (forceUpdate === null && isNativePlatform()) {
+    return (
+      <div style={{
+        minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+        background: "#0f172a", color: "#94a3b8", fontSize: 14, fontWeight: 600,
+      }}>
+        Đang kiểm tra phiên bản...
+      </div>
+    );
+  }
+
+  if (forceUpdate && forceUpdate.required) {
+    return (
+      <ForceUpdateScreen
+        info={forceUpdate}
+        onRetry={() => setForceUpdateTick((n) => n + 1)}
+      />
+    );
+  }
 
   if (token && !sessionReady) {
     return (

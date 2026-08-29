@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-29-redis-cache-fix";
+const BUILD_VERSION = "2026-08-29-force-app-update";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -6039,13 +6039,53 @@ if (fs.existsSync(distPath)) {
   }));
 }
 
-// Version endpoint — no auth required, used to verify deployment
+async function getAppUpdatePolicy() {
+  let settings = {};
+  try {
+    const rows = await all(db, "SELECT key, value FROM settings");
+    settings = Object.fromEntries((rows || []).map((r) => [r.key, r.value]));
+  } catch { /* db may be down */ }
+  const pick = (...keys) => {
+    for (const k of keys) {
+      const v = process.env[k] ?? settings[k];
+      if (v != null && String(v).trim() !== "") return String(v).trim();
+    }
+    return "";
+  };
+  const forceFlag = pick("FORCE_APP_UPDATE", "force_app_update") || "1";
+  const force = forceFlag !== "0" && forceFlag.toLowerCase() !== "false";
+  return {
+    force,
+    message:
+      pick("FORCE_UPDATE_MESSAGE", "force_update_message") ||
+      "Phiên bản ứng dụng đã cũ. Vui lòng cập nhật bản mới trên TestFlight / App Store để tiếp tục.",
+    ios: {
+      minVersion: pick("MIN_IOS_APP_VERSION", "min_ios_app_version"),
+      storeUrl: pick("IOS_STORE_URL", "ios_store_url"),
+    },
+    android: {
+      minVersion: pick("MIN_ANDROID_APP_VERSION", "min_android_app_version"),
+      storeUrl: pick("ANDROID_STORE_URL", "android_store_url"),
+    },
+  };
+}
+
+// Version endpoint — no auth required, used to verify deployment + force update policy
 app.get("/api/version", async (req, res) => {
   const dist = verifyDistBundle();
   let lastSync = null;
   try {
     lastSync = (await getConfig(db))?.lastSync || null;
   } catch { /* db may be down */ }
+  let appUpdate = {
+    force: true,
+    message: "Phiên bản ứng dụng đã cũ. Vui lòng cập nhật bản mới để tiếp tục.",
+    ios: { minVersion: "", storeUrl: "" },
+    android: { minVersion: "", storeUrl: "" },
+  };
+  try {
+    appUpdate = await getAppUpdatePolicy();
+  } catch { /* ignore */ }
   res.json({
     version: BUILD_VERSION,
     uptime: process.uptime(),
@@ -6058,6 +6098,7 @@ app.get("/api/version", async (req, res) => {
     telegramMenuButtons: true,
     telegramPerplexity: true,
     redis: getRedisStatus(),
+    appUpdate,
   });
 });
 
