@@ -9,6 +9,8 @@ const LEAD_CHANNELS = [
   { id: "lead_notifications", name: "Lead moi", sound: "default" },
 ];
 
+const BADGE_NOTIF_ID = 88001442;
+
 function getLeadChannelId(sound) {
   if (sound === "sale") return "lead_notifications_sale_v6";
   if (sound === "manager") return "lead_notifications_manager_v6";
@@ -59,12 +61,14 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
   if (!isNativeLocalNotificationSupported()) return;
   const permission = await getNativeLocalPermissionState();
   if (permission !== "granted") return;
+  const t = String(title || "").trim() || "LUX IQI CRM";
+  const b = String(body || "").trim() || "Bạn có lead mới";
   const { LocalNotifications } = await import("@capacitor/local-notifications");
   await LocalNotifications.schedule({
     notifications: [{
       id: Math.floor(Date.now() % 2147483647),
-      title: title || "LUX IQI CRM",
-      body: body || "Ban co lead moi",
+      title: t,
+      body: b,
       channelId: getLeadChannelId(sound),
       sound: "default",
       extra: { leadId },
@@ -73,38 +77,24 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
   });
 }
 
-/** Cập nhật số trên icon app (iOS LocalNotifications.badge + clear delivered khi = 0). */
+/**
+ * Cập nhật / xóa badge icon app.
+ * KHÔNG schedule local notification (title/body rỗng trước đây gây banner trống mỗi lần mở app).
+ * - count=0: hủy badge helper + xóa delivered → iOS về 0
+ * - count>0: chỉ clear helper cũ; số badge lấy từ silent push (syncNativeAppBadge)
+ */
 export async function setNativeAppIconBadge(count = 0) {
   if (!isNativeLocalNotificationSupported()) return { ok: false };
   try {
     const { LocalNotifications } = await import("@capacitor/local-notifications");
     const n = Math.max(0, Math.min(99, Number(count) || 0));
-    const badgeId = 88001442;
     try {
-      await LocalNotifications.cancel({ notifications: [{ id: badgeId }] });
+      await LocalNotifications.cancel({ notifications: [{ id: BADGE_NOTIF_ID }] });
     } catch { /* ignore */ }
     if (n <= 0) {
       try {
         await LocalNotifications.removeAllDeliveredNotifications();
       } catch { /* ignore */ }
-    }
-    // iOS: schedule ephemeral notif để gán badge, rồi huỷ khỏi notification center
-    await LocalNotifications.schedule({
-      notifications: [{
-        id: badgeId,
-        title: n > 0 ? "LUX IQI CRM" : " ",
-        body: n > 0 ? `Bạn có ${n} lead mới` : " ",
-        badge: n,
-        channelId: "lead_notifications",
-        extra: { silentBadge: true },
-        schedule: { at: new Date(Date.now() + 80) },
-      }],
-    });
-    if (n <= 0) {
-      setTimeout(() => {
-        LocalNotifications.cancel({ notifications: [{ id: badgeId }] }).catch(() => {});
-        LocalNotifications.removeAllDeliveredNotifications?.().catch(() => {});
-      }, 400);
     }
     return { ok: true, count: n };
   } catch (err) {

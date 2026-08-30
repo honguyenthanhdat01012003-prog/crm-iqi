@@ -1568,9 +1568,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         return key && !seenLeadKeys.has(key) && !current.some((x) => leadKey(x) === key);
       });
       if (!stillFresh.length) return current;
-      const next = [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
-      void setNativeAppIconBadge(next.length);
-      return next;
+      return [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
     });
   }, [nativeLocalSupported, nativePushSupported, playLeadSound, seenLeadKeys, user.role]);
 
@@ -1953,11 +1951,16 @@ function CRMApp({ user, updateUser, onLogout }) {
     void setNativeAppIconBadge(0);
   }, [notifications]);
 
-  // Badge icon = số thông báo lead chưa xem (trong app)
+  // Đồng bộ badge icon — không schedule local notif (tránh banner trống).
+  // count=0: chỉ clear local. count>0: silent push server cập nhật số trên icon.
   useEffect(() => {
+    if (!isNativePlatform()) return;
     const n = Array.isArray(notifications) ? notifications.length : 0;
-    void setNativeAppIconBadge(n);
-    if (n === 0) void syncNativeAppBadge(apiFetch, API, 0);
+    if (n <= 0) {
+      void setNativeAppIconBadge(0);
+      return;
+    }
+    void syncNativeAppBadge(apiFetch, API, n);
   }, [notifications]);
 
   const [dataLoadAttempted, setDataLoadAttempted] = useState(false);
