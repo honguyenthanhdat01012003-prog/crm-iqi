@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-08-29-force-app-update";
+const BUILD_VERSION = "2026-09-04-redis-opt-in";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8595,12 +8595,6 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
     if (scopeResponseCache.key === cacheKey && scopeResponseCache.data && now - scopeResponseCache.at < SCOPE_RESPONSE_CACHE_MS) {
       return res.json({ ...scopeResponseCache.data, cached: true, cacheLayer: "memory" });
     }
-    const redisKey = redisCacheKey("scope", cacheKey);
-    const fromRedis = await redisGetCached(redisKey, dataVersion);
-    if (fromRedis) {
-      scopeResponseCache = { at: now, key: cacheKey, data: fromRedis };
-      return res.json({ ...fromRedis, cached: true, redis: true, cacheLayer: "redis" });
-    }
     scopeInflightCount += 1;
     let scopeData;
     try {
@@ -8622,10 +8616,9 @@ app.get("/api/data/scope", requireAuth, async (req, res) => {
       noChange: false,
     };
     stripLeadsForClient(payload);
-    // Không cache bản truncated/huge — tránh giữ payload lớn trong RAM lâu
+    // RAM cache only — không nhét full lead list vào Redis (JSON lớn làm VPS lag)
     if (!tooLarge) {
       scopeResponseCache = { at: now, key: cacheKey, data: payload };
-      void redisSetCached(redisKey, payload, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
     }
     res.json(payload);
     const totalMs = Date.now() - t0;
