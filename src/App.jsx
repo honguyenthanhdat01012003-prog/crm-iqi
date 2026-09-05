@@ -271,6 +271,35 @@ function formatVNDCompact(n) {
   return num.toLocaleString("vi-VN") + " đ";
 }
 
+/** Facebook ad preview HTML is usually one <iframe width/height="..."> — keep native size. */
+function parseFbAdPreviewDims(html, isDesktop) {
+  const s = String(html || "");
+  const attrW = Number((s.match(/\bwidth\s*=\s*["']?(\d+)/i) || [])[1]) || 0;
+  const attrH = Number((s.match(/\bheight\s*=\s*["']?(\d+)/i) || [])[1]) || 0;
+  const styleW = Number((s.match(/width\s*:\s*(\d+)px/i) || [])[1]) || 0;
+  const styleH = Number((s.match(/height\s*:\s*(\d+)px/i) || [])[1]) || 0;
+  return {
+    w: attrW || styleW || (isDesktop ? 500 : 320),
+    h: attrH || styleH || (isDesktop ? 620 : 560),
+  };
+}
+
+function buildFbAdPreviewSrcDoc(html, w, h) {
+  let body = String(html || "");
+  if (/<iframe/i.test(body)) {
+    if (/\bwidth\s*=/i.test(body)) body = body.replace(/\bwidth\s*=\s*["']?\d+["']?/i, `width="${w}"`);
+    else body = body.replace(/<iframe/i, `<iframe width="${w}"`);
+    if (/\bheight\s*=/i.test(body)) body = body.replace(/\bheight\s*=\s*["']?\d+["']?/i, `height="${h}"`);
+    else body = body.replace(/<iframe/i, `<iframe height="${h}"`);
+  }
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=${w}, initial-scale=1"/>
+<style>
+  html, body { margin: 0; padding: 0; background: #fff; width: ${w}px; height: ${h}px; overflow: hidden; }
+  body > iframe { display: block; border: 0 !important; width: ${w}px !important; height: ${h}px !important; max-width: none !important; max-height: none !important; }
+</style></head><body>${body}</body></html>`;
+}
+
 function getLeadTemp(createdAt) {
   const d = parseLeadDate(createdAt);
   if (!d) return { label: "Lạnh", bg: "#f0f9ff", color: "#64748b", icon: "cold" };
@@ -12364,7 +12393,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           display: "flex", justifyContent: "center", alignItems: isMobile ? "flex-end" : "center", padding: isMobile ? 0 : 16,
         }}>
           <div onClick={e => e.stopPropagation()} style={{
-            background: "#fff", borderRadius: isMobile ? "14px 14px 0 0" : 14, width: "100%", maxWidth: isMobile ? "100%" : 560, maxHeight: isMobile ? "90vh" : "90vh",
+            background: "#fff", borderRadius: isMobile ? "14px 14px 0 0" : 14, width: "100%", maxWidth: isMobile ? "100%" : 720, maxHeight: isMobile ? "92vh" : "92vh",
             overflow: "auto", boxShadow: "0 16px 48px rgba(0,0,0,.28)",
             WebkitOverflowScrolling: "touch",
           }}>
@@ -12388,7 +12417,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               ) : adPreview?.adId ? (
                 <div>
                   <div style={{ marginBottom: 10, padding: "8px 10px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
-                    <div style={{ fontSize: isMobile ? 13 : 13, fontWeight: 700, color: "#166534", wordBreak: "break-word" }}>{adPreview.adName}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#166534", wordBreak: "break-word" }}>{adPreview.adName}</div>
                     <div style={{ fontSize: 10.5, color: "#6b7280", marginTop: 2, wordBreak: "break-all" }}>
                       Trạng thái: <span style={{ fontWeight: 700, color: adPreview.status === "ACTIVE" ? "#16a34a" : "#dc2626" }}>{String(adPreview.status || "").replace(/_/g, " ")}</span>
                       {" · "}ID: {adPreview.adId}
@@ -12402,73 +12431,59 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
                   {(adPreview.previews || [])
                     .filter((p) => {
                       if (!isMobile) return true;
-                      // Mobile: ưu tiên Mobile Feed; Desktop Feed chỉ hiện nếu không có bản mobile
                       const hasMobile = (adPreview.previews || []).some((x) => String(x.format || "").includes("MOBILE"));
                       if (hasMobile && String(p.format || "") === "DESKTOP_FEED_STANDARD") return false;
                       return true;
                     })
                     .map((p, pi) => {
-                      const isDesktop = String(p.format || "") === "DESKTOP_FEED_STANDARD";
-                      const scale = isMobile && isDesktop ? 0.58 : 1;
-                      const frameW = isMobile ? (isDesktop ? 540 : "100%") : "100%";
-                      const responsiveHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
-                        <style>
-                          html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; overflow-x: hidden !important; }
-                          * { box-sizing: border-box !important; max-width: 100% !important; }
-                          img, video, iframe, canvas { max-width: 100% !important; height: auto !important; }
-                          [style*="width"] { max-width: 100% !important; }
-                        </style></head><body>${p.html || ""}</body></html>`;
+                      const isDesktopFmt = String(p.format || "") === "DESKTOP_FEED_STANDARD";
+                      const { w: nativeW, h: nativeH } = parseFbAdPreviewDims(p.html, isDesktopFmt);
+                      const pad = isMobile ? 24 : 48;
+                      const availW = Math.max(260, (typeof window !== "undefined" ? Math.min(window.innerWidth, isMobile ? window.innerWidth : 720) : 720) - pad);
+                      // Fit-to-width only when wider than modal; never squash height via CSS
+                      const scale = Math.min(1, availW / nativeW);
+                      const srcDoc = buildFbAdPreviewSrcDoc(p.html, nativeW, nativeH);
                       return (
-                        <div key={pi} style={{ marginBottom: 12 }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", marginBottom: 4 }}>
-                            {isDesktop ? "Desktop Feed" : "Mobile Feed"}
+                        <div key={pi} style={{ marginBottom: 14 }}>
+                          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
+                            {isDesktopFmt ? "Desktop Feed" : "Mobile Feed"}
                           </div>
                           <div style={{
                             width: "100%",
-                            overflow: "hidden",
-                            borderRadius: 8,
+                            display: "flex",
+                            justifyContent: "center",
+                            overflow: "auto",
+                            borderRadius: 10,
                             border: "1px solid #e5e7eb",
-                            background: "#f8fafc",
-                            maxHeight: isMobile ? "52vh" : 640,
+                            background: "#eef2f7",
+                            maxHeight: isMobile ? "70vh" : 740,
+                            padding: isDesktopFmt ? 0 : 14,
+                            WebkitOverflowScrolling: "touch",
                           }}>
                             <div style={{
-                              width: "100%",
-                              transform: scale !== 1 ? `scale(${scale})` : undefined,
-                              transformOrigin: "top left",
-                              height: scale !== 1 ? undefined : undefined,
+                              width: Math.round(nativeW * scale),
+                              height: Math.round(nativeH * scale),
+                              flexShrink: 0,
+                              overflow: "hidden",
+                              borderRadius: isDesktopFmt ? 0 : 10,
+                              background: "#fff",
+                              boxShadow: isDesktopFmt ? "none" : "0 4px 18px rgba(15,23,42,.12)",
                             }}>
                               <iframe
                                 title={`ad-preview-${pi}`}
-                                srcDoc={responsiveHtml}
+                                srcDoc={srcDoc}
+                                width={nativeW}
+                                height={nativeH}
                                 style={{
-                                  width: frameW,
-                                  minHeight: isMobile ? (isDesktop ? 320 : 280) : (isDesktop ? 420 : 480),
+                                  width: nativeW,
+                                  height: nativeH,
                                   border: "none",
-                                  background: "#fff",
                                   display: "block",
+                                  transform: scale !== 1 ? `scale(${scale})` : undefined,
+                                  transformOrigin: "top left",
+                                  background: "#fff",
                                 }}
                                 sandbox="allow-scripts allow-same-origin allow-popups"
-                                scrolling="no"
-                                onLoad={(e) => {
-                                  try {
-                                    const iframe = e.target;
-                                    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-                                    if (!doc?.body) return;
-                                    const resize = () => {
-                                      const h = Math.max(doc.body.scrollHeight || 0, doc.documentElement?.scrollHeight || 0);
-                                      if (h > 80) {
-                                        iframe.style.height = `${h + 8}px`;
-                                        if (scale !== 1 && iframe.parentElement) {
-                                          iframe.parentElement.style.height = `${Math.ceil((h + 8) * scale)}px`;
-                                          iframe.parentElement.style.width = `${Math.ceil(100 / scale)}%`;
-                                        }
-                                      }
-                                    };
-                                    resize();
-                                    setTimeout(resize, 400);
-                                    setTimeout(resize, 1200);
-                                  } catch { /* ignore */ }
-                                }}
                               />
                             </div>
                           </div>
