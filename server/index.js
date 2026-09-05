@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-04-redis-opt-in";
+const BUILD_VERSION = "2026-09-05-past-sale-update";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4176,7 +4176,11 @@ async function getProjectTeamMembersByOrder(projectId) {
   return out;
 }
 
-/** Sale được cập nhật lead nếu: đang là sale phụ trách HOẶC là thành viên team primary/co-holder. */
+/** Sale được cập nhật lead nếu:
+ * - đang là sale phụ trách, hoặc
+ * - thành viên team primary/co-holder, hoặc
+ * - đã từng feedback thật trên lead này (sau khi xáo sang sale khác vẫn được cập nhật tiếp).
+ */
 async function saleCanUpdateLead(leadRow, displayName) {
   if (!leadRow) return { ok: false, status: 404, error: "Lead không tồn tại" };
   if (matchSaleName(leadRow.sale_name, displayName)) return { ok: true };
@@ -4204,6 +4208,38 @@ async function saleCanUpdateLead(leadRow, displayName) {
       if (u) return { ok: true };
     } catch (_) {}
   }
+
+  // Sale cũ đã feedback: vẫn được cập nhật sau khi lead xáo / chuyển sale khác
+  const dn = String(displayName || "").trim();
+  if (dn) {
+    try {
+      const priorSummary = await get(
+        db,
+        `SELECT 1 as ok FROM lead_sale_summary
+         WHERE lead_id = ?
+           AND LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+           AND LOWER(TRIM(COALESCE(sale_tab_status, ''))) NOT IN ('', 'new')
+         LIMIT 1`,
+        [leadRow.id, dn]
+      );
+      if (priorSummary) return { ok: true };
+    } catch (_) {}
+    try {
+      const priorHist = await get(
+        db,
+        `SELECT 1 as ok FROM lead_history
+         WHERE lead_id = ?
+           AND LOWER(TRIM(COALESCE(sale_name, ''))) = LOWER(TRIM(?))
+           AND action != 'Chia lead'
+           AND TRIM(COALESCE(status, '')) != ''
+           AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('new', 'chưa feedback', 'chua feedback')
+         LIMIT 1`,
+        [leadRow.id, dn]
+      );
+      if (priorHist) return { ok: true };
+    } catch (_) {}
+  }
+
   return {
     ok: false,
     status: 403,
