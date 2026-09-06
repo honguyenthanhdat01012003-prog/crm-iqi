@@ -5325,7 +5325,7 @@ function DashboardPage({ projects, apiFetch }) {
               />
             </section>
             <section className="crm-dash-kpi-group crm-dash-kpi-group--quality" style={{ "--dash-accent": "#0284c7" }}>
-              <h4 className="crm-dash-kpi-group__title"><Star size={16} /> Chất lượng Lead</h4>
+              <h4 className="crm-dash-kpi-group__title"><Star size={16} /> Chất lượng lead sau cuộc gọi đầu</h4>
               <QualityKpiBoard q={kpis.quality} total={kpis.marketing.totalLeads} />
             </section>
             <DashboardKpiGroup title="Kết quả Kinh doanh" icon={Trophy} accent="#059669">
