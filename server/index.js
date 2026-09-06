@@ -68,7 +68,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-07-backup-bloat-fix";
+const BUILD_VERSION = "2026-09-07-ack-fast-response";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4884,6 +4884,28 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
     leadsTotal,
     phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
   };
+}
+
+/**
+ * Patch lead siêu nhẹ cho ack/claim — không quét history/phone-reg.
+ * Client merge vào lead đang mở; tránh chờ finishLeadsPage khi DB đang bị thundering herd.
+ */
+async function buildFastLeadPatch(db, leadId, extra = {}) {
+  const row = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+  if (!row) return { id: leadId, ...extra };
+  return {
+    ...mapLeadFromRow(row, {}, {}, {}, [], [], {}, []),
+    ...extra,
+  };
+}
+
+/** Chạy sau khi đã res.json — không chặn nút xác nhận trên app. */
+function deferAfterResponse(label, fn) {
+  setImmediate(() => {
+    Promise.resolve()
+      .then(fn)
+      .catch((err) => console.warn(`[defer:${label}]`, err?.message || err));
+  });
 }
 
 /** Trả 1 lead đã map — dùng cho PUT/history để không load cả DB. */
@@ -14238,29 +14260,32 @@ async function claimLeadRace(db, leadId, user) {
       "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
       [leadId, user.displayName || "", "Race claim quản lý", nowVi, "", "Quản lý xác nhận nhận lead — còn 10 phút cập nhật trạng thái khách", nextSeq, "race-manager-claim"]
     );
-    await deleteTelegramMsgsForLeadSale(db, leadId, offeredName || user.displayName || "", projectId);
-    const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
-    await sendTelegramNewLeadNotification(db, {
-      leadId,
-      saleName: offeredName || user.displayName || "",
-      lead: refreshed,
-      extraLines: [
-        "✅ _Bạn đã nhận lead._",
-        "⏳ _Còn 10 phút để cập nhật trạng thái + ghi chú. Có feedback → giữ lead cho bạn (chia sale tay). Hết hạn → chuyển team._",
-      ],
-      deadlineMinutes: 10,
+    // Trả nhanh cho app — Telegram/push/emit chạy sau (tránh timeout Android)
+    const updatedLead = await buildFastLeadPatch(db, leadId);
+    deferAfterResponse("race-claim-manager", async () => {
+      await deleteTelegramMsgsForLeadSale(db, leadId, offeredName || user.displayName || "", projectId);
+      const refreshed = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+      await sendTelegramNewLeadNotification(db, {
+        leadId,
+        saleName: offeredName || user.displayName || "",
+        lead: refreshed,
+        extraLines: [
+          "✅ _Bạn đã nhận lead._",
+          "⏳ _Còn 10 phút để cập nhật trạng thái + ghi chú. Có feedback → giữ lead cho bạn (chia sale tay). Hết hạn → chuyển team._",
+        ],
+        deadlineMinutes: 10,
+      });
+      sendPushToDisplayName(offeredName || user.displayName || "", {
+        title: "Đã nhận lead — còn 10 phút feedback",
+        body: `${refreshed?.name || lead.name || "Khách"} — cập nhật trạng thái để giữ lead`,
+        tag: `race-mgr-feedback-${leadId}`,
+        sound: "manager",
+        data: { url: "/", type: "race_manager_feedback", leadId, projectId },
+        requireInteraction: true,
+      }).catch(() => {});
+      lastSyncHash = "";
+      emitDataChanged("race-claim-manager");
     });
-    sendPushToDisplayName(offeredName || user.displayName || "", {
-      title: "Đã nhận lead — còn 10 phút feedback",
-      body: `${refreshed?.name || lead.name || "Khách"} — cập nhật trạng thái để giữ lead`,
-      tag: `race-mgr-feedback-${leadId}`,
-      sound: "manager",
-      data: { url: "/", type: "race_manager_feedback", leadId, projectId },
-      requireInteraction: true,
-    }).catch(() => {});
-    lastSyncHash = "";
-    emitDataChanged("race-claim-manager");
-    const updatedLead = await buildUpdatedLeadPayload(db, leadId, user);
     return { ok: true, updatedLead, stage: LEAD_RACE_STAGES.managerFeedback };
   }
 
@@ -14315,19 +14340,20 @@ async function claimLeadRace(db, leadId, user) {
     } catch (holdErr) {
       console.warn(`[race] claim holder sync lead#${leadId}:`, holdErr.message);
     }
-    // Gỡ tin Telegram cũ (SĐT + nút) của cả team — tránh B/C còn nút nhận
-    await deleteTelegramMsgsForLeadSale(db, leadId, leaderOrFallback || user.displayName || "", projectId);
-    await notifyTeamMembersAfterRaceClaim(db, {
-      lead,
-      team: team || { id: offeredTeamId, name: teamLabel, leaderName: leaderOrFallback, members: [{ id: user.userId, displayName: user.displayName }] },
-      projectId,
-      claimedByName: user.displayName || "",
-      claimAt: claimNow,
+    const updatedLead = await buildFastLeadPatch(db, leadId);
+    deferAfterResponse("race-claim-team", async () => {
+      await deleteTelegramMsgsForLeadSale(db, leadId, leaderOrFallback || user.displayName || "", projectId);
+      await notifyTeamMembersAfterRaceClaim(db, {
+        lead,
+        team: team || { id: offeredTeamId, name: teamLabel, leaderName: leaderOrFallback, members: [{ id: user.userId, displayName: user.displayName }] },
+        projectId,
+        claimedByName: user.displayName || "",
+        claimAt: claimNow,
+      });
+      lastSyncHash = "";
+      emitDataChanged("race-claim-team");
     });
-    lastSyncHash = "";
-    emitDataChanged("race-claim-team");
-    const updatedLead = await buildUpdatedLeadPayload(db, leadId, user);
-    return { ok: true, updatedLead };
+    return { ok: true, updatedLead, stage: LEAD_RACE_STAGES.claimed };
   }
 
   return { status: 403, error: "Bạn không có quyền nhận lead ở trạng thái hiện tại" };
@@ -14416,7 +14442,7 @@ app.post("/api/leads/:id/race-claim", requireAuth, async (req, res) => {
     if (!leadId) return res.status(400).json({ error: "Lead không hợp lệ" });
     const result = await claimLeadRace(db, leadId, req.user);
     if (!result.ok) return res.status(result.status || 400).json({ error: result.error || "Không thể nhận lead" });
-    return res.json({ ok: true, updatedLead: result.updatedLead });
+    return res.json({ ok: true, updatedLead: result.updatedLead, stage: result.stage || "" });
   } catch (err) {
     return res.status(500).json({ error: err.message || "Race claim failed" });
   }
@@ -14436,13 +14462,13 @@ app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
       const result = await claimLeadRace(db, leadId, req.user);
       if (!result.ok) return res.status(result.status || 400).json({ error: result.error || "Không thể nhận lead" });
       console.log(`[ack-receive] lead#${leadId} routed to race-claim in ${Date.now() - t0}ms`);
-      return res.json({ ok: true, raceClaimed: true, acknowledgedAt: getAssignmentNowStr(), updatedLead: result.updatedLead });
+      return res.json({ ok: true, raceClaimed: true, acknowledgedAt: getAssignmentNowStr(), updatedLead: result.updatedLead, stage: result.stage || "" });
     }
     if (raceStage === LEAD_RACE_STAGES.managerFeedback) {
       return res.json({
         ok: true,
         acknowledgedAt: String(lead.instant_sla_accepted_at || "").trim() || getAssignmentNowStr(),
-        updatedLead: await buildUpdatedLeadPayload(db, leadId, req.user),
+        updatedLead: await buildFastLeadPatch(db, leadId),
         message: "Đã nhận lead — hãy cập nhật trạng thái trong 10 phút",
       });
     }
@@ -14462,16 +14488,22 @@ app.post("/api/leads/:id/ack-receive", requireAuth, async (req, res) => {
       const nextSeq = (maxSeq?.m ?? -1) + 1;
       await run(db, "INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
         [leadId, req.user.displayName || lead.sale_name || "", "Nhận lead", nowAck, "", "Xác nhận đã nhận lead", nextSeq, req.user.role === "sale" ? "sale-ack" : "manager-ack"]);
-      lastSyncHash = "";
-      emitDataChanged("lead-ack");
     }
 
-    const updatedLead = await buildUpdatedLeadPayload(db, leadId, req.user);
+    // Trả patch nhẹ TRƯỚC khi emit — trước đây emit → mọi client refresh → DB lock → buildUpdatedLeadPayload >20s → Android báo "Kết nối chậm"
+    const acknowledgedAt = already || nowAck;
+    const updatedLead = await buildFastLeadPatch(db, leadId, { instantSlaAcceptedAt: acknowledgedAt });
     console.log(`[ack-receive] lead#${leadId} ok in ${Date.now() - t0}ms`);
-    res.json({ ok: true, acknowledgedAt: already || nowAck, updatedLead });
+    res.json({ ok: true, acknowledgedAt, updatedLead });
+    if (!already) {
+      deferAfterResponse("lead-ack", () => {
+        lastSyncHash = "";
+        emitDataChanged("lead-ack");
+      });
+    }
   } catch (err) {
     console.error(`[ack-receive] failed in ${Date.now() - t0}ms:`, err.message);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 

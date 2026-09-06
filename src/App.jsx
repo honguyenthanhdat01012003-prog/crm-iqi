@@ -6144,13 +6144,23 @@ const LeadsPage = (props) => {
     if (!lead?.id || claimingRaceLeadIds.has(lead.id) || ackingLeadIds.has(lead.id)) return;
     setClaimingRaceLeadIds((prev) => new Set(prev).add(lead.id));
     setAckingLeadIds((prev) => new Set(prev).add(lead.id));
-    try {
+    const ackTimeoutMs = isNativePlatform() ? 45000 : 25000;
+    const isTimeoutErr = (e) => /abort|timeout|timed.?out|socket.?timeout|network request failed/i.test(String(e?.message || e || ""));
+    const postClaim = async (timeoutMs) => {
       const r = await apiFetch(`${API}/leads/${lead.id}/race-claim`, {
         method: "POST",
         body: "{}",
-        timeoutMs: 20000,
+        timeoutMs,
       });
       const d = await r.json().catch(() => ({}));
+      return { r, d };
+    };
+    try {
+      let { r, d } = await postClaim(ackTimeoutMs);
+      // Android đôi khi timeout dù server đã claim — retry 1 lần (idempotent)
+      if (!r.ok && !d.error) {
+        ({ r, d } = await postClaim(ackTimeoutMs));
+      }
       if (!r.ok) {
         showToast(d.error || "Nhận lead thất bại", "error");
         return;
@@ -6165,8 +6175,23 @@ const LeadsPage = (props) => {
         "success"
       );
     } catch (e) {
-      const msg = String(e?.message || e || "");
-      showToast(/abort|timeout|timed out/i.test(msg) ? "Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa" : ("Lỗi kết nối: " + msg), "error");
+      if (isTimeoutErr(e)) {
+        try {
+          const { r, d } = await postClaim(ackTimeoutMs);
+          if (r.ok) {
+            if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
+            if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
+            showToast(
+              Number(lead.teamId) || String(lead.raceStage) === "team_offer" ? getTeamSlaToastMessage() : "Đã nhận lead thành công",
+              "success"
+            );
+            return;
+          }
+        } catch (_) { /* fall through */ }
+        showToast("Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa", "error");
+      } else {
+        showToast("Lỗi kết nối: " + String(e?.message || e || ""), "error");
+      }
       if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
     } finally {
       setClaimingRaceLeadIds((prev) => {
@@ -6195,18 +6220,18 @@ const LeadsPage = (props) => {
       return;
     }
     setAckingLeadIds((prev) => new Set(prev).add(lead.id));
-    try {
+    const ackTimeoutMs = isNativePlatform() ? 45000 : 25000;
+    const isTimeoutErr = (e) => /abort|timeout|timed.?out|socket.?timeout|network request failed/i.test(String(e?.message || e || ""));
+    const postAck = async (timeoutMs) => {
       const r = await apiFetch(`${API}/leads/${lead.id}/ack-receive`, {
         method: "POST",
         body: "{}",
-        timeoutMs: 20000,
+        timeoutMs,
       });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        showToast(d.error || "Xác nhận nhận lead thất bại", "error");
-        if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
-        return;
-      }
+      return { r, d };
+    };
+    const applyAckSuccess = (d) => {
       if (d.updatedLead) applyApiData({ updatedLead: d.updatedLead }, { suppressNotifications: true });
       else if (d.acknowledgedAt) {
         applyApiData({
@@ -6219,9 +6244,29 @@ const LeadsPage = (props) => {
       } else {
         showToast(Number(lead.teamId) > 0 ? getTeamSlaToastMessage().replace("Team đã nhận lead — ", "Đã xác nhận — ") : "Đã xác nhận nhận lead — tạm dừng thu hồi 10 phút", "success");
       }
+    };
+    try {
+      const { r, d } = await postAck(ackTimeoutMs);
+      if (!r.ok) {
+        showToast(d.error || "Xác nhận nhận lead thất bại", "error");
+        if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
+        return;
+      }
+      applyAckSuccess(d);
     } catch (e) {
-      const msg = String(e?.message || e || "");
-      showToast(/abort|timeout|timed out/i.test(msg) ? "Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa" : ("Lỗi kết nối: " + msg), "error");
+      if (isTimeoutErr(e)) {
+        // Server có thể đã ghi ack nhưng CapacitorHttp abort — retry idempotent 1 lần
+        try {
+          const { r, d } = await postAck(ackTimeoutMs);
+          if (r.ok) {
+            applyAckSuccess(d);
+            return;
+          }
+        } catch (_) { /* fall through */ }
+        showToast("Kết nối chậm — mở lại lead để kiểm tra đã nhận chưa", "error");
+      } else {
+        showToast("Lỗi kết nối: " + String(e?.message || e || ""), "error");
+      }
       if (typeof onRefreshLeadScope === "function") void onRefreshLeadScope({ background: true, skipCacheRead: true });
     } finally {
       setAckingLeadIds((prev) => {
