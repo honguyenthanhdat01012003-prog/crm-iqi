@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-dash-lead-stats";
+const BUILD_VERSION = "2026-09-06-funnel-stats-data";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -7665,6 +7665,8 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
     const { projectId = "all", preset = "month", startDate, endDate } = req.query;
     const range = resolveDashboardDateRange(preset, startDate, endDate);
     const cacheKey = [
+      "lq1",
+      BUILD_VERSION,
       req.user.role,
       req.user.userId || req.user.displayName,
       projectId,

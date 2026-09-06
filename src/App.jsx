@@ -2443,7 +2443,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   useEffect(() => {
     if (!isAdmin || !initialDataLoaded) return;
     if (page !== "dashboard" || leadsFetching) return;
-    const key = "crm_dash_v1_month_all__";
+    const key = "crm_dash_v2_month_all__";
     try {
       const raw = sessionStorage.getItem(key);
       if (raw) {
@@ -4775,19 +4775,41 @@ function FunnelChart({ stages }) {
   );
 }
 
-/** Map nhóm Xuất thống kê → stages cho FunnelChart (cùng số liệu, UI phễu). */
+/** Map nhóm Xuất thống kê → stages FunnelChart (đúng thứ tự + label như copy thống kê). */
 function leadQualityReportToFunnelStages(report) {
   if (!report?.groups) return [];
   const g = report.groups;
+  const n = (x) => Number(x?.count) || 0;
   return [
-    { key: "total", label: "Tổng Lead", value: Number(report.total) || 0, kind: "core" },
-    { key: "interested", label: "Quan tâm (QT + QT hời hợt + Tư vấn + QT DA khác)", value: Number(g.interested?.count) || 0, kind: "core" },
-    { key: "appointment", label: "Hẹn gặp/Hẹn xem", value: Number(g.appointment?.count) || 0, kind: "core" },
-    { key: "noFeedback", label: "Chưa nhập feedback (Mới)", value: Number(g.noFeedback?.count) || 0, kind: "core" },
-    { key: "notInterested", label: "Không quan tâm (Nhầm/Rác/Sale/Gọi lại)", value: Number(g.notInterested?.count) || 0, kind: "negative" },
-    { key: "booked", label: "Booking/Cọc/Chốt", value: Number(g.booked?.count) || 0, kind: "core" },
-    { key: "other", label: "Trạng thái khác", value: Number(g.other?.count) || 0, kind: "negative" },
+    { key: "total", label: "Tổng số lead", value: Number(report.total) || 0, kind: "core" },
+    { key: "interested", label: g.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)", value: n(g.interested), kind: "core" },
+    { key: "appointment", label: g.appointment?.label || "Hẹn gặp/Hẹn xem", value: n(g.appointment), kind: "core" },
+    { key: "notInterested", label: g.notInterested?.label || "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)", value: n(g.notInterested), kind: "negative" },
+    { key: "noFeedback", label: g.noFeedback?.label || "Chưa nhập feedback (Mới)", value: n(g.noFeedback), kind: "core" },
+    { key: "booked", label: g.booked?.label || "Booking/Cọc/Chốt", value: n(g.booked), kind: "core" },
+    { key: "other", label: g.other?.label || "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)", value: n(g.other), kind: "negative" },
   ];
+}
+
+function FunnelStatsPanel({ report }) {
+  const stages = leadQualityReportToFunnelStages(report);
+  if (!stages.length) return <div className="crm-dash-empty">Không có dữ liệu thống kê</div>;
+  const fmtMoney = (n) => (n != null && n !== "" ? Number(n).toLocaleString("vi-VN") : "0");
+  return (
+    <div>
+      <FunnelChart stages={stages} />
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
+          <span style={{ color: "#64748b", fontWeight: 600 }}>Tổng ngân sách đã chi tiêu</span>
+          <strong style={{ color: "#dc2626" }}>{fmtMoney(report.totalSpent)}</strong>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12.5 }}>
+          <span style={{ color: "#64748b", fontWeight: 600 }}>Chi phí/lead</span>
+          <strong style={{ color: "#ea580c" }}>{fmtMoney(report.cpLead)}</strong>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function niceAxisMax(value) {
@@ -5067,13 +5089,15 @@ function DashboardPage({ projects, apiFetch }) {
   const [projectId, setProjectId] = useState("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const cacheKey = `crm_dash_v1_${preset}_${projectId}_${customFrom}_${customTo}`;
+  const cacheKey = `crm_dash_v2_${preset}_${projectId}_${customFrom}_${customTo}`;
   const readCache = useCallback(() => {
     try {
       const raw = sessionStorage.getItem(cacheKey);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed?.data || !parsed?.at) return null;
+      // Chỉ dùng cache có leadQualityReport (tránh hiện phễu cũ)
+      if (!parsed.data.leadQualityReport?.groups) return null;
       if (Date.now() - parsed.at > 10 * 60 * 1000) return null;
       return parsed.data;
     } catch {
@@ -5082,10 +5106,11 @@ function DashboardPage({ projects, apiFetch }) {
   }, [cacheKey]);
   const [data, setData] = useState(() => {
     try {
-      const raw = sessionStorage.getItem(`crm_dash_v1_month_all__`);
+      const raw = sessionStorage.getItem(`crm_dash_v2_month_all__`);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed?.data || Date.now() - parsed.at > 10 * 60 * 1000) return null;
+      if (!parsed.data.leadQualityReport?.groups) return null;
       return parsed.data;
     } catch {
       return null;
@@ -5212,7 +5237,7 @@ function DashboardPage({ projects, apiFetch }) {
   }, [apiFetch, projectId, loading, data]);
 
   const kpis = data?.kpis;
-  const funnel = data?.funnel || [];
+  const leadQualityReport = data?.leadQualityReport || null;
   const trend = data?.trend || [];
   const sources = data?.sources || [];
   const campaigns = data?.campaigns || [];
@@ -5315,7 +5340,7 @@ function DashboardPage({ projects, apiFetch }) {
             </div>
             <div className="crm-dash-panel">
               <h4 className="crm-dash-panel__title"><Filter size={18} /> Phễu chuyển đổi</h4>
-              <FunnelChart stages={funnel} compact={isMobile} />
+              <FunnelStatsPanel report={leadQualityReport} />
             </div>
           </div>
 
