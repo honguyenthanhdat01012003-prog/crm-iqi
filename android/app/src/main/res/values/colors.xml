@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="iqi_orange">#F5A623</color>
+    <color name="iqi_orange_light">#F5C842</color>
+    <color name="iqi_orange_deep">#E8541E</color>
+    <!-- Màu tô icon nhỏ trên thanh trạng thái + viền thông báo -->
+    <color name="notification_brand">#F5A623</color>
+</resources>

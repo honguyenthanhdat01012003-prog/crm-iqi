@@ -366,7 +366,7 @@ async function sendNativePushToUser(userId, payload) {
   const data = stringifyFcmData({
     ...(payload.data || {}),
     title: payload.title || "LUX IQI CRM",
-    body: payload.body || "Ban co thong bao moi",
+    body: payload.body || "Bạn có thông báo mới",
     sound: payload.sound || "manager",
     channelId: notificationSound.channelId,
     badge: String(badgeCount),
@@ -374,7 +374,7 @@ async function sendNativePushToUser(userId, payload) {
   for (const row of tokens) {
     const isAndroid = String(row.platform || "").toLowerCase() === "android";
     const title = payload.title || "LUX IQI CRM";
-    const body = payload.body || "Ban co thong bao moi";
+    const body = payload.body || "Bạn có thông báo mới";
     const message = {
       token: row.token,
       data,
@@ -8952,7 +8952,7 @@ function emitLeadNotification(userId, payload = {}) {
   if (!io || !userId) return;
   io.to(`user-${userId}`).emit("lead-notification", {
     title: payload.title || "LUX IQI CRM",
-    body: payload.body || "Ban co thong bao moi",
+    body: payload.body || "Bạn có thông báo mới",
     sound: payload.sound || "manager",
     leadId: payload.data?.leadId || payload.leadId || null,
     phone: payload.data?.phone || payload.phone || null,

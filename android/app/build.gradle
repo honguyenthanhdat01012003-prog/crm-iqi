@@ -7,14 +7,19 @@ android {
         applicationId "vn.id.crmiqi.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 6
-        versionName "1.0.5-fcm-priority-fix"
+        versionCode 7
+        versionName "1.0.6-iqi-branding"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+    }
+    // Tên kênh thông báo có dấu tiếng Việt — thiếu dòng này javac đọc theo mã trang
+    // của Windows và chữ bị vỡ trong Cài đặt thông báo.
+    compileOptions {
+        encoding = "UTF-8"
     }
     buildTypes {
         release {

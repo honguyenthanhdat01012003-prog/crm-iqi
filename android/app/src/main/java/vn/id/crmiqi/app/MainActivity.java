@@ -35,11 +35,11 @@ public class MainActivity extends BridgeActivity {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build();
 
-        createLeadChannel(manager, attrs, "lead_notifications_manager_v6", "Lead moi quan ly", rawSound(R.raw.lead_manager));
-        createLeadChannel(manager, attrs, "lead_notifications_sale_v6", "Lead moi sale", rawSound(R.raw.lead_sale));
-        createLeadChannel(manager, attrs, "lead_notifications_update_v3", "Nhac cap nhat lead", rawSound(R.raw.lead_update));
-        createLeadChannel(manager, attrs, "lead_notifications_recall_v2", "Thu hoi lead", rawSound(R.raw.lead_recall));
-        createLeadChannel(manager, attrs, "lead_notifications", "Lead moi",
+        createLeadChannel(manager, attrs, "lead_notifications_manager_v6", "Lead mới quản lý", rawSound(R.raw.lead_manager));
+        createLeadChannel(manager, attrs, "lead_notifications_sale_v6", "Lead mới sale", rawSound(R.raw.lead_sale));
+        createLeadChannel(manager, attrs, "lead_notifications_update_v3", "Nhắc cập nhật lead", rawSound(R.raw.lead_update));
+        createLeadChannel(manager, attrs, "lead_notifications_recall_v2", "Thu hồi lead", rawSound(R.raw.lead_recall));
+        createLeadChannel(manager, attrs, "lead_notifications", "Lead mới",
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
 
         // Dọn channel đời cũ để user không thấy mục trùng trong Cài đặt thông báo
@@ -54,9 +54,10 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void createLeadChannel(NotificationManager manager, AudioAttributes attrs, String id, String name, Uri soundUri) {
-        if (manager.getNotificationChannel(id) != null) return;
+        // Gọi lại cả khi channel đã có: Android chỉ cập nhật tên/mô tả,
+        // giữ nguyên âm thanh và mức độ ưu tiên người dùng đã chỉnh.
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
-        channel.setDescription("Thong bao khi co lead moi trong CRM");
+        channel.setDescription("Thông báo khi có lead mới trong CRM");
         channel.enableVibration(true);
         channel.enableLights(true);
         channel.setShowBadge(true);

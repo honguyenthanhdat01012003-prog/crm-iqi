@@ -40,6 +40,18 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
+        <!-- App tắt hẳn thì hệ thống tự dựng thông báo, không qua code của mình.
+             Thiếu 3 meta-data này thì Android lấy icon mặc định và mất màu thương hiệu. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notification" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_brand" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="lead_notifications" />
+
         <service
             android:name=".LeadFirebaseMessagingService"
             android:exported="false">

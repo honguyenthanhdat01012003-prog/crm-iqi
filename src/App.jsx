@@ -1467,7 +1467,6 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushBusy, setPushBusy] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [nativePushServerStatus, setNativePushServerStatus] = useState(null);
-  const [pushTestResults, setPushTestResults] = useState(null);
   const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
@@ -1735,27 +1734,6 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushBusy(false);
     }
   }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId, refreshNativePushServerStatus]);
-
-  const handleTestNativePush = useCallback(async () => {
-    if (!nativePushSupported || pushBusy) return;
-    setPushBusy(true);
-    try {
-      const res = await apiFetch(`${API}/native-push/test`, { method: "POST", body: "{}" });
-      const data = await res.json().catch(() => ({}));
-      const status = await refreshNativePushServerStatus();
-      setPushTestResults(Array.isArray(data.results) ? data.results : null);
-      const err = data.results?.find((r) => !r.ok)?.error || status?.tokens?.[0]?.last_error || data.error || "";
-      if (res.ok && (data.sent > 0 || data.nativeSent > 0)) {
-        showToast("Đã gửi push test. Vuốt tắt app rồi thử lại — phải thấy banner.", "success");
-      } else {
-        showToast("Push test thất bại: " + (err || data.error || `sent=${data.sent ?? 0}`), "warning");
-      }
-    } catch (err) {
-      showToast("Push test lỗi: " + (err.message || err), "warning");
-    } finally {
-      setPushBusy(false);
-    }
-  }, [nativePushSupported, pushBusy, refreshNativePushServerStatus]);
 
   useEffect(() => {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;
@@ -3365,57 +3343,30 @@ function CRMApp({ user, updateUser, onLogout }) {
         </div>
       )}
 
-      {/* Chẩn đoán push trên app native — luôn hiện để biết máy đã có token FCM chưa */}
-      {nativePushSupported && (
-        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#fff" }}>
+      {/* Push hỏng thì mới hiện lối đăng ký lại — chạy bình thường thì panel chỉ có thông báo */}
+      {nativePushSupported && (pushPermission === "denied" || nativePushServerStatus?.tokenCount === 0) && (
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#fffbeb" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
-              <div style={{ fontSize: 11, fontWeight: 800, color: "#1a3c20" }}>Thông báo khi tắt app</div>
-              <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>
-                Quyền: <b>{pushPermission || "?"}</b>
-                {" · "}Token: <b>{nativePushServerStatus?.tokenCount ?? "?"}</b>
-                {" · "}Firebase: <b>{nativePushServerStatus?.fcmConfigured === false ? "chưa cấu hình" : nativePushServerStatus?.fcmConfigured ? "OK" : "?"}</b>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#92400e" }}>Chưa nhận được thông báo khi tắt app</div>
+              <div style={{ fontSize: 10, color: "#92400e", marginTop: 2, lineHeight: 1.45 }}>
+                {pushPermission === "denied"
+                  ? "Quyền thông báo đang tắt — bấm Mở cài đặt để bật lại."
+                  : "Thiết bị chưa đăng ký — bấm Đăng ký lại."}
               </div>
-              {!!nativePushServerStatus?.tokens?.[0]?.last_error && !pushTestResults && (
-                <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3, wordBreak: "break-word" }}>
-                  Lỗi: {String(nativePushServerStatus.tokens[0].last_error).slice(0, 160)}
-                </div>
-              )}
-              {pushTestResults?.map((r) => (
-                <div
-                  key={r.tokenId}
-                  style={{ fontSize: 10, color: r.ok ? "#15803d" : "#dc2626", marginTop: 3, wordBreak: "break-word" }}
-                >
-                  {r.platform} #{r.tokenId}: {r.ok ? "gửi OK" : String(r.error || "lỗi").slice(0, 200)}
-                </div>
-              ))}
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={handleTestNativePush}
-                disabled={pushBusy}
-                style={{
-                  border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8",
-                  borderRadius: 8, padding: "6px 10px", fontSize: 10, fontWeight: 800,
-                  cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-                }}
-              >
-                {pushBusy ? "Đang gửi..." : "Gửi thử"}
-              </button>
-              <button
-                type="button"
-                onClick={handleEnablePush}
-                disabled={pushBusy}
-                style={{
-                  border: "1px solid #d1d5db", background: "#fff", color: "#1f2937",
-                  borderRadius: 8, padding: "6px 10px", fontSize: 10, fontWeight: 700,
-                  cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-                }}
-              >
-                Đăng ký lại
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={pushPermission === "denied" ? () => openAppNotificationSettings() : handleEnablePush}
+              disabled={pushBusy}
+              style={{
+                border: "1px solid #fcd34d", background: "#fff", color: "#92400e",
+                borderRadius: 8, padding: "6px 10px", fontSize: 10, fontWeight: 800,
+                cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              }}
+            >
+              {pushPermission === "denied" ? "Mở cài đặt" : "Đăng ký lại"}
+            </button>
           </div>
         </div>
       )}

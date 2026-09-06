@@ -5,7 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
-import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Path;
+import android.graphics.drawable.Drawable;
 import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -13,6 +16,7 @@ import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import androidx.core.content.ContextCompat;
 
 import com.capacitorjs.plugins.pushnotifications.PushNotificationsPlugin;
 import com.google.firebase.messaging.FirebaseMessagingService;
@@ -51,7 +55,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
 
         String sound = valueOrDefault(data.get("sound"), "manager");
         String title = valueOrDefault(data.get("title"), "LUX IQI CRM");
-        String body = valueOrDefault(data.get("body"), "Ban co lead moi");
+        String body = valueOrDefault(data.get("body"), "Bạn có lead mới");
         String channelId = valueOrDefault(data.get("channelId"), getChannelId(sound));
 
         createLeadChannel(channelId, getChannelName(sound), sound);
@@ -72,7 +76,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
 
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.drawable.ic_stat_notification)
-            .setColor(Color.parseColor("#0f4d2a"))
+            .setColor(ContextCompat.getColor(this, R.color.notification_brand))
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
@@ -81,6 +85,10 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
             .setContentIntent(pendingIntent);
+
+        // Logo app bên phải thông báo — giống cách iOS hiện icon ứng dụng
+        Bitmap largeIcon = buildAppLargeIcon();
+        if (largeIcon != null) builder.setLargeIcon(largeIcon);
 
         Uri soundUri = getSoundUri(sound);
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O && soundUri != null) {
@@ -118,7 +126,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .build();
 
         NotificationChannel channel = new NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH);
-        channel.setDescription("Thong bao khi co lead moi trong CRM");
+        channel.setDescription("Thông báo khi có lead mới trong CRM");
         channel.enableVibration(true);
         if (soundUri != null) {
             channel.setSound(soundUri, attrs);
@@ -136,11 +144,11 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     }
 
     private String getChannelName(String sound) {
-        if ("sla_recall".equals(sound)) return "Thu hoi lead";
-        if ("sale".equals(sound)) return "Lead moi sale";
-        if ("update".equals(sound)) return "Nhac cap nhat lead";
-        if ("manager".equals(sound)) return "Lead moi quan ly";
-        return "Lead moi";
+        if ("sla_recall".equals(sound)) return "Thu hồi lead";
+        if ("sale".equals(sound)) return "Lead mới sale";
+        if ("update".equals(sound)) return "Nhắc cập nhật lead";
+        if ("manager".equals(sound)) return "Lead mới quản lý";
+        return "Lead mới";
     }
 
     private Uri getSoundUri(String sound) {
@@ -158,6 +166,27 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             return Uri.parse("android.resource://" + getPackageName() + "/" + resId);
         }
         return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+    }
+
+    /** Icon app là adaptive icon (XML) nên decodeResource trả null — phải tự vẽ ra bitmap. */
+    private Bitmap buildAppLargeIcon() {
+        try {
+            Drawable drawable = ContextCompat.getDrawable(this, R.mipmap.ic_launcher);
+            if (drawable == null) return null;
+            int size = Math.max(64, (int) (getResources().getDisplayMetrics().density * 56));
+            Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            // Bo góc kiểu squircle cho giống icon iOS
+            float radius = size * 0.22f;
+            Path clip = new Path();
+            clip.addRoundRect(0f, 0f, size, size, radius, radius, Path.Direction.CW);
+            canvas.clipPath(clip);
+            drawable.setBounds(0, 0, size, size);
+            drawable.draw(canvas);
+            return bitmap;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String valueOrDefault(String value, String fallback) {
