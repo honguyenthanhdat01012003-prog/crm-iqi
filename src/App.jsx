@@ -4774,23 +4774,6 @@ function FunnelChart({ stages }) {
   );
 }
 
-/** Copy text giống modal Xuất thống kê (lead-report). */
-function buildLeadQualityCopyText(report) {
-  if (!report?.groups) return "";
-  const grps = report.groups;
-  const fmtMoney = (n) => (n ? Number(n).toLocaleString("vi-VN") : "0");
-  const fmtDate = (s) => (s ? new Date(s).toLocaleDateString("vi-VN") : "—");
-  const interestedReportLabel = grps.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
-  const appointmentLine = grps.appointment
-    ? `\n+ ${grps.appointment.label}: ${grps.appointment.count} (~${grps.appointment.pct}%)`
-    : "";
-  const dateLine = report.rangeLabel
-    || (report.startDate || report.endDate
-      ? `từ ${fmtDate(report.startDate)} đến ${fmtDate(report.endDate)}`
-      : "");
-  return `Thống kê ${report.projectName || ""} ${dateLine}:\n- Tổng số lead: ${report.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(report.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(report.cpLead)}`;
-}
-
 function niceAxisMax(value) {
   if (value <= 0) return 5;
   if (value <= 5) return 5;
@@ -5316,8 +5299,8 @@ function DashboardPage({ projects, apiFetch }) {
               <TrendChart data={trend} compact={isMobile} preset={preset} />
             </div>
             <div className="crm-dash-panel">
-              <h4 className="crm-dash-panel__title"><BarChart3 size={18} /> Thống kê chất lượng Lead</h4>
-              <LeadQualityReportPanel report={leadQualityReport} compact={isMobile} />
+              <h4 className="crm-dash-panel__title"><Filter size={18} /> Phễu chuyển đổi</h4>
+              <FunnelChart stages={funnel} compact={isMobile} />
             </div>
           </div>
 
