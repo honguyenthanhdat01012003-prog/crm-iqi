@@ -1959,7 +1959,13 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeads(data.leads);
     }
     if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
-    if (Array.isArray(data.projects)) setProjects(data.projects);
+    // Không ghi đè danh sách dự án bằng mảng rỗng (lite/lỗi) — tránh mất ô chọn dự án
+    if (Array.isArray(data.projects)) {
+      setProjects((prev) => {
+        if (data.projects.length === 0 && Array.isArray(prev) && prev.length > 0) return prev;
+        return data.projects;
+      });
+    }
     if (Array.isArray(data.schedules)) setSchedules(data.schedules);
     if (data.autoRotateProjects !== undefined) setAutoRotateProjects(data.autoRotateProjects);
     if (data.sprintRotateProjects !== undefined) setSprintRotateProjects(data.sprintRotateProjects);
@@ -2414,15 +2420,12 @@ function CRMApp({ user, updateUser, onLogout }) {
 
     const bootP = fetchCrmData({ isBoot: true, timeoutMs: 20000 });
 
-    // Ưu tiên chờ lite nếu chưa có cache — UI hiện khách sớm nhất có thể
+    // Lite song song với bootstrap — NHƯNG luôn await boot (projects/campaigns).
+    // Trước đây void bootP sau khi lite xong → mất ô chọn dự án khi boot chậm/lỗi.
     if (!hadCache && canUseProjectCache) {
-      const liteData = await liteP;
-      if (liteData && !bootDoneRef.current) {
-        // fetchCrmData(applyResult) đã markInitialDataLoaded
-      }
-      void bootP;
+      await Promise.all([liteP.catch(() => null), bootP.catch(() => null)]);
     } else {
-      await bootP;
+      await bootP.catch(() => null);
     }
 
     if (canScope) {
@@ -2433,14 +2436,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
 
     if (!bootDoneRef.current) {
-      // Fallback: chờ boot nếu lite fail
-      const bootData = await bootP.catch(() => null);
-      const liteData = await liteP.catch(() => null);
-      if (!bootData && !liteData && !bootDoneRef.current) {
-        if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
-        bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 2500);
-        return;
-      }
+      if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
+      bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 2500);
+      return;
     }
     // Phase 3: schedules, ranking — không chặn UI
     fetchDataExtras();
@@ -3004,6 +3002,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       fbCode: p.fbCode || "",
       fbPerson: p.fbPerson || "",
       dailyReportEnabled: !!p.dailyReportEnabled,
+      telegramLeadNotify: !!p.telegramLeadNotify,
       distributionMode: p.distributionMode || "log",
       teamIdsOrdered: Array.isArray(p.teamIdsOrdered) ? p.teamIdsOrdered : [],
     });
@@ -4075,6 +4074,18 @@ function CRMApp({ user, updateUser, onLogout }) {
               type="checkbox"
               checked={!!draftProject.dailyReportEnabled}
               onChange={(e) => setDraftProject({ ...draftProject, dailyReportEnabled: e.target.checked })}
+              style={{ width: 18, height: 18, flexShrink: 0 }}
+            />
+          </label>
+          <label style={{ ...labelStyle, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginTop: 10 }}>
+            <span>
+              Báo Telegram khi có lead mới / xáo
+              <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginTop: 2 }}>Bật thì bot gửi lead cho sale trên Telegram. Tắt thì chỉ còn báo trên app/web.</div>
+            </span>
+            <input
+              type="checkbox"
+              checked={!!draftProject.telegramLeadNotify}
+              onChange={(e) => setDraftProject({ ...draftProject, telegramLeadNotify: e.target.checked })}
               style={{ width: 18, height: 18, flexShrink: 0 }}
             />
           </label>

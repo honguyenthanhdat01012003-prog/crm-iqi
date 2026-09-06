@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-tele-lead-toggle";
+const BUILD_VERSION = "2026-09-06-fix-project-picker";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8618,6 +8618,13 @@ app.get("/api/data", requireAuth, async (req, res) => {
         return { all: pageData.leadsTotal || 0 };
       });
     }
+    // Gắn projects/campaigns từ bootstrap cache — picker không phụ thuộc riêng bootstrapOnly
+    let bootstrapMeta = null;
+    try {
+      bootstrapMeta = await getBootstrapPayload(db, req.user);
+    } catch (e) {
+      console.warn("[GET /api/data] bootstrap meta skipped:", e.message);
+    }
     const data = {
       leads: pageData.leads,
       leadsTotal: pageData.leadsTotal,
@@ -8629,6 +8636,9 @@ app.get("/api/data", requireAuth, async (req, res) => {
       version: dataVersion,
       noChange: false,
     };
+    if (bootstrapMeta?.projects) data.projects = bootstrapMeta.projects;
+    if (bootstrapMeta?.campaigns) data.campaigns = bootstrapMeta.campaigns;
+    if (bootstrapMeta?.lastSync) data.lastSync = bootstrapMeta.lastSync;
     if (tabCounts) data.tabCounts = tabCounts;
     stripLeadsForClient(data);
     res.json(data);
