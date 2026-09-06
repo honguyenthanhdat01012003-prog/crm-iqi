@@ -86,7 +86,13 @@ export function LeadDataGrid({
                   <td className="crm-data-grid-name">
                     <div className="crm-data-grid-name-inner">
                       {isRecentLead(lead) && <NewLeadBadge />}
-                      {isSale && isShuffleLead?.(lead) && <ShuffleLeadBadge />}
+                      {isSale && isShuffleLead?.(lead) && (
+                        <ShuffleLeadBadge passCount={lead.shufflePassCount ?? (Array.isArray(lead.pastSaleNames) ? lead.pastSaleNames.filter((n) => {
+                          const s = String(n || "").trim().toLowerCase();
+                          const cur = String(lead.saleName || "").trim().toLowerCase();
+                          return s && s !== "chưa chia" && s !== cur;
+                        }).length : 0)} />
+                      )}
                       {isAdmin && lead.regCount > 1 && (
                         <span className="crm-status-badge crm-status-badge--reg">ĐK {lead.regIndex}</span>
                       )}

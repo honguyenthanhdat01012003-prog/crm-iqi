@@ -36,10 +36,12 @@ export function NewLeadBadge() {
 }
 
 /** Lead xáo / nước rút được chia trong ngày — sale nhận biết dễ như tag NEW */
-export function ShuffleLeadBadge() {
+export function ShuffleLeadBadge({ passCount = 0 }) {
+  const n = Math.max(0, Number(passCount) || 0);
+  const title = n > 0 ? `Đã xáo qua ${n} sale` : DISTRIBUTION_KIND_LABELS.shuffle;
   return (
-    <span className="crm-status-badge crm-status-badge--shuffle" title={DISTRIBUTION_KIND_LABELS.shuffle}>
-      XÁO
+    <span className="crm-status-badge crm-status-badge--shuffle" title={title}>
+      {n > 0 ? `XÁO · ${n}` : "XÁO"}
     </span>
   );
 }

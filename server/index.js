@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-fast-boot-cache";
+const BUILD_VERSION = "2026-09-06-shuffle-pass-count";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4014,20 +4014,42 @@ function invalidateLeadTabIndexCache() {
 
 async function loadPastSaleNamesForLeads(db, leadIds) {
   if (!leadIds.length) return {};
-  const ph = leadIds.map(() => "?").join(",");
-  const rows = await all(
-    db,
-    `SELECT DISTINCT lead_id, sale_name FROM lead_history
-     WHERE lead_id IN (${ph}) AND sale_name IS NOT NULL AND TRIM(sale_name) != ''
-     AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', '')`,
-    leadIds
-  );
   const map = {};
-  for (const r of rows) {
-    if (!map[r.lead_id]) map[r.lead_id] = [];
-    if (!map[r.lead_id].includes(r.sale_name)) map[r.lead_id].push(r.sale_name);
+  const BATCH = 400;
+  for (let i = 0; i < leadIds.length; i += BATCH) {
+    const batch = leadIds.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    const rows = await all(
+      db,
+      `SELECT DISTINCT lead_id, sale_name FROM lead_history
+       WHERE lead_id IN (${ph}) AND sale_name IS NOT NULL AND TRIM(sale_name) != ''
+       AND LOWER(TRIM(sale_name)) NOT IN ('chưa chia', '')`,
+      batch
+    );
+    for (const r of rows) {
+      if (!map[r.lead_id]) map[r.lead_id] = [];
+      if (!map[r.lead_id].includes(r.sale_name)) map[r.lead_id].push(r.sale_name);
+    }
   }
   return map;
+}
+
+/** Số sale đã từng nhận lead trước người hiện tại (A→B = 1, B→C = 2). */
+function computeShufflePassCount(pastSaleNames = [], currentSaleName = "") {
+  const cur = String(currentSaleName || "").trim().toLowerCase();
+  const seen = new Set();
+  for (const name of pastSaleNames || []) {
+    const k = String(name || "").trim().toLowerCase();
+    if (!k || k === "chưa chia") continue;
+    if (cur && k === cur) continue;
+    seen.add(k);
+  }
+  return seen.size;
+}
+
+async function countPriorSalesForLead(db, leadId, currentSaleName = "") {
+  const map = await loadPastSaleNamesForLeads(db, [leadId]);
+  return computeShufflePassCount(map[leadId] || [], currentSaleName);
 }
 
 /** Team đang giữ lead (co-holder còn hiệu lực) — dùng badge filter / pastTeamIds. */
@@ -4122,6 +4144,7 @@ function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastS
     regIndex: regIndex >= 0 ? regIndex + 1 : 1,
     historyCount: historyCountMap[l.id] || feedbackHistorySummary.length || 0,
     pastSaleNames,
+    shufflePassCount: computeShufflePassCount(pastSaleNames, l.sale_name || ""),
     pastTeamIds: Array.isArray(pastTeamIds) ? pastTeamIds.filter((n) => Number(n) > 0).map(Number) : [],
     feedbackHistorySummary,
     saleFeedbackStatus,
@@ -4709,11 +4732,15 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
 
   if (skipHistory) {
     // Chỉ đếm history theo lead trong page/scope — không full-scan lead_history (rất chậm khi mở dự án)
-    const historyCountMap = await getHistoryCountsForLeadIds(db, leadIds);
+    // Vẫn load pastSaleNames (nhẹ, DISTINCT) để hiện "đã xáo qua N sale" trên list/app
+    const [historyCountMap, pastSaleMap] = await Promise.all([
+      getHistoryCountsForLeadIds(db, leadIds),
+      loadPastSaleNamesForLeads(db, leadIds),
+    ]);
     for (const id of leadIds) {
       feedbackMap[id] = {
         historyCount: historyCountMap[id] || 0,
-        pastSaleNames: [],
+        pastSaleNames: pastSaleMap[id] || [],
         feedbackHistorySummary: [],
         saleFeedbackStatus: {},
       };
@@ -10138,7 +10165,15 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
         try {
           for (let i = 0; i < leads.length; i++) {
             const assignedSale = saleNames[i % saleNames.length];
-            await sendTelegramNewLeadNotification(db, { leadId: leads[i].id, saleName: assignedSale });
+            const passCount = await countPriorSalesForLead(db, leads[i].id, assignedSale);
+            const extraLines = passCount > 0
+              ? [`🔀 Đã xáo qua *${passCount}* sale trước đó`]
+              : [`🔀 Lead xáo — vui lòng cập nhật feedback`];
+            await sendTelegramNewLeadNotification(db, {
+              leadId: leads[i].id,
+              saleName: assignedSale,
+              extraLines,
+            });
           }
         } catch (teleErr) {
           console.error("[Telegram shuffle] Send failed:", teleErr.message);
@@ -10147,13 +10182,17 @@ app.post("/api/leads/shuffle", requireAuth, requireAdmin, async (req, res) => {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [pid]);
           for (const [saleName, saleLeadIds] of assignedBySale.entries()) {
             const firstLead = await get(db, "SELECT * FROM leads WHERE id = ?", [saleLeadIds[0]]);
+            const passCount = await countPriorSalesForLead(db, saleLeadIds[0], saleName);
             const extra = saleLeadIds.length > 1 ? ` và ${saleLeadIds.length - 1} lead khác` : "";
+            const passLabel = passCount > 0 ? ` · đã xáo qua ${passCount} sale` : " · lead xáo";
             sendPushToDisplayName(saleName, {
-              title: `Bạn có ${saleLeadIds.length} lead mới`,
-              body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}`,
+              title: passCount > 0
+                ? `Lead xáo — đã qua ${passCount} sale`
+                : `Bạn có ${saleLeadIds.length} lead xáo`,
+              body: `${projectRow ? projectRow.name : "-"}: ${firstLead ? firstLead.name || "N/A" : "N/A"}${extra}${passLabel}`,
               tag: `sale-shuffle-${pid}-${saleName}-${Date.now()}`,
               sound: "sale",
-              data: { url: "/", type: "sale_shuffle_leads", projectId: pid, leadIds: saleLeadIds },
+              data: { url: "/", type: "sale_shuffle_leads", projectId: pid, leadIds: saleLeadIds, shufflePassCount: passCount },
               requireInteraction: true,
             }).catch(err => console.error(`[Push] Shuffle notify failed for ${saleName}:`, err.message));
           }
@@ -10905,11 +10944,15 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
 
     const updated = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
     const members = teamMemberDisplayNames(nextTeam);
+    const passCount = await countPriorSalesForLead(db, lead.id, assigned?.leaderName || "");
+    const passLine = passCount > 0 ? `🔀 Đã xáo qua *${passCount}* sale/team trước đó` : null;
     const teleExtra = [
       ...telegramExtraLines,
       `👥 Team: *${escMd(nextTeam.name || "")}*`,
       "⏳ _Cả team cùng nhận — cập nhật trạng thái trên app._",
+      ...(passLine ? [passLine] : []),
     ];
+    const pushPass = passCount > 0 ? ` · đã xáo qua ${passCount} sale` : "";
     for (const dn of members) {
       const member = (nextTeam.members || []).find((m) => String(m.displayName || "").trim() === dn);
       await sendTelegramNewLeadNotification(db, {
@@ -10920,11 +10963,11 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
         extraLines: teleExtra,
       }).catch((err) => console.error(`[Telegram] SLA team assign failed for ${dn}:`, err.message));
       sendPushToDisplayName(dn, {
-        title: pushTitle,
-        body: `Team ${nextTeam.name}: ${updated?.name || "Khách"}${pushBodySuffix}`,
+        title: passCount > 0 ? `Lead xáo — đã qua ${passCount} sale` : pushTitle,
+        body: `Team ${nextTeam.name}: ${updated?.name || "Khách"}${pushBodySuffix}${pushPass}`,
         tag: `sla-shuffle-pool-team-${nextTeam.id}-${lead.id}-${Date.now()}`,
         sound: "sale",
-        data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id, teamId: nextTeam.id },
+        data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id, teamId: nextTeam.id, shufflePassCount: passCount },
         requireInteraction: true,
       }).catch((err) => console.error(`[Push] SLA team assign failed for ${dn}:`, err.message));
     }
@@ -10948,18 +10991,21 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   ], "write");
 
   const updated = await get(db, "SELECT * FROM leads WHERE id = ?", [lead.id]);
+  const passCount = await countPriorSalesForLead(db, lead.id, saleName);
+  const passLine = passCount > 0 ? `🔀 Đã xáo qua *${passCount}* sale trước đó` : null;
   await sendTelegramNewLeadNotification(db, {
     leadId: lead.id,
     saleName,
     lead: updated,
-    extraLines: telegramExtraLines,
+    extraLines: passLine ? [...telegramExtraLines, passLine] : telegramExtraLines,
   });
+  const pushPass = passCount > 0 ? ` · đã xáo qua ${passCount} sale` : "";
   sendPushToDisplayName(saleName, {
-    title: pushTitle,
-    body: `${updated?.name || "Khách"}${pushBodySuffix}`,
+    title: passCount > 0 ? `Lead xáo — đã qua ${passCount} sale` : pushTitle,
+    body: `${updated?.name || "Khách"}${pushBodySuffix}${pushPass}`,
     tag: `sla-shuffle-pool-${saleName}-${lead.id}-${Date.now()}`,
     sound: "sale",
-    data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id },
+    data: { url: "/", type: "sla_shuffle_pool", leadId: lead.id, projectId: lead.project_id, shufflePassCount: passCount },
     requireInteraction: true,
   }).catch((err) => console.error(`[Push] SLA pool assign failed for ${saleName}:`, err.message));
   await refreshLeadTabDenorm(db, lead.id);

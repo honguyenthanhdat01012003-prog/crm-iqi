@@ -363,6 +363,23 @@ function isShuffleTaggedLead(lead) {
   return false;
 }
 
+/** Số sale đã nhận lead trước người hiện tại (A→B = 1, …→C = 2). */
+function getShufflePassCount(lead, viewerName = "") {
+  if (lead?.shufflePassCount != null && lead.shufflePassCount !== "") {
+    return Math.max(0, Number(lead.shufflePassCount) || 0);
+  }
+  const names = Array.isArray(lead?.pastSaleNames) ? lead.pastSaleNames : [];
+  const current = String(lead?.saleName || viewerName || "").trim().toLowerCase();
+  const prior = new Set();
+  for (const n of names) {
+    const s = String(n || "").trim().toLowerCase();
+    if (!s || s === "chưa chia") continue;
+    if (current && s === current) continue;
+    prior.add(s);
+  }
+  return prior.size;
+}
+
 /** Đưa lên đầu list sale: NEW hôm nay hoặc lead cũ vừa được chia hôm nay (xáo/manual/…). */
 function isSaleHotAssignLead(lead) {
   if (isNewTaggedLead(lead)) return true;
@@ -10093,13 +10110,16 @@ const LeadsPage = (props) => {
                         <span style={{ display: "flex", alignItems: "center", gap: 3, minWidth: 0, marginBottom: 2 }}>
                           {isLocked && <Lock size={9} style={{ color: "#dc2626", flexShrink: 0 }} />}
                           {isRecentLead(l) && <NewLeadBadge />}
-                          {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
+                          {isSale && isShuffleLead(l) && <ShuffleLeadBadge passCount={getShufflePassCount(l)} />}
                           {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact />}
                           {l.teamId && teamNameMap[l.teamId] && <span style={{ flexShrink: 0, fontSize: 8, fontWeight: 800, padding: "0 4px", borderRadius: 6, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                           <span style={{ minWidth: 0, color: "#0f172a", fontSize: 12, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{l.name}</span>
                         </span>
                         <span style={{ display: "block", color: "#64748b", fontSize: 10, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                           {l.phone || "-"} · {getLeadProjectName(l)}
+                          {isSale && isShuffleLead(l) && getShufflePassCount(l) > 0 && (
+                            <span style={{ color: "#c2410c", fontWeight: 750 }}> · đã xáo qua {getShufflePassCount(l)} sale</span>
+                          )}
                         </span>
                       </span>
                       <span className="crm-lead-row-mobile__status">
@@ -10130,11 +10150,14 @@ const LeadsPage = (props) => {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
                       {isLocked && <Lock size={12} style={{ color: "#dc2626", flexShrink: 0 }} />}
                       {isRecentLead(l) && <NewLeadBadge />}
-                      {isSale && isShuffleLead(l) && <ShuffleLeadBadge />}
+                      {isSale && isShuffleLead(l) && <ShuffleLeadBadge passCount={getShufflePassCount(l)} />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
                       {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       {l.teamId && teamNameMap[l.teamId] && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
+                      {isSale && isShuffleLead(l) && getShufflePassCount(l) > 0 && (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#c2410c" }}>đã xáo qua {getShufflePassCount(l)} sale</span>
+                      )}
                       <StatusBadge status={isSale ? getLeadTabStatus(l, true) : l.status} size="sm" />
                       {!isSale && l.isHot && <span style={{ fontSize: 11, display: "flex", alignItems: "center" }}>{(() => { const t = getLeadTemp(l.createdAt); return t.icon === "very_hot" ? <><Flame size={13} /><Flame size={13} /></> : t.icon === "hot" ? <Flame size={13} /> : t.icon === "warm" ? <CloudSun size={13} /> : <Snowflake size={13} />; })()}</span>}
                       {l.isLocked && <Lock size={12} color="#dc2626" title="Lead đã khóa" />}
