@@ -1,5 +1,14 @@
 apply plugin: 'com.android.application'
 
+// Thông tin ký nằm ở android/keystore.properties (đã gitignore).
+// Không có file thì vẫn build debug được như thường.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace = "vn.id.crmiqi.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -21,10 +30,23 @@ android {
     compileOptions {
         encoding = "UTF-8"
     }
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKeystore) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
