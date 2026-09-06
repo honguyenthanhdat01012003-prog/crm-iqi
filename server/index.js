@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-funnel-stats-data";
+const BUILD_VERSION = "2026-09-06-split-consulting";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2325,14 +2325,17 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
 
   let hasInterested = false;
   let hasLowInterest = false;
+  let hasConsulting = false;
   for (const h of history) {
     if (!isReportFeedbackHistory(h)) continue;
     const key = normalizeStatus(h.status);
     if (key === "appointment") return "appointment";
-    // Quan tâm bucket: QT / QT hời hợt / Đang tư vấn / QT DA khác
-    if (key === "interested" || key === "consulting" || key === "other_project") hasInterested = true;
+    // Đang tư vấn tách riêng khỏi nhóm Quan tâm
+    if (key === "consulting") hasConsulting = true;
+    if (key === "interested" || key === "other_project") hasInterested = true;
     if (key === "low_interest") hasLowInterest = true;
   }
+  if (hasConsulting) return "consulting";
   if (hasInterested) return "interested";
   if (hasLowInterest) return "low_interest";
   return getFirstUpdaterReportStatus(lead, history);
@@ -2340,7 +2343,8 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
 
 /** Nhóm thống kê giống /api/lead-report — dùng chung dashboard + xuất thống kê. */
 function buildLeadQualityReportGroups(leads = [], historyMap = {}) {
-  const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "consulting", "other_project"];
+  // Quan tâm không còn gộp Đang tư vấn
+  const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "other_project"];
   const reportStatuses = leads.map((l) => {
     const hist = historyMap[l.id] || historyMap[Number(l.id)] || [];
     return getLeadReportStatusFromHistory(l, hist);
@@ -2350,23 +2354,25 @@ function buildLeadQualityReportGroups(leads = [], historyMap = {}) {
   const countWhere = (pred) => reportStatuses.filter(pred).length;
 
   const interestedN = countWhere((s) => INTERESTED_REPORT_STATUSES.includes(s));
+  const consultingN = countWhere((s) => s === "consulting");
   const appointmentN = countWhere((s) => s === "appointment");
   const notInterestedN = countWhere((s) => ["not_interested", "spam", "sale", "callback"].includes(s));
   const noFeedbackN = countWhere((s) => s === "new" || !s);
   const bookedN = countWhere((s) => ["booked", "booking_other", "closed"].includes(s));
   const known = new Set([
     ...INTERESTED_REPORT_STATUSES,
-    "appointment", "not_interested", "spam", "sale", "callback", "new",
+    "consulting", "appointment", "not_interested", "spam", "sale", "callback", "new",
     "booked", "booking_other", "closed", null, undefined, "",
   ]);
   const otherN = countWhere((s) => !known.has(s));
 
-  const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
+  const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + QT DA khác)";
   return {
     total,
     groups: {
-      appointment: { count: appointmentN, pct: pct(appointmentN), label: "Hẹn gặp/Hẹn xem" },
       interested: { count: interestedN, pct: pct(interestedN), label: interestedLabel },
+      consulting: { count: consultingN, pct: pct(consultingN), label: "Đang tư vấn" },
+      appointment: { count: appointmentN, pct: pct(appointmentN), label: "Hẹn gặp/Hẹn xem" },
       notInterested: { count: notInterestedN, pct: pct(notInterestedN), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
       noFeedback: { count: noFeedbackN, pct: pct(noFeedbackN), label: "Chưa nhập feedback (Mới)" },
       booked: { count: bookedN, pct: pct(bookedN), label: "Booking/Cọc/Chốt" },
