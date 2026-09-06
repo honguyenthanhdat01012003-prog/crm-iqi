@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-multiuser-boot-fix";
+const BUILD_VERSION = "2026-09-07-sync-throttle-android-channels";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -450,11 +450,17 @@ async function sendNativePushToUser(userId, payload) {
           break;
         }
         lastFailure = body.slice(0, 500);
-        if (res.status === 400 || res.status === 404) {
-          // Token chết hẳn — xoá luôn, không retry
+        // Chỉ xoá khi FCM báo token thật sự chết (UNREGISTERED/404).
+        // 400 thường là payload sai — xoá token ở đây từng làm mất sạch thiết bị Android.
+        const unregistered = res.status === 404 || /UNREGISTERED|NOT_FOUND|InvalidRegistration/i.test(body);
+        if (unregistered) {
           await run(db, "DELETE FROM native_push_tokens WHERE id = ?", [row.id]);
           lastFailure = "";
-          console.error(`[NativePush] Token#${row.id} invalid (${res.status}) — removed`);
+          console.error(`[NativePush] Token#${row.id} unregistered (${res.status}) — removed`);
+          break;
+        }
+        if (res.status === 400) {
+          console.error(`[NativePush] Token#${row.id} rejected 400 (payload?) — GIỮ token:`, body.slice(0, 300));
           break;
         }
         console.error(`[NativePush] FCM failed token#${row.id} attempt=${attempt + 1}:`, body.slice(0, 300));
@@ -6006,9 +6012,22 @@ async function syncAllProjects(db, opts = {}) {
     if (syncable.length > 0) {
       rotate = ((rotate % syncable.length) + syncable.length) % syncable.length;
     }
-    const ordered = syncable.length
+    let ordered = syncable.length
       ? [...syncable.slice(rotate), ...syncable.slice(0, rotate)]
       : [];
+
+    // Auto-sync: mỗi vòng chỉ quét vài dự án. Tải + parse CSV là việc đồng bộ,
+    // quét cả 11 dự án mỗi 20s làm Node kẹt event loop → mọi API (kể cả /api/version) treo.
+    // Rotate đảm bảo dự án nào cũng tới lượt sau vài vòng.
+    const maxScan = Number(
+      opts.maxScan != null
+        ? opts.maxScan
+        : (skipCost ? (process.env.SYNC_MAX_SCAN_AUTO || 4) : (process.env.SYNC_MAX_SCAN_MANUAL || 99))
+    );
+    if (ordered.length > maxScan) {
+      deferred = ordered.length - maxScan;
+      ordered = ordered.slice(0, maxScan);
+    }
 
     gcIfHeapHigh(2200, "sync-start");
 
@@ -6022,12 +6041,12 @@ async function syncAllProjects(db, opts = {}) {
       }
       // Chỉ hoãn khi gần trần heap 4GB
       if (heapBefore > 3600 && (writes >= 1 || okCount >= 1)) {
-        deferred = ordered.length - pi;
+        deferred += ordered.length - pi;
         console.warn(`[syncAllProjects] defer ${deferred} projects — heap=${heapBefore}MB writes=${writes} ok=${okCount}`);
         break;
       }
       if (writes >= maxWrites) {
-        deferred = ordered.length - pi;
+        deferred += ordered.length - pi;
         console.log(`[syncAllProjects] maxWrites=${maxWrites} reached, defer ${deferred}`);
         break;
       }
@@ -6045,7 +6064,8 @@ async function syncAllProjects(db, opts = {}) {
         console.error("Sync project", p.id, "failed:", e.message, e.stack);
         errors.push(`${p.name}: ${e.message}`);
       }
-      await new Promise((r) => setTimeout(r, 40));
+      // Nhả event loop giữa 2 dự án — request của sale/admin được phục vụ xen kẽ
+      await new Promise((r) => setTimeout(r, 250));
     }
 
     if (syncable.length > 0) {
@@ -6094,6 +6114,21 @@ async function syncAllProjects(db, opts = {}) {
   } finally {
     syncInProgress = false;
   }
+}
+
+// Đo độ trễ event loop — nếu cao nghĩa là có việc đồng bộ nặng chặn toàn bộ API
+let eventLoopLagMs = 0;
+let eventLoopLagMaxMs = 0;
+{
+  let last = Date.now();
+  const TICK = 500;
+  setInterval(() => {
+    const now = Date.now();
+    const lag = Math.max(0, now - last - TICK);
+    last = now;
+    eventLoopLagMs = lag;
+    if (lag > eventLoopLagMaxMs) eventLoopLagMaxMs = lag;
+  }, TICK).unref?.();
 }
 
 const app = express();
@@ -6235,6 +6270,7 @@ app.get("/api/version", async (req, res) => {
     distError: dist.ok ? null : dist.error,
     lastSync,
     autoSync: lastAutoSyncMeta,
+    eventLoop: { lagMs: eventLoopLagMs, maxLagMs: eventLoopLagMaxMs },
     telegramMenuButtons: true,
     telegramPerplexity: true,
     redis: getRedisStatus(),
@@ -19342,7 +19378,7 @@ if (!process.env.VERCEL) {
   });
 
   // Auto-sync ~20s, ghi hết dự án có sheet đổi — ưu tiên lead mới lên CRM nhanh
-  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 20 * 1000;
+  const SYNC_INTERVAL = parseInt(process.env.SYNC_INTERVAL_MS, 10) || 30 * 1000;
   let isSyncing = false;
   const runAutoSync = async (label = "auto-sync") => {
     if (isSyncing || !db) return;

@@ -146,8 +146,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     private Uri getSoundUri(String sound) {
         int resId = 0;
         if ("sla_recall".equals(sound)) {
-            resId = getResources().getIdentifier("lead_recall", "raw", getPackageName());
-            if (resId == 0) resId = R.raw.lead_manager;
+            resId = R.raw.lead_recall;
         } else if ("sale".equals(sound)) {
             resId = R.raw.lead_sale;
         } else if ("update".equals(sound)) {
