@@ -40,19 +40,19 @@ export async function requestNativeLocalNotificationPermission() {
   if (perm.display !== "granted") perm = await LocalNotifications.requestPermissions();
   if (perm.display !== "granted") return { ok: false, permission: perm.display };
 
-  try {
-    for (const channel of LEAD_CHANNELS) {
-      await LocalNotifications.createChannel({
-        id: channel.id,
-        name: channel.name,
-        description: "Thong bao khi co lead moi trong CRM",
-        importance: 5,
-        visibility: 1,
-        sound: "default",
-        vibration: true,
-      });
-    }
-  } catch (_) {}
+        try {
+          for (const channel of LEAD_CHANNELS) {
+            await LocalNotifications.createChannel({
+              id: channel.id,
+              name: channel.name,
+              description: "Thong bao khi co lead moi trong CRM",
+              importance: 5,
+              visibility: 1,
+              sound: channel.sound || "default",
+              vibration: true,
+            });
+          }
+        } catch (_) {}
 
   return { ok: true, permission: "granted" };
 }
@@ -70,7 +70,7 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
       title: t,
       body: b,
       channelId: getLeadChannelId(sound),
-      sound: "default",
+      sound: sound === "sale" ? "lead_sale" : sound === "manager" ? "lead_manager" : sound === "update" ? "lead_update" : "default",
       extra: { leadId },
       schedule: { at: new Date(Date.now() + 100) },
     }],

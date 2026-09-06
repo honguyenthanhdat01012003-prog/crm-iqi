@@ -47,10 +47,12 @@ export async function getNativePushPermissionState() {
 
 async function ensureNativePushChannels(PushNotifications) {
   if (typeof PushNotifications.createChannel !== "function") return;
+  // channelId phải khớp server getNativeNotificationSound + LeadFirebaseMessagingService
   const channels = [
-    { id: "lead_notifications_manager_v4", name: "Lead moi quan ly", sound: "default" },
-    { id: "lead_notifications_sale_v4", name: "Lead moi sale", sound: "default" },
-    { id: "lead_notifications_recall_v2", name: "Thu hoi lead", sound: "lead_recall" },
+    { id: "lead_notifications_manager_v6", name: "Lead moi quan ly", sound: "lead_manager" },
+    { id: "lead_notifications_sale_v6", name: "Lead moi sale", sound: "lead_sale" },
+    { id: "lead_notifications_update_v3", name: "Nhac cap nhat lead", sound: "lead_update" },
+    { id: "lead_notifications_recall_v2", name: "Thu hoi lead", sound: "lead_manager" },
     { id: "lead_notifications", name: "Lead moi", sound: "default" },
   ];
   for (const channel of channels) {

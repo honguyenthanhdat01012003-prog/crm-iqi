@@ -52,7 +52,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         String sound = valueOrDefault(data.get("sound"), "manager");
         String title = valueOrDefault(data.get("title"), "LUX IQI CRM");
         String body = valueOrDefault(data.get("body"), "Ban co lead moi");
-        String channelId = getChannelId(sound);
+        String channelId = valueOrDefault(data.get("channelId"), getChannelId(sound));
 
         createLeadChannel(channelId, getChannelName(sound), sound);
 
@@ -79,7 +79,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE)
             .setContentIntent(pendingIntent);
 
         Uri soundUri = getSoundUri(sound);
@@ -126,25 +126,37 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         manager.createNotificationChannel(channel);
     }
 
+    /** Khớp channelId server (getNativeNotificationSound). */
     private String getChannelId(String sound) {
         if ("sla_recall".equals(sound)) return "lead_notifications_recall_v2";
-        if ("sale".equals(sound)) return "lead_notifications_sale_v4";
-        return "lead_notifications_manager_v4";
+        if ("sale".equals(sound)) return "lead_notifications_sale_v6";
+        if ("update".equals(sound)) return "lead_notifications_update_v3";
+        if ("manager".equals(sound)) return "lead_notifications_manager_v6";
+        return "lead_notifications";
     }
 
     private String getChannelName(String sound) {
         if ("sla_recall".equals(sound)) return "Thu hoi lead";
         if ("sale".equals(sound)) return "Lead moi sale";
-        return "Lead moi quan ly";
-    }
-
-    private Uri getRecallSoundUri() {
-        return Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.lead_recall);
+        if ("update".equals(sound)) return "Nhac cap nhat lead";
+        if ("manager".equals(sound)) return "Lead moi quan ly";
+        return "Lead moi";
     }
 
     private Uri getSoundUri(String sound) {
+        int resId = 0;
         if ("sla_recall".equals(sound)) {
-            return getRecallSoundUri();
+            resId = getResources().getIdentifier("lead_recall", "raw", getPackageName());
+            if (resId == 0) resId = R.raw.lead_manager;
+        } else if ("sale".equals(sound)) {
+            resId = R.raw.lead_sale;
+        } else if ("update".equals(sound)) {
+            resId = R.raw.lead_update;
+        } else if ("manager".equals(sound)) {
+            resId = R.raw.lead_manager;
+        }
+        if (resId != 0) {
+            return Uri.parse("android.resource://" + getPackageName() + "/" + resId);
         }
         return RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
     }

@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-fix-project-picker";
+const BUILD_VERSION = "2026-09-06-multiuser-boot-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -383,24 +383,15 @@ async function sendNativePushToUser(userId, payload) {
     if (isAndroid) {
       if (!badgeOnly) {
         message.notification = { title, body };
-        if (payload.sound === "sla_recall") {
-          message.android.notification = {
-            channel_id: notificationSound.channelId,
-            priority: "HIGH",
-            default_vibrate_timings: true,
-            default_sound: false,
-            notification_count: badgeCount,
-          };
-        } else {
-          message.android.notification = {
-            channel_id: notificationSound.channelId,
-            sound: "default",
-            priority: "HIGH",
-            default_vibrate_timings: true,
-            default_sound: true,
-            notification_count: badgeCount,
-          };
-        }
+        const useCustomSound = notificationSound.soundName && notificationSound.soundName !== "default";
+        message.android.notification = {
+          channel_id: notificationSound.channelId,
+          sound: useCustomSound ? notificationSound.soundName : "default",
+          priority: "HIGH",
+          default_vibrate_timings: true,
+          default_sound: !useCustomSound,
+          notification_count: badgeCount,
+        };
       } else {
         // Chỉ cập nhật badge/count — không spam tray
         message.android.priority = "NORMAL";
@@ -1216,6 +1207,19 @@ async function initDb() {
     url: dbUrl,
     authToken: process.env.TURSO_AUTH_TOKEN || undefined,
   });
+
+  // Local SQLite: WAL + busy_timeout — nhiều sale/admin vào cùng lúc không bị lock chết
+  if (isLocal) {
+    try {
+      await db.execute("PRAGMA journal_mode=WAL");
+      await db.execute("PRAGMA busy_timeout=8000");
+      await db.execute("PRAGMA synchronous=NORMAL");
+      await db.execute("PRAGMA temp_store=MEMORY");
+      console.log("[DB] PRAGMA WAL + busy_timeout=8000 enabled");
+    } catch (pragmaErr) {
+      console.warn("[DB] PRAGMA setup skipped:", pragmaErr.message);
+    }
+  }
 
   // Fast path: check if DB is already fully initialized (1 network call)
   let dbVersion = 0;
@@ -3759,7 +3763,63 @@ const BOOTSTRAP_CACHE_MS = 45_000;
 let leadAuxCache = { at: 0, historyCountMap: null, dupPhones: null };
 const LEAD_AUX_CACHE_MS = 120_000;
 let projectCountsCache = { at: 0, key: "", data: null };
-const PROJECT_COUNTS_CACHE_MS = 60_000;
+const PROJECT_COUNTS_CACHE_MS = 180_000;
+const projectCountsInflight = new Map();
+
+async function queryProjectLeadCounts(db, user) {
+  const cacheKey = `${user.role}:${user.userId || user.displayName}`;
+  const now = Date.now();
+  if (projectCountsCache.data && projectCountsCache.key === cacheKey && now - projectCountsCache.at < PROJECT_COUNTS_CACHE_MS) {
+    return projectCountsCache.data;
+  }
+  // Single-flight: 10 user cùng role không chạy 10 GROUP BY song song
+  if (projectCountsInflight.has(cacheKey)) {
+    try { return await projectCountsInflight.get(cacheKey); } catch { /* fall through */ }
+  }
+
+  const work = (async () => {
+  const redisKey = redisCacheKey("projcounts", cacheKey);
+  const fromRedis = await redisGetCached(redisKey, dataVersion);
+  if (fromRedis) {
+    projectCountsCache = { at: now, key: cacheKey, data: fromRedis };
+    return fromRedis;
+  }
+
+  let rows;
+  if (user.role === "admin") {
+    rows = await all(db, "SELECT project_id, COUNT(*) as c FROM leads GROUP BY project_id");
+  } else if (user.role === "manager") {
+    const pids = await getUserProjectIds(user.userId);
+    if (!pids.length) return { byProject: {}, all: 0 };
+    const ph = pids.map(() => "?").join(",");
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE project_id IN (${ph}) GROUP BY project_id`, pids);
+  } else {
+    const f = { statusTab: "all", statusFilter: "all" };
+    const { where, params } = await buildLeadsSqlFilters(db, user, f);
+    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
+  }
+
+  const byProject = {};
+  let allCount = 0;
+  for (const r of rows) {
+    const pid = Number(r.project_id);
+    const c = Number(r.c) || 0;
+    if (!Number.isNaN(pid) && pid > 0) byProject[pid] = c;
+    allCount += c;
+  }
+  const data = { byProject, all: allCount };
+  projectCountsCache = { at: Date.now(), key: cacheKey, data };
+  void redisSetCached(redisKey, data, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
+  return data;
+  })();
+
+  projectCountsInflight.set(cacheKey, work);
+  try {
+    return await work;
+  } finally {
+    projectCountsInflight.delete(cacheKey);
+  }
+}
 
 function invalidateBootstrapCache() {
   bootstrapCache = { at: 0, data: null, key: "" };
@@ -4509,48 +4569,6 @@ async function querySaleRankingSummary(db, user, filters = {}) {
     }
   }
   return Object.values(map).sort((a, b) => b.total - a.total);
-}
-
-async function queryProjectLeadCounts(db, user) {
-  const cacheKey = `${user.role}:${user.userId || user.displayName}`;
-  const now = Date.now();
-  if (projectCountsCache.data && projectCountsCache.key === cacheKey && now - projectCountsCache.at < PROJECT_COUNTS_CACHE_MS) {
-    return projectCountsCache.data;
-  }
-
-  const redisKey = redisCacheKey("projcounts", cacheKey);
-  const fromRedis = await redisGetCached(redisKey, dataVersion);
-  if (fromRedis) {
-    projectCountsCache = { at: now, key: cacheKey, data: fromRedis };
-    return fromRedis;
-  }
-
-  let rows;
-  if (user.role === "admin") {
-    rows = await all(db, "SELECT project_id, COUNT(*) as c FROM leads GROUP BY project_id");
-  } else if (user.role === "manager") {
-    const pids = await getUserProjectIds(user.userId);
-    if (!pids.length) return { byProject: {}, all: 0 };
-    const ph = pids.map(() => "?").join(",");
-    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads WHERE project_id IN (${ph}) GROUP BY project_id`, pids);
-  } else {
-    const f = { statusTab: "all", statusFilter: "all" };
-    const { where, params } = await buildLeadsSqlFilters(db, user, f);
-    rows = await all(db, `SELECT project_id, COUNT(*) as c FROM leads ${where} GROUP BY project_id`, params);
-  }
-
-  const byProject = {};
-  let allCount = 0;
-  for (const r of rows) {
-    const pid = Number(r.project_id);
-    const c = Number(r.c) || 0;
-    if (!Number.isNaN(pid) && pid > 0) byProject[pid] = c;
-    allCount += c;
-  }
-  const data = { byProject, all: allCount };
-  projectCountsCache = { at: now, key: cacheKey, data };
-  void redisSetCached(redisKey, data, { version: dataVersion, ttlSec: redisDefaultTtlSec() });
-  return data;
 }
 
 async function queryLeadsPage(db, user, filters, page, limit) {
@@ -6579,50 +6597,58 @@ app.get("/api/pending-leads", requireAuth, async (req, res) => {
   try {
     if (req.user.role !== "sale") return res.json({ pendingLeads: [], totalPending: 0 });
     const displayName = req.user.displayName;
-    const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
     const now = Date.now();
 
-    // Get all leads assigned to this sale (not locked statuses)
-    const leads = await all(db,
-      `SELECT l.id, l.name, l.phone, l.status, l.project_id FROM leads l
-       WHERE (l.sale_name = ? OR l.sale_name = ?)
+    // 1 query thay vì N+1 (trước đây mỗi lead 2–3 SELECT → nghẽn SQLite khi nhiều sale mở app)
+    const rows = await all(
+      db,
+      `SELECT l.id, l.name, l.phone, l.status, l.project_id, p.name AS project_name,
+              (
+                SELECT h.contact_date FROM lead_history h
+                WHERE h.lead_id = l.id AND h.sale_name = ? AND h.action != 'Chia lead'
+                ORDER BY h.seq DESC LIMIT 1
+              ) AS last_contact,
+              (
+                SELECT h.feedback FROM lead_history h
+                WHERE h.lead_id = l.id AND h.sale_name = ? AND h.action != 'Chia lead'
+                ORDER BY h.seq DESC LIMIT 1
+              ) AS last_feedback,
+              (
+                SELECT h.status FROM lead_history h
+                WHERE h.lead_id = l.id AND h.sale_name = ? AND h.action != 'Chia lead'
+                ORDER BY h.seq DESC LIMIT 1
+              ) AS last_hist_status,
+              (
+                SELECT h.contact_date FROM lead_history h
+                WHERE h.lead_id = l.id AND h.sale_name = ? AND h.action = 'Chia lead'
+                ORDER BY h.seq DESC LIMIT 1
+              ) AS chia_contact
+       FROM leads l
+       LEFT JOIN projects p ON p.id = l.project_id
+       WHERE (l.sale_name = ? OR LOWER(l.sale_name) = LOWER(?))
          AND l.status NOT IN ('booked','booking_other','closed','not_interested','spam','wrong_number','blocked','lost','cancelled_deposit')
        ORDER BY l.id`,
-      [displayName, displayName.toLowerCase()]
+      [displayName, displayName, displayName, displayName, displayName, displayName]
     );
 
     const pending = [];
-    for (const lead of leads) {
-      // Find last non-"Chia lead" history entry from this sale
-      const lastUpdate = await get(db,
-        `SELECT contact_date, status, feedback, action FROM lead_history
-         WHERE lead_id = ? AND sale_name = ? AND action != 'Chia lead'
-         ORDER BY seq DESC LIMIT 1`,
-        [lead.id, displayName]
-      );
-
-      let daysSinceUpdate = null;
-      if (!lastUpdate) {
-        // Never updated — check "Chia lead" date as fallback
-        const chiaEntry = await get(db,
-          `SELECT contact_date FROM lead_history WHERE lead_id = ? AND sale_name = ? AND action = 'Chia lead' ORDER BY seq DESC LIMIT 1`,
-          [lead.id, displayName]
-        );
-        if (chiaEntry) {
-          const d = parseLeadDate(chiaEntry.contact_date);
-          if (d) daysSinceUpdate = Math.floor((now - d.getTime()) / (24*60*60*1000));
-        }
-        if (daysSinceUpdate === null || daysSinceUpdate < 2) continue;
-        const proj = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
-        pending.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, projectName: proj?.name || "-", daysSinceUpdate, lastFeedback: null });
-      } else {
-        const d = parseLeadDate(lastUpdate.contact_date);
-        if (!d) continue;
-        daysSinceUpdate = Math.floor((now - d.getTime()) / (24*60*60*1000));
-        if (daysSinceUpdate < 2) continue;
-        const proj = await get(db, "SELECT name FROM projects WHERE id = ?", [lead.project_id]);
-        pending.push({ id: lead.id, name: lead.name, phone: lead.phone, status: lead.status, projectName: proj?.name || "-", daysSinceUpdate, lastFeedback: lastUpdate.feedback || lastUpdate.status || null, lastDate: lastUpdate.contact_date });
-      }
+    for (const lead of rows) {
+      const contactRaw = lead.last_contact || lead.chia_contact;
+      if (!contactRaw) continue;
+      const d = parseLeadDate(contactRaw);
+      if (!d) continue;
+      const daysSinceUpdate = Math.floor((now - d.getTime()) / (24 * 60 * 60 * 1000));
+      if (daysSinceUpdate < 2) continue;
+      pending.push({
+        id: lead.id,
+        name: lead.name,
+        phone: lead.phone,
+        status: lead.status,
+        projectName: lead.project_name || "-",
+        daysSinceUpdate,
+        lastFeedback: lead.last_feedback || lead.last_hist_status || null,
+        lastDate: lead.last_contact || null,
+      });
     }
 
     res.json({ pendingLeads: pending.slice(0, 50), totalPending: pending.length });

@@ -1633,15 +1633,21 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [pendingSnoozeChecked, pendingSnoozeKey]);
   useEffect(() => {
     if (user.role !== "sale") return;
+    if (!initialDataLoaded) return; // Đợi boot xong — tránh N query pending đè SQLite lúc nhiều người vào
+    let cancelled = false;
     let snoozedToday = false;
     try { snoozedToday = localStorage.getItem(pendingSnoozeKey) === new Date().toLocaleDateString("en-CA"); } catch {}
-    apiFetch(`${API}/pending-leads`).then(r => r.json()).then(data => {
-      if (data && (data.totalPending > 0 || data.pendingLeads)) {
-        setPendingLeadsData(data);
-        if (data.totalPending > 0 && !snoozedToday) setShowPendingPopup(true);
-      }
-    }).catch(() => {});
-  }, []);
+    const t = setTimeout(() => {
+      apiFetch(`${API}/pending-leads`).then(r => r.json()).then(data => {
+        if (cancelled) return;
+        if (data && (data.totalPending > 0 || data.pendingLeads)) {
+          setPendingLeadsData(data);
+          if (data.totalPending > 0 && !snoozedToday) setShowPendingPopup(true);
+        }
+      }).catch(() => {});
+    }, 2500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [initialDataLoaded, user.role, pendingSnoozeKey]);
 
   const refreshNativePushServerStatus = useCallback(async () => {
     if (!nativePushSupported) {
@@ -2568,6 +2574,27 @@ function CRMApp({ user, updateUser, onLogout }) {
       fetchProjectLeadCounts();
     }
   }, [initialDataLoaded, fetchProjectLeadCounts, projectLeadCounts]);
+
+  // Nếu bootstrap/lite không mang projects → gọi lại boot metadata (tránh màn chọn trống)
+  useEffect(() => {
+    if (!initialDataLoaded) return;
+    if (Array.isArray(projects) && projects.length > 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/data?bootstrapOnly=1`, { timeoutMs: 20000 });
+        if (!r.ok || cancelled) return;
+        const data = await r.json();
+        if (cancelled) return;
+        if (Array.isArray(data.projects) && data.projects.length > 0) {
+          applyApiData({ projects: data.projects, campaigns: data.campaigns }, { suppressNotifications: true });
+        }
+      } catch (err) {
+        console.warn("[CRM] projects recovery failed:", err?.message || err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [initialDataLoaded, projects, applyApiData]);
 
   // Prefetch sớm: sale đang màn chọn dự án, hoặc đã vào dự án
   useEffect(() => {
@@ -4162,16 +4189,27 @@ function CRMApp({ user, updateUser, onLogout }) {
 
       {/* Pending leads popup for sale users */}
       {showPendingPopup && pendingLeadsData && pendingLeadsData.totalPending > 0 && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.5)", padding: 16 }}>
-          <div style={{ background: "#fff", borderRadius: 16, width: Math.min(480, window.innerWidth - 32), maxHeight: "80vh", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,.3)", animation: "fadeIn .2s ease" }}>
-            <div style={{ background: "linear-gradient(135deg, #f59e0b, #d97706)", padding: "16px 20px", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>⏰ Nhắc nhở cập nhật khách hàng</div>
+        <div style={{ position: "fixed", inset: 0, zIndex: 10000, display: "flex", alignItems: "flex-end", justifyContent: "center", background: "rgba(0,0,0,.5)", padding: "max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom))" }}>
+          <div style={{
+            background: "#fff",
+            borderRadius: 16,
+            width: "100%",
+            maxWidth: 480,
+            maxHeight: "min(88dvh, 88vh)",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            boxShadow: "0 20px 60px rgba(0,0,0,.3)",
+            animation: "fadeIn .2s ease",
+          }}>
+            <div style={{ flexShrink: 0, background: "linear-gradient(135deg, #f59e0b, #d97706)", padding: "14px 16px", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>⏰ Nhắc nhở cập nhật khách hàng</div>
                 <div style={{ fontSize: 12, opacity: .9, marginTop: 2 }}>Bạn có {pendingLeadsData.totalPending} khách chưa cập nhật trên 2 ngày</div>
               </div>
-              <button onClick={closePendingPopup} style={{ background: "rgba(255,255,255,.2)", border: "none", color: "#fff", borderRadius: 8, width: 30, height: 30, cursor: "pointer", fontSize: 16, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+              <button type="button" onClick={closePendingPopup} aria-label="Đóng" style={{ flexShrink: 0, background: "rgba(255,255,255,.2)", border: "none", color: "#fff", borderRadius: 8, width: 36, height: 36, cursor: "pointer", fontSize: 18, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
             </div>
-            <div style={{ maxHeight: "55vh", overflowY: "auto", padding: "12px 16px" }}>
+            <div style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", WebkitOverflowScrolling: "touch", padding: "12px 16px" }}>
               {pendingLeadsData.pendingLeads.map((l, i) => (
                 <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", background: i % 2 ? "#f9fafb" : "#fff", borderRadius: 8, marginBottom: 4, border: "1px solid #f3f4f6" }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -4193,20 +4231,20 @@ function CRMApp({ user, updateUser, onLogout }) {
                 <div style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: 8 }}>... và {pendingLeadsData.totalPending - pendingLeadsData.pendingLeads.length} khách khác</div>
               )}
             </div>
-            <div style={{ padding: "10px 16px 0", borderTop: "1px solid #e5e7eb" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#4b5563", cursor: "pointer", userSelect: "none" }}>
+            <div style={{ flexShrink: 0, borderTop: "1px solid #e5e7eb", background: "#fff", padding: "10px 16px calc(10px + env(safe-area-inset-bottom))" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#4b5563", cursor: "pointer", userSelect: "none", marginBottom: 10 }}>
                 <input
                   type="checkbox"
                   checked={pendingSnoozeChecked}
                   onChange={(e) => setPendingSnoozeChecked(e.target.checked)}
-                  style={{ width: 16, height: 16, accentColor: "#d97706", cursor: "pointer" }}
+                  style={{ width: 18, height: 18, accentColor: "#d97706", cursor: "pointer", flexShrink: 0 }}
                 />
                 Không nhắc lại trong hôm nay (hiện lại từ 00:00 ngày mai)
               </label>
-            </div>
-            <div style={{ padding: "10px 16px 12px", display: "flex", gap: 8 }}>
-              <button onClick={() => { closePendingPopup(); setPage("leads"); }} style={{ flex: 1, padding: "10px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📋 Cập nhật ngay</button>
-              <button onClick={closePendingPopup} style={{ padding: "10px 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Để sau</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" onClick={() => { closePendingPopup(); setPage("leads"); }} style={{ flex: 1, padding: "12px 16px", borderRadius: 10, border: "none", background: "linear-gradient(135deg, #e88a2e, #d97706)", color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer" }}>📋 Cập nhật ngay</button>
+                <button type="button" onClick={closePendingPopup} style={{ padding: "12px 16px", borderRadius: 10, border: "1px solid #d1d5db", background: "#fff", color: "#6b7280", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Để sau</button>
+              </div>
             </div>
           </div>
         </div>
