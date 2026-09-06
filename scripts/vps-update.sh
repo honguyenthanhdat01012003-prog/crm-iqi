@@ -58,8 +58,9 @@ pkill -f "server/keeper.js" 2>/dev/null || true
 pkill -f "server/index.js" 2>/dev/null || true
 sleep 2
 
-# 4096MB — PHẢI khớp keeper. Từng để 640 làm server OOM crash-loop mỗi 20 giây!
-export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-4096}"
+# PHẢI khớp keeper. Đừng nâng lên 4096: VPS RAM thấp, V8 ăn tới trần là cả máy
+# rơi vào swap và nginx cũng treo theo. Cũng đừng hạ xuống 640 (OOM crash-loop).
+export NODE_MAX_OLD_SPACE_SIZE="${NODE_MAX_OLD_SPACE_SIZE:-1536}"
 export PORT
 mkdir -p "$ROOT/server/data"
 nohup node server/keeper.js >> "$ROOT/server/data/keeper.out" 2>&1 &
@@ -83,7 +84,10 @@ echo "$SHEET_JSON"
 echo "Done. Hard-refresh CRM (Ctrl+F5)."
 echo "Public check: curl -s https://crm-iqi.id.vn/api/version"
 echo "Expect version: ${EXPECTED_VERSION_PREFIX}"
-echo "aaPanel Memory Limit: để trống hoặc ≥ 4096M (keeper mặc định heap 4096)"
+echo "aaPanel Memory Limit: để trống hoặc ≥ 2048M (keeper mặc định heap 1536)"
+echo ""
+echo "KIỂM TRA RAM MÁY (system.freeMb thấp = VPS thiếu RAM, cần dọn data hoặc nâng gói):"
+echo "  curl -s http://127.0.0.1:${PORT}/api/health"
 echo ""
 echo "KIỂM TRA ỔN ĐỊNH: chạy lệnh dưới 2 lần cách nhau 1 phút — uptime phải TĂNG dần:"
 echo "  curl -s http://127.0.0.1:${PORT}/api/version | grep -o '\"uptime\":[0-9]*'"
