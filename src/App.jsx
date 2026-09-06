@@ -4727,22 +4727,60 @@ function formatShortDate(iso) {
   return `${d}/${m}`;
 }
 
-/** Panel thống kê chất lượng lead — cùng format với modal Xuất thống kê. */
-function LeadQualityReportPanel({ report, compact }) {
-  if (!report?.groups) return <div className="crm-dash-empty">Không có dữ liệu</div>;
+function FunnelChart({ stages }) {
+  const max = stages.find((s) => s.key === "total")?.value || stages[0]?.value || 1;
+  if (!max) return <div className="crm-dash-empty">Không có dữ liệu</div>;
+  let lastPositiveValue = max;
+  const rows = [];
+  for (const stage of stages) {
+    const isNegative = stage.kind === "negative";
+    const isCore = stage.kind === "core";
+    const widthPct = Math.max(isNegative ? 8 : 12, (stage.value / max) * 100);
+    const dropPct = !isNegative && !isCore && lastPositiveValue
+      ? (((lastPositiveValue - stage.value) / lastPositiveValue) * 100).toFixed(0)
+      : null;
+    if (!isNegative && !isCore) lastPositiveValue = stage.value;
+    const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
+    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore });
+  }
+  return (
+    <div className="crm-funnel">
+      {rows.map(({ stage, widthPct, dropPct, convPct, isNegative, isCore }) => (
+        <div key={stage.key} className={`crm-funnel__row${isNegative ? " crm-funnel__row--negative" : ""}${isCore && stage.key === "new" ? " crm-funnel__row--neutral" : ""}`}>
+          <div className="crm-funnel__meta">
+            <span className="crm-funnel__label">{stage.label}</span>
+            <span className="crm-funnel__stats">
+              <strong>{stage.value}</strong>
+              <span>{convPct}%</span>
+              {dropPct != null && Number(dropPct) > 0 && <span className="crm-funnel__drop">−{dropPct}%</span>}
+            </span>
+          </div>
+          <div className="crm-funnel__track">
+            <div
+              className="crm-funnel__bar"
+              style={{
+                width: `${widthPct}%`,
+                background: isNegative
+                  ? "linear-gradient(90deg, #ef4444, #f97316)"
+                  : isCore && stage.key === "new"
+                    ? "linear-gradient(90deg, #f59e0b, #fbbf24)"
+                    : undefined,
+              }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Copy text giống modal Xuất thống kê (lead-report). */
+function buildLeadQualityCopyText(report) {
+  if (!report?.groups) return "";
   const grps = report.groups;
   const fmtMoney = (n) => (n ? Number(n).toLocaleString("vi-VN") : "0");
   const fmtDate = (s) => (s ? new Date(s).toLocaleDateString("vi-VN") : "—");
   const interestedReportLabel = grps.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
-  const rows = [
-    { ...grps.interested, label: interestedReportLabel, color: "#16a34a", emoji: "✅" },
-    ...(grps.appointment ? [{ ...grps.appointment, color: "#8b5cf6", emoji: "📅" }] : []),
-    { ...grps.noFeedback, color: "#f59e0b", emoji: "⏳" },
-    { ...grps.notInterested, color: "#dc2626", emoji: "❌" },
-    { ...grps.booked, color: "#8b5cf6", emoji: "🎉" },
-    { ...grps.other, color: "#6b7280", emoji: "📋" },
-  ].filter((r) => r && r.label != null);
-
   const appointmentLine = grps.appointment
     ? `\n+ ${grps.appointment.label}: ${grps.appointment.count} (~${grps.appointment.pct}%)`
     : "";
@@ -4750,80 +4788,7 @@ function LeadQualityReportPanel({ report, compact }) {
     || (report.startDate || report.endDate
       ? `từ ${fmtDate(report.startDate)} đến ${fmtDate(report.endDate)}`
       : "");
-  const copyText = `Thống kê ${report.projectName || ""} ${dateLine}:\n- Tổng số lead: ${report.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(report.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(report.cpLead)}`;
-
-  return (
-    <div>
-      <div style={{
-        background: "linear-gradient(135deg, #f5f3ff, #ede9fe)",
-        borderRadius: 12,
-        padding: compact ? 12 : 14,
-        marginBottom: 12,
-      }}>
-        <div style={{ fontSize: compact ? 13 : 14, fontWeight: 700, color: "#7c3aed", marginBottom: 2 }}>
-          {report.projectName || "Tất cả dự án"}
-        </div>
-        <div style={{ fontSize: 11.5, color: "#6b7280" }}>
-          {report.rangeLabel || (report.startDate || report.endDate ? `Từ ${fmtDate(report.startDate)} đến ${fmtDate(report.endDate)}` : "Theo bộ lọc dashboard")}
-        </div>
-        <div style={{ display: "flex", gap: compact ? 8 : 12, marginTop: 10, flexWrap: "wrap" }}>
-          <div style={{ background: "#fff", borderRadius: 10, padding: compact ? "8px 10px" : "10px 12px", flex: 1, minWidth: 88, textAlign: "center" }}>
-            <div style={{ fontSize: compact ? 18 : 22, fontWeight: 800, color: "#1f2937" }}>{report.total}</div>
-            <div style={{ fontSize: 10.5, color: "#6b7280" }}>Tổng lead</div>
-          </div>
-          <div style={{ background: "#fff", borderRadius: 10, padding: compact ? "8px 10px" : "10px 12px", flex: 1, minWidth: 88, textAlign: "center" }}>
-            <div style={{ fontSize: compact ? 16 : 20, fontWeight: 800, color: "#dc2626" }}>{fmtMoney(report.totalSpent)}</div>
-            <div style={{ fontSize: 10.5, color: "#6b7280" }}>Tổng chi tiêu</div>
-          </div>
-          <div style={{ background: "#fff", borderRadius: 10, padding: compact ? "8px 10px" : "10px 12px", flex: 1, minWidth: 88, textAlign: "center" }}>
-            <div style={{ fontSize: compact ? 16 : 20, fontWeight: 800, color: "#ea580c" }}>{fmtMoney(report.cpLead)}</div>
-            <div style={{ fontSize: 10.5, color: "#6b7280" }}>Chi phí/lead</div>
-          </div>
-        </div>
-      </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-        {rows.map((row, i) => (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 15, width: 22, textAlign: "center", flexShrink: 0 }}>{row.emoji}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, marginBottom: 3 }}>
-                <span style={{ color: "#374151", fontWeight: 600, lineHeight: 1.25 }}>{row.label}</span>
-                <span style={{ fontWeight: 700, color: row.color, whiteSpace: "nowrap", flexShrink: 0 }}>
-                  {row.count} <span style={{ fontWeight: 400, color: "#9ca3af" }}>(~{row.pct}%)</span>
-                </span>
-              </div>
-              <div style={{ height: 6, borderRadius: 3, background: "#f3f4f6", overflow: "hidden" }}>
-                <div style={{ width: `${Math.min(100, Number(row.pct) || 0)}%`, height: "100%", borderRadius: 3, background: row.color }} />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ marginTop: 12 }}>
-        <button
-          type="button"
-          onClick={() => {
-            navigator.clipboard.writeText(copyText);
-            showToast("Đã copy thống kê", "success");
-          }}
-          style={{
-            ...btnSecondary,
-            padding: "8px 14px",
-            fontSize: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            width: "100%",
-            justifyContent: "center",
-          }}
-        >
-          <ClipboardList size={14} /> Copy văn bản
-        </button>
-      </div>
-    </div>
-  );
+  return `Thống kê ${report.projectName || ""} ${dateLine}:\n- Tổng số lead: ${report.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(report.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(report.cpLead)}`;
 }
 
 function niceAxisMax(value) {
@@ -5248,6 +5213,7 @@ function DashboardPage({ projects, apiFetch }) {
   }, [apiFetch, projectId, loading, data]);
 
   const kpis = data?.kpis;
+  const funnel = data?.funnel || [];
   const leadQualityReport = data?.leadQualityReport || null;
   const trend = data?.trend || [];
   const sources = data?.sources || [];
