@@ -4728,21 +4728,8 @@ function formatShortDate(iso) {
 }
 
 function FunnelChart({ stages }) {
-  const max = stages.find((s) => s.key === "total")?.value || stages[0]?.value || 1;
-  if (!max) return <div className="crm-dash-empty">Không có dữ liệu</div>;
-  let lastPositiveValue = max;
-  const rows = [];
-  for (const stage of stages) {
-    const isNegative = stage.kind === "negative";
-    const isCore = stage.kind === "core";
-    const widthPct = Math.max(isNegative ? 8 : 12, (stage.value / max) * 100);
-    const dropPct = !isNegative && !isCore && lastPositiveValue
-      ? (((lastPositiveValue - stage.value) / lastPositiveValue) * 100).toFixed(0)
-      : null;
-    if (!isNegative && !isCore) lastPositiveValue = stage.value;
-    const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
-    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore });
-  }
+  const rows = buildFunnelExportRows(stages);
+  if (!rows.length) return <div className="crm-dash-empty">Không có dữ liệu</div>;
   return (
     <div className="crm-funnel">
       {rows.map(({ stage, widthPct, dropPct, convPct, isNegative, isCore }) => (
@@ -4772,6 +4759,55 @@ function FunnelChart({ stages }) {
       ))}
     </div>
   );
+}
+
+/** Rows + % giống UI phễu — dùng chung cho chart và xuất thống kê. */
+function buildFunnelExportRows(stages = []) {
+  const max = stages.find((s) => s.key === "total")?.value || stages[0]?.value || 0;
+  if (!max) return [];
+  let lastPositiveValue = max;
+  const rows = [];
+  for (const stage of stages) {
+    const isNegative = stage.kind === "negative";
+    const isCore = stage.kind === "core";
+    const widthPct = Math.max(isNegative ? 8 : 12, (stage.value / max) * 100);
+    const dropPct = !isNegative && !isCore && lastPositiveValue
+      ? (((lastPositiveValue - stage.value) / lastPositiveValue) * 100).toFixed(0)
+      : null;
+    if (!isNegative && !isCore) lastPositiveValue = stage.value;
+    const convPct = ((stage.value / max) * 100).toFixed(1);
+    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore });
+  }
+  return rows;
+}
+
+function buildFunnelCopyText({ projectName, rangeLabel, stages }) {
+  const rows = buildFunnelExportRows(stages);
+  const total = stages.find((s) => s.key === "total")?.value ?? stages[0]?.value ?? 0;
+  const lines = [
+    `Phễu chuyển đổi — ${projectName || "Tất cả dự án"}`,
+    rangeLabel ? `Khoảng thời gian: ${rangeLabel}` : null,
+    `Tổng lead: ${total}`,
+    "",
+  ].filter((x) => x != null);
+  for (const { stage, convPct, dropPct, isNegative } of rows) {
+    if (stage.key === "total") continue;
+    const drop = dropPct != null && Number(dropPct) > 0 ? ` · rớt −${dropPct}%` : "";
+    const tag = isNegative ? " [âm]" : "";
+    lines.push(`+ ${stage.label}: ${stage.value} (~${convPct}%)${drop}${tag}`);
+  }
+  return lines.join("\n");
+}
+
+function buildFunnelCsv(stages) {
+  const rows = buildFunnelExportRows(stages);
+  const header = "Giai đoạn,Số lượng,Tỷ lệ (%),Rớt (%)";
+  const lines = rows.map(({ stage, convPct, dropPct }) => {
+    const drop = dropPct != null && Number(dropPct) > 0 ? dropPct : "";
+    const label = String(stage.label || "").replace(/"/g, '""');
+    return `"${label}",${stage.value},${convPct},${drop}`;
+  });
+  return `\uFEFF${header}\n${lines.join("\n")}`;
 }
 
 function niceAxisMax(value) {
@@ -5088,6 +5124,7 @@ function DashboardPage({ projects, apiFetch }) {
   const [auditPage, setAuditPage] = useState(1);
   const [rankPage, setRankPage] = useState(1);
   const [teamRankPage, setTeamRankPage] = useState(1);
+  const [funnelExportOpen, setFunnelExportOpen] = useState(false);
   useEffect(() => { setAuditPage(1); }, [auditSaleFilter, auditSlaType, auditVerdict, slaAudit]);
   useEffect(() => { setRankPage(1); setTeamRankPage(1); }, [preset, projectId]);
 
@@ -5206,6 +5243,14 @@ function DashboardPage({ projects, apiFetch }) {
   const unassignedLeads = data?.unassignedLeads || 0;
   const discipline = data?.discipline || { totalPenalties: 0, bySale: [], recent: [] };
   const rangeLabel = data?.range?.label || "";
+  const funnelProjectName = projectId === "all"
+    ? "Tất cả dự án"
+    : ((projects || []).find((p) => String(p.id) === String(projectId))?.name || `Dự án #${projectId}`);
+  const funnelExportRows = useMemo(() => buildFunnelExportRows(funnel), [funnel]);
+  const funnelCopyText = useMemo(
+    () => buildFunnelCopyText({ projectName: funnelProjectName, rangeLabel, stages: funnel }),
+    [funnelProjectName, rangeLabel, funnel]
+  );
   const auditSummary = slaAudit?.summary || { total: 0, valid: 0, disputed: 0, instant10m: 0, scheduled24h: 0, bySale: [] };
   const auditItems = slaAudit?.items || [];
   const auditSaleOptions = useMemo(() => {
@@ -5298,10 +5343,131 @@ function DashboardPage({ projects, apiFetch }) {
               <TrendChart data={trend} compact={isMobile} preset={preset} />
             </div>
             <div className="crm-dash-panel">
-              <h4 className="crm-dash-panel__title"><Filter size={18} /> Phễu chuyển đổi</h4>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 14 }}>
+                <h4 className="crm-dash-panel__title" style={{ margin: 0 }}><Filter size={18} /> Phễu chuyển đổi</h4>
+                <button
+                  type="button"
+                  disabled={!funnelExportRows.length}
+                  onClick={() => setFunnelExportOpen(true)}
+                  style={{
+                    ...btnSecondary,
+                    padding: "6px 10px",
+                    fontSize: 11.5,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                    opacity: funnelExportRows.length ? 1 : 0.5,
+                    cursor: funnelExportRows.length ? "pointer" : "default",
+                    flexShrink: 0,
+                  }}
+                  title="Xuất phễu chuyển đổi"
+                >
+                  <BarChart3 size={13} /> Xuất
+                </button>
+              </div>
               <FunnelChart stages={funnel} compact={isMobile} />
             </div>
           </div>
+
+          {funnelExportOpen && (
+            <div
+              onClick={() => setFunnelExportOpen(false)}
+              style={{
+                position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)",
+                display: "flex", alignItems: isMobile ? "flex-end" : "center", justifyContent: "center", zIndex: 999, animation: "fadeIn .2s ease",
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 28px" : 28,
+                  width: isMobile ? "100%" : 520, maxWidth: "96vw", maxHeight: isMobile ? "90vh" : "85vh", overflowY: "auto",
+                  boxShadow: "0 25px 50px rgba(0,0,0,.25)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 750, display: "flex", alignItems: "center", gap: 8 }}>
+                    <Filter size={18} /> Xuất phễu chuyển đổi
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setFunnelExportOpen(false)}
+                    style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div style={{ background: "linear-gradient(135deg, #f0fdf4, #ecfdf5)", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+                  <div style={{ fontSize: 14, fontWeight: 750, color: "#166534", marginBottom: 2 }}>{funnelProjectName}</div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>{rangeLabel || "Theo bộ lọc dashboard"}</div>
+                  <div style={{ marginTop: 10, background: "#fff", borderRadius: 10, padding: "10px 14px", textAlign: "center", display: "inline-block", minWidth: 110 }}>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: "#1f2937" }}>
+                      {funnel.find((s) => s.key === "total")?.value ?? 0}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#6b7280" }}>Tổng lead</div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {funnelExportRows.filter((r) => r.stage.key !== "total").map(({ stage, convPct, dropPct, isNegative, isCore }) => {
+                    const color = isNegative ? "#ea580c" : isCore ? "#d97706" : "#16a34a";
+                    return (
+                      <div key={stage.key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, marginBottom: 3 }}>
+                            <span style={{ color: "#374151", fontWeight: 600 }}>{stage.label}</span>
+                            <span style={{ fontWeight: 700, color, whiteSpace: "nowrap" }}>
+                              {stage.value}{" "}
+                              <span style={{ fontWeight: 400, color: "#9ca3af" }}>(~{convPct}%)</span>
+                              {dropPct != null && Number(dropPct) > 0 && (
+                                <span style={{ color: "#dc2626", marginLeft: 4 }}>−{dropPct}%</span>
+                              )}
+                            </span>
+                          </div>
+                          <div style={{ height: 6, borderRadius: 3, background: "#f3f4f6", overflow: "hidden" }}>
+                            <div style={{ width: `${Math.min(100, Number(convPct) || 0)}%`, height: "100%", borderRadius: 3, background: color }} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{ marginTop: 16, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(funnelCopyText);
+                      showToast("Đã copy phễu chuyển đổi", "success");
+                    }}
+                    style={{ ...btnSecondary, padding: "8px 14px", fontSize: 12, display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", minWidth: 140 }}
+                  >
+                    <ClipboardList size={14} /> Copy văn bản
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const csv = buildFunnelCsv(funnel);
+                      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `pheu-chuyen-doi-${new Date().toISOString().slice(0, 10)}.csv`;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                      showToast("Đã tải CSV phễu chuyển đổi", "success");
+                    }}
+                    style={{ ...btnPrimary, padding: "8px 14px", fontSize: 12, display: "flex", alignItems: "center", gap: 6, flex: 1, justifyContent: "center", minWidth: 140, background: "linear-gradient(135deg, #16a34a, #15803d)" }}
+                  >
+                    <Download size={14} /> Tải CSV
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className={`crm-dash-row crm-dash-row--bottom${isMobile ? " crm-dash-row--stack" : ""}`}>
             <div className="crm-dash-panel crm-dash-panel--wide">
