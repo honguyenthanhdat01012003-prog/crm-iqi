@@ -9,6 +9,7 @@ import helmet from "helmet";
 import http from "http";
 import https from "https";
 import jwt from "jsonwebtoken";
+import os from "os";
 import zlib from "zlib";
 import path from "path";
 import { promisify } from "util";
@@ -67,7 +68,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-07-sync-throttle-android-channels";
+const BUILD_VERSION = "2026-09-07-backup-bloat-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -1221,9 +1222,29 @@ async function initDb() {
       await db.execute("PRAGMA busy_timeout=8000");
       await db.execute("PRAGMA synchronous=NORMAL");
       await db.execute("PRAGMA temp_store=MEMORY");
-      console.log("[DB] PRAGMA WAL + busy_timeout=8000 enabled");
+      // Chặn page cache phình vô hạn — VPS RAM thấp, cache to là swap chết cả máy
+      await db.execute("PRAGMA cache_size=-32000");
+      console.log("[DB] PRAGMA WAL + busy_timeout=8000 + cache_size=32MB enabled");
     } catch (pragmaErr) {
       console.warn("[DB] PRAGMA setup skipped:", pragmaErr.message);
+    }
+
+    // Dọn bản backup khổng lồ do bug cũ ghi cả lead_history vào settings
+    try {
+      const bloated = await db.execute({
+        sql: "SELECT key, length(value) AS n FROM settings WHERE key LIKE 'backup_project_%' AND length(value) > ?",
+        args: [4 * 1024 * 1024],
+      });
+      const rows = bloated?.rows || [];
+      if (rows.length) {
+        const totalMb = Math.round(rows.reduce((s, r) => s + Number(r.n || 0), 0) / (1024 * 1024));
+        for (const r of rows) {
+          await db.execute({ sql: "DELETE FROM settings WHERE key = ?", args: [r.key] });
+        }
+        console.warn(`[DB] Đã xoá ${rows.length} bản backup phình (~${totalMb}MB) trong settings`);
+      }
+    } catch (cleanErr) {
+      console.warn("[DB] Backup cleanup skipped:", cleanErr.message);
     }
   }
 
@@ -2956,6 +2977,10 @@ async function assertUserCanAccessProject(user, projectId) {
   return pids.includes(pid);
 }
 
+// Giới hạn bản backup ghi vào bảng settings trước mỗi lần sync
+const BACKUP_HISTORY_LIMIT = Number(process.env.BACKUP_HISTORY_LIMIT || 3000);
+const BACKUP_MAX_BYTES = Number(process.env.BACKUP_MAX_BYTES || 4 * 1024 * 1024);
+
 async function replaceProjectData(db, projectId, leads, campaigns) {
   // Helper: normalize phone for matching (uses robust +84/0 normalization)
   const normPhone = normalizePhoneKey;
@@ -2973,17 +2998,30 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       "SELECT id, name, phone, sale_name, manager_name, status, raw_status FROM leads WHERE project_id = ? AND sale_name != '' AND sale_name != 'Chưa chia'",
       [projectId]
     );
+    // Chỉ lấy history gần nhất. Trước đây dump TOÀN BỘ lead_history (1.5tr dòng)
+    // rồi JSON.stringify vào 1 ô settings mỗi lần sync → RSS vài GB, VPS swap, cả nginx cũng treo.
+    // Sync không xoá lead_history nên bản dump đầy đủ là thừa; backup DB 8h/lần vẫn giữ nguyên.
     const backupHistory = await all(db,
-      "SELECT lh.lead_id, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.note, lh.source, lh.user_name, lh.created_at, l.phone, l.name as lead_name FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ?",
-      [projectId]
+      `SELECT lh.lead_id, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.note, lh.source, lh.user_name, lh.created_at, l.phone, l.name as lead_name
+       FROM lead_history lh JOIN leads l ON lh.lead_id = l.id
+       WHERE l.project_id = ?
+       ORDER BY lh.id DESC
+       LIMIT ?`,
+      [projectId, BACKUP_HISTORY_LIMIT]
     );
     if (backupLeads.length > 0 || backupHistory.length > 0) {
-      const backupData = JSON.stringify({ ts: new Date().toISOString(), projectId, leads: backupLeads, history: backupHistory });
+      let payload = { ts: new Date().toISOString(), projectId, leads: backupLeads, history: backupHistory };
+      let backupData = JSON.stringify(payload);
+      if (backupData.length > BACKUP_MAX_BYTES) {
+        payload = { ...payload, history: [], historyDropped: backupHistory.length };
+        backupData = JSON.stringify(payload);
+        console.warn(`[replaceProjectData] project=${projectId} backup quá lớn — bỏ history, giữ ${backupLeads.length} phân công sale`);
+      }
       await run(db,
         "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         [`backup_project_${projectId}`, backupData]
       );
-      console.log(`[replaceProjectData] Backup saved: ${backupLeads.length} sale assignments, ${backupHistory.length} history entries`);
+      console.log(`[replaceProjectData] Backup saved: ${backupLeads.length} sale assignments, ${payload.history.length} history entries (${Math.round(backupData.length / 1024)}KB)`);
     }
   } catch (e) { console.warn("[replaceProjectData] Backup failed:", e.message); }
 
@@ -8525,6 +8563,15 @@ app.get("/api/health", async (_req, res) => {
       rss: Math.round(process.memoryUsage().rss / (1024 * 1024)),
       heapUsed: Math.round(process.memoryUsage().heapUsed / (1024 * 1024)),
       heapTotal: Math.round(process.memoryUsage().heapTotal / (1024 * 1024)),
+    },
+    // Máy đang thiếu RAM thì nginx cũng chậm theo — cần số liệu OS, không chỉ của Node
+    system: {
+      totalMb: Math.round(os.totalmem() / (1024 * 1024)),
+      freeMb: Math.round(os.freemem() / (1024 * 1024)),
+      cpus: os.cpus().length,
+      loadAvg: os.loadavg().map((n) => Math.round(n * 100) / 100),
+      eventLoopLagMs: eventLoopLagMs,
+      eventLoopMaxLagMs: eventLoopLagMaxMs,
     },
     v36DenormReady,
     v36BackfillRunning,

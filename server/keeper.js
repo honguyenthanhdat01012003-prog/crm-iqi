@@ -11,8 +11,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const appScript = path.join(__dirname, "index.js");
 const HEARTBEAT = path.join(__dirname, "data", "keeper.heartbeat");
 const RESTART_MS = Math.max(1500, Number(process.env.KEEPER_RESTART_MS) || 2500);
-const MAX_OLD = process.env.NODE_MAX_OLD_SPACE_SIZE || "4096";
+// VPS RAM thấp: cho V8 tới 4GB là cầm chắc swap chết máy (nginx cũng treo theo)
+const MAX_OLD = process.env.NODE_MAX_OLD_SPACE_SIZE || "1536";
 const LISTEN_PORT = Number(process.env.PORT || 4000) || 4000;
+// Vượt ngưỡng RSS thì restart — van an toàn khi rò rỉ bộ nhớ native
+const RSS_LIMIT_MB = Number(process.env.KEEPER_RSS_LIMIT_MB || 2000);
 
 let child = null;
 let stopping = false;
@@ -76,6 +79,8 @@ function start() {
 
   const env = {
     ...process.env,
+    // Hạn chế arena của glibc — Node trả RAM về OS thay vì giữ vài GB
+    MALLOC_ARENA_MAX: process.env.MALLOC_ARENA_MAX || "2",
     NODE_OPTIONS: [
       process.env.NODE_OPTIONS,
       `--max-old-space-size=${MAX_OLD}`,
@@ -170,6 +175,31 @@ process.on("unhandledRejection", (reason) => {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+function childRssMb() {
+  if (!child?.pid) return 0;
+  try {
+    const status = fs.readFileSync(`/proc/${child.pid}/status`, "utf8");
+    const m = status.match(/VmRSS:\s+(\d+)\s+kB/);
+    return m ? Math.round(Number(m[1]) / 1024) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Van an toàn: RSS vượt ngưỡng thì restart trước khi cả VPS rơi vào swap
+setInterval(() => {
+  if (stopping || !child) return;
+  const rss = childRssMb();
+  if (rss > 0 && rss > RSS_LIMIT_MB) {
+    log(`child RSS ${rss}MB > ${RSS_LIMIT_MB}MB — restart để giải phóng RAM`);
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      /* ignore */
+    }
+  }
+}, 60000);
 
 setInterval(touchHeartbeat, 15000);
 start();
