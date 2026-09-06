@@ -2319,7 +2319,8 @@ function getFirstUpdaterReportStatus(lead = {}, history = []) {
   return normalizeStatus(latestStatus || lead.status || "new");
 }
 
-function getLeadReportStatusFromHistory(lead = {}, history = []) {
+function getLeadReportStatusFromHistory(lead = {}, history = [], opts = {}) {
+  const splitConsulting = !!opts.splitConsulting;
   const currentKey = normalizeStatus(lead.status || "new");
   if (TERMINAL_DEAL_STATUSES.has(currentKey)) return currentKey;
 
@@ -2330,55 +2331,63 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
     if (!isReportFeedbackHistory(h)) continue;
     const key = normalizeStatus(h.status);
     if (key === "appointment") return "appointment";
-    // Đang tư vấn tách riêng khỏi nhóm Quan tâm
-    if (key === "consulting") hasConsulting = true;
+    if (key === "consulting") {
+      if (splitConsulting) hasConsulting = true;
+      else hasInterested = true; // Xuất thống kê: gộp vào Quan tâm như cũ
+    }
     if (key === "interested" || key === "other_project") hasInterested = true;
     if (key === "low_interest") hasLowInterest = true;
   }
-  if (hasConsulting) return "consulting";
+  if (splitConsulting && hasConsulting) return "consulting";
   if (hasInterested) return "interested";
   if (hasLowInterest) return "low_interest";
   return getFirstUpdaterReportStatus(lead, history);
 }
 
-/** Nhóm thống kê giống /api/lead-report — dùng chung dashboard + xuất thống kê. */
-function buildLeadQualityReportGroups(leads = [], historyMap = {}) {
-  // Quan tâm không còn gộp Đang tư vấn
-  const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "other_project"];
+/** Nhóm thống kê. splitConsulting=true chỉ dùng dashboard (tách Đang tư vấn). */
+function buildLeadQualityReportGroups(leads = [], historyMap = {}, opts = {}) {
+  const splitConsulting = !!opts.splitConsulting;
+  const INTERESTED_REPORT_STATUSES = splitConsulting
+    ? ["interested", "low_interest", "other_project"]
+    : ["interested", "low_interest", "consulting", "other_project"];
   const reportStatuses = leads.map((l) => {
     const hist = historyMap[l.id] || historyMap[Number(l.id)] || [];
-    return getLeadReportStatusFromHistory(l, hist);
+    return getLeadReportStatusFromHistory(l, hist, { splitConsulting });
   });
   const total = reportStatuses.length;
   const pct = (n) => (total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0);
   const countWhere = (pred) => reportStatuses.filter(pred).length;
 
   const interestedN = countWhere((s) => INTERESTED_REPORT_STATUSES.includes(s));
-  const consultingN = countWhere((s) => s === "consulting");
+  const consultingN = splitConsulting ? countWhere((s) => s === "consulting") : 0;
   const appointmentN = countWhere((s) => s === "appointment");
   const notInterestedN = countWhere((s) => ["not_interested", "spam", "sale", "callback"].includes(s));
   const noFeedbackN = countWhere((s) => s === "new" || !s);
   const bookedN = countWhere((s) => ["booked", "booking_other", "closed"].includes(s));
   const known = new Set([
     ...INTERESTED_REPORT_STATUSES,
-    "consulting", "appointment", "not_interested", "spam", "sale", "callback", "new",
+    ...(splitConsulting ? ["consulting"] : []),
+    "appointment", "not_interested", "spam", "sale", "callback", "new",
     "booked", "booking_other", "closed", null, undefined, "",
   ]);
   const otherN = countWhere((s) => !known.has(s));
 
-  const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + QT DA khác)";
-  return {
-    total,
-    groups: {
-      interested: { count: interestedN, pct: pct(interestedN), label: interestedLabel },
-      consulting: { count: consultingN, pct: pct(consultingN), label: "Đang tư vấn" },
-      appointment: { count: appointmentN, pct: pct(appointmentN), label: "Hẹn gặp/Hẹn xem" },
-      notInterested: { count: notInterestedN, pct: pct(notInterestedN), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
-      noFeedback: { count: noFeedbackN, pct: pct(noFeedbackN), label: "Chưa nhập feedback (Mới)" },
-      booked: { count: bookedN, pct: pct(bookedN), label: "Booking/Cọc/Chốt" },
-      other: { count: otherN, pct: pct(otherN), label: "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)" },
-    },
+  const interestedLabel = splitConsulting
+    ? "Quan tâm (Quan tâm + QT hời hợt + QT DA khác)"
+    : "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
+
+  const groups = {
+    interested: { count: interestedN, pct: pct(interestedN), label: interestedLabel },
+    appointment: { count: appointmentN, pct: pct(appointmentN), label: "Hẹn gặp/Hẹn xem" },
+    notInterested: { count: notInterestedN, pct: pct(notInterestedN), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
+    noFeedback: { count: noFeedbackN, pct: pct(noFeedbackN), label: "Chưa nhập feedback (Mới)" },
+    booked: { count: bookedN, pct: pct(bookedN), label: "Booking/Cọc/Chốt" },
+    other: { count: otherN, pct: pct(otherN), label: "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)" },
   };
+  if (splitConsulting) {
+    groups.consulting = { count: consultingN, pct: pct(consultingN), label: "Đang tư vấn" };
+  }
+  return { total, groups };
 }
 
 function getAdminLeadTabStatus(lead = {}, history = []) {
@@ -7823,7 +7832,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       return { key: stage.key, label: stage.label, value: count, kind: stage.kind };
     });
 
-    const qualityReportBase = buildLeadQualityReportGroups(filteredLeads, historyMap);
+    const qualityReportBase = buildLeadQualityReportGroups(filteredLeads, historyMap, { splitConsulting: true });
 
     const qualityGood = (stats.interested || 0) + (stats.low_interest || 0) + (stats.other_project || 0)
       + (stats.consulting || 0) + (stats.appointment || 0);

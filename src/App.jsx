@@ -8532,11 +8532,9 @@ const LeadsPage = (props) => {
                     width: `${pct}%`, height: "100%", borderRadius: 3, background: color, transition: "width .5s ease",
                   });
 
-                  const interestedReportLabel = grps.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + QT DA khác)";
-                  const consultingLabel = grps.consulting?.label || "Đang tư vấn";
+                  const interestedReportLabel = grps.interested?.label || "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
                   const rows = [
                     { ...grps.interested, label: interestedReportLabel, color: "#16a34a", emoji: "✅" },
-                    ...(grps.consulting ? [{ ...grps.consulting, label: consultingLabel, color: "#0d9488", emoji: "💬" }] : []),
                     ...(grps.appointment ? [{ ...grps.appointment, color: "#8b5cf6", emoji: "📅" }] : []),
                     { ...grps.noFeedback, color: "#f59e0b", emoji: "⏳" },
                     { ...grps.notInterested, color: "#dc2626", emoji: "❌" },
@@ -8545,9 +8543,8 @@ const LeadsPage = (props) => {
                   ];
 
                   // Copy text
-                  const consultingLine = grps.consulting ? `\n+ ${consultingLabel}: ${grps.consulting.count} (~${grps.consulting.pct}%)` : "";
                   const appointmentLine = grps.appointment ? `\n+ ${grps.appointment.label}: ${grps.appointment.count} (~${grps.appointment.pct}%)` : "";
-                  const copyText = `Thống kê ${d.projectName} từ ${fmtDate(d.startDate)} đến ${fmtDate(d.endDate)}:\n- Tổng số lead: ${d.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${consultingLine}${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(d.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(d.cpLead)}`;
+                  const copyText = `Thống kê ${d.projectName} từ ${fmtDate(d.startDate)} đến ${fmtDate(d.endDate)}:\n- Tổng số lead: ${d.total}\n+ ${interestedReportLabel}: ${grps.interested.count} (~${grps.interested.pct}%)${appointmentLine}\n+ ${grps.notInterested.label}: ${grps.notInterested.count} (~${grps.notInterested.pct}%)\n+ ${grps.noFeedback.label}: ${grps.noFeedback.count} (~${grps.noFeedback.pct}%)\n+ ${grps.booked.label}: ${grps.booked.count} (~${grps.booked.pct}%)\n+ ${grps.other.label}: ${grps.other.count} (~${grps.other.pct}%)\n+ Tổng ngân sách đã chi tiêu: ${fmtMoney(d.totalSpent)}\n+ Chi phí/lead: ${fmtMoney(d.cpLead)}`;
 
                   return (
                     <div>
