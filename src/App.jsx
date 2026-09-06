@@ -4735,18 +4735,19 @@ function FunnelChart({ stages }) {
   for (const stage of stages) {
     const isNegative = stage.kind === "negative";
     const isCore = stage.kind === "core";
+    const isNeutral = isCore && (stage.key === "new" || stage.key === "noFeedback");
     const widthPct = Math.max(isNegative ? 8 : 12, (stage.value / max) * 100);
     const dropPct = !isNegative && !isCore && lastPositiveValue
       ? (((lastPositiveValue - stage.value) / lastPositiveValue) * 100).toFixed(0)
       : null;
     if (!isNegative && !isCore) lastPositiveValue = stage.value;
     const convPct = max ? ((stage.value / max) * 100).toFixed(1) : "0";
-    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore });
+    rows.push({ stage, widthPct, dropPct, convPct, isNegative, isCore, isNeutral });
   }
   return (
     <div className="crm-funnel">
-      {rows.map(({ stage, widthPct, dropPct, convPct, isNegative, isCore }) => (
-        <div key={stage.key} className={`crm-funnel__row${isNegative ? " crm-funnel__row--negative" : ""}${isCore && stage.key === "new" ? " crm-funnel__row--neutral" : ""}`}>
+      {rows.map(({ stage, widthPct, dropPct, convPct, isNegative, isNeutral }) => (
+        <div key={stage.key} className={`crm-funnel__row${isNegative ? " crm-funnel__row--negative" : ""}${isNeutral ? " crm-funnel__row--neutral" : ""}`}>
           <div className="crm-funnel__meta">
             <span className="crm-funnel__label">{stage.label}</span>
             <span className="crm-funnel__stats">
@@ -4762,7 +4763,7 @@ function FunnelChart({ stages }) {
                 width: `${widthPct}%`,
                 background: isNegative
                   ? "linear-gradient(90deg, #ef4444, #f97316)"
-                  : isCore && stage.key === "new"
+                  : isNeutral
                     ? "linear-gradient(90deg, #f59e0b, #fbbf24)"
                     : undefined,
               }}
@@ -4772,6 +4773,21 @@ function FunnelChart({ stages }) {
       ))}
     </div>
   );
+}
+
+/** Map nhóm Xuất thống kê → stages cho FunnelChart (cùng số liệu, UI phễu). */
+function leadQualityReportToFunnelStages(report) {
+  if (!report?.groups) return [];
+  const g = report.groups;
+  return [
+    { key: "total", label: "Tổng Lead", value: Number(report.total) || 0, kind: "core" },
+    { key: "interested", label: "Quan tâm (QT + QT hời hợt + Tư vấn + QT DA khác)", value: Number(g.interested?.count) || 0, kind: "core" },
+    { key: "appointment", label: "Hẹn gặp/Hẹn xem", value: Number(g.appointment?.count) || 0, kind: "core" },
+    { key: "noFeedback", label: "Chưa nhập feedback (Mới)", value: Number(g.noFeedback?.count) || 0, kind: "core" },
+    { key: "notInterested", label: "Không quan tâm (Nhầm/Rác/Sale/Gọi lại)", value: Number(g.notInterested?.count) || 0, kind: "negative" },
+    { key: "booked", label: "Booking/Cọc/Chốt", value: Number(g.booked?.count) || 0, kind: "core" },
+    { key: "other", label: "Trạng thái khác", value: Number(g.other?.count) || 0, kind: "negative" },
+  ];
 }
 
 function niceAxisMax(value) {
@@ -5197,7 +5213,6 @@ function DashboardPage({ projects, apiFetch }) {
 
   const kpis = data?.kpis;
   const funnel = data?.funnel || [];
-  const leadQualityReport = data?.leadQualityReport || null;
   const trend = data?.trend || [];
   const sources = data?.sources || [];
   const campaigns = data?.campaigns || [];
