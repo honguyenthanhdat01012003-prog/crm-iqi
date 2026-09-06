@@ -3362,6 +3362,53 @@ function CRMApp({ user, updateUser, onLogout }) {
           </div>
         </div>
       )}
+
+      {/* Chẩn đoán push trên app native — luôn hiện để biết máy đã có token FCM chưa */}
+      {nativePushSupported && (
+        <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#fff" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#1a3c20" }}>Thông báo khi tắt app</div>
+              <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2, lineHeight: 1.45 }}>
+                Quyền: <b>{pushPermission || "?"}</b>
+                {" · "}Token: <b>{nativePushServerStatus?.tokenCount ?? "?"}</b>
+                {" · "}Firebase: <b>{nativePushServerStatus?.fcmConfigured === false ? "chưa cấu hình" : nativePushServerStatus?.fcmConfigured ? "OK" : "?"}</b>
+              </div>
+              {!!nativePushServerStatus?.tokens?.[0]?.last_error && (
+                <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3, wordBreak: "break-word" }}>
+                  Lỗi: {String(nativePushServerStatus.tokens[0].last_error).slice(0, 160)}
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={handleTestNativePush}
+                disabled={pushBusy}
+                style={{
+                  border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8",
+                  borderRadius: 8, padding: "6px 10px", fontSize: 10, fontWeight: 800,
+                  cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                }}
+              >
+                {pushBusy ? "Đang gửi..." : "Gửi thử"}
+              </button>
+              <button
+                type="button"
+                onClick={handleEnablePush}
+                disabled={pushBusy}
+                style={{
+                  border: "1px solid #d1d5db", background: "#fff", color: "#1f2937",
+                  borderRadius: 8, padding: "6px 10px", fontSize: 10, fontWeight: 700,
+                  cursor: pushBusy ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+                }}
+              >
+                Đăng ký lại
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {notifications.length === 0 ? (
         <div style={{ padding: 24, textAlign: "center", color: "#9ca3af", fontSize: 13 }}>Không có thông báo mới</div>
       ) : (
