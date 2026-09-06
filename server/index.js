@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-05-past-sale-update";
+const BUILD_VERSION = "2026-09-06-dash-lead-stats";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -2336,6 +2336,43 @@ function getLeadReportStatusFromHistory(lead = {}, history = []) {
   if (hasInterested) return "interested";
   if (hasLowInterest) return "low_interest";
   return getFirstUpdaterReportStatus(lead, history);
+}
+
+/** Nhóm thống kê giống /api/lead-report — dùng chung dashboard + xuất thống kê. */
+function buildLeadQualityReportGroups(leads = [], historyMap = {}) {
+  const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "consulting", "other_project"];
+  const reportStatuses = leads.map((l) => {
+    const hist = historyMap[l.id] || historyMap[Number(l.id)] || [];
+    return getLeadReportStatusFromHistory(l, hist);
+  });
+  const total = reportStatuses.length;
+  const pct = (n) => (total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0);
+  const countWhere = (pred) => reportStatuses.filter(pred).length;
+
+  const interestedN = countWhere((s) => INTERESTED_REPORT_STATUSES.includes(s));
+  const appointmentN = countWhere((s) => s === "appointment");
+  const notInterestedN = countWhere((s) => ["not_interested", "spam", "sale", "callback"].includes(s));
+  const noFeedbackN = countWhere((s) => s === "new" || !s);
+  const bookedN = countWhere((s) => ["booked", "booking_other", "closed"].includes(s));
+  const known = new Set([
+    ...INTERESTED_REPORT_STATUSES,
+    "appointment", "not_interested", "spam", "sale", "callback", "new",
+    "booked", "booking_other", "closed", null, undefined, "",
+  ]);
+  const otherN = countWhere((s) => !known.has(s));
+
+  const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
+  return {
+    total,
+    groups: {
+      appointment: { count: appointmentN, pct: pct(appointmentN), label: "Hẹn gặp/Hẹn xem" },
+      interested: { count: interestedN, pct: pct(interestedN), label: interestedLabel },
+      notInterested: { count: notInterestedN, pct: pct(notInterestedN), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
+      noFeedback: { count: noFeedbackN, pct: pct(noFeedbackN), label: "Chưa nhập feedback (Mới)" },
+      booked: { count: bookedN, pct: pct(bookedN), label: "Booking/Cọc/Chốt" },
+      other: { count: otherN, pct: pct(otherN), label: "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)" },
+    },
+  };
 }
 
 function getAdminLeadTabStatus(lead = {}, history = []) {
@@ -7657,6 +7694,7 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
           kpis: { marketing: { totalLeads: 0, totalSpent: 0, cpl: 0 }, quality: { good: 0, bad: 0, neutral: 0, qualityPct: 0 }, sales: { booked: 0, closed: 0, totalBooking: 0 } },
           funnel: [], trend: [], sources: [], campaigns: [], campaignMeta: {}, saleRanking: [], teamRanking: [], unassignedLeads: 0,
           discipline: { totalPenalties: 0, bySale: [], recent: [] },
+          leadQualityReport: null,
         });
       }
       where.push(`project_id IN (${pids.map(() => "?").join(",")})`);
@@ -7776,6 +7814,8 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
       }
       return { key: stage.key, label: stage.label, value: count, kind: stage.kind };
     });
+
+    const qualityReportBase = buildLeadQualityReportGroups(filteredLeads, historyMap);
 
     const qualityGood = (stats.interested || 0) + (stats.low_interest || 0) + (stats.other_project || 0)
       + (stats.consulting || 0) + (stats.appointment || 0);
@@ -7969,6 +8009,17 @@ app.get("/api/dashboard", requireAuth, requireAdmin, async (req, res) => {
         },
       },
       funnel,
+      leadQualityReport: {
+        ...qualityReportBase,
+        projectName: projectId && projectId !== "all"
+          ? ((await get(db, "SELECT name FROM projects WHERE id = ?", [Number(projectId)]))?.name || "")
+          : "Tất cả dự án",
+        startDate: startIso,
+        endDate: endIso,
+        rangeLabel: range.label,
+        totalSpent,
+        cpLead: cpl,
+      },
       trend,
       sources,
       campaigns,
@@ -8291,27 +8342,7 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
       }
     }
 
-    const reportLeads = leads.map(l => ({
-      ...l,
-      reportStatus: getLeadReportStatusFromHistory(l, historyByLead.get(Number(l.id)) || []),
-    }));
-
-    // Groupings based on report status. Interested/appointment scan all feedback history first.
-    const INTERESTED_REPORT_STATUSES = ["interested", "low_interest", "consulting", "other_project"];
-    const interested = reportLeads.filter(l => INTERESTED_REPORT_STATUSES.includes(l.reportStatus));
-    const appointment = reportLeads.filter(l => l.reportStatus === "appointment");
-    const notInterested = reportLeads.filter(l => ["not_interested", "spam", "sale", "callback"].includes(l.reportStatus));
-    const noFeedback = reportLeads.filter(l => l.reportStatus === "new" || !l.reportStatus);
-    const booked = reportLeads.filter(l => ["booked", "booking_other", "closed"].includes(l.reportStatus));
-    const knownReportStatuses = new Set([
-      ...INTERESTED_REPORT_STATUSES,
-      "appointment", "not_interested", "spam", "sale", "callback", "new",
-      "booked", "booking_other", "closed", null, undefined, "",
-    ]);
-    const other = reportLeads.filter(l => !knownReportStatuses.has(l.reportStatus));
-
-    const total = reportLeads.length;
-    const pct = (n) => total > 0 ? Number(((n / total) * 100).toFixed(1)) : 0;
+    const { total, groups } = buildLeadQualityReportGroups(leads, Object.fromEntries(historyByLead));
 
     // Cost: fetch cost sheet CSV directly and sum by selected date range
     const project = await get(db, "SELECT name, cost_url, cost_data FROM projects WHERE id = ?", [Number(projectId)]);
@@ -8345,20 +8376,12 @@ app.get("/api/lead-report", requireAuth, requireAdmin, async (req, res) => {
 
     const cpLead = total > 0 ? Math.round(totalSpent / total) : 0;
 
-    const interestedLabel = "Quan tâm (Quan tâm + QT hời hợt + Đang tư vấn + QT DA khác)";
     res.json({
       projectName: project?.name || "",
       startDate: startDate || null,
       endDate: endDate || null,
       total,
-      groups: {
-        appointment: { count: appointment.length, pct: pct(appointment.length), label: "Hẹn gặp/Hẹn xem" },
-        interested: { count: interested.length, pct: pct(interested.length), label: interestedLabel },
-        notInterested: { count: notInterested.length, pct: pct(notInterested.length), label: "Không quan tâm (Bấm nhầm/Rác/Sale/Gọi lại KQT)" },
-        noFeedback: { count: noFeedback.length, pct: pct(noFeedback.length), label: "Chưa nhập feedback (Mới)" },
-        booked: { count: booked.length, pct: pct(booked.length), label: "Booking/Cọc/Chốt" },
-        other: { count: other.length, pct: pct(other.length), label: "Trạng thái khác (thuê bao, tài chính yếu, trùng sale, chưa liên lạc...)" },
-      },
+      groups,
       totalSpent,
       cpLead,
     });
