@@ -68,7 +68,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-07-ack-fast-response";
+const BUILD_VERSION = "2026-09-07-sync-history-oom-fix";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3103,18 +3103,44 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   // 2. Save CRM-added history per phone (non-sheet entries)
   // Keep ALL feedback entries + only latest "Chia lead" per sale to prevent bloat
+  //
+  // Lọc NGAY TRONG SQL. Bản cũ đọc `lh.*` của cả dự án rồi mới bỏ dòng sheet thuần
+  // bằng JS — bảng phình tới hàng trăm nghìn dòng thì heap vọt qua 1.5GB và Node
+  // chết đúng lần sync đầu sau khi khởi động, thành vòng lặp crash.
   let allHistory = [];
   if (existing.length > 0) {
     allHistory = await all(db,
-      "SELECT lh.*, l.phone FROM lead_history lh JOIN leads l ON lh.lead_id = l.id WHERE l.project_id = ? ORDER BY lh.seq DESC",
+      `SELECT lh.seq, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.source, l.phone
+       FROM lead_history lh JOIN leads l ON lh.lead_id = l.id
+       WHERE l.project_id = ?
+         AND NOT (COALESCE(lh.source, '') = 'sheet'
+                  AND TRIM(COALESCE(lh.status, '')) = ''
+                  AND TRIM(COALESCE(lh.feedback, '')) = '')
+       ORDER BY lh.seq DESC`,
       [projectId]
     );
   }
+
+  // Khoá của dòng lịch sử nguồn "sheet" đã nằm trong DB. phoneHistMap không chứa
+  // dòng sheet thuần nên nếu chỉ dựa vào nó, mỗi lần sync lại chèn lại nguyên xi
+  // các dòng đó — 30 giây một lần, bảng lớn mãi không dừng.
+  const sheetHistKeys = new Set();
+  if (existing.length > 0) {
+    const sheetRows = await all(db,
+      `SELECT DISTINCT l.phone, lh.sale_name, lh.action, lh.contact_date
+       FROM lead_history lh JOIN leads l ON lh.lead_id = l.id
+       WHERE l.project_id = ? AND COALESCE(lh.source, '') = 'sheet'`,
+      [projectId]
+    );
+    for (const r of sheetRows) {
+      const np = normPhone(r.phone);
+      if (np) sheetHistKeys.add(`${np}|${r.sale_name || ""}|${r.action || ""}|${r.contact_date || ""}`);
+    }
+  }
+  console.log(`[replaceProjectData] history kept=${allHistory.length} sheetKeys=${sheetHistKeys.size}`);
+
   const phoneHistMap = new Map();
   for (const h of allHistory) {
-    // Direction B: keep sheet-source entries that have real sale feedback (non-empty status/feedback).
-    // Pure "Chia lead" sheet entries (no status, no feedback) are dropped — they'll be re-added from new sheet.
-    if (h.source === "sheet" && !h.status && !h.feedback) continue;
     const np = normPhone(h.phone);
     if (!np) continue;
     if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
@@ -3373,15 +3399,18 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       const crmHistEntries = crmHist || [];
       for (let si = 0; si < l.saleHistory.length; si++) {
         const sh = l.saleHistory[si];
-        const isDup = crmHistEntries.some(h =>
-          h.sale_name === sh.saleName && h.action === sh.action && h.contact_date === sh.date
-        );
+        const sheetKey = `${np}|${sh.saleName || ""}|${sh.action || ""}|${sh.date || ""}`;
+        const isDup = sheetHistKeys.has(sheetKey)
+          || crmHistEntries.some(h =>
+            h.sale_name === sh.saleName && h.action === sh.action && h.contact_date === sh.date
+          );
         if (!isDup) {
           stmts.push({
             sql: `INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source)
                   VALUES(${historyLeadIdSql}, ?, ?, ?, ?, ?, ${historySeqSql}, ?)`,
             args: [...historyLeadIdArg, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, ...historySeqArg, "sheet"],
           });
+          if (np) sheetHistKeys.add(sheetKey);
           seqCounter++;
         }
       }
@@ -3418,10 +3447,13 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // Post-sync: re-sync lead statuses from history (use contact_date for correct ordering)
   try {
     const leadsInProject = await all(db, "SELECT id, status, name FROM leads WHERE project_id = ?", [projectId]);
+    // Vòng dò bên dưới chỉ đọc dòng có trạng thái và dừng ở mốc "Chia lead" —
+    // các dòng còn lại chỉ tốn RAM, lọc luôn ở SQL.
     const allHistory = await all(db, `
       SELECT lead_id, action, status, seq, source, sale_name, contact_date
       FROM lead_history
       WHERE lead_id IN (SELECT id FROM leads WHERE project_id = ?)
+        AND (action = 'Chia lead' OR TRIM(COALESCE(status, '')) != '')
       ORDER BY lead_id, seq DESC`, [projectId]);
 
     // Parse Vietnamese/ISO date string to Date object
