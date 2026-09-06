@@ -361,6 +361,7 @@ async function sendNativePushToUser(userId, payload) {
 
   const accessToken = await getFcmAccessToken();
   let sent = 0;
+  const results = [];
   const notificationSound = getNativeNotificationSound(payload.sound);
   const data = stringifyFcmData({
     ...(payload.data || {}),
@@ -385,10 +386,12 @@ async function sendNativePushToUser(userId, payload) {
       if (!badgeOnly) {
         message.notification = { title, body };
         const useCustomSound = notificationSound.soundName && notificationSound.soundName !== "default";
+        // REST v1 dùng notification_priority (PRIORITY_*). Field "priority" không tồn tại
+        // trong AndroidNotification → FCM trả 400 INVALID_ARGUMENT và Android im hoàn toàn.
         message.android.notification = {
           channel_id: notificationSound.channelId,
           sound: useCustomSound ? notificationSound.soundName : "default",
-          priority: "HIGH",
+          notification_priority: "PRIORITY_HIGH",
           default_vibrate_timings: true,
           default_sound: !useCustomSound,
           notification_count: badgeCount,
@@ -472,17 +475,20 @@ async function sendNativePushToUser(userId, payload) {
     }
     if (delivered) {
       sent++;
+      results.push({ tokenId: row.id, platform: row.platform || "?", ok: true, error: "" });
       await run(db, "UPDATE native_push_tokens SET last_error = '', updated_at = datetime('now') WHERE id = ?", [row.id]);
       console.log(`[NativePush] OK user#${userId} platform=${row.platform || "?"} token#${row.id}`);
       appendPushLog({ ev: "native_ok", userId, tokenId: row.id, platform: row.platform, title: payload.title, body: payload.body });
     } else {
-      appendPushLog({ ev: "native_fail", userId, tokenId: row.id, platform: row.platform, title: payload.title, error: lastFailure || "token_removed_400_404" });
+      const reason = lastFailure || "token_removed_404";
+      results.push({ tokenId: row.id, platform: row.platform || "?", ok: false, error: reason.slice(0, 300) });
+      appendPushLog({ ev: "native_fail", userId, tokenId: row.id, platform: row.platform, title: payload.title, error: reason });
       if (lastFailure) {
         await run(db, "UPDATE native_push_tokens SET last_error = ?, updated_at = datetime('now') WHERE id = ?", [lastFailure, row.id]);
       }
     }
   }
-  return { sent };
+  return { sent, results };
 }
 
 async function sendPushToUser(userId, payload) {

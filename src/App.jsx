@@ -1467,6 +1467,7 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushBusy, setPushBusy] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [nativePushServerStatus, setNativePushServerStatus] = useState(null);
+  const [pushTestResults, setPushTestResults] = useState(null);
   const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
@@ -1742,7 +1743,8 @@ function CRMApp({ user, updateUser, onLogout }) {
       const res = await apiFetch(`${API}/native-push/test`, { method: "POST", body: "{}" });
       const data = await res.json().catch(() => ({}));
       const status = await refreshNativePushServerStatus();
-      const err = status?.tokens?.[0]?.last_error || data.error || "";
+      setPushTestResults(Array.isArray(data.results) ? data.results : null);
+      const err = data.results?.find((r) => !r.ok)?.error || status?.tokens?.[0]?.last_error || data.error || "";
       if (res.ok && (data.sent > 0 || data.nativeSent > 0)) {
         showToast("Đã gửi push test. Vuốt tắt app rồi thử lại — phải thấy banner.", "success");
       } else {
@@ -3374,11 +3376,19 @@ function CRMApp({ user, updateUser, onLogout }) {
                 {" · "}Token: <b>{nativePushServerStatus?.tokenCount ?? "?"}</b>
                 {" · "}Firebase: <b>{nativePushServerStatus?.fcmConfigured === false ? "chưa cấu hình" : nativePushServerStatus?.fcmConfigured ? "OK" : "?"}</b>
               </div>
-              {!!nativePushServerStatus?.tokens?.[0]?.last_error && (
+              {!!nativePushServerStatus?.tokens?.[0]?.last_error && !pushTestResults && (
                 <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3, wordBreak: "break-word" }}>
                   Lỗi: {String(nativePushServerStatus.tokens[0].last_error).slice(0, 160)}
                 </div>
               )}
+              {pushTestResults?.map((r) => (
+                <div
+                  key={r.tokenId}
+                  style={{ fontSize: 10, color: r.ok ? "#15803d" : "#dc2626", marginTop: 3, wordBreak: "break-word" }}
+                >
+                  {r.platform} #{r.tokenId}: {r.ok ? "gửi OK" : String(r.error || "lỗi").slice(0, 200)}
+                </div>
+              ))}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
               <button
