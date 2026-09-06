@@ -1996,7 +1996,9 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (!isNativePlatform()) return;
     const n = Array.isArray(notifications) ? notifications.length : 0;
     if (n <= 0) {
-      void setNativeAppIconBadge(0);
+      // Phải báo server về 0 nữa. Trước đây chỉ xoá badge dưới máy nên bộ đếm
+      // trên server cứ cộng dồn, lần push sau lại nhảy tiếp 4, 5, 6...
+      void syncNativeAppBadge(apiFetch, API, 0);
       return;
     }
     void syncNativeAppBadge(apiFetch, API, n);

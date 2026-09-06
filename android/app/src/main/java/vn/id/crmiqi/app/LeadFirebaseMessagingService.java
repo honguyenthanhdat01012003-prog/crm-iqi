@@ -53,6 +53,11 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         }
         if (data.isEmpty()) return;
 
+        // Tin đồng bộ badge là tin ngầm, không có notification payload.
+        // Không chặn ở đây thì mỗi lần app cập nhật số trên icon lại hiện
+        // một thông báo rỗng "Bạn có thông báo mới".
+        if ("badge_sync".equals(data.get("type"))) return;
+
         String sound = valueOrDefault(data.get("sound"), "manager");
         String title = valueOrDefault(data.get("title"), "LUX IQI CRM");
         String body = valueOrDefault(data.get("body"), "Bạn có lead mới");

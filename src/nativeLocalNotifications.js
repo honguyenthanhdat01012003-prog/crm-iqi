@@ -95,6 +95,12 @@ export async function setNativeAppIconBadge(count = 0) {
       try {
         await LocalNotifications.removeAllDeliveredNotifications();
       } catch { /* ignore */ }
+      // Thông báo lead đến từ FCM nên do PushNotifications quản lý.
+      // Chỉ xoá phía LocalNotifications thì khay vẫn còn và Xiaomi vẫn đếm số trên icon.
+      try {
+        const { PushNotifications } = await import("@capacitor/push-notifications");
+        await PushNotifications.removeAllDeliveredNotifications();
+      } catch { /* ignore */ }
     }
     return { ok: true, count: n };
   } catch (err) {
