@@ -1,0 +1,73 @@
+H1:HƯỚNG DẪN CÀI ĐẶT ỨNG DỤNG LUX IQI CRM TRÊN ANDROID
+P:Tài liệu này hướng dẫn cài ứng dụng LUX IQI CRM từ file APK. Toàn bộ quá trình mất khoảng 5 phút. Vui lòng làm đầy đủ các bước, đặc biệt là phần cấp quyền thông báo, vì nếu bỏ qua thì máy sẽ không nhận được báo lead mới.
+
+H2:Yêu cầu trước khi cài
+B:Điện thoại Android phiên bản 7.0 trở lên.
+B:File cài đặt: LUX-IQI-CRM-android-v1.0.7.apk
+B:Kết nối Internet (Wi-Fi hoặc 4G).
+B:Tài khoản đăng nhập CRM do quản lý cấp.
+
+H2:Bước 1 – Tải file APK về điện thoại
+N:Nhận file APK từ quản lý qua Zalo, Telegram hoặc email.
+N:Bấm vào file để tải về máy.
+N:Sau khi tải xong, mở ứng dụng Quản lý tệp (File Manager), vào thư mục Download để tìm file.
+W:Lưu ý: Nếu tải qua Zalo, hãy bấm Lưu về máy trước rồi mới mở từ thư mục Download. Mở trực tiếp trong Zalo đôi khi báo lỗi.
+
+H2:Bước 2 – Cho phép cài ứng dụng từ nguồn này
+P:Android mặc định chặn cài ứng dụng ngoài CH Play. Đây là bước bật quyền cho phép, chỉ cần làm một lần duy nhất.
+N:Bấm vào file APK vừa tải.
+N:Màn hình hiện thông báo "Không được phép cài đặt ứng dụng không xác định từ nguồn này". Bấm Cài đặt.
+N:Hệ thống chuyển sang trang cài đặt. Gạt bật mục Cho phép từ nguồn này (hoặc Tin cậy nguồn này).
+N:Bấm nút Quay lại để trở về màn hình cài đặt ứng dụng.
+
+H2:Bước 3 – Tiến hành cài đặt
+N:Bấm Cài đặt và chờ khoảng 10–20 giây.
+N:Nếu hiện cảnh báo từ Play Protect với nội dung "Ứng dụng không an toàn" hoặc "Ứng dụng chưa được quét", bấm Vẫn cài đặt hoặc Cài đặt mà không cần quét.
+N:Cài xong bấm Mở để khởi động ứng dụng.
+W:Cảnh báo của Play Protect là bình thường với mọi ứng dụng cài ngoài CH Play, không phải app bị nhiễm mã độc. Ứng dụng này do công ty phát triển và phân phối nội bộ.
+
+H2:Bước 4 – Cấp quyền thông báo (BẮT BUỘC)
+P:Đây là bước quan trọng nhất. Không cấp quyền này thì máy sẽ không kêu và không hiện thông báo khi có lead mới được chia.
+N:Lần đầu mở app, màn hình hỏi "Cho phép LUX IQI CRM gửi thông báo cho bạn?". Bấm Cho phép.
+N:Nếu lỡ bấm Từ chối, vào Cài đặt điện thoại, chọn Ứng dụng, tìm LUX IQI CRM, chọn Thông báo và bật lên.
+N:Kiểm tra bật đủ các mục con: Lead mới quản lý, Lead mới sale, Nhắc cập nhật lead, Thu hồi lead.
+
+H2:Bước 5 – Riêng máy Xiaomi, Redmi, POCO, OPPO, vivo, realme
+P:Các dòng máy này tự động tắt ứng dụng chạy nền để tiết kiệm pin, khiến thông báo lead không về khi đã tắt app. Cần chỉnh thêm hai mục sau.
+N:Vào Cài đặt, chọn Ứng dụng, chọn Quản lý ứng dụng, tìm LUX IQI CRM.
+N:Bật mục Tự khởi động (Autostart).
+N:Vào mục Tiết kiệm pin (hoặc Trình tiết kiệm pin), chọn Không giới hạn (No restrictions).
+N:Quay ra màn hình đa nhiệm, vuốt tìm LUX IQI CRM rồi bấm biểu tượng ổ khoá để ghim ứng dụng, tránh bị dọn khi tối ưu bộ nhớ.
+W:Bỏ qua bước này là nguyên nhân phổ biến nhất khiến sale không nhận được thông báo lead khi tắt app.
+
+H2:Bước 6 – Đăng nhập và kiểm tra
+N:Nhập tên đăng nhập và mật khẩu do quản lý cấp.
+N:Chờ ứng dụng tải dữ liệu lần đầu, có thể mất 10–30 giây.
+N:Khi vào được danh sách khách hàng là đã thành công.
+N:Nhờ quản lý chia thử một lead để kiểm tra. Tắt hẳn ứng dụng rồi chờ, máy phải kêu và hiện thông báo trên màn hình.
+
+H2:Xử lý sự cố thường gặp
+H3:Cài đặt thất bại hoặc báo "Ứng dụng không được cài đặt"
+B:Nguyên nhân thường gặp là máy đang có bản cũ ký bằng khoá khác. Gỡ ứng dụng LUX IQI CRM cũ rồi cài lại.
+B:Kiểm tra bộ nhớ trống còn ít nhất 200 MB.
+B:Tải lại file APK vì file có thể bị lỗi trong quá trình truyền.
+
+H3:Không nhận được thông báo khi tắt app
+B:Kiểm tra lại Bước 4 và Bước 5, đặc biệt là mục Tự khởi động.
+B:Mở app, vào mục Thông báo, nếu thấy dòng nhắc màu vàng thì bấm nút bên cạnh để đăng ký lại.
+B:Kiểm tra điện thoại không bật chế độ Không làm phiền.
+
+H3:Ứng dụng tải dữ liệu chậm hoặc đứng ở màn hình chờ
+B:Kiểm tra kết nối mạng, thử chuyển giữa Wi-Fi và 4G.
+B:Bấm nút Thử lại ngay trên màn hình chờ.
+B:Nếu vẫn không được, tắt hẳn ứng dụng rồi mở lại.
+
+H3:Số đỏ trên biểu tượng ứng dụng hiển thị sai
+B:Mở ứng dụng và vào mục Thông báo, số sẽ tự động về 0.
+B:Vuốt xoá các thông báo cũ còn nằm trong khay thông báo.
+
+H2:Cập nhật phiên bản mới
+P:Khi có bản cập nhật, quản lý sẽ gửi file APK mới. Cài đè trực tiếp lên bản cũ, không cần gỡ ứng dụng và không mất dữ liệu đăng nhập. Các bước làm giống Bước 1 đến Bước 3.
+
+H2:Hỗ trợ
+P:Nếu gặp vấn đề không xử lý được, liên hệ quản lý trực tiếp và cung cấp các thông tin sau để được hỗ trợ nhanh: tên máy đang dùng, phiên bản Android, ảnh chụp màn hình lỗi, và mô tả bước đang bị kẹt.
