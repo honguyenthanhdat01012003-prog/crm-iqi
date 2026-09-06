@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-split-consulting";
+const BUILD_VERSION = "2026-09-06-fast-boot-cache";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8516,11 +8516,10 @@ app.get("/api/data", requireAuth, async (req, res) => {
   try {
     const t0 = Date.now();
 
-    // Phase 1 boot: metadata only — unblock UI shell immediately (no lead scan)
+    // Phase 1 boot: metadata only — KHÔNG đếm lead (queryProjectLeadCounts rất nặng với sale nhiều lead)
     if (req.query.bootstrapOnly === "1") {
-      const [bootstrap, projectLeadCounts, hash] = await Promise.all([
+      const [bootstrap, hash] = await Promise.all([
         getBootstrapPayload(db, req.user),
-        queryProjectLeadCounts(db, req.user),
         ensureSyncHash(),
       ]);
       return res.json({
@@ -8531,7 +8530,8 @@ app.get("/api/data", requireAuth, async (req, res) => {
         leadsLimit: 15,
         paginated: true,
         tabCounts: { all: 0 },
-        projectLeadCounts,
+        // Counts load sau qua /api/projects/lead-counts — tránh block splash 30–60s
+        projectLeadCounts: { byProject: {}, all: 0 },
         phoneRegistrations: {},
         hash,
         version: dataVersion,

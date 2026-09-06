@@ -2345,7 +2345,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     // Desktop: full scope mode. Mobile: vẫn hydrate disk + persist lite (không bật full scope nặng).
     const canScope = canUseProjectCache && !isMobile;
 
-    // 1) Hydrate disk ngay — mở app (web + iOS) là thấy data lần trước
+    // 1) Hydrate disk ngay — mở app là thấy data lần trước (giống Zalo: hiện local trước, sync sau)
     if (canUseProjectCache) {
       const userKey = scopeUserKey(user);
       const cacheKey = buildScopeCacheKey({
@@ -2355,9 +2355,14 @@ function CRMApp({ user, updateUser, onLogout }) {
         userRole: user.role,
         userId: userKey,
       });
-      if (!getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey)) {
+      const mem = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
+      if (mem?.data?.leads?.length) {
+        applyScopePayload(mem.data, cacheKey);
+        markInitialDataLoaded();
+        bootDoneRef.current = true;
+      } else {
         const disk = await readScopeDiskCache(userKey, cacheKey);
-        if (disk?.data) {
+        if (disk?.data?.leads?.length) {
           setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, disk.data, {
             userKey,
             persist: false,
@@ -2369,30 +2374,55 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     }
 
-    // 2) Không có cache: lite page paint ngay + scope full nền (desktop)
     const hadCache = bootDoneRef.current;
-    const bootP = fetchCrmData({ isBoot: true });
+
+    // 2) Lite page trước (nhanh, có khách) — bootstrap metadata chạy song song / nền
+    // Không để query counts nặng trong bootstrap chặn splash.
     let liteP = Promise.resolve(null);
     if (canUseProjectCache && !hadCache) {
-      // Hiện 50 lead đầu ngay — không chờ full scope
-      liteP = fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
-    } else if (isMobile && canUseProjectCache && hadCache) {
-      // Mobile đã có disk: refresh lite nền, không block UI
-      void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
+      liteP = fetchCrmData({
+        skipTabCounts: true,
+        refreshTabCounts: true,
+        timeoutMs: 25000,
+      });
+    } else if (canUseProjectCache && hadCache) {
+      // Đã có cache: refresh lite nền, không block
+      void fetchCrmData({
+        skipTabCounts: true,
+        refreshTabCounts: true,
+        timeoutMs: 25000,
+      });
     }
-    const [bootData, liteData] = await Promise.all([bootP, liteP]);
+
+    const bootP = fetchCrmData({ isBoot: true, timeoutMs: 20000 });
+
+    // Ưu tiên chờ lite nếu chưa có cache — UI hiện khách sớm nhất có thể
+    if (!hadCache && canUseProjectCache) {
+      const liteData = await liteP;
+      if (liteData && !bootDoneRef.current) {
+        // fetchCrmData(applyResult) đã markInitialDataLoaded
+      }
+      void bootP;
+    } else {
+      await bootP;
+    }
 
     if (canScope) {
       void fetchLeadScope({
-        background: hadCache || !!liteData,
+        background: hadCache || bootDoneRef.current,
         skipCacheRead: true,
       });
     }
 
-    if (!bootData && !liteData && !bootDoneRef.current) {
-      if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
-      bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 3000);
-      return;
+    if (!bootDoneRef.current) {
+      // Fallback: chờ boot nếu lite fail
+      const bootData = await bootP.catch(() => null);
+      const liteData = await liteP.catch(() => null);
+      if (!bootData && !liteData && !bootDoneRef.current) {
+        if (bootRetryTimerRef.current) clearTimeout(bootRetryTimerRef.current);
+        bootRetryTimerRef.current = setTimeout(() => runBootLoad(), 2500);
+        return;
+      }
     }
     // Phase 3: schedules, ranking — không chặn UI
     fetchDataExtras();
@@ -2611,8 +2641,10 @@ function CRMApp({ user, updateUser, onLogout }) {
     const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
     const expectedCount = Number(projectLeadCounts?.byProject?.[Number(selectedProject)] || 0);
     const cachedLen = Array.isArray(cached?.data?.leads) ? cached.data.leads.length : 0;
-    // Chỉ so count tổng dự án khi KHÔNG lọc sale/QL — lọc race/sale luôn ít hơn tổng
+    // Cache lite/paginated chỉ có 1 trang — KHÔNG so với tổng lead dự án (tránh xóa cache → load lại 30–60s)
+    const isPartialPageCache = !!(cached?.data?.paginated || cached?.data?.scope === false);
     const countMismatch =
+      !isPartialPageCache &&
       selectedProject &&
       selectedProject !== "all" &&
       managerFilter === "all" &&
