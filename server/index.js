@@ -67,7 +67,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-06-shuffle-pass-count";
+const BUILD_VERSION = "2026-09-06-tele-lead-toggle";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -613,7 +613,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 47; // Bump this when adding new DDL/migrations
+const DB_VERSION = 48; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1958,6 +1958,10 @@ async function initDb() {
   if (dbVersion < 47) {
     console.log("[DB] v47 migration: users.push_badge_count (iOS app icon badge = số lead chưa xem)");
     try { await run(db, "ALTER TABLE users ADD COLUMN push_badge_count INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+  }
+  if (dbVersion < 48) {
+    console.log("[DB] v48 migration: projects.telegram_lead_notify (bật/tắt báo Telegram lead theo dự án)");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN telegram_lead_notify INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -4964,6 +4968,7 @@ async function getBootstrapPayload(db, user) {
       fbCode: user.role === "sale" ? "" : (p.fb_code || ""),
       fbPerson: user.role === "sale" ? "" : (p.fb_person || ""),
       dailyReportEnabled: Boolean(p.daily_report_enabled),
+      telegramLeadNotify: Boolean(p.telegram_lead_notify),
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
@@ -5089,6 +5094,7 @@ async function readData(db) {
       fbCode: p.fb_code || "",
       fbPerson: p.fb_person || "",
       dailyReportEnabled: Boolean(p.daily_report_enabled),
+      telegramLeadNotify: Boolean(p.telegram_lead_notify),
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
@@ -5129,7 +5135,8 @@ function formatRaceDeadline(msFromNow) {
 
 async function sendRaceManagerOfferNotifications(db, projectId, lead, managers = [], projectName = "-") {
   if (!lead || !managers.length) return;
-  const activeBot = await getBotForProject(projectId);
+  const teleEnabled = await isProjectTelegramLeadNotifyEnabled(db, projectId);
+  const activeBot = teleEnabled ? await getBotForProject(projectId) : null;
   const deadlineLabel = new Date(Date.now() + MANAGER_RACE_MS).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
   for (const mgr of managers) {
     const targetName = mgr.display_name || "";
@@ -9544,6 +9551,7 @@ app.get("/api/projects", requireAuth, async (req, res) => {
         fbCode: "",
         fbPerson: "",
         dailyReportEnabled: !!p.dailyReportEnabled,
+        telegramLeadNotify: !!p.telegramLeadNotify,
         isLegacy: !!p.isLegacy,
         distributionMode: normalizeDistributionMode(p.distributionMode),
       }));
@@ -9556,7 +9564,7 @@ app.get("/api/projects", requireAuth, async (req, res) => {
 
 app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
   try {
-    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, isLegacy } = req.body;
+    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, telegramLeadNotify, isLegacy } = req.body;
     const distributionMode = normalizeDistributionMode(req.body?.distributionMode);
     const teamIdsOrdered = Array.isArray(req.body?.teamIdsOrdered)
       ? [...new Set(req.body.teamIdsOrdered.map((v) => Number(v)).filter(Boolean))]
@@ -9570,7 +9578,7 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     if (isLegacy) {
       const result = await run(
         db,
-        "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, is_legacy, distribution_mode, race_team_cursor) VALUES(?, '', '', '', '', 0, 1, ?, 0)",
+        "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, is_legacy, distribution_mode, race_team_cursor, telegram_lead_notify) VALUES(?, '', '', '', '', 0, 1, ?, 0, 0)",
         [String(name).trim(), distributionMode]
       );
       const newProjectId = Number(result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID);
@@ -9587,8 +9595,8 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
       db,
-      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor) VALUES(?, ?, ?, ?, ?, ?, ?, 0)",
-      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode]
+      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor, telegram_lead_notify) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?)",
+      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0]
     );
     const newProjectId = Number(result.lastID || result.lastInsertRowid || result.lastInsertRowId);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -9697,7 +9705,7 @@ app.post("/api/projects/:id/sync", requireAuth, requireAdmin, async (req, res) =
 app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled } = req.body;
+    const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, telegramLeadNotify } = req.body;
     const distributionMode = normalizeDistributionMode(req.body?.distributionMode);
     const teamIdsOrdered = Array.isArray(req.body?.teamIdsOrdered)
       ? [...new Set(req.body.teamIdsOrdered.map((v) => Number(v)).filter(Boolean))]
@@ -9709,8 +9717,8 @@ app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => 
     const cleanCost = sanitizeSheetUrl(costUrl);
     await run(
       db,
-      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ?, daily_report_enabled = ?, distribution_mode = ? WHERE id = ?",
-      [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, id]
+      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ?, daily_report_enabled = ?, distribution_mode = ?, telegram_lead_notify = ? WHERE id = ?",
+      [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, id]
     );
     await run(db, "DELETE FROM project_teams WHERE project_id = ?", [id]);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -10408,11 +10416,26 @@ function buildTelegramNewLeadMessageText(lead, projectName, assignedAt, extraLin
 }
 
 /** Gửi tin Telegram lead mới + lưu message_id để xóa khi quá hạn / thu hồi. */
+async function isProjectTelegramLeadNotifyEnabled(db, projectId) {
+  const pid = Number(projectId) || 0;
+  if (!pid) return false;
+  try {
+    const row = await get(db, "SELECT telegram_lead_notify FROM projects WHERE id = ?", [pid]);
+    return Boolean(row?.telegram_lead_notify);
+  } catch {
+    return false;
+  }
+}
+
 async function sendTelegramNewLeadNotification(db, { leadId, saleName, userId = 0, lead = null, extraLines = [], deadlineMinutes = null } = {}) {
   if (!leadId || (!saleName && !userId)) return null;
   try {
     const row = lead || await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
     if (!row) return null;
+    // Theo dự án: tắt = không gửi Telegram lead (mặc định tắt)
+    if (!(await isProjectTelegramLeadNotifyEnabled(db, row.project_id))) {
+      return null;
+    }
     let saleUser = null;
     if (Number(userId) > 0) {
       saleUser = await get(

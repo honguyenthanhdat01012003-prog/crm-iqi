@@ -1440,6 +1440,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     leadUrl: "",
     costUrl: "",
     dailyReportEnabled: false,
+    telegramLeadNotify: false,
     distributionMode: "log",
     teamIdsOrdered: [],
   });
@@ -2987,6 +2988,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       fbCode: "",
       fbPerson: "",
       dailyReportEnabled: false,
+      telegramLeadNotify: false,
       distributionMode: "log",
       teamIdsOrdered: [],
     });
