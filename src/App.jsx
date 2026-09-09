@@ -15,7 +15,7 @@ import {
   Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2, Download
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, getNativePushServerStatus, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge } from "./nativePush.js";
+import { getNativePushPermissionState, getNativePushPlatformLabel, getNativePushServerStatus, isDeviceTokenRegistered, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification, setNativeAppIconBadge } from "./nativeLocalNotifications.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
 import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
@@ -1467,6 +1467,12 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [pushBusy, setPushBusy] = useState(false);
   const [showPushPrompt, setShowPushPrompt] = useState(false);
   const [nativePushServerStatus, setNativePushServerStatus] = useState(null);
+  const [nativePushLastError, setNativePushLastError] = useState("");
+  const nativePushDeviceRegistered = useMemo(
+    () => isDeviceTokenRegistered(nativePushServerStatus),
+    [nativePushServerStatus]
+  );
+  const nativePlatformLabel = nativePushSupported || nativeLocalSupported ? getNativePushPlatformLabel() : "điện thoại";
   const nativeLocalAutoTriedRef = useRef(false);
   const managerLeadAudioRef = useRef(null);
   const saleLeadAudioRef = useRef(null);
@@ -1678,8 +1684,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         .then(([permission, status]) => {
           setPushPermission(permission);
           if (status.ok) setNativePushServerStatus(status);
-          const hasServerToken = !!(status.ok && status.tokenCount > 0);
-          const enabled = permission === "granted" && hasServerToken;
+          const enabled = permission === "granted" && isDeviceTokenRegistered(status);
           setPushEnabled(enabled);
         })
         .catch(() => setPushEnabled(false));
@@ -1712,9 +1717,15 @@ function CRMApp({ user, updateUser, onLogout }) {
       let enabled = !!result.ok && nextPermission === "granted";
       if (enabled && nativePushSupported) {
         const status = await refreshNativePushServerStatus();
-        enabled = !!(status?.ok && status.tokenCount > 0);
+        enabled = isDeviceTokenRegistered(status);
       }
       setPushEnabled(enabled);
+      if (nativePushSupported) {
+        setNativePushLastError(enabled
+          ? ""
+          : (result.error
+            || (nextPermission !== "granted" ? "Chưa đọc được quyền thông báo của máy" : "Server chưa lưu token của máy này")));
+      }
       if (result.ok) {
         if (nativePushSupported) {
           localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
@@ -1764,16 +1775,23 @@ function CRMApp({ user, updateUser, onLogout }) {
       if (!alive) return;
       const nextPermission = await getNativePushPermissionState();
       const refreshed = await refreshNativePushServerStatus();
-      const enabled = !!result.ok && nextPermission === "granted" && !!(refreshed?.ok && refreshed.tokenCount > 0);
+      // Phải là token của CHÍNH máy này. Đếm theo tài khoản thì máy khác cũng tính,
+      // và máy đăng ký lỗi sẽ mắc ở trạng thái lửng lơ không báo gì.
+      const enabled = !!result.ok && nextPermission === "granted" && isDeviceTokenRegistered(refreshed);
       setPushPermission(nextPermission);
       setPushEnabled(enabled);
       if (enabled) {
+        setNativePushLastError("");
         const firstTime = localStorage.getItem(`crm_native_push_enabled_${user.userId}`) !== "1";
         localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
         if (firstTime) showToast("Đã bật thông báo. Tắt app vẫn nhận lead.", "success");
       } else {
         localStorage.removeItem(`crm_native_push_enabled_${user.userId}`);
-        const errMsg = result.error || (result.ok ? "Server chưa lưu token" : (result.permission === "denied" ? "Quyền thông báo bị chặn" : "Chưa lấy được FCM token — bấm Kích hoạt lại khi mở app"));
+        const errMsg = result.error
+          || (result.permission === "denied" ? "Quyền thông báo bị chặn" : null)
+          || (nextPermission !== "granted" ? "Chưa đọc được quyền thông báo của máy" : null)
+          || (result.ok ? "Server chưa lưu token của máy này" : "Chưa lấy được FCM token — bấm Đăng ký lại");
+        setNativePushLastError(errMsg);
         showToast("Chưa đăng ký FCM: " + errMsg, "warning");
       }
     };
@@ -1785,9 +1803,10 @@ function CRMApp({ user, updateUser, onLogout }) {
           const synced = await syncNativePushTokenToServer(apiFetch, API);
           if (synced.ok) {
             const refreshed = await refreshNativePushServerStatus();
-            if (refreshed?.ok && refreshed.tokenCount > 0) {
+            if (isDeviceTokenRegistered(refreshed)) {
               setPushEnabled(true);
               setPushPermission("granted");
+              setNativePushLastError("");
               localStorage.setItem(`crm_native_push_enabled_${user.userId}`, "1");
               showToast("Đã đồng bộ FCM token lên server.", "success");
               return;
@@ -1795,6 +1814,7 @@ function CRMApp({ user, updateUser, onLogout }) {
           }
         } catch {}
         setPushEnabled(false);
+        setNativePushLastError(err?.message || String(err));
         showToast("Không đăng ký được push nền: " + (err.message || err), "warning");
       });
     }, 800);
@@ -3274,13 +3294,11 @@ function CRMApp({ user, updateUser, onLogout }) {
                 {pushEnabled
                   ? (nativePushSupported ? "Đã đăng ký FCM — nhận lead khi tắt app" : "Chỉ báo khi app đang mở")
                   : pushPermission === "denied"
-                    ? ((nativePushSupported || nativeLocalSupported) ? "Quyền thông báo Android đang tắt — bấm Mở cài đặt" : "Đang bị chặn trong trình duyệt")
+                    ? ((nativePushSupported || nativeLocalSupported) ? `Quyền thông báo ${nativePlatformLabel} đang tắt — bấm Mở cài đặt` : "Đang bị chặn trong trình duyệt")
                     : nativePushSupported
                       ? (nativePushServerStatus?.fcmConfigured === false
                         ? "Server chưa cấu hình Firebase — kiểm tra .env VPS"
-                        : nativePushServerStatus?.tokenCount > 0
-                          ? "Đang đồng bộ token..."
-                          : "Chưa đăng ký FCM — bấm Đăng ký lại bên phải")
+                        : (nativePushLastError || "Máy này chưa đăng ký — bấm Đăng ký lại bên phải"))
                       : ((nativePushSupported || nativeLocalSupported) ? "App sẽ tự xin quyền thông báo sau khi đăng nhập" : "Bật để nhận lead mới khi đóng app")}
               </div>
             </div>
@@ -3346,7 +3364,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       )}
 
       {/* Push hỏng thì mới hiện lối đăng ký lại — chạy bình thường thì panel chỉ có thông báo */}
-      {nativePushSupported && (pushPermission === "denied" || nativePushServerStatus?.tokenCount === 0) && (
+      {nativePushSupported && (pushPermission === "denied" || (!!nativePushServerStatus && !nativePushDeviceRegistered)) && (
         <div style={{ padding: "10px 12px", borderBottom: "1px solid #f3f4f6", background: "#fffbeb" }}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ minWidth: 0, flex: "1 1 auto" }}>
@@ -3354,7 +3372,9 @@ function CRMApp({ user, updateUser, onLogout }) {
               <div style={{ fontSize: 10, color: "#92400e", marginTop: 2, lineHeight: 1.45 }}>
                 {pushPermission === "denied"
                   ? "Quyền thông báo đang tắt — bấm Mở cài đặt để bật lại."
-                  : "Thiết bị chưa đăng ký — bấm Đăng ký lại."}
+                  : (nativePushLastError
+                    ? `${nativePushLastError} — bấm Đăng ký lại.`
+                    : "Máy này chưa đăng ký — bấm Đăng ký lại.")}
               </div>
             </div>
             <button

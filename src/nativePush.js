@@ -26,13 +26,40 @@ export function getNativePushDeviceId() {
   return id;
 }
 
+/** "Android"/"iPhone" để câu thông báo trên máy nào ra đúng máy đó. */
+export function getNativePushPlatformLabel() {
+  const platform = typeof window !== "undefined" ? (window.Capacitor?.getPlatform?.() || "") : "";
+  if (platform === "ios") return "iPhone";
+  if (platform === "android") return "Android";
+  return "điện thoại";
+}
+
+/**
+ * MÁY NÀY đã có token trên server chưa.
+ * `tokenCount` đếm theo tài khoản nên máy khác / lần cài trước cũng làm nó > 0,
+ * khiến máy chưa đăng ký được vẫn bị coi là "đang đồng bộ" và treo mãi ở đó.
+ */
+export function isDeviceTokenRegistered(status) {
+  if (!status?.ok) return false;
+  const tokens = Array.isArray(status.tokens) ? status.tokens : [];
+  if (!tokens.length) return false;
+  const withDeviceId = tokens.filter((t) => String(t?.device_id || t?.deviceId || "").trim());
+  // Token cũ lưu trước khi có device_id → không phân biệt được, giữ cách đếm cũ
+  if (!withDeviceId.length) return true;
+  const deviceId = getNativePushDeviceId();
+  return withDeviceId.some((t) => String(t.device_id || t.deviceId || "") === deviceId);
+}
+
 export async function getNativePushPermissionState() {
   if (!isNativePushSupported()) return "unsupported";
   try {
     const { PushNotifications } = await import("@capacitor/push-notifications");
+    // Máy cũ (iPhone X…) mở app lần đầu sau khi cài rất nặng; hết 4 giây là hàm này
+    // trả "unsupported" — không phải granted mà cũng không phải denied, nên giao diện
+    // rơi vào nhánh không có đường ra.
     const perm = await withTimeout(
       PushNotifications.checkPermissions(),
-      4000,
+      12000,
       "Không kiểm tra được quyền thông báo native"
     );
     if (perm.receive !== "granted") {
@@ -141,21 +168,31 @@ export async function obtainNativePushDeviceToken() {
 
   await ensureNativePushChannels(PushNotifications);
 
-  try {
-    const token = await waitForNativePushToken(PushNotifications);
-    if (!token || token.length < 20) return { ok: false, error: "FCM token rỗng" };
-    // APNs device token thường chỉ hex ~64 ký tự — FCM token dài hơn và có ký tự khác
-    const looksLikeApnsHex = /^[0-9a-fA-F]{64}$/.test(token);
-    if (looksLikeApnsHex) {
-      return {
-        ok: false,
-        error: "Đang lấy APNs token thay vì FCM. Cập nhật AppDelegate (Messaging.messaging().token) rồi build lại.",
-      };
+  // Lần cài đầu, iOS phải xong bắt tay APNs rồi Firebase mới cấp token. Máy cũ hoặc
+  // mạng yếu thường quá hạn lần đầu nhưng lần hai là được — thử lại thay vì bỏ luôn.
+  let lastError = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const token = await waitForNativePushToken(PushNotifications);
+      if (!token || token.length < 20) {
+        lastError = "FCM token rỗng";
+        continue;
+      }
+      // APNs device token thường chỉ hex ~64 ký tự — FCM token dài hơn và có ký tự khác
+      const looksLikeApnsHex = /^[0-9a-fA-F]{64}$/.test(token);
+      if (looksLikeApnsHex) {
+        return {
+          ok: false,
+          error: "Đang lấy APNs token thay vì FCM. Cập nhật AppDelegate (Messaging.messaging().token) rồi build lại.",
+        };
+      }
+      return { ok: true, permission: "granted", token };
+    } catch (err) {
+      lastError = err?.message || String(err);
     }
-    return { ok: true, permission: "granted", token };
-  } catch (err) {
-    return { ok: false, error: err?.message || String(err) };
   }
+  return { ok: false, error: lastError || "Không lấy được FCM token" };
 }
 
 export async function syncNativePushTokenToServer(apiFetch, apiBase = "/api") {
