@@ -15,7 +15,7 @@ import {
   Briefcase, AlertTriangle, ArrowUp, ArrowDown, CalendarClock, CheckCircle2, Download
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
-import { getNativePushPermissionState, getNativePushPlatformLabel, getNativePushServerStatus, isDeviceTokenRegistered, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge } from "./nativePush.js";
+import { getNativePushPermissionState, getNativePushPlatformLabel, getNativePushServerStatus, isDeviceTokenRegistered, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge, ensureNativePushTokenListeners } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification, setNativeAppIconBadge } from "./nativeLocalNotifications.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
 import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
@@ -1745,6 +1745,13 @@ function CRMApp({ user, updateUser, onLogout }) {
       setPushBusy(false);
     }
   }, [pushSupported, nativePushSupported, nativeLocalSupported, pushBusy, pushPromptKey, user.userId, refreshNativePushServerStatus]);
+
+  useEffect(() => {
+    if (!nativePushSupported) return;
+    import("@capacitor/push-notifications")
+      .then(({ PushNotifications }) => ensureNativePushTokenListeners(PushNotifications))
+      .catch(() => {});
+  }, [nativePushSupported]);
 
   useEffect(() => {
     if (!nativePushSupported || pushBusy || nativePushAutoTriedRef.current) return;

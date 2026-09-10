@@ -95,61 +95,73 @@ async function ensureNativePushChannels(PushNotifications) {
   }
 }
 
-export async function waitForNativePushToken(PushNotifications, timeoutMs = 30000) {
-  // LUÔN xin token mới từ FCM thay vì tin cache — token cache có thể đã chết
-  // sau khi update/cài lại app (FCM vẫn trả OK nhưng Apple không giao nữa).
-  // Cache chỉ dùng làm fallback nếu FCM không phản hồi kịp.
-  const existing = localStorage.getItem("crm_native_push_token") || "";
-  const fallbackMs = existing.length > 20 ? 8000 : timeoutMs;
+let nativePushListenersBound = false;
+let latestNativePushToken = "";
+let latestNativePushError = "";
+const nativePushWaiters = new Set();
 
-  let done = false;
-  let timer = null;
-  let removeRegistration = null;
-  let removeError = null;
-  let resolveToken = null;
-  let rejectToken = null;
-  const tokenPromise = new Promise((resolve, reject) => {
-    resolveToken = resolve;
-    rejectToken = reject;
-  });
-  const cleanup = () => {
-    if (timer) clearTimeout(timer);
-    removeRegistration?.remove?.();
-    removeError?.remove?.();
-  };
-  const finish = (fn, value) => {
-    if (done) return;
-    done = true;
-    cleanup();
-    fn(value);
-  };
+function resolveNativePushWaiters(token) {
+  for (const waiter of nativePushWaiters) waiter.resolve(token);
+  nativePushWaiters.clear();
+}
 
-  // PHẢI gắn xong listener rồi mới gọi register().
-  // Bản cũ gọi register() ngay trong lúc addListener còn đang chờ bridge: máy nào
-  // đã có token sẵn trong Firebase sẽ bắn "registration" gần như tức thì, bắn xong
-  // rồi listener mới gắn nên không ai nghe — lần nào cũng hết giờ và báo
-  // "Không nhận được FCM token từ Google" dù máy hoàn toàn bình thường.
-  removeRegistration = await PushNotifications.addListener("registration", (result) => {
+function rejectNativePushWaiters(err) {
+  for (const waiter of nativePushWaiters) waiter.reject(err);
+  nativePushWaiters.clear();
+}
+
+/** Gắn listener 1 lần cho cả vòng đời app — không gỡ khi hết giờ chờ. */
+export async function ensureNativePushTokenListeners(PushNotifications) {
+  if (nativePushListenersBound || !PushNotifications) return;
+  nativePushListenersBound = true;
+  latestNativePushToken = localStorage.getItem("crm_native_push_token") || "";
+  await PushNotifications.addListener("registration", (result) => {
     const value = result?.value || "";
-    if (value) localStorage.setItem("crm_native_push_token", value);
-    finish(resolveToken, value);
+    if (!value) return;
+    latestNativePushToken = value;
+    latestNativePushError = "";
+    localStorage.setItem("crm_native_push_token", value);
+    resolveNativePushWaiters(value);
   });
-  removeError = await PushNotifications.addListener("registrationError", (error) => {
-    finish(rejectToken, new Error(error?.error || "Đăng ký FCM thất bại"));
+  await PushNotifications.addListener("registrationError", (error) => {
+    latestNativePushError = error?.error || "Đăng ký FCM thất bại";
+    rejectNativePushWaiters(new Error(latestNativePushError));
   });
+}
 
-  timer = setTimeout(() => {
-    if (existing.length > 20) finish(resolveToken, existing);
-    else finish(rejectToken, new Error("Apple/Google không trả token trong " + Math.round(fallbackMs / 1000) + "s"));
-  }, fallbackMs);
+export async function waitForNativePushToken(PushNotifications, timeoutMs = 30000) {
+  await ensureNativePushTokenListeners(PushNotifications);
+  const existing = latestNativePushToken || localStorage.getItem("crm_native_push_token") || "";
 
   try {
     await PushNotifications.register();
   } catch (err) {
-    finish(rejectToken, new Error(err?.message || "Đăng ký FCM thất bại"));
+    throw new Error(err?.message || "Đăng ký FCM thất bại");
   }
 
-  return tokenPromise;
+  if (latestNativePushToken.length > 20) return latestNativePushToken;
+
+  return new Promise((resolve, reject) => {
+    const waiter = {
+      resolve: (token) => {
+        clearTimeout(timer);
+        nativePushWaiters.delete(waiter);
+        resolve(token);
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        nativePushWaiters.delete(waiter);
+        reject(err);
+      },
+    };
+    nativePushWaiters.add(waiter);
+    const timer = setTimeout(() => {
+      nativePushWaiters.delete(waiter);
+      const cached = latestNativePushToken || existing;
+      if (cached.length > 20) resolve(cached);
+      else reject(new Error("Apple/Google không trả token trong " + Math.round(timeoutMs / 1000) + "s"));
+    }, timeoutMs);
+  });
 }
 
 /** Xin quyền + lấy FCM token (chưa cần login). */
@@ -171,14 +183,15 @@ export async function obtainNativePushDeviceToken() {
   if (!systemEnabled) return { ok: false, permission: "denied", reason: "system-disabled" };
 
   await ensureNativePushChannels(PushNotifications);
+  await ensureNativePushTokenListeners(PushNotifications);
 
-  // Lần cài đầu, iOS phải xong bắt tay APNs rồi Firebase mới cấp token. Máy cũ hoặc
-  // mạng yếu thường quá hạn lần đầu nhưng lần hai là được — thử lại thay vì bỏ luôn.
+  // iOS: token có thể về sau lần register đầu (Firebase MessagingDelegate).
+  // Listener gắn 1 lần và không gỡ — lần bấm Đăng ký lại vẫn nhận được token trễ.
   let lastError = "";
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2500));
     try {
-      const token = await waitForNativePushToken(PushNotifications);
+      const token = await waitForNativePushToken(PushNotifications, attempt === 0 ? 45000 : 20000);
       if (!token || token.length < 20) {
         lastError = "FCM token rỗng";
         continue;

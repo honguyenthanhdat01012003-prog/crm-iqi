@@ -46,14 +46,21 @@ import FirebaseMessaging
 import UserNotifications
 
 @UIApplicationMain
-class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate, MessagingDelegate {
 
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         FirebaseApp.configure()
+        Messaging.messaging().delegate = self
         UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    // Firebase gọi khi FCM token sẵn sàng — kể cả lúc JS chưa kịp addListener
+    func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
+        guard let token = fcmToken, !token.isEmpty else { return }
+        NotificationCenter.default.post(name: .capacitorDidRegisterForRemoteNotifications, object: token)
     }
 
     // Banner + tiếng khi app đang mở (iOS 13 dùng .alert)

@@ -68,7 +68,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-07-sync-history-oom-fix";
+const BUILD_VERSION = "2026-09-10-sale-own-status-fcm-listen";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -3759,8 +3759,53 @@ async function refreshLeadTabDenormMany(db, leadIds = []) {
   }
 }
 
+/** Backfill dở / COUNT>0 bị đánh dấu xong sớm → sale mất dòng summary của chính mình. */
+async function repairMissingSaleSummaries(db) {
+  if (!db) return;
+  const BATCH = 80;
+  let total = 0;
+  for (;;) {
+    const missing = await all(
+      db,
+      `SELECT l.id FROM leads l
+       WHERE TRIM(COALESCE(l.sale_name, '')) != ''
+         AND LOWER(TRIM(l.sale_name)) NOT IN ('chưa chia', 'chua chia')
+         AND LOWER(TRIM(COALESCE(l.status, ''))) NOT IN ('', 'new')
+         AND NOT EXISTS (
+           SELECT 1 FROM lead_sale_summary s
+           WHERE s.lead_id = l.id
+             AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(l.sale_name))
+         )
+       ORDER BY l.id DESC
+       LIMIT ?`,
+      [BATCH]
+    );
+    if (!missing.length) break;
+    for (const row of missing) {
+      await refreshLeadTabDenorm(db, row.id);
+      total += 1;
+    }
+    if (missing.length < BATCH) break;
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  if (total) console.log(`[DB] repaired lead_sale_summary for ${total} current-assignee leads`);
+}
+
 function tabStatusSqlExpr(col = "admin_tab_status") {
   return `COALESCE(NULLIF(TRIM(${col}), ''), 'new')`;
+}
+
+/** Tab của 1 sale: dòng denorm của chính họ, không thì status lead nếu họ đang phụ trách. */
+function saleOwnTabSqlExpr(leadAlias = "l", summaryAlias = "s") {
+  return `COALESCE(
+    NULLIF(TRIM(${summaryAlias}.sale_tab_status), ''),
+    CASE
+      WHEN LOWER(TRIM(COALESCE(${leadAlias}.sale_name, ''))) = LOWER(TRIM(?))
+      THEN NULLIF(TRIM(COALESCE(${leadAlias}.status, '')), '')
+      ELSE NULL
+    END,
+    'new'
+  )`;
 }
 
 function isAdminSalePerspective(filters = {}) {
@@ -3779,12 +3824,12 @@ async function queryAdminTabCountsDenorm(db, user, filters = {}) {
     const saleName = f.saleFilter;
     rows = await all(
       db,
-      `SELECT ${tabStatusSqlExpr("s.sale_tab_status")} as tab_st, COUNT(*) as c
-       FROM (SELECT id FROM leads ${where}) vis
+      `SELECT ${saleOwnTabSqlExpr("vis", "s")} as tab_st, COUNT(*) as c
+       FROM (SELECT id, sale_name, status FROM leads ${where}) vis
        LEFT JOIN lead_sale_summary s ON vis.id = s.lead_id
          AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
        GROUP BY tab_st`,
-      [...params, saleName]
+      [...params, saleName, saleName]
     );
   } else {
     rows = await all(
@@ -3809,11 +3854,11 @@ async function querySaleTabCountsDenorm(db, user, filters = {}) {
   // Sale tab = chỉ feedback của chính sale (không lộ status sheet/lead chung hay đồng đội)
   const rows = await all(
     db,
-    `SELECT ${tabStatusSqlExpr("COALESCE(s.sale_tab_status, 'new')")} as tab_st, COUNT(*) as c
-     FROM (SELECT id FROM leads ${where}) l
+    `SELECT ${saleOwnTabSqlExpr("l", "s")} as tab_st, COUNT(*) as c
+     FROM (SELECT id, sale_name, status FROM leads ${where}) l
      LEFT JOIN lead_sale_summary s ON l.id = s.lead_id AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
      GROUP BY tab_st`,
-    [...params, saleName]
+    [...params, saleName, saleName]
   );
   const counts = { all: 0 };
   for (const r of rows) {
@@ -4679,13 +4724,13 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
 
     if (v36DenormReady && statusTab && statusTab !== "all") {
-      const tabExpr = tabStatusSqlExpr("COALESCE(s.sale_tab_status, 'new')");
+      const tabExpr = saleOwnTabSqlExpr("l", "s");
       const scopeSql = `
         FROM (SELECT * FROM leads ${where}) l
         LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
           AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
         WHERE ${tabExpr} = ?`;
-      const scopeParams = [...params, saleName, statusTab];
+      const scopeParams = [...params, saleName, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
@@ -4721,13 +4766,13 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const { where, params } = await buildLeadsSqlFilters(db, user, baseFilters);
     if (isAdminSalePerspective(baseFilters)) {
       const saleName = baseFilters.saleFilter;
-      const tabExpr = tabStatusSqlExpr("s.sale_tab_status");
+      const tabExpr = saleOwnTabSqlExpr("l", "s");
       const scopeSql = `
         FROM (SELECT * FROM leads ${where}) l
         LEFT JOIN lead_sale_summary s ON l.id = s.lead_id
           AND LOWER(TRIM(COALESCE(s.sale_name, ''))) = LOWER(TRIM(?))
         WHERE ${tabExpr} = ?`;
-      const scopeParams = [...params, saleName, statusTab];
+      const scopeParams = [...params, saleName, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
         all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
@@ -14020,7 +14065,7 @@ function countSaleVisibleHistorySummary(summary, displayName, teamMemberNames = 
 function applySaleLeadView(lead, displayName, viewOpts = {}) {
   const saleKey = normalizePersonNameServer(displayName);
   const fbMap = lead.saleFeedbackStatus || {};
-  const myFb = fbMap[saleKey];
+  let myFb = fbMap[saleKey];
 
   const summary = Array.isArray(lead.feedbackHistorySummary) ? lead.feedbackHistorySummary : [];
   const hasSummary = summary.length > 0;
@@ -14031,6 +14076,18 @@ function applySaleLeadView(lead, displayName, viewOpts = {}) {
         return matchSaleName(h.saleName || h.source || "", displayName);
       })
     : [];
+
+  // skipHistory để timeline rỗng. Nếu bảng lead_sale_summary thiếu dòng (backfill dở)
+  // thì sale đang phụ trách vẫn phải thấy đúng trạng thái họ vừa lưu — không đẩy về "new".
+  if (!myFb && matchSaleName(lead.saleName, displayName)) {
+    const assignedStatus = normalizeStatus(lead.status || "new") || "new";
+    if (assignedStatus !== "new") {
+      myFb = {
+        status: assignedStatus,
+        rawStatus: lead.rawStatus || lead.status || assignedStatus,
+      };
+    }
+  }
 
   // Sale chỉ thấy trạng thái do chính mình cập nhật — không lộ status sheet/lead chung
   const status = myFb?.status
@@ -19465,9 +19522,11 @@ if (!process.env.VERCEL) {
 
     if (db) {
       setTimeout(() => {
-        runV36BackfillBackground(db).catch((e) => {
-          console.error("[DB] v36 backfill scheduler error:", e.message);
-        });
+        runV36BackfillBackground(db)
+          .then(() => repairMissingSaleSummaries(db))
+          .catch((e) => {
+            console.error("[DB] v36 backfill scheduler error:", e.message);
+          });
       }, 2000);
     }
 
