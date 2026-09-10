@@ -38,6 +38,7 @@ import {
   filterHistoryForTeamMembers,
   rotateDistributionKind,
   resolveSaleHistoryMemberNames,
+  countActiveHolderSales,
 } from "./leadTeamHolders.js";
 import { buildAuthUserFromRow, isJwtRoleStale } from "./authUser.js";
 
@@ -68,7 +69,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-10-sale-own-status-fcm-listen";
+const BUILD_VERSION = "2026-09-11-sale-own-history-holder-count";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -4274,6 +4275,48 @@ async function loadPastTeamIdsForLeads(db, leadIds) {
   return map;
 }
 
+async function loadSaleMembersByTeam(dbConn, teamIds) {
+  const ids = [...new Set((teamIds || []).map((n) => Number(n) || 0).filter((n) => n > 0))];
+  const membersByTeam = {};
+  if (!ids.length) return membersByTeam;
+  const ph = ids.map(() => "?").join(",");
+  const rows = await all(
+    dbConn,
+    `SELECT team_id, display_name FROM users WHERE role = 'sale' AND team_id IN (${ph})`,
+    ids
+  );
+  for (const r of rows) {
+    const tid = Number(r.team_id) || 0;
+    if (!tid) continue;
+    if (!membersByTeam[tid]) membersByTeam[tid] = [];
+    const name = String(r.display_name || "").trim();
+    if (name) membersByTeam[tid].push(name);
+  }
+  return membersByTeam;
+}
+
+function collectLeadHolderTeamIds(leadRow, pastTeamIds = []) {
+  const ids = [];
+  for (const tid of pastTeamIds || []) {
+    const n = Number(tid) || 0;
+    if (n) ids.push(n);
+  }
+  const cur = Number(leadRow?.team_id || leadRow?.race_team_id) || 0;
+  if (cur) ids.push(cur);
+  return [...new Set(ids)];
+}
+
+function withHolderSaleCount(lead, leadRow, pastTeamIds, membersByTeam) {
+  return {
+    ...lead,
+    holderSaleCount: countActiveHolderSales({
+      teamIds: collectLeadHolderTeamIds(leadRow, pastTeamIds),
+      membersByTeam,
+      saleName: leadRow?.sale_name || lead?.saleName || "",
+    }),
+  };
+}
+
 function mapLeadFromRow(l, projectLegacyMap, phoneRegMap, historyCountMap, pastSaleNames = [], feedbackHistorySummary = [], saleFeedbackStatus = {}, pastTeamIds = []) {
   const mktXaoMeta = getMktXaoMeta(l);
   const phone = (l.phone || "").replace(/[^0-9+]/g, "");
@@ -4956,6 +4999,14 @@ async function finishLeadsPage(db, leadRows, leadsTotal, projectRowsCached = nul
       : (l.adminTabStatus || l.status || "new"),
   }));
 
+  const holderTeamIds = [];
+  for (const row of leadRows) {
+    holderTeamIds.push(...collectLeadHolderTeamIds(row, pastTeamMap[row.id] || []));
+  }
+  const membersByTeam = await loadSaleMembersByTeam(db, holderTeamIds);
+  const rowById = Object.fromEntries(leadRows.map((row) => [row.id, row]));
+  leads = leads.map((l) => withHolderSaleCount(l, rowById[l.id] || {}, pastTeamMap[l.id] || l.pastTeamIds || [], membersByTeam));
+
   return {
     leads,
     leadsTotal,
@@ -5238,12 +5289,20 @@ async function readData(db) {
 
   const result = {
     phoneRegistrations: buildPhoneRegistrationsFromMap(phoneRegMap),
-    leads: leads.map((l) => {
-      const pastTeams = pastTeamMap[l.id] || [];
-      const cur = Number(l.team_id || l.race_team_id) || 0;
-      const teamIds = cur && !pastTeams.includes(cur) ? [...pastTeams, cur] : pastTeams;
-      return mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || [], [], {}, teamIds);
-    }),
+    leads: await (async () => {
+      const mapped = leads.map((l) => {
+        const pastTeams = pastTeamMap[l.id] || [];
+        const cur = Number(l.team_id || l.race_team_id) || 0;
+        const teamIds = cur && !pastTeams.includes(cur) ? [...pastTeams, cur] : pastTeams;
+        return mapLeadFromRow(l, projectLegacyMap, phoneRegMap, aux.historyCountMap, pastSaleMap[l.id] || [], [], {}, teamIds);
+      });
+      const holderTeamIds = [];
+      for (const row of leads) {
+        holderTeamIds.push(...collectLeadHolderTeamIds(row, pastTeamMap[row.id] || []));
+      }
+      const membersByTeam = await loadSaleMembersByTeam(db, holderTeamIds);
+      return mapped.map((lead, i) => withHolderSaleCount(lead, leads[i], pastTeamMap[leads[i].id] || [], membersByTeam));
+    })(),
     campaigns: campaigns.map((c) => ({
       id: c.id,
       name: c.name,
@@ -14051,14 +14110,13 @@ function assertCurrentSaleOwnsLead(leadRow, displayName) {
   return { ok: true };
 }
 
-function countSaleVisibleHistorySummary(summary, displayName, teamMemberNames = []) {
+function countSaleVisibleHistorySummary(summary, displayName) {
   const memberNames = resolveSaleHistoryMemberNames({
-    mode: teamMemberNames.length > 1 ? "race" : "log",
     displayName,
-    teamMemberNames,
   });
   return filterHistoryForTeamMembers(summary, memberNames, {
     normalizeName: (s) => normalizePersonNameServer(s),
+    ownRowsOnly: true,
   }).length;
 }
 
@@ -14069,7 +14127,6 @@ function applySaleLeadView(lead, displayName, viewOpts = {}) {
 
   const summary = Array.isArray(lead.feedbackHistorySummary) ? lead.feedbackHistorySummary : [];
   const hasSummary = summary.length > 0;
-  const teamMemberNames = viewOpts.teamMemberNames || [];
   const myHistory = hasSummary
     ? summary.filter((h) => {
         if (!h || h.action === "Chia lead" || !h.status) return false;
@@ -14096,9 +14153,9 @@ function applySaleLeadView(lead, displayName, viewOpts = {}) {
     || (myHistory.length ? myHistory[myHistory.length - 1].status : "")
     || status;
 
-  // Badge lịch sử phải khớp GET /api/leads/:id/history (đã lọc theo sale/team), không dùng tổng DB
+  // Số dòng lịch sử sale được xem (cập nhật của chính họ) — badge tím dùng holderSaleCount
   const historyCount = hasSummary
-    ? countSaleVisibleHistorySummary(summary, displayName, teamMemberNames)
+    ? countSaleVisibleHistorySummary(summary, displayName)
     : (myFb && myFb.status && myFb.status !== "new" ? 1 : 0);
 
   let lastSaleUpdate = lead.lastSaleUpdate || null;
@@ -14237,29 +14294,12 @@ app.get("/api/leads/:id/history", requireAuth, async (req, res) => {
     if (!lead) return res.status(404).json({ error: "Lead not found" });
     let history = await fetchLeadHistoryFormatted(db, leadId);
     if (req.user.role === "sale") {
-      const mode = await getProjectDistributionMode(lead.project_id);
-      let teamMemberNames = [];
-      if (mode === "race") {
-        const teamId = await getSaleTeamId(req.user.userId);
-        if (teamId) {
-          try {
-            // Sale chỉ thấy lịch sử của các SALE trong team (không lộ dòng của quản lý/admin).
-            const saleRows = await all(
-              db,
-              "SELECT display_name FROM users WHERE team_id = ? AND role = 'sale' ORDER BY id",
-              [teamId]
-            );
-            teamMemberNames = saleRows.map((r) => String(r.display_name || "").trim()).filter(Boolean);
-          } catch (_) {}
-        }
-      }
       const memberNames = resolveSaleHistoryMemberNames({
-        mode,
         displayName: req.user.displayName || "",
-        teamMemberNames,
       });
       history = filterHistoryForTeamMembers(history, memberNames, {
         normalizeName: (s) => normalizePersonNameServer(s),
+        ownRowsOnly: true,
       });
     }
     res.json({ history });

@@ -12079,9 +12079,9 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               Lịch sử đăng ký & Tương tác
             </span>
-            {(Number(lead.historyCount) > 0 || history.length > 0) && (
-              <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 10, background: "#e88a2e", color: "#fff", fontWeight: 700, flexShrink: 0 }}>
-                {Math.max(Number(lead.historyCount) || 0, history.length || 0)}
+            {Number(lead.holderSaleCount) > 0 && (
+              <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 10, background: "#e88a2e", color: "#fff", fontWeight: 700, flexShrink: 0 }} title="Số sale đang nắm lead">
+                {Number(lead.holderSaleCount)}
               </span>
             )}
           </span>
@@ -12396,8 +12396,13 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           );
         }
 
-        // === SALE VIEW: timeline từ API (log = chỉ mình, race = cả team — đã lọc server) ===
-        const saleContacts = allEvents.filter(e => e.type === "contact");
+        // === SALE VIEW: chỉ cập nhật khách của chính sale đang xem ===
+        const saleContacts = allEvents.filter((e) => {
+          if (e.type !== "contact") return false;
+          if (!isSamePersonName(e.saleName, user?.displayName)) return false;
+          const st = String(e.status || "").trim();
+          return !!st && st !== "new";
+        });
         let saleNum = 0;
         saleContacts.forEach(e => { saleNum++; e.num = saleNum; });
 
@@ -12407,7 +12412,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           : null;
         const lastStatusLabel = lastContact ? (STATUS_LABELS[lastContact.status] || lastContact.status || "Chưa feedback") : "Chưa feedback";
         const lastStatusColor = lastContact ? (STATUS_COLORS[lastContact.status] || "#6b7280") : "#6b7280";
-        const showSaleNames = isRaceProject || saleContacts.some((c) => c.saleName && c.saleName !== user?.displayName);
+        const showSaleNames = saleContacts.some((c) => c.saleName && !isSamePersonName(c.saleName, user?.displayName));
 
         if (saleContacts.length === 0) return <div style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>Chưa có lịch sử</div>;
 

@@ -19,26 +19,29 @@ export function formatTeamRotateLabel(team) {
 }
 
 /**
- * Sale history filter: keep rows from teammate names + chia/system rows for this team.
+ * Sale history filter: keep rows from member names.
+ * System rows (chia / nhận / race / thu hồi) are kept unless ownRowsOnly.
  * Cross-team "Cập nhật" / feedback rows are hidden.
  */
 export function filterHistoryForTeamMembers(history, memberNames = [], options = {}) {
   const list = Array.isArray(history) ? history : [];
-  const names = new Set(
-    (memberNames || [])
-      .map((n) => String(n || "").trim().toLowerCase())
-      .filter(Boolean)
-  );
-  const includeAllChia = options.includeAllChia === true;
   const normalize = typeof options.normalizeName === "function"
     ? options.normalizeName
     : (s) => String(s || "").trim().toLowerCase();
+  const names = new Set(
+    (memberNames || [])
+      .map((n) => normalize(n))
+      .filter(Boolean)
+  );
+  const includeAllChia = options.includeAllChia === true;
+  const ownRowsOnly = options.ownRowsOnly === true;
 
   return list.filter((h) => {
     if (!h) return false;
     const action = String(h.action || "").trim();
     const sale = normalize(h.saleName || h.sale_name || "");
-    if (names.has(sale)) return true;
+    if (sale && names.has(sale)) return true;
+    if (ownRowsOnly) return false;
     // Keep assign / race / recall system rows so the team sees how they got the lead
     if (
       action === "Chia lead" ||
@@ -48,7 +51,6 @@ export function filterHistoryForTeamMembers(history, memberNames = [], options =
       action === "Nhận lead"
     ) {
       if (includeAllChia) return true;
-      // Prefer chia rows that mention a teammate as assignee, else keep all chia (team context)
       return true;
     }
     return false;
@@ -65,13 +67,26 @@ export function isRotateNewKind(kind) {
 }
 
 /**
- * Who a sale may see in lead history:
- * - log → only themselves
- * - race → their team members (fallback to self if no team list)
+ * Who a sale may see in lead history: always themselves.
+ * Sale A and sale B on the same lead must not see each other's feedback.
  */
-export function resolveSaleHistoryMemberNames({ mode, displayName, teamMemberNames = [] } = {}) {
+export function resolveSaleHistoryMemberNames({ displayName } = {}) {
   const self = String(displayName || "").trim();
-  const team = (teamMemberNames || []).map((n) => String(n || "").trim()).filter(Boolean);
-  if (String(mode || "log").trim() === "race" && team.length) return team;
   return self ? [self] : [];
+}
+
+/** Distinct sales currently holding a lead (active teams, else assigned sale). */
+export function countActiveHolderSales({ teamIds = [], membersByTeam = {}, saleName = "" } = {}) {
+  const names = new Set();
+  for (const tid of teamIds || []) {
+    const list = membersByTeam[tid] || membersByTeam[String(tid)] || [];
+    for (const n of list) {
+      const k = String(n || "").trim().toLowerCase();
+      if (k) names.add(k);
+    }
+  }
+  if (names.size) return names.size;
+  const sn = String(saleName || "").trim().toLowerCase();
+  if (sn && sn !== "chưa chia") return 1;
+  return 0;
 }
