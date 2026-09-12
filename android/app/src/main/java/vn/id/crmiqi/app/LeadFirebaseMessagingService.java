@@ -32,7 +32,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
         super.onMessageReceived(message);
         RemoteMessage.Notification notificationPayload = message.getNotification();
         boolean hasSystemNotification = notificationPayload != null;
-        boolean inForeground = isAppInForeground();
+        boolean inForeground = MainActivity.isInForeground() || isAppInForeground();
 
         try {
             PushNotificationsPlugin.sendRemoteMessage(message);
@@ -159,7 +159,7 @@ public class LeadFirebaseMessagingService extends FirebaseMessagingService {
     private Uri getSoundUri(String sound) {
         int resId = 0;
         if ("sla_recall".equals(sound)) {
-            resId = R.raw.lead_recall;
+            resId = R.raw.lead_manager;
         } else if ("sale".equals(sound)) {
             resId = R.raw.lead_sale;
         } else if ("update".equals(sound)) {

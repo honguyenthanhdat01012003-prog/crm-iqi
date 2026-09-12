@@ -69,7 +69,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-11-sale-own-history-holder-count";
+const BUILD_VERSION = "2026-09-12-android-sale-assign-sound";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -525,10 +525,9 @@ async function sendPushToUser(userId, payload) {
     console.error(`[NativePush] Send failed for user#${userId}:`, err.message || err);
     return { sent: 0, error: err.message || String(err) };
   });
-  // Đã gửi FCM → không emit socket (tránh double banner + double list khi app mở)
-  if (!(native.sent > 0)) {
-    emitLeadNotification(userId, payload);
-  }
+  // Luôn emit socket: Android app đang mở thì FCM không tự hiện tray/âm.
+  // Client tự chống trùng banner; nếu chỉ dựa FCM thì sale không nghe gì khi đang trong app.
+  emitLeadNotification(userId, payload);
   return { sent: sent + (native.sent || 0), webSent: sent, nativeSent: native.sent || 0, nativeSkipped: native.skipped };
 }
 
@@ -9114,6 +9113,8 @@ function emitLeadNotification(userId, payload = {}) {
     sound: payload.sound || "manager",
     leadId: payload.data?.leadId || payload.leadId || null,
     phone: payload.data?.phone || payload.phone || null,
+    projectId: payload.data?.projectId || payload.projectId || null,
+    type: payload.data?.type || payload.type || "",
     tag: payload.tag || null,
     ts: Date.now(),
   });
@@ -14935,22 +14936,26 @@ app.put("/api/leads/:id", requireAuth, async (req, res) => {
               }).catch((teleErr) => {
                 console.error(`[Telegram] Send failed for ${target.name}:`, teleErr.message);
               });
-              if (target.name) {
-                sendPushToDisplayName(target.name, {
-                  title: pushTitle,
-                  body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
-                  tag: `sale-lead-${actualLeadId}-${target.name}-${Date.now()}`,
-                  sound: "sale",
-                  data: {
-                    url: "/",
-                    type: "sale_new_lead",
-                    leadId: actualLeadId,
-                    phone: lead?.phone || "",
-                    projectId: lead?.project_id,
-                  },
-                  requireInteraction: true,
-                }).catch(err => console.error(`[Push] Sale notify failed for ${target.name}:`, err.message));
-              }
+              const pushPayload = {
+                title: pushTitle,
+                body: `${projectRow ? projectRow.name : "-"}: ${lead ? lead.name || "N/A" : "N/A"}${lead?.phone ? ` • ${lead.phone}` : ""}`,
+                tag: `sale-lead-${actualLeadId}-${target.name || target.id}-${Date.now()}`,
+                sound: "sale",
+                data: {
+                  url: "/",
+                  type: "sale_new_lead",
+                  leadId: actualLeadId,
+                  phone: lead?.phone || "",
+                  projectId: lead?.project_id,
+                },
+                requireInteraction: true,
+              };
+              const pushFn = Number(target.id) > 0
+                ? sendPushToUser(target.id, pushPayload)
+                : target.name
+                  ? sendPushToDisplayName(target.name, pushPayload)
+                  : Promise.resolve();
+              pushFn.catch((err) => console.error(`[Push] Sale notify failed for ${target.name || target.id}:`, err.message));
             }
           } catch (notifyErr) {
             console.error("[Notify] Team/sale assign failed:", notifyErr.message);

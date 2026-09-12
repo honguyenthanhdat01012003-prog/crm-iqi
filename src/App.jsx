@@ -18,7 +18,7 @@ import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationS
 import { getNativePushPermissionState, getNativePushPlatformLabel, getNativePushServerStatus, isDeviceTokenRegistered, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge, ensureNativePushTokenListeners } from "./nativePush.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification, setNativeAppIconBadge } from "./nativeLocalNotifications.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
-import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds } from "./leadNotify.js";
+import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds, shouldAddLeadAlert, shouldPlayLeadAlert } from "./leadNotify.js";
 import { useServerConnection } from "./useServerConnection.js";
 import { LeadDataGrid } from "./components/leads/LeadDataGrid.jsx";
 import { LeadDetailDrawer } from "./components/leads/LeadDetailDrawer.jsx";
@@ -1592,38 +1592,37 @@ function CRMApp({ user, updateUser, onLogout }) {
     const items = (pushItem ? [pushItem] : notifyLeads).filter(Boolean);
     if (!items.length) return;
     const existing = Array.isArray(notificationsRef.current) ? notificationsRef.current : [];
-    const fresh = items.filter((item) => {
-      const key = leadKey(item);
-      if (!key || seenLeadKeys.has(key)) return false;
-      return !existing.some((x) => leadKey(x) === key);
-    });
-    if (!fresh.length) return;
-    playLeadSound(soundKind);
-    const first = fresh[0];
-    // Đã có FCM: để hệ thống hiện tray (kể cả tắt app). LocalNotification chỉ gây double khi app mở.
-    if (nativeLocalSupported && !nativePushSupported && !skipLocal) {
-      const title = user.role === "sale"
-        ? "Bạn có lead mới"
-        : user.role === "admin"
-          ? "Có lead mới — vào chia cho sale"
-          : "Có lead mới về quản lý";
+    const existingKeys = new Set(existing.map(leadKey).filter(Boolean));
+    const playable = items.filter((item) => shouldPlayLeadAlert(item, { seenKeys: seenLeadKeys, existingKeys }));
+    const fresh = items.filter((item) => shouldAddLeadAlert(item, { seenKeys: seenLeadKeys, existingKeys }));
+    if (!playable.length && !fresh.length) return;
+    if (playable.length) playLeadSound(soundKind);
+    const first = playable[0] || fresh[0];
+    // App đang mở: FCM Android không tự hiện tray — phải LocalNotification mới có tiếng + banner.
+    // App chạy nền: skipLocal (FCM hệ thống đã hiện) để tránh 2 thông báo.
+    if (nativeLocalSupported && !skipLocal && first) {
+      const title = first.title
+        || (user.role === "sale"
+          ? "Bạn có lead mới"
+          : user.role === "admin"
+            ? "Có lead mới — vào chia cho sale"
+            : "Có lead mới về quản lý");
       showNativeLeadNotification({
         title,
-        body: first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới"),
+        body: first.body || (first.phone ? `${first.name || "Khách mới"} - ${first.phone}` : (first.name || "Bạn có lead mới")),
         leadId: first.leadId || first.id,
         sound: soundKind === "sale" ? "sale" : soundKind === "update" ? "update" : "manager",
       }).catch(() => {});
     }
+    if (!fresh.length) return;
     setNotifications((n) => {
       const current = Array.isArray(n) ? n : [];
-      const stillFresh = fresh.filter((item) => {
-        const key = leadKey(item);
-        return key && !seenLeadKeys.has(key) && !current.some((x) => leadKey(x) === key);
-      });
+      const currentKeys = new Set(current.map(leadKey).filter(Boolean));
+      const stillFresh = fresh.filter((item) => shouldAddLeadAlert(item, { seenKeys: seenLeadKeys, existingKeys: currentKeys }));
       if (!stillFresh.length) return current;
       return [...stillFresh.map((l) => ({ ...l, notifTime: Date.now() })), ...current].slice(0, 50);
     });
-  }, [nativeLocalSupported, nativePushSupported, playLeadSound, seenLeadKeys, user.role]);
+  }, [nativeLocalSupported, playLeadSound, seenLeadKeys, user.role]);
 
   // Pending leads notification for sale users
   const [pendingLeadsData, setPendingLeadsData] = useState(null);
@@ -1882,13 +1881,13 @@ function CRMApp({ user, updateUser, onLogout }) {
           showToast(data.body || notification?.body || "Lead bị thu hồi do quá hạn SLA", "warning");
           return;
         }
-        // App đang mở: FCM đã (có thể) hiện banner — chỉ cập nhật list trong app, không LocalNotification
         const soundKind = data.sound === "sale" || data.sound === "sale_new_lead" ? "sale"
           : data.sound === "update" ? "update"
           : "manager";
+        const appHidden = typeof document !== "undefined" && document.hidden;
         triggerLeadAlerts({
           soundKind,
-          skipLocal: true,
+          skipLocal: appHidden,
           pushItem: leadFromPushPayload({
             title: notification?.title || data.title,
             body: notification?.body || data.body,
@@ -2871,7 +2870,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       const soundKind = payload?.sound === "sale" || payload?.sound === "sale_new_lead" ? "sale"
         : payload?.sound === "update" ? "update"
         : "manager";
-      triggerLeadAlerts({ soundKind, skipLocal: true, pushItem: leadFromPushPayload(payload) });
+      const appHidden = typeof document !== "undefined" && document.hidden;
+      triggerLeadAlerts({
+        soundKind,
+        skipLocal: appHidden && nativePushSupported,
+        pushItem: leadFromPushPayload(payload),
+      });
     });
     socket.on("lead-sla-recall", (payload) => {
       playRecallSound();

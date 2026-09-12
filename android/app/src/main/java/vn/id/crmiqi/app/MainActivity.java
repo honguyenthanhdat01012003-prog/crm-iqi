@@ -11,12 +11,29 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    private static volatile boolean inForeground = false;
+
+    public static boolean isInForeground() {
+        return inForeground;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         registerPlugin(CrmNotificationsPlugin.class);
         createLeadNotificationChannels();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        inForeground = true;
+    }
+
+    @Override
+    public void onPause() {
+        inForeground = false;
+        super.onPause();
     }
 
     /**
@@ -38,7 +55,7 @@ public class MainActivity extends BridgeActivity {
         createLeadChannel(manager, attrs, "lead_notifications_manager_v6", "Lead mới quản lý", rawSound(R.raw.lead_manager));
         createLeadChannel(manager, attrs, "lead_notifications_sale_v6", "Lead mới sale", rawSound(R.raw.lead_sale));
         createLeadChannel(manager, attrs, "lead_notifications_update_v3", "Nhắc cập nhật lead", rawSound(R.raw.lead_update));
-        createLeadChannel(manager, attrs, "lead_notifications_recall_v2", "Thu hồi lead", rawSound(R.raw.lead_recall));
+        createLeadChannel(manager, attrs, "lead_notifications_recall_v2", "Thu hồi lead", rawSound(R.raw.lead_manager));
         createLeadChannel(manager, attrs, "lead_notifications", "Lead mới",
             RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
 

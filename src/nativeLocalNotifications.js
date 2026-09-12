@@ -66,7 +66,9 @@ export async function showNativeLeadNotification({ title, body, leadId, sound = 
   const { LocalNotifications } = await import("@capacitor/local-notifications");
   await LocalNotifications.schedule({
     notifications: [{
-      id: Math.floor(Date.now() % 2147483647),
+      id: Number(leadId) > 0
+        ? 800000000 + (Number(leadId) % 100000000)
+        : Math.floor(Date.now() % 2147483647),
       title: t,
       body: b,
       channelId: getLeadChannelId(sound),

@@ -3,7 +3,7 @@ P:Tài liệu này hướng dẫn cài ứng dụng LUX IQI CRM từ file APK. T
 
 H2:Yêu cầu trước khi cài
 B:Điện thoại Android phiên bản 7.0 trở lên.
-B:File cài đặt: LUX-IQI-CRM-android-v1.0.7.apk
+B:File cài đặt: LUX-IQI-CRM-android-v1.0.8.apk
 B:Kết nối Internet (Wi-Fi hoặc 4G).
 B:Tài khoản đăng nhập CRM do quản lý cấp.
 

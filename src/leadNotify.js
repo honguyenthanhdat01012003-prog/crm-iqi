@@ -113,6 +113,24 @@ export function detectLeadNotifications(prevLeads, nextLeads, { role, displayNam
   return { notifyLeads, soundKind: role === "sale" ? "sale" : "manager" };
 }
 
+/** Push/socket chia lead: luôn kêu, kể cả lead đã nằm trong crm_seen_keys. */
+export function shouldPlayLeadAlert(item, { seenKeys, existingKeys } = {}) {
+  if (item?.fromPush) return true;
+  const key = leadKey(item);
+  if (!key) return false;
+  if (seenKeys instanceof Set && seenKeys.has(key)) return false;
+  if (existingKeys instanceof Set && existingKeys.has(key)) return false;
+  return true;
+}
+
+export function shouldAddLeadAlert(item, { seenKeys, existingKeys } = {}) {
+  const key = leadKey(item);
+  if (!key) return false;
+  if (seenKeys instanceof Set && seenKeys.has(key)) return false;
+  if (existingKeys instanceof Set && existingKeys.has(key)) return false;
+  return true;
+}
+
 export function leadFromPushPayload(payload = {}) {
   const body = String(payload.body || "");
   const data = payload.data && typeof payload.data === "object" ? payload.data : {};
@@ -126,6 +144,8 @@ export function leadFromPushPayload(payload = {}) {
     leadId,
     notifKey: leadId ? `id:${leadId}` : `push:${fallbackKey}`,
     name: nameFromBody || payload.title || "Lead moi",
+    title: payload.title || "",
+    body,
     phone: payload.phone || data.phone || "",
     notifTime: Date.now(),
     fromPush: true,
