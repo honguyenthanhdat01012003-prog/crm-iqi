@@ -41,6 +41,12 @@ import {
   countActiveHolderSales,
 } from "./leadTeamHolders.js";
 import { buildAuthUserFromRow, isJwtRoleStale } from "./authUser.js";
+import {
+  LOG_SHUFFLE_MODES,
+  normalizeLogShuffleMode,
+  pickSaleFromCandidates,
+  pickLogShuffleSale,
+} from "./logShuffle.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,7 +75,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-12-android-sale-assign-sound";
+const BUILD_VERSION = "2026-09-23-ios-open-lead-from-push";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -434,6 +440,8 @@ async function sendNativePushToUser(userId, payload) {
               sound: notificationSound.iosSound,
               badge: badgeCount,
             },
+            // Copy data vào APNs userInfo — iOS tap đôi khi không lấy message.data nếu chỉ có aps
+            ...data,
           },
         };
       }
@@ -617,7 +625,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 48; // Bump this when adding new DDL/migrations
+const DB_VERSION = 49; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1290,7 +1298,8 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lead_url TEXT DEFAULT '',
       cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '',
       mgr_assign_idx INTEGER DEFAULT 0, manual_assign INTEGER DEFAULT 0, daily_report_enabled INTEGER DEFAULT 0,
-      distribution_mode TEXT DEFAULT 'log', race_team_cursor INTEGER DEFAULT 0)`,
+      distribution_mode TEXT DEFAULT 'log', race_team_cursor INTEGER DEFAULT 0,
+      log_shuffle_mode TEXT DEFAULT 'rank')`,
     `CREATE TABLE IF NOT EXISTS project_teams (
       project_id INTEGER NOT NULL,
       team_id INTEGER NOT NULL,
@@ -1999,6 +2008,10 @@ async function initDb() {
   if (dbVersion < 48) {
     console.log("[DB] v48 migration: projects.telegram_lead_notify (bật/tắt báo Telegram lead theo dự án)");
     try { await run(db, "ALTER TABLE projects ADD COLUMN telegram_lead_notify INTEGER NOT NULL DEFAULT 0"); } catch (_) {}
+  }
+  if (dbVersion < 49) {
+    console.log("[DB] v49 migration: projects.log_shuffle_mode (rank | random cho xáo lead log)");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN log_shuffle_mode TEXT NOT NULL DEFAULT 'rank'"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -4450,6 +4463,15 @@ async function getProjectDistributionMode(projectId) {
   return normalizeDistributionMode(row?.distribution_mode);
 }
 
+async function getProjectLogShuffleMode(projectId) {
+  try {
+    const row = await get(db, "SELECT log_shuffle_mode FROM projects WHERE id = ?", [Number(projectId) || 0]);
+    return normalizeLogShuffleMode(row?.log_shuffle_mode);
+  } catch (_) {
+    return LOG_SHUFFLE_MODES.rank;
+  }
+}
+
 async function getProjectManagers(projectId) {
   return await all(
     db,
@@ -5188,6 +5210,7 @@ async function getBootstrapPayload(db, user) {
       telegramLeadNotify: Boolean(p.telegram_lead_notify),
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
+      logShuffleMode: normalizeLogShuffleMode(p.log_shuffle_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
       teamIdsOrdered: projectTeamMap[p.id] || [],
     })),
@@ -5322,6 +5345,7 @@ async function readData(db) {
       telegramLeadNotify: Boolean(p.telegram_lead_notify),
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
+      logShuffleMode: normalizeLogShuffleMode(p.log_shuffle_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
       teamIdsOrdered: projectTeamMap[p.id] || [],
     })),
@@ -9838,6 +9862,7 @@ app.get("/api/projects", requireAuth, async (req, res) => {
         telegramLeadNotify: !!p.telegramLeadNotify,
         isLegacy: !!p.isLegacy,
         distributionMode: normalizeDistributionMode(p.distributionMode),
+        logShuffleMode: normalizeLogShuffleMode(p.logShuffleMode),
       }));
     }
     res.json(projects);
@@ -9850,6 +9875,7 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
   try {
     const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, telegramLeadNotify, isLegacy } = req.body;
     const distributionMode = normalizeDistributionMode(req.body?.distributionMode);
+    const logShuffleMode = normalizeLogShuffleMode(req.body?.logShuffleMode);
     const teamIdsOrdered = Array.isArray(req.body?.teamIdsOrdered)
       ? [...new Set(req.body.teamIdsOrdered.map((v) => Number(v)).filter(Boolean))]
       : [];
@@ -9862,8 +9888,8 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     if (isLegacy) {
       const result = await run(
         db,
-        "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, is_legacy, distribution_mode, race_team_cursor, telegram_lead_notify) VALUES(?, '', '', '', '', 0, 1, ?, 0, 0)",
-        [String(name).trim(), distributionMode]
+        "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, is_legacy, distribution_mode, race_team_cursor, telegram_lead_notify, log_shuffle_mode) VALUES(?, '', '', '', '', 0, 1, ?, 0, 0, ?)",
+        [String(name).trim(), distributionMode, logShuffleMode]
       );
       const newProjectId = Number(result.lastInsertRowId ?? result.lastInsertRowid ?? result.lastID);
       if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -9879,8 +9905,8 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
       db,
-      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor, telegram_lead_notify) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?)",
-      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0]
+      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor, telegram_lead_notify, log_shuffle_mode) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, logShuffleMode]
     );
     const newProjectId = Number(result.lastID || result.lastInsertRowid || result.lastInsertRowId);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -9991,6 +10017,7 @@ app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => 
     const id = Number(req.params.id);
     const { name, leadUrl, costUrl, fbCode, fbPerson, dailyReportEnabled, telegramLeadNotify } = req.body;
     const distributionMode = normalizeDistributionMode(req.body?.distributionMode);
+    const logShuffleMode = normalizeLogShuffleMode(req.body?.logShuffleMode);
     const teamIdsOrdered = Array.isArray(req.body?.teamIdsOrdered)
       ? [...new Set(req.body.teamIdsOrdered.map((v) => Number(v)).filter(Boolean))]
       : [];
@@ -10001,8 +10028,8 @@ app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => 
     const cleanCost = sanitizeSheetUrl(costUrl);
     await run(
       db,
-      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ?, daily_report_enabled = ?, distribution_mode = ?, telegram_lead_notify = ? WHERE id = ?",
-      [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, id]
+      "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ?, daily_report_enabled = ?, distribution_mode = ?, telegram_lead_notify = ?, log_shuffle_mode = ? WHERE id = ?",
+      [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, logShuffleMode, id]
     );
     await run(db, "DELETE FROM project_teams WHERE project_id = ?", [id]);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -11285,7 +11312,8 @@ async function assignSlaPoolLeadToNextSale(db, lead, nowStr, {
   const ranked = await rankSalesByPerformanceForProject(db, lead.project_id, excluded);
   if (!ranked.length) return null;
 
-  const saleName = ranked[0];
+  const shuffleMode = await getProjectLogShuffleMode(lead.project_id);
+  const saleName = pickSaleFromCandidates(ranked, shuffleMode);
   const assign = buildLeadAssignUpdateStmt(saleName, lead.id, distributionKind, nowStr);
   const maxSeqRow = await get(db, "SELECT MAX(seq) as m FROM lead_history WHERE lead_id = ?", [lead.id]);
   const nextSeq = (maxSeqRow?.m ?? -1) + 1;
@@ -11887,6 +11915,8 @@ async function processAutoRotate(db) {
 
   const distModeCache = new Map();
   const projectTeamsCache = new Map();
+  const logShuffleCache = new Map();
+  const rankedSalesCache = new Map();
   const getCachedDistMode = async (pid) => {
     if (!distModeCache.has(pid)) distModeCache.set(pid, await getProjectDistributionMode(pid));
     return distModeCache.get(pid);
@@ -11894,6 +11924,24 @@ async function processAutoRotate(db) {
   const getCachedProjectTeams = async (pid) => {
     if (!projectTeamsCache.has(pid)) projectTeamsCache.set(pid, await getProjectTeamMembersByOrder(pid));
     return projectTeamsCache.get(pid);
+  };
+  const getCachedLogShuffleMode = async (pid) => {
+    if (!logShuffleCache.has(pid)) logShuffleCache.set(pid, await getProjectLogShuffleMode(pid));
+    return logShuffleCache.get(pid);
+  };
+  const getCachedRankedSales = async (pid) => {
+    if (!rankedSalesCache.has(pid)) rankedSalesCache.set(pid, await rankSalesByPerformanceForProject(db, pid, []));
+    return rankedSalesCache.get(pid);
+  };
+  const pickNextLogRotateSale = async (pid, candidates) => {
+    const names = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    if (!names.length) return null;
+    const shuffleMode = await getCachedLogShuffleMode(pid);
+    if (normalizeLogShuffleMode(shuffleMode) === LOG_SHUFFLE_MODES.random) {
+      return pickSaleFromCandidates(names, shuffleMode);
+    }
+    const ranked = await getCachedRankedSales(pid);
+    return pickLogShuffleSale(names, ranked, shuffleMode);
   };
 
   // Helper: parse date from VN or ISO format (includes time)
@@ -12097,7 +12145,7 @@ async function processAutoRotate(db) {
       const allHotNames = [...projectHotSales];
       const unreceivedHot = allHotNames.filter(s => !pastSaleNames.has(s));
       if (unreceivedHot.length > 0) {
-        nextSale = unreceivedHot[lead.id % unreceivedHot.length];
+        nextSale = await pickNextLogRotateSale(lead.project_id, unreceivedHot);
       } else {
         // Hot exhausted → normal sales
         const nonHotSales = await all(db,
@@ -12109,14 +12157,14 @@ async function processAutoRotate(db) {
         const nonHotNames = nonHotSales.map(r => r.display_name);
         const unreceivedNormal = nonHotNames.filter(s => !pastSaleNames.has(s));
         if (unreceivedNormal.length > 0) {
-          nextSale = unreceivedNormal[lead.id % unreceivedNormal.length];
+          nextSale = await pickNextLogRotateSale(lead.project_id, unreceivedNormal);
         } else if (nonHotNames.length > 0) {
           const available = nonHotNames.filter(s => s !== lead.sale_name);
-          if (available.length > 0) nextSale = available[lead.id % available.length];
+          if (available.length > 0) nextSale = await pickNextLogRotateSale(lead.project_id, available);
         }
         if (!nextSale) {
           const otherHot = allHotNames.filter(s => s !== lead.sale_name);
-          if (otherHot.length > 0) nextSale = otherHot[lead.id % otherHot.length];
+          if (otherHot.length > 0) nextSale = await pickNextLogRotateSale(lead.project_id, otherHot);
         }
       }
     } else {
@@ -12129,10 +12177,10 @@ async function processAutoRotate(db) {
       const allNames = projectSales.map(r => r.display_name);
       const unreceived = allNames.filter(s => !pastSaleNames.has(s));
       if (unreceived.length > 0) {
-        nextSale = unreceived[lead.id % unreceived.length];
+        nextSale = await pickNextLogRotateSale(lead.project_id, unreceived);
       } else {
         const available = allNames.filter(s => s !== lead.sale_name);
-        if (available.length > 0) nextSale = available[lead.id % available.length];
+        if (available.length > 0) nextSale = await pickNextLogRotateSale(lead.project_id, available);
       }
     }
 
@@ -14285,6 +14333,27 @@ app.post("/api/leads/:id/manager", requireAuth, requireAdmin, async (req, res) =
   } catch (err) {
     console.error(`[POST manager] ERROR:`, err);
     res.status(500).json({ error: err.message || "Manager update failed" });
+  }
+});
+
+app.get("/api/leads/:id", requireAuth, async (req, res) => {
+  try {
+    const leadId = Number(req.params.id);
+    if (!leadId) return res.status(400).json({ error: "leadId required" });
+    const row = await get(db, "SELECT * FROM leads WHERE id = ?", [leadId]);
+    if (!row) return res.status(404).json({ error: "Lead not found" });
+    if (req.user.role === "sale") {
+      const own = await saleCanUpdateLead(row, req.user.displayName);
+      if (!own.ok) return res.status(own.status || 403).json({ error: own.error });
+    } else if (req.user.role === "manager") {
+      const pids = await getUserProjectIds(req.user.userId);
+      if (!pids.includes(Number(row.project_id))) return res.status(403).json({ error: "Forbidden" });
+    }
+    const lead = await buildUpdatedLeadPayload(db, leadId, req.user);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    res.json({ lead });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Could not load lead" });
   }
 });
 

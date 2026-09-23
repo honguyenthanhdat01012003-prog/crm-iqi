@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { getCurrentPushSubscription, getPushPermissionState, isPushNotificationSupported, subscribeToPushNotifications } from "./registerServiceWorker.js";
 import { getNativePushPermissionState, getNativePushPlatformLabel, getNativePushServerStatus, isDeviceTokenRegistered, isNativePushSupported, setupNativePushListeners, subscribeToNativePushNotifications, syncNativePushTokenToServer, unregisterNativePushNotifications, syncNativeAppBadge, ensureNativePushTokenListeners } from "./nativePush.js";
+import { parsePushNotificationData } from "./pushOpenLead.js";
 import { getNativeLocalPermissionState, isNativeLocalNotificationSupported, requestNativeLocalNotificationPermission, showNativeLeadNotification, setNativeAppIconBadge } from "./nativeLocalNotifications.js";
 import { getNativeNotificationPermissionSnapshot, openAppNotificationSettings, requestNativeNotificationPermissionWithContext } from "./nativeNotificationPermission.js";
 import { detectLeadNotifications, leadFromPushPayload, leadKey, registerKnownLeadIds, shouldAddLeadAlert, shouldPlayLeadAlert } from "./leadNotify.js";
@@ -1442,6 +1443,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     dailyReportEnabled: false,
     telegramLeadNotify: false,
     distributionMode: "log",
+    logShuffleMode: "rank",
     teamIdsOrdered: [],
   });
 
@@ -1458,6 +1460,11 @@ function CRMApp({ user, updateUser, onLogout }) {
   const [bottomNavHidden, setBottomNavHidden] = useState(false);
   const lastScrollYRef = useRef(0);
   const [highlightLeadId, setHighlightLeadId] = useState(null);
+  const openLeadFromPushRef = useRef(null);
+  const forceReloadFromPushRef = useRef(false);
+  const lastPushOpenRef = useRef({ key: "", at: 0 });
+  const pinnedPushLeadRef = useRef(null);
+  const [pushOpenNonce, setPushOpenNonce] = useState(0);
   const webPushSupported = isPushNotificationSupported();
   const nativePushSupported = isNativePushSupported();
   const nativeLocalSupported = isNativeLocalNotificationSupported();
@@ -1898,20 +1905,8 @@ function CRMApp({ user, updateUser, onLogout }) {
         });
       },
       onAction: (event) => {
-        const d = event?.notification?.data || {};
-        let leadId = Number(d.leadId || 0);
-        // FCM serialize mảng thành chuỗi "1,2,3" — nếu chỉ có 1 lead thì mở thẳng chi tiết
-        if (!leadId && d.leadIds) {
-          const ids = String(d.leadIds).split(",").map((s) => Number(s)).filter(Boolean);
-          if (ids.length === 1) leadId = ids[0];
-        }
-        const projectId = Number(d.projectId || 0);
-        // Nhảy vào ĐÚNG dự án của lead. Sale KHÔNG có scope "Tất cả dự án" —
-        // nếu push cũ thiếu projectId thì giữ nguyên dự án đang chọn, không ép về "all"
-        if (projectId) setSelectedProject(String(projectId));
-        else if (user.role !== "sale") setSelectedProject("all");
-        if (leadId) setHighlightLeadId(leadId);
-        setPage("leads");
+        const parsed = event?.parsed || parsePushNotificationData(event);
+        openLeadFromPushRef.current?.(parsed);
       },
     }).then((fn) => { if (alive) cleanup = fn; else fn?.(); }).catch(() => {});
     return () => { alive = false; cleanup?.(); };
@@ -1967,8 +1962,12 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       }
       registerKnownLeadIds(data.leads, knownLeadIdsRef.current);
-      leadsRef.current = data.leads;
-      setLeads(data.leads);
+      const pin = pinnedPushLeadRef.current;
+      const nextLeads = pin?.id && !data.leads.some((l) => Number(l.id) === Number(pin.id))
+        ? [pin, ...data.leads]
+        : data.leads;
+      leadsRef.current = nextLeads;
+      setLeads(nextLeads);
     }
     if (Array.isArray(data.campaigns)) setCampaigns(data.campaigns);
     // Không ghi đè danh sách dự án bằng mảng rỗng (lite/lỗi) — tránh mất ô chọn dự án
@@ -2042,6 +2041,41 @@ function CRMApp({ user, updateUser, onLogout }) {
   const prefetchPausedRef = useRef(false);
   const dataChangedTimerRef = useRef(null);
   const [leadsScopeMode, setLeadsScopeMode] = useState(false);
+
+  const openLeadFromPush = useCallback((parsed = {}) => {
+    const leadId = Number(parsed.leadId || 0);
+    const projectId = Number(parsed.projectId || 0);
+    if (!leadId && !projectId) return;
+    const key = `${leadId}:${projectId}`;
+    const now = Date.now();
+    if (lastPushOpenRef.current.key === key && now - lastPushOpenRef.current.at < 1200) return;
+    lastPushOpenRef.current = { key, at: now };
+    forceReloadFromPushRef.current = true;
+    if (projectId) {
+      const userKey = scopeUserKey(user);
+      const cacheKey = buildScopeCacheKey({
+        selectedProject: String(projectId),
+        managerFilter,
+        saleFilter,
+        userRole: user.role,
+        userId: userKey,
+      });
+      invalidateClientScopeCache(clientScopeCacheRef.current, cacheKey);
+      if (userKey) void deleteScopeDiskCache(userKey, cacheKey);
+      setSelectedProject(String(projectId));
+    } else if (user.role !== "sale") {
+      setSelectedProject("all");
+    }
+    if (leadId) setHighlightLeadId(leadId);
+    setPage("leads");
+    setPushOpenNonce((n) => n + 1);
+  }, [user, managerFilter, saleFilter]);
+  useEffect(() => {
+    openLeadFromPushRef.current = openLeadFromPush;
+  }, [openLeadFromPush]);
+  const pinLeadFromPush = useCallback((lead) => {
+    pinnedPushLeadRef.current = lead || null;
+  }, []);
 
   const applyScopePayload = useCallback((data, cacheKey, options = {}) => {
     if (!data || !Array.isArray(data.leads)) return;
@@ -2671,15 +2705,18 @@ function CRMApp({ user, updateUser, onLogout }) {
       userId: userKey,
     });
 
+    const forceFromPush = forceReloadFromPushRef.current;
+    if (forceFromPush) forceReloadFromPushRef.current = false;
+
     // Mount lần đầu: boot chỉ load nếu đã có selectedProject sẵn (admin/"all" hoặc sale nhớ dự án).
     // Sale click card ngoài từ màn picker: prev rỗng → PHẢI load (trước đây return sớm → list trắng).
     if (!prevScopeKeyRef.current) {
       prevScopeKeyRef.current = cacheKey;
       const saleFirstPick = user.role === "sale" && !!selectedProject && selectedProject !== "personal";
       const emptyNeedsLoad = (leadsRef.current?.length || 0) === 0 && !!selectedProject && selectedProject !== "personal";
-      if (!saleFirstPick && !emptyNeedsLoad) return;
+      if (!saleFirstPick && !emptyNeedsLoad && !forceFromPush) return;
       // fall through → load dự án vừa chọn
-    } else if (prevScopeKeyRef.current === cacheKey) {
+    } else if (prevScopeKeyRef.current === cacheKey && !forceFromPush) {
       return;
     } else {
       prevScopeKeyRef.current = cacheKey;
@@ -2704,7 +2741,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       cachedLen > 0 &&
       cachedLen < expectedCount;
 
-    if (cached?.data?.leads?.length && !countMismatch) {
+    if (cached?.data?.leads?.length && !countMismatch && !forceFromPush) {
       applyScopePayload(cached.data, cacheKey);
       setLeadsFetching(false);
       void fetchLeadScope({ background: true, skipCacheRead: true });
@@ -2839,7 +2876,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         done();
       }
     })();
-  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData, projectLeadCounts]);
+  }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData, projectLeadCounts, pushOpenNonce]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -3028,6 +3065,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       dailyReportEnabled: false,
       telegramLeadNotify: false,
       distributionMode: "log",
+      logShuffleMode: "rank",
       teamIdsOrdered: [],
     });
     setShowProjectModal(true);
@@ -3044,6 +3082,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       dailyReportEnabled: !!p.dailyReportEnabled,
       telegramLeadNotify: !!p.telegramLeadNotify,
       distributionMode: p.distributionMode || "log",
+      logShuffleMode: p.logShuffleMode === "random" ? "random" : "rank",
       teamIdsOrdered: Array.isArray(p.teamIdsOrdered) ? p.teamIdsOrdered : [],
     });
     setShowProjectModal(true);
@@ -3799,6 +3838,7 @@ function CRMApp({ user, updateUser, onLogout }) {
             onLogout={onLogout}
             highlightLeadId={highlightLeadId}
             setHighlightLeadId={setHighlightLeadId}
+            pinLeadFromPush={pinLeadFromPush}
             selectedProject={selectedProject}
             setSelectedProject={setSelectedProject}
             onPrefetchProject={prefetchOneProject}
@@ -4073,6 +4113,71 @@ function CRMApp({ user, updateUser, onLogout }) {
               <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>Manager race 5p → team RR 10p → chưa chia nếu hết vòng.</div>
             </button>
           </div>
+          {(draftProject.distributionMode || "log") === "log" && (
+            <div style={{ border: "1px solid #d9e2dc", borderRadius: 10, padding: 10, marginBottom: 10, background: "#f8fdf9" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#0f3d1e", marginBottom: 8 }}>Xáo lead tự động (New 10p + tự động xáo)</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setDraftProject((prev) => ({ ...prev, logShuffleMode: "rank" }))}
+                  style={{
+                    border: (draftProject.logShuffleMode || "rank") === "rank" ? "1px solid #86efac" : "1px solid #e5e7eb",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    background: (draftProject.logShuffleMode || "rank") === "rank" ? "#ecfdf3" : "#fff",
+                    color: "#0f3d1e",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      border: (draftProject.logShuffleMode || "rank") === "rank" ? "1px solid #16a34a" : "1px solid #cbd5e1",
+                      background: (draftProject.logShuffleMode || "rank") === "rank" ? "#16a34a" : "#fff",
+                      color: "#fff", fontSize: 11, fontWeight: 900,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    }}>{(draftProject.logShuffleMode || "rank") === "rank" ? "✓" : ""}</span>
+                    Xếp hạng chăm sóc
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>
+                    Sale phản hồi nhanh, chăm và chốt tốt được xáo lead New 10p và tự động xáo trước.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraftProject((prev) => ({ ...prev, logShuffleMode: "random" }))}
+                  style={{
+                    border: draftProject.logShuffleMode === "random" ? "1px solid #86efac" : "1px solid #e5e7eb",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    background: draftProject.logShuffleMode === "random" ? "#ecfdf3" : "#fff",
+                    color: "#0f3d1e",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{
+                      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                      border: draftProject.logShuffleMode === "random" ? "1px solid #16a34a" : "1px solid #cbd5e1",
+                      background: draftProject.logShuffleMode === "random" ? "#16a34a" : "#fff",
+                      color: "#fff", fontSize: 11, fontWeight: 900,
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                    }}>{draftProject.logShuffleMode === "random" ? "✓" : ""}</span>
+                    Ngẫu nhiên cùng dự án
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#64748b", marginTop: 4 }}>
+                    Xáo New 10p và tự động xáo cho bất kỳ sale nào gắn dự án này, không theo xếp hạng.
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
           {(draftProject.distributionMode || "log") === "race" && (
             <div style={{ border: "1px solid #dbeafe", borderRadius: 10, padding: 10, marginBottom: 10, background: "#f8fbff" }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#1d4ed8", marginBottom: 8 }}>Team tham gia luân chuyển</div>
@@ -6006,6 +6111,7 @@ const LeadsPage = (props) => {
     onLogout,
     highlightLeadId,
     setHighlightLeadId,
+    pinLeadFromPush,
     selectedProject,
     setSelectedProject,
     onPrefetchProject,
@@ -6662,6 +6768,7 @@ const LeadsPage = (props) => {
 
   useEffect(() => {
     if (!highlightLeadId || activeTab !== "all") return;
+    if (user.role === "sale" && !selectedProject) return;
     const idx = tabFiltered.findIndex(l => l.id === highlightLeadId);
     const existsAnywhere = idx >= 0 || leads.some(l => l.id === highlightLeadId);
     // Lead chưa có trong dữ liệu (đang tải) → GIỮ highlight, effect tự chạy lại khi leads đổi
@@ -6678,7 +6785,36 @@ const LeadsPage = (props) => {
       if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 100);
     setHighlightLeadId(null);
-  }, [highlightLeadId, tabFiltered, leads, pageSize, isMobile]);
+  }, [highlightLeadId, tabFiltered, leads, pageSize, isMobile, user.role, selectedProject]);
+
+  useEffect(() => {
+    if (!highlightLeadId) return;
+    if (leads.some((l) => l.id === highlightLeadId)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`${API}/leads/${highlightLeadId}`);
+        if (cancelled) return;
+        if (r.status === 404 || r.status === 403) {
+          showToast("Không tìm thấy lead này trên tài khoản của bạn. Thử kéo xuống làm mới danh sách.", "warning");
+          setHighlightLeadId(null);
+          return;
+        }
+        if (!r.ok) return;
+        const data = await r.json();
+        const lead = data?.lead;
+        if (!lead?.id) return;
+        pinLeadFromPush?.(lead);
+        if (lead.projectId && user.role === "sale" && String(selectedProject) !== String(lead.projectId)) {
+          setSelectedProject(String(lead.projectId));
+        }
+        applyApiData({ updatedLead: lead }, { suppressNotifications: true });
+      } catch (err) {
+        console.warn("[CRM] open lead from push failed:", err?.message || err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [highlightLeadId, leads, selectedProject, user.role, applyApiData, setSelectedProject, setHighlightLeadId, pinLeadFromPush]);
 
   const saleNames = useMemo(() => {
     const names = new Set();

@@ -1,4 +1,44 @@
 import { areSystemNotificationsEnabled } from "./crmNotifications.js";
+import { parsePushNotificationData } from "./pushOpenLead.js";
+
+let pendingPushOpen = null;
+const pushOpenSubscribers = new Set();
+let pushActionListenerBound = false;
+
+function emitPushOpen(parsed) {
+  if (!parsed || (!parsed.leadId && !parsed.projectId)) return;
+  pendingPushOpen = parsed;
+  if (!pushOpenSubscribers.size) return;
+  for (const fn of pushOpenSubscribers) {
+    try { fn(parsed); } catch { /* ignore subscriber errors */ }
+  }
+  pendingPushOpen = null;
+}
+
+export function takePendingPushOpen() {
+  const value = pendingPushOpen;
+  pendingPushOpen = null;
+  return value;
+}
+
+export function subscribePushOpen(fn) {
+  if (typeof fn !== "function") return () => {};
+  pushOpenSubscribers.add(fn);
+  if (pendingPushOpen) {
+    const value = pendingPushOpen;
+    pendingPushOpen = null;
+    try { fn(value); } catch { /* ignore */ }
+  }
+  return () => pushOpenSubscribers.delete(fn);
+}
+
+async function ensurePushActionListener(PushNotifications) {
+  if (pushActionListenerBound || !PushNotifications) return;
+  pushActionListenerBound = true;
+  await PushNotifications.addListener("pushNotificationActionPerformed", (event) => {
+    emitPushOpen(parsePushNotificationData(event));
+  });
+}
 
 function isCapacitorNative() {
   return typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
@@ -288,14 +328,18 @@ export async function getNativePushServerStatus(apiFetch, apiBase = "/api") {
 export async function setupNativePushListeners({ onNotification, onAction } = {}) {
   if (!isNativePushSupported()) return () => {};
   const { PushNotifications } = await import("@capacitor/push-notifications");
+  await ensurePushActionListener(PushNotifications);
   const handles = [];
   handles.push(await PushNotifications.addListener("pushNotificationReceived", (notification) => {
     onNotification?.(notification);
   }));
-  handles.push(await PushNotifications.addListener("pushNotificationActionPerformed", (event) => {
-    onAction?.(event);
-  }));
-  return () => handles.forEach((h) => h?.remove?.());
+  const unsubOpen = subscribePushOpen((parsed) => {
+    onAction?.({ notification: { data: parsed }, parsed });
+  });
+  return () => {
+    unsubOpen();
+    handles.forEach((h) => h?.remove?.());
+  };
 }
 
 /** Đồng bộ badge icon với server (+ silent APNs). count=0 khi đã xem hết lead. */
@@ -317,4 +361,12 @@ export async function syncNativeAppBadge(apiFetch, apiBase = "/api", count = 0) 
   } catch (err) {
     return { ok: false, count: n, error: err?.message };
   }
+}
+
+/** Gắn listener tap thông báo ngay khi module load — trước khi React mount.
+ *  iOS cold start phát launch notification cho listener đầu tiên; nếu chờ App.jsx thì mất leadId. */
+if (isNativePushSupported()) {
+  import("@capacitor/push-notifications")
+    .then(({ PushNotifications }) => ensurePushActionListener(PushNotifications))
+    .catch(() => {});
 }
