@@ -127,6 +127,39 @@ export function paginateLeadsScope(leads, page, pageSize) {
   return leads.slice(offset, offset + size);
 }
 
+/** Tổng lead để hiện phân trang — cache lite 15 dòng không được coi là cả dự án. */
+export function resolvePagedLeadsTotal({
+  leadsScopeMode = false,
+  scopedCount = 0,
+  leadsTotal = 0,
+  tabCountAll = 0,
+  projectCount = 0,
+  loadedCount = 0,
+} = {}) {
+  if (leadsScopeMode) return Math.max(0, Number(scopedCount) || 0);
+  for (const raw of [leadsTotal, tabCountAll, projectCount]) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return Math.max(0, Number(loadedCount) || 0);
+}
+
+export function isPartialScopeCache(data) {
+  return !!(data && (data.paginated === true || data.scope === false || data.scopeTooLarge));
+}
+
+/** Không ghi đè cache đủ dự án bằng 1 trang lite 15 lead. */
+export function shouldReplaceScopeCache(existing, incoming) {
+  const oldList = Array.isArray(existing?.leads) ? existing.leads : [];
+  const nextList = Array.isArray(incoming?.leads) ? incoming.leads : [];
+  if (!nextList.length) return false;
+  if (!oldList.length) return true;
+  if (!isPartialScopeCache(existing) && isPartialScopeCache(incoming) && oldList.length > nextList.length) {
+    return false;
+  }
+  return true;
+}
+
 export function scopeUserKey(user) {
   return String(user?.userId || user?.username || user?.displayName || "anon");
 }

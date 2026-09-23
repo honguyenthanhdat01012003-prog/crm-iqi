@@ -44,8 +44,10 @@ import {
   invalidateClientScopeCache,
   paginateLeadsScope,
   readScopeDiskCache,
+  resolvePagedLeadsTotal,
   scopeUserKey,
   setClientScopeCacheEntry,
+  shouldReplaceScopeCache,
   sortLeadsScope,
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
@@ -2088,10 +2090,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
     // Dự án quá lớn: dùng phân trang server, không bật local scope mode
     if (data.leads.length > 0 && (data.scopeTooLarge || data.paginated === true || data.scope === false)) {
+      scopeCacheKeyRef.current = cacheKey;
       applyApiData(data, { suppressNotifications });
       leadsRef.current = data.leads;
       setLeadsScopeMode(false);
       leadsScopeModeRef.current = false;
+      if (!(Number(data.leadsTotal) > 0)) {
+        const fromTabs = Number(data.tabCounts?.all);
+        if (fromTabs > 0) setLeadsTotal(fromTabs);
+      }
       if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
         stableTabCountsRef.current = data.tabCounts;
         setServerTabCounts(data.tabCounts);
@@ -2241,7 +2248,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       const data = await fetchAndCacheScope(cacheKey, buildScopeUrl(), userKey);
       if (!data) return null;
       if (!background && seq !== fetchSeqRef.current) return data;
-      if (background && scopeCacheKeyRef.current !== requestKey) return data;
+      if (background && scopeCacheKeyRef.current && scopeCacheKeyRef.current !== requestKey) return data;
       markInitialDataLoaded();
       bootDoneRef.current = true;
       applyScopePayload(data, cacheKey, {
@@ -2374,6 +2381,7 @@ function CRMApp({ user, updateUser, onLogout }) {
               userRole: user.role,
               userId: userKey,
             });
+            const existing = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
             const diskPayload = {
               leads: data.leads,
               leadsTotal: data.leadsTotal,
@@ -2383,10 +2391,12 @@ function CRMApp({ user, updateUser, onLogout }) {
               paginated: true,
               scope: false,
             };
-            setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, diskPayload, {
-              userKey,
-              persist: true,
-            });
+            if (shouldReplaceScopeCache(existing?.data, diskPayload)) {
+              setClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, diskPayload, {
+                userKey,
+                persist: true,
+              });
+            }
           }
         }
         if (refreshTabCounts && Array.isArray(data.leads) && data.leads.length > 0) {
@@ -2442,6 +2452,9 @@ function CRMApp({ user, updateUser, onLogout }) {
           applyScopePayload(disk.data, cacheKey);
           markInitialDataLoaded();
           bootDoneRef.current = true;
+          if (disk.data.paginated || disk.data.scope === false) {
+            void fetchTabCounts();
+          }
         }
       }
     }
@@ -2502,6 +2515,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     applyScopePayload,
     markInitialDataLoaded,
     isMobile,
+    fetchTabCounts,
   ]);
 
   const updateLeadsQuery = useCallback((patch = {}) => {
@@ -2745,6 +2759,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       applyScopePayload(cached.data, cacheKey);
       setLeadsFetching(false);
       void fetchLeadScope({ background: true, skipCacheRead: true });
+      if (cached.data.paginated || cached.data.scope === false) {
+        void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true, applyResult: false })
+          .then((lite) => {
+            if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
+            if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
+              stableTabCountsRef.current = lite.tabCounts;
+              setServerTabCounts(lite.tabCounts);
+            } else {
+              void fetchTabCounts();
+            }
+          })
+          .catch(() => { void fetchTabCounts(); });
+      }
       return;
     }
 
@@ -2787,6 +2814,16 @@ function CRMApp({ user, updateUser, onLogout }) {
           applyScopePayload(diskFull.data, cacheKey);
           done();
           void fetchLeadScope({ background: true, skipCacheRead: true });
+          void liteP.then((lite) => {
+            if (projectLoadSeqRef.current !== seq) return;
+            if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
+            if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
+              stableTabCountsRef.current = lite.tabCounts;
+              setServerTabCounts(lite.tabCounts);
+            } else {
+              void fetchTabCounts();
+            }
+          }).catch(() => { void fetchTabCounts(); });
           return;
         }
 
@@ -6649,7 +6686,16 @@ const LeadsPage = (props) => {
     return sortLeadsScope(tabFiltered, sortConfig);
   }, [tabFiltered, leadsScopeMode, sortConfig, isSale]);
 
-  const displayLeadsTotal = leadsScopeMode ? sortedLeads.length : (leadsTotal || 0);
+  const displayLeadsTotal = resolvePagedLeadsTotal({
+    leadsScopeMode,
+    scopedCount: sortedLeads.length,
+    leadsTotal,
+    tabCountAll: serverTabCounts?.all,
+    projectCount: selectedProject && selectedProject !== "all" && selectedProject !== "personal"
+      ? projectLeadCountsMap[Number(selectedProject)]
+      : projectLeadCounts?.all,
+    loadedCount: sortedLeads.length,
+  });
   const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
