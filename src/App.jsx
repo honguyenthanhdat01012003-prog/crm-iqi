@@ -42,12 +42,14 @@ import {
   filterLeadsScope,
   getClientScopeCacheEntry,
   invalidateClientScopeCache,
+  isPartialLeadPage,
   paginateLeadsScope,
   readScopeDiskCache,
   resolvePagedLeadsTotal,
   scopeUserKey,
   setClientScopeCacheEntry,
   shouldReplaceScopeCache,
+  shouldShowLeadPager,
   sortLeadsScope,
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
@@ -2088,8 +2090,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.leads.length === 0 && (leadsRef.current?.length || 0) > 0 && Number(data.leadsTotal) !== 0) {
       return;
     }
-    // Dự án quá lớn: dùng phân trang server, không bật local scope mode
-    if (data.leads.length > 0 && (data.scopeTooLarge || data.paginated === true || data.scope === false)) {
+    // 1 trang cache (15 lead) hoặc truncated: dùng phân trang server, không bật local scope mode
+    if (data.leads.length > 0 && isPartialLeadPage(data)) {
       scopeCacheKeyRef.current = cacheKey;
       applyApiData(data, { suppressNotifications });
       leadsRef.current = data.leads;
@@ -2722,13 +2724,20 @@ function CRMApp({ user, updateUser, onLogout }) {
     const forceFromPush = forceReloadFromPushRef.current;
     if (forceFromPush) forceReloadFromPushRef.current = false;
 
+    const cachedEarly = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
+    const partialHydrate = isPartialLeadPage(cachedEarly?.data) || isPartialLeadPage({
+      leads: leadsRef.current,
+      paginated: !leadsScopeModeRef.current,
+    });
+
     // Mount lần đầu: boot chỉ load nếu đã có selectedProject sẵn (admin/"all" hoặc sale nhớ dự án).
     // Sale click card ngoài từ màn picker: prev rỗng → PHẢI load (trước đây return sớm → list trắng).
+    // Admin/manager hydrate 15 lead cache thì cũng phải load — trước đây return sớm → kẹt 15 lead, mất pager.
     if (!prevScopeKeyRef.current) {
       prevScopeKeyRef.current = cacheKey;
       const saleFirstPick = user.role === "sale" && !!selectedProject && selectedProject !== "personal";
       const emptyNeedsLoad = (leadsRef.current?.length || 0) === 0 && !!selectedProject && selectedProject !== "personal";
-      if (!saleFirstPick && !emptyNeedsLoad && !forceFromPush) return;
+      if (!saleFirstPick && !emptyNeedsLoad && !forceFromPush && !partialHydrate) return;
       // fall through → load dự án vừa chọn
     } else if (prevScopeKeyRef.current === cacheKey && !forceFromPush) {
       return;
@@ -2740,7 +2749,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     ++tabCountsSeqRef.current;
     const seq = ++projectLoadSeqRef.current;
 
-    const cached = getClientScopeCacheEntry(clientScopeCacheRef.current, cacheKey, { allowStale: true });
+    const cached = cachedEarly;
     const expectedCount = Number(projectLeadCounts?.byProject?.[Number(selectedProject)] || 0);
     const cachedLen = Array.isArray(cached?.data?.leads) ? cached.data.leads.length : 0;
     // Cache lite/paginated chỉ có 1 trang — KHÔNG so với tổng lead dự án (tránh xóa cache → load lại 30–60s)
@@ -2759,17 +2768,8 @@ function CRMApp({ user, updateUser, onLogout }) {
       applyScopePayload(cached.data, cacheKey);
       setLeadsFetching(false);
       void fetchLeadScope({ background: true, skipCacheRead: true });
-      if (cached.data.paginated || cached.data.scope === false) {
-        void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true, applyResult: false })
-          .then((lite) => {
-            if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
-            if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
-              stableTabCountsRef.current = lite.tabCounts;
-              setServerTabCounts(lite.tabCounts);
-            } else {
-              void fetchTabCounts();
-            }
-          })
+      if (isPartialLeadPage(cached.data)) {
+        void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true, applyResult: true })
           .catch(() => { void fetchTabCounts(); });
       }
       return;
@@ -2814,16 +2814,24 @@ function CRMApp({ user, updateUser, onLogout }) {
           applyScopePayload(diskFull.data, cacheKey);
           done();
           void fetchLeadScope({ background: true, skipCacheRead: true });
-          void liteP.then((lite) => {
-            if (projectLoadSeqRef.current !== seq) return;
-            if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
-            if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
-              stableTabCountsRef.current = lite.tabCounts;
-              setServerTabCounts(lite.tabCounts);
-            } else {
-              void fetchTabCounts();
-            }
-          }).catch(() => { void fetchTabCounts(); });
+          if (isPartialLeadPage(diskFull.data)) {
+            void liteP.then((lite) => {
+              if (projectLoadSeqRef.current !== seq) return;
+              if (lite && Array.isArray(lite.leads) && lite.leads.length) {
+                applyApiData(lite, { suppressNotifications: true });
+                if (Array.isArray(lite.leads)) leadsRef.current = lite.leads;
+                setLeadsScopeMode(false);
+                leadsScopeModeRef.current = false;
+              }
+              if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
+              if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
+                stableTabCountsRef.current = lite.tabCounts;
+                setServerTabCounts(lite.tabCounts);
+              } else {
+                void fetchTabCounts();
+              }
+            }).catch(() => { void fetchTabCounts(); });
+          }
           return;
         }
 
@@ -2914,6 +2922,19 @@ function CRMApp({ user, updateUser, onLogout }) {
       }
     })();
   }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData, projectLeadCounts, pushOpenNonce]);
+
+  useEffect(() => {
+    const list = Array.isArray(leadsRef.current) ? leadsRef.current : [];
+    if (!leadsScopeModeRef.current || !list.length) return;
+    const known = Number(leadsTotal)
+      || Number(serverTabCounts?.all)
+      || Number(projectLeadCounts?.byProject?.[Number(selectedProject)])
+      || 0;
+    if (list.length <= 15 && (known > list.length || isPartialLeadPage({ leads: list, leadsTotal: known }))) {
+      setLeadsScopeMode(false);
+      leadsScopeModeRef.current = false;
+    }
+  }, [leadsTotal, serverTabCounts, projectLeadCounts, selectedProject]);
 
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
@@ -6687,7 +6708,11 @@ const LeadsPage = (props) => {
   }, [tabFiltered, leadsScopeMode, sortConfig, isSale]);
 
   const displayLeadsTotal = resolvePagedLeadsTotal({
-    leadsScopeMode,
+    leadsScopeMode: leadsScopeMode && !isPartialLeadPage({
+      leads: sortedLeads,
+      leadsTotal,
+      paginated: !leadsScopeMode,
+    }),
     scopedCount: sortedLeads.length,
     leadsTotal,
     tabCountAll: serverTabCounts?.all,
@@ -6697,6 +6722,12 @@ const LeadsPage = (props) => {
     loadedCount: sortedLeads.length,
   });
   const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
+  const showLeadPager = shouldShowLeadPager({
+    totalPages,
+    loadedCount: sortedLeads.length,
+    pageSize,
+    leadsScopeMode: leadsScopeMode && displayLeadsTotal <= sortedLeads.length,
+  });
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
   // Scope: cắt local. Lite/server-page: server đã trả đúng 1 trang → hiện nguyên list
@@ -10759,7 +10790,7 @@ const LeadsPage = (props) => {
       )}
 
       {/* Pagination */}
-      {totalPages > 1 && (() => {
+      {showLeadPager && (() => {
         const btnStyle = (disabled) => ({
           padding: isMobile ? "10px 14px" : "6px 10px", borderRadius: 8,
           border: "1px solid #d1d5db", background: disabled ? "#f3f4f6" : "#fff",
@@ -10768,7 +10799,20 @@ const LeadsPage = (props) => {
           display: "flex", alignItems: "center", justifyContent: "center",
         });
         return (
-        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: isMobile ? 6 : 8, marginTop: 16, flexWrap: "wrap" }}>
+        <div style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          gap: isMobile ? 6 : 8,
+          marginTop: 16,
+          flexWrap: "wrap",
+          position: isMobile ? "sticky" : undefined,
+          bottom: isMobile ? "calc(12px + env(safe-area-inset-bottom, 0px))" : undefined,
+          zIndex: isMobile ? 8 : undefined,
+          background: isMobile ? "#fff" : undefined,
+          padding: isMobile ? "8px 0" : undefined,
+          boxShadow: isMobile ? "0 -6px 16px rgba(15,23,42,.06)" : undefined,
+        }}>
           <button onClick={() => setCurrentPage(1)} disabled={safePage === 1} style={btnStyle(safePage === 1)}>«</button>
           <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={safePage === 1} style={btnStyle(safePage === 1)}>‹</button>
           <span style={{ fontSize: 13, color: "#374151", padding: "0 4px" }}>{safePage} / {totalPages}</span>

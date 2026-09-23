@@ -148,6 +148,22 @@ export function isPartialScopeCache(data) {
   return !!(data && (data.paginated === true || data.scope === false || data.scopeTooLarge));
 }
 
+/** Cache/list đúng 1 trang (mặc định 15) thì không được coi là đủ cả dự án. */
+export function isPartialLeadPage(data, pageSize = 15) {
+  const list = Array.isArray(data?.leads) ? data.leads : [];
+  if (!list.length) return false;
+  if (isPartialScopeCache(data)) return true;
+  const total = Number(data?.leadsTotal);
+  if (Number.isFinite(total) && total > list.length) return true;
+  const size = Math.max(1, Number(pageSize) || 15);
+  return list.length <= size && data?.scope !== true;
+}
+
+export function shouldShowLeadPager({ totalPages = 1, loadedCount = 0, pageSize = 15, leadsScopeMode = false } = {}) {
+  if (Number(totalPages) > 1) return true;
+  return !leadsScopeMode && Number(loadedCount) >= Math.max(1, Number(pageSize) || 15);
+}
+
 /** Không ghi đè cache đủ dự án bằng 1 trang lite 15 lead. */
 export function shouldReplaceScopeCache(existing, incoming) {
   const oldList = Array.isArray(existing?.leads) ? existing.leads : [];

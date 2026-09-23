@@ -2,6 +2,8 @@ import assert from "assert";
 import {
   resolvePagedLeadsTotal,
   shouldReplaceScopeCache,
+  isPartialLeadPage,
+  shouldShowLeadPager,
 } from "./leadScopeClient.js";
 
 assert.strictEqual(
@@ -33,5 +35,12 @@ assert.strictEqual(
   shouldReplaceScopeCache(null, { leads: new Array(15), paginated: true }),
   true
 );
+
+assert.strictEqual(isPartialLeadPage({ leads: new Array(15) }), true);
+assert.strictEqual(isPartialLeadPage({ leads: new Array(15), paginated: true }), true);
+assert.strictEqual(isPartialLeadPage({ leads: new Array(80), scope: true, leadsTotal: 80 }), false);
+assert.strictEqual(shouldShowLeadPager({ totalPages: 1, loadedCount: 15, pageSize: 15, leadsScopeMode: false }), true);
+assert.strictEqual(shouldShowLeadPager({ totalPages: 1, loadedCount: 15, pageSize: 15, leadsScopeMode: true }), false);
+assert.strictEqual(shouldShowLeadPager({ totalPages: 4, loadedCount: 15, pageSize: 15, leadsScopeMode: false }), true);
 
 console.log("leadScopeClient.test.js: ok");
