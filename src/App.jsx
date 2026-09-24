@@ -48,8 +48,10 @@ import {
   resolvePagedLeadsTotal,
   scopeUserKey,
   setClientScopeCacheEntry,
+  shouldKeepExistingLeadList,
   shouldReplaceScopeCache,
   shouldShowLeadPager,
+  mergeLeadsPreserveFullList,
   sortLeadsScope,
 } from "./utils/leadScopeClient.js";
 import { telHref, zaloHref } from "./utils/phoneLinks.js";
@@ -1515,6 +1517,8 @@ function CRMApp({ user, updateUser, onLogout }) {
     products: "",
   });
   const leadsScopeModeRef = useRef(false);
+  // Cache key của dự án đang giữ list đủ (scope) — rỗng khi list chỉ là 1 trang hoặc vừa đổi dự án
+  const fullListKeyRef = useRef("");
   const [seenLeadKeys, setSeenLeadKeys] = useState(() => {
     try { const s = localStorage.getItem("crm_seen_keys"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
   });
@@ -1966,10 +1970,25 @@ function CRMApp({ user, updateUser, onLogout }) {
         }
       }
       registerKnownLeadIds(data.leads, knownLeadIdsRef.current);
+      const prevList = Array.isArray(leadsRef.current) ? leadsRef.current : [];
+      const keepFullList = shouldKeepExistingLeadList(prevList, data, {
+        hasFullList: !!fullListKeyRef.current,
+      });
+      if (!keepFullList && isPartialLeadPage(data)) fullListKeyRef.current = "";
       const pin = pinnedPushLeadRef.current;
-      const nextLeads = pin?.id && !data.leads.some((l) => Number(l.id) === Number(pin.id))
-        ? [pin, ...data.leads]
-        : data.leads;
+      let nextLeads;
+      if (keepFullList) {
+        setLeadsScopeMode(true);
+        leadsScopeModeRef.current = true;
+        nextLeads = mergeLeadsPreserveFullList(prevList, data.leads);
+        if (pin?.id && !nextLeads.some((l) => Number(l.id) === Number(pin.id))) {
+          nextLeads = [pin, ...nextLeads];
+        }
+      } else {
+        nextLeads = pin?.id && !data.leads.some((l) => Number(l.id) === Number(pin.id))
+          ? [pin, ...data.leads]
+          : data.leads;
+      }
       leadsRef.current = nextLeads;
       setLeads(nextLeads);
     }
@@ -1988,10 +2007,20 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.phoneRegistrations && typeof data.phoneRegistrations === "object") {
       setPhoneRegistrations(data.phoneRegistrations);
     }
-    if (data.leadsTotal != null) setLeadsTotal(Number(data.leadsTotal) || 0);
+    const holdsFullList = !!fullListKeyRef.current;
+    const keptCount = Array.isArray(leadsRef.current) ? leadsRef.current.length : 0;
+    if (data.leadsTotal != null) {
+      const nextTotal = Number(data.leadsTotal) || 0;
+      if (!(holdsFullList && nextTotal < keptCount)) {
+        setLeadsTotal(nextTotal);
+      }
+    }
     if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
-      stableTabCountsRef.current = data.tabCounts;
-      setServerTabCounts(data.tabCounts);
+      const nextAll = Number(data.tabCounts.all) || 0;
+      if (!(holdsFullList && nextAll < keptCount)) {
+        stableTabCountsRef.current = data.tabCounts;
+        setServerTabCounts(data.tabCounts);
+      }
     }
     if (Array.isArray(data.saleRanking)) setServerSaleRanking(data.saleRanking);
     if (data.projectLeadCounts && typeof data.projectLeadCounts === "object") {
@@ -2090,11 +2119,15 @@ function CRMApp({ user, updateUser, onLogout }) {
     if (data.leads.length === 0 && (leadsRef.current?.length || 0) > 0 && Number(data.leadsTotal) !== 0) {
       return;
     }
+    // Đã có list đủ dự án: trang 15 không được tắt scope / ghi đè
+    if (shouldKeepExistingLeadList(leadsRef.current, data, { hasFullList: !!fullListKeyRef.current })) {
+      applyApiData(data, { suppressNotifications });
+      return;
+    }
     // 1 trang cache (15 lead) hoặc truncated: dùng phân trang server, không bật local scope mode
     if (data.leads.length > 0 && isPartialLeadPage(data)) {
       scopeCacheKeyRef.current = cacheKey;
       applyApiData(data, { suppressNotifications });
-      leadsRef.current = data.leads;
       setLeadsScopeMode(false);
       leadsScopeModeRef.current = false;
       if (!(Number(data.leadsTotal) > 0)) {
@@ -2111,7 +2144,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     setLeadsScopeMode(true);
     leadsScopeModeRef.current = true;
     applyApiData(data, { suppressNotifications });
-    leadsRef.current = data.leads;
+    fullListKeyRef.current = cacheKey || "scope";
     if (data.tabCounts && typeof data.tabCounts === "object" && isFullTabCounts(data.tabCounts)) {
       stableTabCountsRef.current = data.tabCounts;
       setServerTabCounts(data.tabCounts);
@@ -2131,9 +2164,9 @@ function CRMApp({ user, updateUser, onLogout }) {
   }, [buildScopeUrlFor, selectedProject, managerFilter, saleFilter]);
 
   /** Fetch scope + ghi cache; dedupe request cùng key (prefetch + click). */
-  const fetchAndCacheScope = useCallback(async (cacheKey, url, userKey) => {
+  const fetchAndCacheScope = useCallback(async (cacheKey, url, userKey, { fresh = false } = {}) => {
     const inflight = scopeInflightRef.current.get(cacheKey);
-    if (inflight) return inflight;
+    if (inflight && !fresh) return inflight;
 
     const job = (async () => {
       const controller = new AbortController();
@@ -2170,7 +2203,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         return null;
       } finally {
         clearTimeout(timeout);
-        scopeInflightRef.current.delete(cacheKey);
+        if (scopeInflightRef.current.get(cacheKey) === job) scopeInflightRef.current.delete(cacheKey);
       }
     })();
 
@@ -2205,7 +2238,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     }
   }, [buildTabCountsUrl]);
 
-  const fetchLeadScope = useCallback(async ({ background = false, skipCacheRead = false, detectNotifications = false } = {}) => {
+  const fetchLeadScope = useCallback(async ({ background = false, skipCacheRead = false, detectNotifications = false, fresh = false } = {}) => {
     const userKey = scopeUserKey(user);
     const cacheKey = buildScopeCacheKey({
       selectedProject,
@@ -2247,7 +2280,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeadsFetching(true);
     }
     try {
-      const data = await fetchAndCacheScope(cacheKey, buildScopeUrl(), userKey);
+      const data = await fetchAndCacheScope(cacheKey, buildScopeUrl(), userKey, { fresh });
       if (!data) return null;
       if (!background && seq !== fetchSeqRef.current) return data;
       if (background && scopeCacheKeyRef.current && scopeCacheKeyRef.current !== requestKey) return data;
@@ -2365,10 +2398,12 @@ function CRMApp({ user, updateUser, onLogout }) {
             return prev;
           });
         }
+        const keepFullList = shouldKeepExistingLeadList(leadsRef.current, data, {
+          hasFullList: !!fullListKeyRef.current,
+        });
         applyApiData(data, { suppressNotifications: true });
-        if (Array.isArray(data.leads)) leadsRef.current = data.leads;
         // Persist lite page → disk (đặc biệt mobile/iOS cold start ngày hôm sau)
-        if (Array.isArray(data.leads) && data.leads.length > 0) {
+        if (!keepFullList && Array.isArray(data.leads) && data.leads.length > 0) {
           const userKey = scopeUserKey(user);
           if (
             userKey &&
@@ -2522,11 +2557,11 @@ function CRMApp({ user, updateUser, onLogout }) {
 
   const updateLeadsQuery = useCallback((patch = {}) => {
     leadsQueryRef.current = { ...leadsQueryRef.current, ...patch };
-    // Chưa vào scope mode: đổi trang/tab phải gọi lại API lite
-    if (!leadsScopeModeRef.current) {
-      return fetchCrmData({ skipTabCounts: true });
+    // List đủ dự án: lọc tab/trang local — không tải lại trang 15
+    if (leadsScopeModeRef.current || fullListKeyRef.current) {
+      return Promise.resolve();
     }
-    return Promise.resolve();
+    return fetchCrmData({ skipTabCounts: true });
   }, [fetchCrmData]);
 
   const fetchProjectLeadCounts = useCallback(async () => {
@@ -2744,6 +2779,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     } else {
       prevScopeKeyRef.current = cacheKey;
     }
+    if (fullListKeyRef.current !== cacheKey) fullListKeyRef.current = "";
 
     ++fetchSeqRef.current;
     ++tabCountsSeqRef.current;
@@ -2769,8 +2805,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       setLeadsFetching(false);
       void fetchLeadScope({ background: true, skipCacheRead: true });
       if (isPartialLeadPage(cached.data)) {
-        void fetchCrmData({ skipTabCounts: true, refreshTabCounts: true, applyResult: true })
-          .catch(() => { void fetchTabCounts(); });
+        void fetchTabCounts();
       }
       return;
     }
@@ -2818,16 +2853,14 @@ function CRMApp({ user, updateUser, onLogout }) {
             void liteP.then((lite) => {
               if (projectLoadSeqRef.current !== seq) return;
               if (lite && Array.isArray(lite.leads) && lite.leads.length) {
+                const keep = shouldKeepExistingLeadList(leadsRef.current, lite, { hasFullList: !!fullListKeyRef.current });
                 applyApiData(lite, { suppressNotifications: true });
-                if (Array.isArray(lite.leads)) leadsRef.current = lite.leads;
-                setLeadsScopeMode(false);
-                leadsScopeModeRef.current = false;
+                if (!keep) {
+                  setLeadsScopeMode(false);
+                  leadsScopeModeRef.current = false;
+                }
               }
-              if (Number(lite?.leadsTotal) > 0) setLeadsTotal(Number(lite.leadsTotal));
-              if (lite?.tabCounts && isFullTabCounts(lite.tabCounts)) {
-                stableTabCountsRef.current = lite.tabCounts;
-                setServerTabCounts(lite.tabCounts);
-              } else {
+              if (!lite?.tabCounts || !isFullTabCounts(lite.tabCounts)) {
                 void fetchTabCounts();
               }
             }).catch(() => { void fetchTabCounts(); });
@@ -2841,8 +2874,7 @@ function CRMApp({ user, updateUser, onLogout }) {
         const applyLite = (lite) => {
           if (!lite || !Array.isArray(lite.leads) || !lite.leads.length) return false;
           applyApiData(lite, { suppressNotifications: true });
-          leadsRef.current = lite.leads;
-          if (lite.leadsTotal != null) setLeadsTotal(Number(lite.leadsTotal) || lite.leads.length);
+          if (lite.leadsTotal != null && !fullListKeyRef.current) setLeadsTotal(Number(lite.leadsTotal) || lite.leads.length);
           if (lite.tabCounts && isFullTabCounts(lite.tabCounts)) {
             stableTabCountsRef.current = lite.tabCounts;
             setServerTabCounts(lite.tabCounts);
@@ -2923,19 +2955,6 @@ function CRMApp({ user, updateUser, onLogout }) {
     })();
   }, [selectedProject, managerFilter, saleFilter, user, applyScopePayload, fetchLeadScope, fetchCrmData, fetchAndCacheScope, buildScopeUrlFor, fetchTabCounts, markInitialDataLoaded, markApiOk, applyApiData, projectLeadCounts, pushOpenNonce]);
 
-  useEffect(() => {
-    const list = Array.isArray(leadsRef.current) ? leadsRef.current : [];
-    if (!leadsScopeModeRef.current || !list.length) return;
-    const known = Number(leadsTotal)
-      || Number(serverTabCounts?.all)
-      || Number(projectLeadCounts?.byProject?.[Number(selectedProject)])
-      || 0;
-    if (list.length <= 15 && (known > list.length || isPartialLeadPage({ leads: list, leadsTotal: known }))) {
-      setLeadsScopeMode(false);
-      leadsScopeModeRef.current = false;
-    }
-  }, [leadsTotal, serverTabCounts, projectLeadCounts, selectedProject]);
-
   // Socket.IO: real-time data updates (replaces 10s polling)
   const fetchAnnouncements = useCallback(() => {
     apiFetch(`${API}/announcements`).then(r => r.ok ? r.json() : []).then(d => setAnnouncements(Array.isArray(d) ? d : [])).catch(() => {});
@@ -2982,10 +3001,12 @@ function CRMApp({ user, updateUser, onLogout }) {
       showToast(payload?.reason || `${payload?.leadName || "Lead"} bị thu hồi — đã đưa về rổ xáo`, "warning");
     });
     socket.on("data-changed", () => {
-      // Xóa cache list lead cũ — trước đây counts cập nhật (13) nhưng cache vẫn 12 khi click vào dự án
-      invalidateClientScopeCache(clientScopeCacheRef.current);
-      const uk = scopeUserKey(user);
-      if (uk) void deleteScopeDiskCache(uk);
+      const hasFullList = leadsScopeModeRef.current || !!fullListKeyRef.current;
+      if (!hasFullList) {
+        invalidateClientScopeCache(clientScopeCacheRef.current);
+        const uk = scopeUserKey(user);
+        if (uk) void deleteScopeDiskCache(uk);
+      }
       if (dataChangedTimerRef.current) clearTimeout(dataChangedTimerRef.current);
       dataChangedTimerRef.current = setTimeout(() => {
         fetchProjectLeadCounts();
@@ -2995,8 +3016,8 @@ function CRMApp({ user, updateUser, onLogout }) {
         if (!selectedProject) return;
         // Native push: socket lead-notification đã báo — không detect lại từ refresh (gây double)
         const detectOnRefresh = !nativePushSupported;
-        if (leadsScopeModeRef.current && !isMobile) {
-          fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: detectOnRefresh });
+        if (hasFullList) {
+          fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: detectOnRefresh, fresh: true });
         } else {
           fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
         }
@@ -3028,15 +3049,17 @@ function CRMApp({ user, updateUser, onLogout }) {
           if (d.hash) setSyncHash(String(d.hash));
           if (d.changed) {
             if (selectedProject === "personal") return;
-            // Soft refresh — invalidate cache để count ngoài khớp list trong
-            invalidateClientScopeCache(clientScopeCacheRef.current);
-            const uk = scopeUserKey(user);
-            if (uk) void deleteScopeDiskCache(uk);
+            const hasFullList = leadsScopeModeRef.current || !!fullListKeyRef.current;
+            if (!hasFullList) {
+              invalidateClientScopeCache(clientScopeCacheRef.current);
+              const uk = scopeUserKey(user);
+              if (uk) void deleteScopeDiskCache(uk);
+            }
             fetchProjectLeadCounts();
             if (user.role === "sale" && !selectedProject) return;
             if (!selectedProject) return;
-            if (leadsScopeModeRef.current && !isMobile) {
-              fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: !nativePushSupported });
+            if (hasFullList) {
+              fetchLeadScope({ background: true, skipCacheRead: true, detectNotifications: !nativePushSupported, fresh: true });
             } else {
               fetchCrmData({ skipTabCounts: true, refreshTabCounts: true });
             }
@@ -6668,6 +6691,7 @@ const LeadsPage = (props) => {
   }, [leads]);
 
   // Scope cache: lọc/tab/trang local — không gọi API mỗi lần đổi tab
+  const localScope = !!leadsScopeMode;
   const scopeFilterOpts = useMemo(() => ({
     selectedProject,
     searchText,
@@ -6681,7 +6705,7 @@ const LeadsPage = (props) => {
   }), [selectedProject, searchText, statusFilter, managerFilter, saleFilter, productFilter, dateFrom, dateTo, isSale]);
 
   const filteredBeforeTab = useMemo(() => {
-    if (!leadsScopeMode) {
+    if (!localScope) {
       const list = Array.isArray(leads) ? leads : [];
       if (!selectedProject || selectedProject === "all" || selectedProject === "personal") return list;
       const pid = Number(selectedProject);
@@ -6689,36 +6713,40 @@ const LeadsPage = (props) => {
       return list.filter((l) => Number(l.projectId) === pid);
     }
     return filterLeadsScope(leads, { ...scopeFilterOpts, activeTab: "all" });
-  }, [leads, leadsScopeMode, scopeFilterOpts, selectedProject]);
+  }, [leads, localScope, scopeFilterOpts, selectedProject]);
 
   const displayTabCounts = useMemo(() => {
-    if (leadsScopeMode) return computeTabCountsFromLeads(filteredBeforeTab, isSale);
+    if (localScope) return computeTabCountsFromLeads(filteredBeforeTab, isSale);
     return serverTabCounts;
-  }, [leadsScopeMode, filteredBeforeTab, isSale, serverTabCounts]);
+  }, [localScope, filteredBeforeTab, isSale, serverTabCounts]);
 
   const tabFiltered = useMemo(() => {
-    if (!leadsScopeMode) return filteredBeforeTab;
+    if (!localScope) return filteredBeforeTab;
     return filterLeadsScope(leads, { ...scopeFilterOpts, activeTab });
-  }, [leads, leadsScopeMode, scopeFilterOpts, activeTab, filteredBeforeTab]);
+  }, [leads, localScope, scopeFilterOpts, activeTab, filteredBeforeTab]);
 
   const sortedLeads = useMemo(() => {
-    if (isSale) return sortLeadsForSaleView(tabFiltered, leadsScopeMode ? sortConfig : null);
-    if (!leadsScopeMode) return tabFiltered;
+    if (isSale) return sortLeadsForSaleView(tabFiltered, localScope ? sortConfig : null);
+    if (!localScope) return tabFiltered;
     return sortLeadsScope(tabFiltered, sortConfig);
-  }, [tabFiltered, leadsScopeMode, sortConfig, isSale]);
+  }, [tabFiltered, localScope, sortConfig, isSale]);
 
+  const hasNarrowingFilter = activeTab !== "all"
+    || !!searchText.trim()
+    || (statusFilter && statusFilter !== "all")
+    || productFilter.length > 0
+    || !!dateFrom
+    || !!dateTo;
   const displayLeadsTotal = resolvePagedLeadsTotal({
-    leadsScopeMode: leadsScopeMode && !isPartialLeadPage({
-      leads: sortedLeads,
-      leadsTotal,
-      paginated: !leadsScopeMode,
-    }),
+    leadsScopeMode: localScope,
     scopedCount: sortedLeads.length,
     leadsTotal,
-    tabCountAll: serverTabCounts?.all,
-    projectCount: selectedProject && selectedProject !== "all" && selectedProject !== "personal"
-      ? projectLeadCountsMap[Number(selectedProject)]
-      : projectLeadCounts?.all,
+    tabCountAll: activeTab === "all" ? serverTabCounts?.all : serverTabCounts?.[activeTab],
+    projectCount: hasNarrowingFilter || managerFilter !== "all" || saleFilter !== "all"
+      ? 0
+      : (selectedProject && selectedProject !== "all" && selectedProject !== "personal"
+        ? projectLeadCountsMap[Number(selectedProject)]
+        : projectLeadCounts?.all),
     loadedCount: sortedLeads.length,
   });
   const totalPages = Math.max(1, Math.ceil(displayLeadsTotal / pageSize));
@@ -6726,15 +6754,15 @@ const LeadsPage = (props) => {
     totalPages,
     loadedCount: sortedLeads.length,
     pageSize,
-    leadsScopeMode: leadsScopeMode && displayLeadsTotal <= sortedLeads.length,
+    leadsScopeMode: localScope,
   });
   const safePage = Math.min(Math.max(1, currentPage), totalPages);
 
   // Scope: cắt local. Lite/server-page: server đã trả đúng 1 trang → hiện nguyên list
   const paginatedLeads = useMemo(() => {
-    if (!leadsScopeMode) return sortedLeads;
+    if (!localScope) return sortedLeads;
     return paginateLeadsScope(sortedLeads, safePage, pageSize);
-  }, [sortedLeads, leadsScopeMode, safePage, pageSize]);
+  }, [sortedLeads, localScope, safePage, pageSize]);
 
   const processedLeads = paginatedLeads;
 
@@ -6785,7 +6813,7 @@ const LeadsPage = (props) => {
   // Scope mode: tab/trang/sort local — không gọi server qua onLeadsQueryChange
   const leadsQueryBootRef = useRef(false);
   useEffect(() => {
-    if (leadsScopeMode || !onLeadsQueryChange) return;
+    if (localScope || !onLeadsQueryChange) return;
     const sig = JSON.stringify({
       activeTab,
       currentPage,
@@ -6811,7 +6839,7 @@ const LeadsPage = (props) => {
       });
     }, 100);
     return () => clearTimeout(t);
-  }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange, leadsScopeMode]);
+  }, [activeTab, currentPage, pageSize, productFilter, sortConfig, onLeadsQueryChange, localScope]);
 
   useEffect(() => {
     setCurrentPage(1);

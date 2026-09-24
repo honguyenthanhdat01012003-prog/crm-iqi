@@ -176,6 +176,48 @@ export function shouldReplaceScopeCache(existing, incoming) {
   return true;
 }
 
+/**
+ * List đang đủ dự án (đã tải scope) thì không được thay bằng 1 trang lite.
+ * Khi list hiện tại cũng chỉ là 1 trang thì trang mới thay bình thường.
+ */
+export function shouldKeepExistingLeadList(existingLeads, incoming, { hasFullList = false } = {}) {
+  if (!hasFullList) return false;
+  const prev = Array.isArray(existingLeads) ? existingLeads : [];
+  const next = Array.isArray(incoming?.leads) ? incoming.leads : [];
+  if (!prev.length || !next.length) return false;
+  if (next.length >= prev.length) return false;
+  return isPartialLeadPage(incoming);
+}
+
+/** Gộp trang lite / lead mới vào list đủ dự án — lead xáo mới thêm đầu. */
+export function mergeLeadsPreserveFullList(existingLeads, incomingLeads) {
+  const prev = Array.isArray(existingLeads) ? existingLeads : [];
+  const next = Array.isArray(incomingLeads) ? incomingLeads : [];
+  if (!next.length) return prev;
+  const byId = new Map();
+  for (const lead of prev) {
+    const id = Number(lead?.id);
+    if (id) byId.set(id, lead);
+  }
+  const prepend = [];
+  for (const lead of next) {
+    const id = Number(lead?.id);
+    if (!id) continue;
+    if (byId.has(id)) {
+      byId.set(id, { ...byId.get(id), ...lead });
+    } else {
+      byId.set(id, lead);
+      prepend.push(lead);
+    }
+  }
+  const merged = prepend.map((lead) => byId.get(Number(lead.id)) || lead);
+  for (const lead of prev) {
+    const id = Number(lead?.id);
+    merged.push(id ? (byId.get(id) || lead) : lead);
+  }
+  return merged;
+}
+
 export function scopeUserKey(user) {
   return String(user?.userId || user?.username || user?.displayName || "anon");
 }
