@@ -238,6 +238,12 @@ const STATUS_LABELS = {
 
 /** Bộ trạng thái mặc định khi Admin xuất CSV lead tệ */
 const DEFAULT_JUNK_EXPORT_STATUSES = ["spam", "wrong_phone", "hung_up", "not_interested", "sale"];
+/** Bộ trạng thái mặc định khi xuất khách nét (ưu tiên qua mọi sale như Xuất thống kê) */
+const DEFAULT_GOOD_EXPORT_STATUSES = [
+  "interested", "low_interest", "other_project", "consulting",
+  "appointment", "booked", "booking_other", "closed",
+];
+const defaultExportStatuses = (flow) => [...(flow === "good" ? DEFAULT_GOOD_EXPORT_STATUSES : DEFAULT_JUNK_EXPORT_STATUSES)];
 
 const STATUS_COLORS = {
   new: "#f59e0b",
@@ -6283,6 +6289,9 @@ const LeadsPage = (props) => {
   const [junkExportProjectIds, setJunkExportProjectIds] = useState([]);
   const [junkExportStatuses, setJunkExportStatuses] = useState(() => [...DEFAULT_JUNK_EXPORT_STATUSES]);
   const [junkExportMode, setJunkExportMode] = useState("single");
+  const [junkExportFlow, setJunkExportFlow] = useState("good");
+  const [junkExportFrom, setJunkExportFrom] = useState("");
+  const [junkExportTo, setJunkExportTo] = useState("");
   const [junkExportLoading, setJunkExportLoading] = useState(false);
   const adminDeskMenuRef = React.useRef(null);
   React.useEffect(() => {
@@ -7363,7 +7372,10 @@ const LeadsPage = (props) => {
       ? [pid]
       : (projects || []).map((p) => Number(p.id)).filter((id) => id > 0).slice(0, 1);
     setJunkExportProjectIds(initial);
-    setJunkExportStatuses([...DEFAULT_JUNK_EXPORT_STATUSES]);
+    setJunkExportFlow("good");
+    setJunkExportStatuses(defaultExportStatuses("good"));
+    setJunkExportFrom("");
+    setJunkExportTo("");
     setJunkExportMode("single");
     setJunkExportOpen(true);
   };
@@ -7394,9 +7406,12 @@ const LeadsPage = (props) => {
       const res = await apiFetch(`${API}/leads/export-junk`, {
         method: "POST",
         body: JSON.stringify({
+          flow: junkExportFlow,
           projectIds: junkExportProjectIds,
           statuses: junkExportStatuses,
           mode: junkExportMode,
+          startDate: junkExportFrom || undefined,
+          endDate: junkExportTo || undefined,
         }),
       });
       const ctype = String(res.headers.get("content-type") || "");
@@ -7412,7 +7427,7 @@ const LeadsPage = (props) => {
           return;
         }
         for (const f of files) {
-          downloadTextFile(f.filename || "lead-te.csv", f.csv || "\uFEFF");
+          downloadTextFile(f.filename || `${junkExportFlow === "good" ? "lead-net" : "lead-te"}.csv`, f.csv || "\uFEFF");
           // eslint-disable-next-line no-await-in-loop
           await new Promise((r) => setTimeout(r, 250));
         }
@@ -7425,7 +7440,7 @@ const LeadsPage = (props) => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `lead-te-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `${junkExportFlow === "good" ? "lead-net" : "lead-te"}-${new Date().toISOString().slice(0, 10)}.csv`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -8026,7 +8041,7 @@ const LeadsPage = (props) => {
           {isAdminOnly && (
             <button onClick={openJunkExportModal}
               style={{ ...btnPrimary, padding: "12px 20px", fontSize: 14, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg, #b45309, #92400e)", borderRadius: 12, flex: "1 1 auto", minWidth: 180, justifyContent: "center" }}>
-              <Download size={16} /> Xuất lead tệ
+              <Download size={16} /> Xuất lead ra file Excel
             </button>
           )}
         </div>
@@ -8061,7 +8076,7 @@ const LeadsPage = (props) => {
             {isAdminOnly && (
               <button type="button" className="crm-admin-toolbar-action" onClick={openJunkExportModal}>
                 <Download size={15} />
-                Xuất lead tệ
+                Xuất lead ra file Excel
               </button>
             )}
             <span className="crm-admin-toolbar-spacer" />
@@ -8515,16 +8530,42 @@ const LeadsPage = (props) => {
                 style={{ background: "#fff", borderRadius: isMobile ? "20px 20px 0 0" : 16, padding: isMobile ? "20px 16px 28px" : 24, width: isMobile ? "100%" : 560, maxWidth: "96vw", maxHeight: isMobile ? "92vh" : "85vh", overflowY: "auto", boxShadow: "0 25px 50px rgba(0,0,0,.25)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
                   <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}>
-                    <Download size={20} /> Xuất lead tệ (CSV)
+                    <Download size={20} /> Xuất lead ra file Excel
                   </h3>
                   <button type="button" disabled={junkExportLoading} onClick={() => setJunkExportOpen(false)}
                     style={{ background: "#f3f4f6", border: "none", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "#6b7280", cursor: "pointer" }}>
                     <X size={18} />
                   </button>
                 </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                  {[
+                    { key: "good", label: "Khách nét / quan tâm", color: "#15803d" },
+                    { key: "junk", label: "Khách phá / rác", color: "#b45309" },
+                  ].map((f) => {
+                    const active = junkExportFlow === f.key;
+                    return (
+                      <button key={f.key} type="button" disabled={junkExportLoading}
+                        onClick={() => { setJunkExportFlow(f.key); setJunkExportStatuses(defaultExportStatuses(f.key)); }}
+                        style={{ padding: "10px 8px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: `2px solid ${active ? f.color : "#e2e8f0"}`, background: active ? `${f.color}14` : "#fff", color: active ? f.color : "#475569" }}>
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <p style={{ margin: "0 0 12px", fontSize: 12, color: "#64748b", lineHeight: 1.45 }}>
-                  Xuất tên khách, SĐT, nhu cầu, trạng thái và nguồn dự án. Mặc định: Phá/rác, Thuê bao, Tắt máy ngang, Không quan tâm, Sale.
+                  {junkExportFlow === "good"
+                    ? "Lấy khách từng có trạng thái bạn chọn ở bất kỳ sale nào (giống Xuất thống kê). Nhiều trạng thái thì lấy cao nhất: Chốt > Booking/Cọc > Hẹn gặp > Tư vấn > Quan tâm > QT hời hợt. File có sale + ngày feedback trạng thái đó và tóm tắt feedback từng sale."
+                    : "Lấy khách theo trạng thái hiện tại. Khách từng được sale nào feedback Quan tâm / Tư vấn / Hẹn gặp / Booking sẽ không nằm trong tệp này (đã ở luồng khách nét)."}
                 </p>
+
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Ngày lead về (bỏ trống = tất cả)</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+                  <input type="date" value={junkExportFrom} onChange={(e) => setJunkExportFrom(e.target.value)}
+                    style={{ flex: "1 1 130px", padding: "8px 10px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13 }} />
+                  <span style={{ color: "#94a3b8" }}>→</span>
+                  <input type="date" value={junkExportTo} onChange={(e) => setJunkExportTo(e.target.value)}
+                    style={{ flex: "1 1 130px", padding: "8px 10px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13 }} />
+                </div>
 
                 <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Dự án</label>
                 <div style={{ maxHeight: 160, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 10, padding: 8, marginBottom: 12 }}>
@@ -8567,7 +8608,7 @@ const LeadsPage = (props) => {
                   })}
                 </div>
                 <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => setJunkExportStatuses([...DEFAULT_JUNK_EXPORT_STATUSES])}
+                  <button type="button" onClick={() => setJunkExportStatuses(defaultExportStatuses(junkExportFlow))}
                     style={{ fontSize: 11, padding: "4px 10px", borderRadius: 8, border: "1px solid #cbd5e1", background: "#f8fafc", cursor: "pointer" }}>Reset mặc định</button>
                 </div>
 

@@ -47,6 +47,13 @@ import {
   pickSaleFromCandidates,
   pickLogShuffleSale,
 } from "./logShuffle.js";
+import {
+  GOOD_EXPORT_DEFAULT_STATUSES,
+  normalizeExportFlow,
+  pickPriorityExportStatus,
+  hadPositiveFeedback,
+  buildSaleFeedbackSummary,
+} from "./leadExport.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,7 +82,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-24-keep-full-lead-list-v3";
+const BUILD_VERSION = "2026-09-29-lead-export-good-junk";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8524,6 +8531,65 @@ function buildJunkLeadsCsv(rows) {
   return "\uFEFF" + lines.join("\r\n");
 }
 
+function buildGoodLeadsCsv(rows) {
+  const header = [
+    "Dự án", "Tên khách", "Số điện thoại", "Nhu cầu",
+    "Trạng thái ưu tiên", "Sale feedback trạng thái đó", "Ngày feedback", "Feedback các sale",
+  ];
+  const lines = [header.map(csvEscapeCell).join(",")];
+  for (const r of rows) {
+    lines.push([
+      r.projectName,
+      r.name,
+      r.phone,
+      r.product,
+      r.statusLabel,
+      r.prioritySale,
+      r.priorityDate,
+      r.saleSummary,
+    ].map(csvEscapeCell).join(","));
+  }
+  return "\uFEFF" + lines.join("\r\n");
+}
+
+function exportDateBounds(startDate, endDate) {
+  const valid = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
+  return {
+    from: valid(startDate) ? new Date(`${startDate}T00:00:00`).getTime() : null,
+    to: valid(endDate) ? new Date(`${endDate}T23:59:59`).getTime() : null,
+  };
+}
+
+function leadInExportRange(lead, bounds) {
+  if (bounds.from == null && bounds.to == null) return true;
+  const t = parseLeadDate(lead.created_at)?.getTime();
+  if (!t) return false;
+  if (bounds.from != null && t < bounds.from) return false;
+  if (bounds.to != null && t > bounds.to) return false;
+  return true;
+}
+
+async function loadExportHistory(dbConn, leadIds) {
+  const byLead = new Map();
+  for (let i = 0; i < leadIds.length; i += 500) {
+    const chunk = leadIds.slice(i, i + 500);
+    const ph = chunk.map(() => "?").join(",");
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await all(dbConn,
+      `SELECT id, lead_id, sale_name, action, status, feedback, source, contact_date, seq
+       FROM lead_history WHERE lead_id IN (${ph})
+       ORDER BY lead_id ASC, COALESCE(seq, 0) ASC, id ASC`,
+      chunk
+    );
+    for (const row of rows) {
+      const key = Number(row.lead_id);
+      if (!byLead.has(key)) byLead.set(key, []);
+      byLead.get(key).push(row);
+    }
+  }
+  return byLead;
+}
+
 function slugifyFilePart(name = "") {
   return String(name || "du-an")
     .normalize("NFD")
@@ -8533,12 +8599,22 @@ function slugifyFilePart(name = "") {
     .slice(0, 40) || "du-an";
 }
 
-/* POST /api/leads/export-junk — Admin xuất CSV lead tệ theo dự án + trạng thái */
+/*
+ * POST /api/leads/export-junk — Admin xuất lead ra file theo dự án + trạng thái.
+ * flow=good: khách nét — trạng thái ưu tiên cao nhất qua mọi sale (giống Xuất thống kê).
+ * flow=junk (mặc định): khách phá/rác — trạng thái hiện tại, bỏ khách từng được feedback nét.
+ */
 app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) => {
   try {
+    const flow = normalizeExportFlow(req.body?.flow);
     const projectIdsRaw = Array.isArray(req.body?.projectIds) ? req.body.projectIds : [];
-    const statusesRaw = Array.isArray(req.body?.statuses) ? req.body.statuses : JUNK_EXPORT_DEFAULT_STATUSES;
+    const statusesRaw = Array.isArray(req.body?.statuses)
+      ? req.body.statuses
+      : (flow === "good" ? GOOD_EXPORT_DEFAULT_STATUSES : JUNK_EXPORT_DEFAULT_STATUSES);
     const mode = String(req.body?.mode || "single").trim() === "per_project" ? "per_project" : "single";
+    const bounds = exportDateBounds(req.body?.startDate, req.body?.endDate);
+    const filePrefix = flow === "good" ? "lead-net" : "lead-te";
+    const buildCsv = flow === "good" ? buildGoodLeadsCsv : buildJunkLeadsCsv;
 
     const projectIds = [...new Set(projectIdsRaw.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
     const statuses = [...new Set(statusesRaw.map((s) => normalizeStatus(String(s || "").trim())).filter((s) => VALID_STATUS_KEYS.has(s)))];
@@ -8551,41 +8627,78 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
     const projectMap = Object.fromEntries(projects.map((p) => [Number(p.id), p.name || `Dự án #${p.id}`]));
     if (!projects.length) return res.status(400).json({ error: "Không tìm thấy dự án hợp lệ" });
 
-    const statusPlaceholders = statuses.map(() => "?").join(",");
-    const labelArgs = statuses.map((s) => JUNK_EXPORT_STATUS_LABELS[s] || STATUS_LABELS_VI[s] || s);
-    const labelPlaceholders = labelArgs.map(() => "?").join(",");
-    const rows = await all(
-      db,
-      `SELECT l.id, l.name, l.phone, l.product, l.status, l.admin_tab_status, l.project_id
-       FROM leads l
-       WHERE l.project_id IN (${projPlaceholders})
-         AND (
-           LOWER(TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, ''))) IN (${statusPlaceholders})
-           OR TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, '')) IN (${labelPlaceholders})
-         )
-       ORDER BY l.project_id ASC, l.id ASC
-       LIMIT ?`,
-      [...projectIds, ...statuses.map((s) => s.toLowerCase()), ...labelArgs, JUNK_EXPORT_MAX_ROWS + 1]
-    );
+    const statusLabelOf = (s) => JUNK_EXPORT_STATUS_LABELS[s] || STATUS_LABELS_VI[s] || s || "";
+    const tooMany = () => res.status(413).json({
+      error: `Quá ${JUNK_EXPORT_MAX_ROWS.toLocaleString("vi-VN")} dòng — hãy chọn ít dự án/trạng thái hơn`,
+    });
+    const historyDeps = { normalizeStatus, isFeedback: isReportFeedbackHistory };
+    const baseRow = (l) => ({
+      projectId: Number(l.project_id) || 0,
+      projectName: projectMap[Number(l.project_id)] || `Dự án #${l.project_id}`,
+      name: l.name || "",
+      phone: l.phone || "",
+      product: l.product || "",
+    });
 
-    if (rows.length > JUNK_EXPORT_MAX_ROWS) {
-      return res.status(413).json({
-        error: `Quá ${JUNK_EXPORT_MAX_ROWS.toLocaleString("vi-VN")} dòng — hãy chọn ít dự án/trạng thái hơn`,
-      });
+    let mapped = [];
+    if (flow === "good") {
+      // Khách nét: xét mọi lead của dự án vì trạng thái ưu tiên có thể nằm trong lịch sử sale cũ
+      const leadRows = (await all(
+        db,
+        `SELECT id, name, phone, product, status, admin_tab_status, project_id, sale_name, created_at
+         FROM leads WHERE project_id IN (${projPlaceholders})
+         ORDER BY project_id ASC, id ASC`,
+        projectIds
+      )).filter((l) => leadInExportRange(l, bounds));
+      const historyByLead = await loadExportHistory(db, leadRows.map((l) => Number(l.id)));
+      for (const l of leadRows) {
+        const hist = historyByLead.get(Number(l.id)) || [];
+        const best = pickPriorityExportStatus(l, hist, statuses, historyDeps);
+        if (!best) continue;
+        mapped.push({
+          ...baseRow(l),
+          statusKey: best.status,
+          statusLabel: statusLabelOf(best.status),
+          prioritySale: best.saleName || "",
+          priorityDate: best.date || "",
+          saleSummary: buildSaleFeedbackSummary(hist, { ...historyDeps, statusLabel: statusLabelOf }),
+        });
+        if (mapped.length > JUNK_EXPORT_MAX_ROWS) return tooMany();
+      }
+    } else {
+      const statusPlaceholders = statuses.map(() => "?").join(",");
+      const labelArgs = statuses.map(statusLabelOf);
+      const labelPlaceholders = labelArgs.map(() => "?").join(",");
+      const rows = await all(
+        db,
+        `SELECT l.id, l.name, l.phone, l.product, l.status, l.admin_tab_status, l.project_id, l.created_at
+         FROM leads l
+         WHERE l.project_id IN (${projPlaceholders})
+           AND (
+             LOWER(TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, ''))) IN (${statusPlaceholders})
+             OR TRIM(COALESCE(NULLIF(TRIM(l.admin_tab_status), ''), l.status, '')) IN (${labelPlaceholders})
+           )
+         ORDER BY l.project_id ASC, l.id ASC
+         LIMIT ?`,
+        [...projectIds, ...statuses.map((s) => s.toLowerCase()), ...labelArgs, JUNK_EXPORT_MAX_ROWS + 1]
+      );
+      if (rows.length > JUNK_EXPORT_MAX_ROWS) return tooMany();
+      const inRange = rows
+        .map((l) => ({ lead: l, st: normalizeStatus(l.admin_tab_status || l.status || "") }))
+        .filter(({ lead, st }) => statuses.includes(st) && leadInExportRange(lead, bounds));
+      const historyByLead = await loadExportHistory(db, inRange.map(({ lead }) => Number(lead.id)));
+      mapped = inRange
+        // Khách từng được feedback nét thuộc luồng khách nét — không lẫn vào tệp rác
+        .filter(({ lead }) => !hadPositiveFeedback(lead, historyByLead.get(Number(lead.id)) || [], {
+          ...historyDeps,
+          ignore: statuses,
+        }))
+        .map(({ lead, st }) => ({
+          ...baseRow(lead),
+          statusKey: st,
+          statusLabel: statusLabelOf(st),
+        }));
     }
-
-    const mapped = rows.map((l) => {
-      const st = normalizeStatus(l.admin_tab_status || l.status || "");
-      return {
-        projectId: Number(l.project_id) || 0,
-        projectName: projectMap[Number(l.project_id)] || `Dự án #${l.project_id}`,
-        name: l.name || "",
-        phone: l.phone || "",
-        product: l.product || "",
-        statusKey: st,
-        statusLabel: JUNK_EXPORT_STATUS_LABELS[st] || st || "",
-      };
-    }).filter((r) => statuses.includes(r.statusKey));
 
     const stamp = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Ho_Chi_Minh" }).replace(/[-: ]/g, "").slice(0, 12);
 
@@ -8600,25 +8713,27 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
         const pname = projectMap[pid] || `project-${pid}`;
         const list = byProject.get(pid) || [];
         files.push({
-          filename: `lead-te-${slugifyFilePart(pname)}-${stamp}.csv`,
+          filename: `${filePrefix}-${slugifyFilePart(pname)}-${stamp}.csv`,
           projectId: pid,
           projectName: pname,
           count: list.length,
-          csv: buildJunkLeadsCsv(list),
+          csv: buildCsv(list),
         });
       }
       return res.json({
         mode: "per_project",
+        flow,
         total: mapped.length,
         files,
       });
     }
 
-    const csv = buildJunkLeadsCsv(mapped);
-    const fname = `lead-te-${stamp}.csv`;
+    const csv = buildCsv(mapped);
+    const fname = `${filePrefix}-${stamp}.csv`;
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
     res.setHeader("X-Export-Count", String(mapped.length));
+    res.setHeader("Access-Control-Expose-Headers", "X-Export-Count, Content-Disposition");
     res.send(csv);
   } catch (err) {
     console.error("[POST /api/leads/export-junk]", err);
@@ -8629,6 +8744,7 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
 app.get("/api/leads/export-junk/defaults", requireAuth, requireAdmin, (_req, res) => {
   res.json({
     defaultStatuses: JUNK_EXPORT_DEFAULT_STATUSES,
+    goodDefaultStatuses: GOOD_EXPORT_DEFAULT_STATUSES,
     statusLabels: JUNK_EXPORT_STATUS_LABELS,
     maxRows: JUNK_EXPORT_MAX_ROWS,
   });
