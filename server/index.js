@@ -55,6 +55,7 @@ import {
   buildSaleFeedbackSummary,
 } from "./leadExport.js";
 import { normalizeSyncMode, selectAutoSyncProjects, SYNC_ACTIVE_DAYS } from "./syncActivity.js";
+import { planSheetLeadMatches } from "./sheetLeadMatch.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,7 +84,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-30-sync-active-projects";
+const BUILD_VERSION = "2026-09-30-lead-registrations";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -618,6 +619,19 @@ function normalizePhoneKey(phone) {
   return s;
 }
 
+/** Các cách ghi cùng một SĐT trong DB (0… / +84… / 84…) để tra `phone IN (...)` vẫn dùng index. */
+function phoneLookupVariants(phone) {
+  const raw = String(phone || "").trim();
+  const key = normalizePhoneKey(raw);
+  if (!key) return [];
+  const out = new Set([raw, key]);
+  if (/^0\d{8,}$/.test(key)) {
+    out.add(`+84${key.slice(1)}`);
+    out.add(`84${key.slice(1)}`);
+  }
+  return [...out].filter(Boolean);
+}
+
 async function run(client, sql, params = []) {
   const result = await client.execute({ sql, args: params });
   return { lastID: Number(result.lastInsertRowid), changes: result.rowsAffected };
@@ -633,7 +647,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 50; // Bump this when adding new DDL/migrations
+const DB_VERSION = 51; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1300,7 +1314,7 @@ async function initDb() {
       manager_name TEXT DEFAULT '', source TEXT, budget TEXT, sync_at TEXT, notes TEXT,
       race_stage TEXT DEFAULT '', race_started_at TEXT DEFAULT '', race_deadline_at TEXT DEFAULT '',
       race_team_id INTEGER DEFAULT NULL, race_claimed_by TEXT DEFAULT '', race_claimed_at TEXT DEFAULT '',
-      race_team_index INTEGER DEFAULT 0,
+      race_team_index INTEGER DEFAULT 0, created_ts INTEGER DEFAULT NULL,
       FOREIGN KEY (campaign_id) REFERENCES campaigns(id))`,
     `CREATE TABLE IF NOT EXISTS projects (
       id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, lead_url TEXT DEFAULT '',
@@ -2024,6 +2038,18 @@ async function initDb() {
   if (dbVersion < 50) {
     console.log("[DB] v50 migration: projects.sync_mode (auto | always | off cho đồng bộ sheet tự động)");
     try { await run(db, "ALTER TABLE projects ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'auto'"); } catch (_) {}
+  }
+  if (dbVersion < 51) {
+    console.log("[DB] v51 migration: leads.created_ts (mốc số của ngày nhận để sắp xếp theo thời điểm đăng ký)");
+    try { await run(db, "ALTER TABLE leads ADD COLUMN created_ts INTEGER DEFAULT NULL"); } catch (_) {}
+    try { await run(db, "CREATE INDEX IF NOT EXISTS idx_leads_project_created_ts ON leads(project_id, created_ts)"); } catch (_) {}
+    // created_at là chữ tự do từ sheet — JS mới parse được, trigger chỉ đánh dấu cần tính lại
+    try {
+      await run(db, `CREATE TRIGGER IF NOT EXISTS trg_leads_created_ts_reset
+        AFTER UPDATE OF created_at ON leads
+        WHEN NEW.created_at IS NOT OLD.created_at
+        BEGIN UPDATE leads SET created_ts = NULL WHERE id = NEW.id; END`);
+    } catch (e) { console.warn("[DB] v51 trigger:", e.message); }
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -3059,65 +3085,15 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   // 1. Load existing leads for status/sale preservation (match by name)
   const existing = await all(
     db,
-    "SELECT id, name, phone, ads_id, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked, customer_fb_url, phone2, phone3, admin_note FROM leads WHERE project_id = ?",
+    "SELECT id, name, phone, ads_id, source, created_at, status, raw_status, notes, sale_id, sale_name, is_hot, manager_name, deal_value, is_locked, customer_fb_url, phone2, phone3, admin_note FROM leads WHERE project_id = ?",
     [projectId]
   );
-  
-  // Helper: compare two leads, return true if newLead should replace prevLead
-  // Priority: 1) non-empty manager_name, 2) non-"new" status, 3) higher ID (more recent)
-  const shouldReplace = (prevLead, newLead) => {
-    // Prefer lead with non-empty manager_name
-    const prevHasMgr = !!(prevLead.manager_name && prevLead.manager_name.trim());
-    const newHasMgr = !!(newLead.manager_name && newLead.manager_name.trim());
-    if (newHasMgr && !prevHasMgr) return true;
-    if (prevHasMgr && !newHasMgr) return false;
-    // Both have or both don't have manager - prefer meaningful status
-    if (prevLead.status === "new" && newLead.status !== "new") return true;
-    if (prevLead.status !== "new" && newLead.status === "new") return false;
-    // Same status category - prefer higher ID (more recent)
-    return newLead.id > prevLead.id;
-  };
-  
-  // Build 4-tier matching: ads_id (best) → phone+name (specific) → phone → name (fallback)
-  const adsIdMap = new Map();
-  const phoneNameMap = new Map(); // composite phone+name key
-  const phoneMap = new Map();
-  const nameMap = new Map();
-  for (const e of existing) {
-    // Tier 1: ads_id (unique per lead from ad platform)
-    const aid = (e.ads_id || "").trim();
-    if (aid) {
-      const prevAid = adsIdMap.get(aid);
-      if (!prevAid || shouldReplace(prevAid, e)) {
-        adsIdMap.set(aid, e);
-      }
-    }
-    // Tier 2: phone+name composite (most specific non-ads match)
-    const np = normPhone(e.phone);
-    const nName = (e.name || "").trim().toLowerCase();
-    if (np && nName) {
-      const pnKey = `${np}||${nName}`;
-      const prevPN = phoneNameMap.get(pnKey);
-      if (!prevPN || shouldReplace(prevPN, e)) {
-        phoneNameMap.set(pnKey, e);
-      }
-    }
-    // Tier 3: phone only
-    if (np) {
-      const prevP = phoneMap.get(np);
-      if (!prevP || shouldReplace(prevP, e)) {
-        phoneMap.set(np, e);
-      }
-    }
-    // Tier 4: name only
-    if (nName) {
-      const prevN = nameMap.get(nName);
-      if (!prevN || shouldReplace(prevN, e)) {
-        nameMap.set(nName, e);
-      }
-    }
-  }
-  console.log(`[replaceProjectData] Maps: adsIdMap=${adsIdMap.size}, phoneNameMap=${phoneNameMap.size}, phoneMap=${phoneMap.size}, nameMap=${nameMap.size}`);
+
+  const matchPlans = planSheetLeadMatches(leads, existing, {
+    normPhone,
+    parseDate: parseLeadDate,
+    canFallback: (e) => !getMktXaoMeta(e).isMktXao,
+  });
   // Debug: log all leads with their manager_name for tracing
   const mgrCounts = {};
   for (const e of existing) {
@@ -3135,7 +3111,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
   let allHistory = [];
   if (existing.length > 0) {
     allHistory = await all(db,
-      `SELECT lh.seq, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.source, l.phone
+      `SELECT lh.lead_id, lh.seq, lh.action, lh.status, lh.sale_name, lh.feedback, lh.contact_date, lh.source
        FROM lead_history lh JOIN leads l ON lh.lead_id = l.id
        WHERE l.project_id = ?
          AND NOT (COALESCE(lh.source, '') = 'sheet'
@@ -3146,33 +3122,31 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     );
   }
 
-  // Khoá của dòng lịch sử nguồn "sheet" đã nằm trong DB. phoneHistMap không chứa
+  // Khoá của dòng lịch sử nguồn "sheet" đã nằm trong DB. leadHistMap không chứa
   // dòng sheet thuần nên nếu chỉ dựa vào nó, mỗi lần sync lại chèn lại nguyên xi
   // các dòng đó — 30 giây một lần, bảng lớn mãi không dừng.
   const sheetHistKeys = new Set();
   if (existing.length > 0) {
     const sheetRows = await all(db,
-      `SELECT DISTINCT l.phone, lh.sale_name, lh.action, lh.contact_date
+      `SELECT DISTINCT lh.lead_id, lh.sale_name, lh.action, lh.contact_date
        FROM lead_history lh JOIN leads l ON lh.lead_id = l.id
        WHERE l.project_id = ? AND COALESCE(lh.source, '') = 'sheet'`,
       [projectId]
     );
     for (const r of sheetRows) {
-      const np = normPhone(r.phone);
-      if (np) sheetHistKeys.add(`${np}|${r.sale_name || ""}|${r.action || ""}|${r.contact_date || ""}`);
+      sheetHistKeys.add(`${r.lead_id}|${r.sale_name || ""}|${r.action || ""}|${r.contact_date || ""}`);
     }
   }
   console.log(`[replaceProjectData] history kept=${allHistory.length} sheetKeys=${sheetHistKeys.size}`);
 
-  const phoneHistMap = new Map();
+  // Theo lead_id: cùng SĐT có thể là nhiều lần đăng ký, lịch sử lần này không được lây sang lần khác.
+  const leadHistMap = new Map();
   for (const h of allHistory) {
-    const np = normPhone(h.phone);
-    if (!np) continue;
-    if (!phoneHistMap.has(np)) phoneHistMap.set(np, []);
-    phoneHistMap.get(np).push(h);
+    if (!leadHistMap.has(h.lead_id)) leadHistMap.set(h.lead_id, []);
+    leadHistMap.get(h.lead_id).push(h);
   }
   // Deduplicate + trim: keep ALL feedback/update entries, only latest "Chia lead" per sale
-  for (const [np, arr] of phoneHistMap) {
+  for (const [leadId, arr] of leadHistMap) {
     const feedback = [];
     const chiaPerSale = new Map();
     const seenFeedback = new Set();
@@ -3191,7 +3165,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
         }
       }
     }
-    phoneHistMap.set(np, [...feedback, ...chiaPerSale.values()]);
+    leadHistMap.set(leadId, [...feedback, ...chiaPerSale.values()]);
   }
 
   const stmts = [];
@@ -3211,24 +3185,22 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
   // 5. Upsert all leads from new sheet, restoring status/sale from old data where matched.
   let matchByAdsId = 0, matchByPhoneName = 0, matchByPhone = 0, matchByName = 0, noMatch = 0;
-  let updatedLeads = 0, insertedLeads = 0;
-  for (const l of leads) {
+  let updatedLeads = 0, insertedLeads = 0, repairedLeads = 0, skippedDupRows = 0;
+  // Thứ tự các lệnh INSERT trong batch — để lấy lại id lead mới sau khi ghi
+  const insertedRows = [];
+  for (let li = 0; li < leads.length; li++) {
+    const l = leads[li];
+    const plan = matchPlans[li];
+    if (plan.skip) { skippedDupRows++; continue; }
     const np = normPhone(l.phone);
-    const nName = (l.name || "").trim().toLowerCase();
     const lAdsId = (l.adsId || "").trim();
-    const pnKey = np && nName ? `${np}||${nName}` : "";
-    // 4-tier matching: ads_id → phone+name → phone → name
-    const prev = (lAdsId && adsIdMap.get(lAdsId)) 
-              || (pnKey && phoneNameMap.get(pnKey))
-              || (np && phoneMap.get(np)) 
-              || (nName && nameMap.get(nName)) 
-              || undefined;
-    if (prev) {
-      if (lAdsId && adsIdMap.has(lAdsId)) matchByAdsId++;
-      else if (pnKey && phoneNameMap.has(pnKey)) matchByPhoneName++;
-      else if (np && phoneMap.has(np)) matchByPhone++;
-      else matchByName++;
-    } else { noMatch++; }
+    const prev = plan.prev || undefined;
+    const repairFrom = !prev && plan.repair ? plan.source : null;
+    if (plan.via === "adsId") matchByAdsId++;
+    else if (plan.via === "phoneName") matchByPhoneName++;
+    else if (plan.via === "phone") matchByPhone++;
+    else if (plan.via === "name") matchByName++;
+    else noMatch++;
 
     // Start with sheet values
     let status = l.status;
@@ -3275,8 +3247,21 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
       if (prev.admin_note) adminNote = prev.admin_note;
       // Debug: log manager restoration for leads with specific managers
       if (prev.manager_name && prev.manager_name !== "Trần Văn Quyết") {
-        console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${lAdsId && adsIdMap.has(lAdsId) ? 'adsId' : pnKey && phoneNameMap.has(pnKey) ? 'phoneName' : np && phoneMap.has(np) ? 'phone' : 'name'})`);
+        console.log(`[replaceProjectData] RESTORE: "${l.name}" prev.id=${prev.id} manager="${prev.manager_name}" (matched by ${plan.via})`);
       }
+    } else if (repairFrom) {
+      // Lần đăng ký cũ từng bị gộp vào lead #repairFrom — tạo lại, giữ nguyên người đang chăm
+      repairedLeads++;
+      if (repairFrom.status && repairFrom.status !== "new") {
+        status = repairFrom.status;
+        rawStatus = repairFrom.raw_status || rawStatus;
+      }
+      if (repairFrom.sale_name && repairFrom.sale_name !== "Chưa chia") {
+        saleName = repairFrom.sale_name;
+        saleId = repairFrom.sale_id || saleId;
+      }
+      managerName = repairFrom.manager_name || "";
+      console.log(`[replaceProjectData] REPAIR: "${l.name}" adsId="${lAdsId}" createdAt="${l.createdAt}" ← lead#${repairFrom.id} sale="${saleName}"`);
     } else {
       // No previous lead found - log for debugging
       if (matchByAdsId + matchByPhoneName + matchByPhone + matchByName + noMatch <= 5) {
@@ -3286,7 +3271,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
 
     // Determine correct status from CRM history by DATE (most reliable, seq can be wrong)
     // Only consider entries AFTER the most recent "Chia lead" for current sale (respect assignment boundary)
-    const crmHist = phoneHistMap.get(np);
+    const crmHist = prev ? leadHistMap.get(prev.id) : null;
     if (crmHist && crmHist.length) {
       // Sort by date DESC to find the most recent "Chia lead" for current sale
       const sortedHist = [...crmHist].sort((a, b) => {
@@ -3415,6 +3400,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
           l.source, l.budget, l.syncAt, notes, dealValue, isLockedVal,
         ],
       });
+      insertedRows.push({ adsId: lAdsId, np, name: (l.name || "").trim(), repair: !!repairFrom });
     }
 
     // Insert sheet history FIRST (lower seq) so CRM entries always have higher priority
@@ -3422,9 +3408,10 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     let seqCounter = 0;
     if (l.saleHistory && l.saleHistory.length) {
       const crmHistEntries = crmHist || [];
+      const histOwnerKey = prev ? String(prev.id) : `new:${li}`;
       for (let si = 0; si < l.saleHistory.length; si++) {
         const sh = l.saleHistory[si];
-        const sheetKey = `${np}|${sh.saleName || ""}|${sh.action || ""}|${sh.date || ""}`;
+        const sheetKey = `${histOwnerKey}|${sh.saleName || ""}|${sh.action || ""}|${sh.date || ""}`;
         const isDup = sheetHistKeys.has(sheetKey)
           || crmHistEntries.some(h =>
             h.sale_name === sh.saleName && h.action === sh.action && h.contact_date === sh.date
@@ -3435,39 +3422,46 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
                   VALUES(${historyLeadIdSql}, ?, ?, ?, ?, ?, ${historySeqSql}, ?)`,
             args: [...historyLeadIdArg, sh.saleName, sh.action, sh.date, sh.status, sh.feedback, ...historySeqArg, "sheet"],
           });
-          if (np) sheetHistKeys.add(sheetKey);
+          sheetHistKeys.add(sheetKey);
           seqCounter++;
         }
       }
     }
-
-    // Then restore CRM history only for newly inserted leads. Matched leads keep their
-    // existing history untouched because their lead_id is preserved.
-    if (!prev && crmHist && crmHist.length) {
-      const crmHistAsc = [...crmHist].reverse();
-      for (let si = 0; si < crmHistAsc.length; si++) {
-        const h = crmHistAsc[si];
-        stmts.push({
-          sql: `INSERT INTO lead_history(lead_id, sale_name, action, contact_date, status, feedback, seq, source)
-                VALUES(${historyLeadIdSql}, ?, ?, ?, ?, ?, ${historySeqSql}, ?)`,
-          args: [...historyLeadIdArg, h.sale_name, h.action, h.contact_date, h.status, h.feedback, ...historySeqArg, h.source || "crm"],
-        });
-      }
-    }
   }
 
-  // Detect truly new leads: use Tier 1-3 only (ads_id, phone+name, phone).
-  // Tier 4 (name-only) is too broad — common names would suppress notifications.
-  const newPhones = leads.filter(l => {
-    const aid = (l.adsId || "").trim();
-    const np = normPhone(l.phone);
-    const nName = (l.name || "").trim().toLowerCase();
-    const pnKey = np && nName ? `${np}||${nName}` : "";
-    return !(aid && adsIdMap.has(aid)) && !(pnKey && phoneNameMap.has(pnKey)) && !(np && phoneMap.has(np));
-  }).map(l => normPhone(l.phone));
-  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} updated=${updatedLeads} inserted=${insertedLeads} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch} newPhones=${newPhones.length}`);
+  const freshRows = insertedRows.filter((r) => !r.repair);
+  const newPhones = freshRows.map((r) => r.np);
+  console.log(`[replaceProjectData] project=${projectId} stmts=${stmts.length} total=${leads.length} old=${existing.length} updated=${updatedLeads} inserted=${insertedLeads} repaired=${repairedLeads} dupRows=${skippedDupRows} matchByAdsId=${matchByAdsId} matchByPhoneName=${matchByPhoneName} matchByPhone=${matchByPhone} matchByName=${matchByName} noMatch=${noMatch} newLeads=${freshRows.length}`);
+  const maxIdBefore = insertedRows.length
+    ? Number((await get(db, "SELECT COALESCE(MAX(id), 0) AS m FROM leads"))?.m) || 0
+    : 0;
   await db.batch(stmts, "write");
   console.log(`[replaceProjectData] batch done for project=${projectId}`);
+  try { await fillLeadCreatedTs(db, 3); } catch (e) { console.warn("[replaceProjectData] created_ts:", e.message); }
+
+  // Lấy id các lead vừa INSERT: lead mới thật (báo/chia) tách khỏi lead khôi phục (im lặng)
+  const newLeadIds = [];
+  const repairedLeadIds = [];
+  if (insertedRows.length) {
+    const createdRows = await all(db,
+      "SELECT id, ads_id, phone, name FROM leads WHERE project_id = ? AND id > ? ORDER BY id ASC",
+      [projectId, maxIdBefore]);
+    const pending = [...insertedRows];
+    for (const row of createdRows) {
+      const aid = String(row.ads_id || "").trim();
+      const np = normPhone(row.phone);
+      const nm = String(row.name || "").trim();
+      const idx = pending.findIndex((r) => (aid ? r.adsId === aid : (!r.adsId && r.np === np && r.name === nm)));
+      if (idx < 0) continue;
+      const [match] = pending.splice(idx, 1);
+      (match.repair ? repairedLeadIds : newLeadIds).push(Number(row.id));
+    }
+  }
+  if (repairedLeadIds.length) {
+    try { await refreshLeadTabDenormMany(db, repairedLeadIds); } catch (e) {
+      console.warn("[replaceProjectData] refresh denorm repaired leads:", e.message);
+    }
+  }
 
   // Post-sync: re-sync lead statuses from history (use contact_date for correct ordering)
   try {
@@ -3556,7 +3550,7 @@ async function replaceProjectData(db, projectId, leads, campaigns) {
     }
   } catch (e) { console.error("[replaceProjectData] Post-sync status fix error:", e.message); }
 
-  return { newPhones };
+  return { newPhones, newLeadIds, repairedLeadIds };
 }
 
 function getMktXaoMeta(lead = {}) {
@@ -3572,14 +3566,18 @@ function getMktXaoMeta(lead = {}) {
   };
 }
 
+/** Khoá theo SĐT đã bỏ ký tự (như client tra); các cách ghi 0…/+84… của cùng số dùng chung 1 danh sách. */
 function buildPhoneRegMap(leads, projectMap) {
-  const phoneRegMap = {};
+  const groups = new Map();
+  const rawKeysByGroup = new Map();
   for (const l of leads) {
     if (getMktXaoMeta(l).isMktXao) continue;
     const phone = (l.phone || "").replace(/[^0-9+]/g, "");
     if (!phone) continue;
-    if (!phoneRegMap[phone]) phoneRegMap[phone] = [];
-    phoneRegMap[phone].push({
+    const key = normalizePhoneKey(phone);
+    if (!groups.has(key)) { groups.set(key, []); rawKeysByGroup.set(key, new Set()); }
+    rawKeysByGroup.get(key).add(phone);
+    groups.get(key).push({
       leadId: l.id,
       name: l.name,
       projectId: l.project_id,
@@ -3590,10 +3588,29 @@ function buildPhoneRegMap(leads, projectMap) {
       createdAt: l.created_at || "",
     });
   }
-  for (const phone in phoneRegMap) {
-    phoneRegMap[phone].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+  const phoneRegMap = {};
+  for (const [key, regs] of groups) {
+    regs.sort((a, b) =>
+      ((parseLeadDate(a.createdAt)?.getTime() || 0) - (parseLeadDate(b.createdAt)?.getTime() || 0))
+      || (Number(a.leadId) - Number(b.leadId)));
+    for (const raw of rawKeysByGroup.get(key)) phoneRegMap[raw] = regs;
   }
   return phoneRegMap;
+}
+
+async function loadLeadsByPhoneVariants(db, phones) {
+  const variants = [...new Set((phones || []).flatMap(phoneLookupVariants))];
+  const rows = [];
+  const CHUNK = 5000;
+  for (let i = 0; i < variants.length; i += CHUNK) {
+    const part = variants.slice(i, i + CHUNK);
+    const ph = part.map(() => "?").join(",");
+    rows.push(...await all(db,
+      `SELECT id, name, phone, project_id, campaign, adset_name, ad_name, created_at, source, ads_id, notes
+       FROM leads WHERE phone IN (${ph})`,
+      part));
+  }
+  return rows;
 }
 
 function inferHistorySource(h) {
@@ -3775,6 +3792,24 @@ async function refreshLeadTabDenorm(db, leadId) {
       [id, saleName, fb.status || "new", fb.rawStatus || fb.status || ""]
     );
   }
+}
+
+/** created_ts = mốc ms của created_at; 0 = ngày không đọc được (xếp cuối, không quét lại). */
+async function fillLeadCreatedTs(db, maxRounds = 5) {
+  const BATCH = 1000;
+  let total = 0;
+  for (let round = 0; round < maxRounds; round++) {
+    const rows = await all(db, `SELECT id, created_at FROM leads WHERE created_ts IS NULL LIMIT ${BATCH}`);
+    if (!rows.length) break;
+    await db.batch(rows.map((r) => ({
+      sql: "UPDATE leads SET created_ts = ? WHERE id = ?",
+      args: [parseLeadDate(r.created_at)?.getTime() || 0, r.id],
+    })), "write");
+    total += rows.length;
+    if (rows.length < BATCH) break;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return total;
 }
 
 async function refreshLeadTabDenormMany(db, leadIds = []) {
@@ -4032,17 +4067,13 @@ async function getHistoryCountsForLeadIds(db, leadIds) {
 async function buildPhoneRegMapForPage(db, leadRows, projectMap) {
   const phones = [...new Set(leadRows.map((l) => l.phone).filter((p) => p && String(p).trim()))];
   if (!phones.length) return {};
-  const ph = phones.map(() => "?").join(",");
-  const dupRows = await all(
-    db,
-    `SELECT phone FROM leads WHERE phone IN (${ph}) GROUP BY phone HAVING COUNT(*) > 1`,
-    phones
-  );
-  if (!dupRows.length) return {};
-  const dupPhones = dupRows.map((r) => r.phone);
-  const ph2 = dupPhones.map(() => "?").join(",");
-  const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph2})`, dupPhones);
-  return buildPhoneRegMap(dupLeads, projectMap);
+  const rows = await loadLeadsByPhoneVariants(db, phones);
+  const full = buildPhoneRegMap(rows, projectMap);
+  const dupOnly = {};
+  for (const [phone, regs] of Object.entries(full)) {
+    if (regs.length > 1) dupOnly[phone] = regs;
+  }
+  return dupOnly;
 }
 
 async function loadLeadAuxData(db) {
@@ -4052,7 +4083,12 @@ async function loadLeadAuxData(db) {
   }
   const [historyCounts, dupPhoneRows] = await Promise.all([
     all(db, "SELECT lead_id, COUNT(*) as c FROM lead_history GROUP BY lead_id"),
-    all(db, "SELECT phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) != '' GROUP BY phone HAVING COUNT(*) > 1"),
+    all(db, `SELECT MIN(phone) AS phone FROM leads WHERE phone IS NOT NULL AND TRIM(phone) != ''
+      GROUP BY CASE
+        WHEN phone LIKE '+84%' THEN '0' || substr(phone, 4)
+        WHEN phone GLOB '84[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*' THEN '0' || substr(phone, 3)
+        ELSE phone END
+      HAVING COUNT(*) > 1`),
   ]);
   const historyCountMap = Object.fromEntries(historyCounts.map((r) => [r.lead_id, r.c]));
   const dupPhones = new Set(dupPhoneRows.map((r) => r.phone));
@@ -4171,6 +4207,10 @@ function sortIndexedLeads(rows, sortKey, sortDir) {
     let va = a[col];
     let vb = b[col];
     if (col === "id") return (Number(va) - Number(vb)) * dir;
+    if (col === "created_at") {
+      const diff = (parseLeadDate(va)?.getTime() || 0) - (parseLeadDate(vb)?.getTime() || 0);
+      return (diff || Number(a.id) - Number(b.id)) * dir;
+    }
     va = String(va ?? "").toLowerCase();
     vb = String(vb ?? "").toLowerCase();
     if (va < vb) return -dir;
@@ -4774,23 +4814,35 @@ async function querySaleRankingSummary(db, user, filters = {}) {
   return Object.values(map).sort((a, b) => b.total - a.total);
 }
 
-async function queryLeadsPage(db, user, filters, page, limit) {
-  const sortKey = filters.sortKey || "id";
-  const sortDir = filters.sortDir || "desc";
-  const statusTab = filters.statusTab || "all";
-  // List/lite không cần full lead_history — timeline load khi mở chi tiết
-  const liteOpts = { skipHistory: true };
-  const sortCol = {
+function leadOrderBySql(sortKey, sortDir, alias = "") {
+  const p = alias ? `${alias}.` : "";
+  const dir = sortDir === "asc" ? "ASC" : "DESC";
+  if (sortKey === "createdAt") {
+    // NULL = vừa ghi, chưa kịp tính mốc → coi như mới nhất
+    return `COALESCE(${p}created_ts, 9007199254740991) ${dir}, ${p}id ${dir}`;
+  }
+  const col = {
     name: "name",
     phone: "phone",
     product: "product",
     status: "status",
     saleName: "sale_name",
     managerName: "manager_name",
-    createdAt: "created_at",
     id: "id",
   }[sortKey] || "id";
-  const sortDirSql = sortDir === "asc" ? "ASC" : "DESC";
+  return `${p}${col} ${dir}`;
+}
+
+async function queryLeadsPage(db, user, filters, page, limit) {
+  const requestedSort = filters.sortKey || "id";
+  // "id" là mặc định client gửi khi chưa chọn cột — admin/quản lý xem theo thời điểm đăng ký
+  const sortKey = requestedSort === "id" && user.role !== "sale" ? "createdAt" : requestedSort;
+  const sortDir = filters.sortDir || "desc";
+  const statusTab = filters.statusTab || "all";
+  // List/lite không cần full lead_history — timeline load khi mở chi tiết
+  const liteOpts = { skipHistory: true };
+  const orderSql = leadOrderBySql(sortKey, sortDir);
+  const orderSqlL = leadOrderBySql(sortKey, sortDir, "l");
   const offset = (page - 1) * limit;
 
   // Sale: tab = feedback của chính sale — dùng SQL phân trang thay vì load toàn bộ lead vào RAM
@@ -4809,7 +4861,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
       const scopeParams = [...params, saleName, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
-        all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
+        all(db, `SELECT l.* ${scopeSql} ORDER BY ${orderSqlL} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
       return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
@@ -4818,7 +4870,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     if (statusTab === "all") {
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
-        all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
+        all(db, `SELECT * FROM leads ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
       return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
@@ -4851,7 +4903,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
       const scopeParams = [...params, saleName, saleName, statusTab];
       const [countRow, leadRows, projectRows] = await Promise.all([
         get(db, `SELECT COUNT(*) as c ${scopeSql}`, scopeParams),
-        all(db, `SELECT l.* ${scopeSql} ORDER BY l.${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
+        all(db, `SELECT l.* ${scopeSql} ORDER BY ${orderSqlL} LIMIT ? OFFSET ?`, [...scopeParams, limit, offset]),
         all(db, "SELECT * FROM projects ORDER BY id ASC"),
       ]);
       return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, { salePerspectiveName: saleName, ...liteOpts });
@@ -4861,7 +4913,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
     const tabParams = [...params, statusTab];
     const [countRow, leadRows, projectRows] = await Promise.all([
       get(db, `SELECT COUNT(*) as c FROM leads ${tabWhere}`, tabParams),
-      all(db, `SELECT * FROM leads ${tabWhere} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...tabParams, limit, offset]),
+      all(db, `SELECT * FROM leads ${tabWhere} ORDER BY ${orderSql} LIMIT ? OFFSET ?`, [...tabParams, limit, offset]),
       all(db, "SELECT * FROM projects ORDER BY id ASC"),
     ]);
     return finishLeadsPage(db, leadRows, countRow?.c || 0, projectRows, user, liteOpts);
@@ -4888,7 +4940,7 @@ async function queryLeadsPage(db, user, filters, page, limit) {
 
   const [countRow, leadRows, projectRows] = await Promise.all([
     get(db, `SELECT COUNT(*) as c FROM leads ${where}`, params),
-    all(db, `SELECT * FROM leads ${where} ORDER BY ${sortCol} ${sortDirSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
+    all(db, `SELECT * FROM leads ${where} ORDER BY ${orderSql} LIMIT ? OFFSET ?`, [...params, limit, offset]),
     all(db, "SELECT * FROM projects ORDER BY id ASC"),
   ]);
 
@@ -5310,9 +5362,7 @@ async function readData(db) {
 
   let phoneRegMap = {};
   if (aux.dupPhones.size) {
-    const phones = [...aux.dupPhones];
-    const ph = phones.map(() => "?").join(",");
-    const dupLeads = await all(db, `SELECT * FROM leads WHERE phone IN (${ph})`, phones);
+    const dupLeads = await loadLeadsByPhoneVariants(db, [...aux.dupPhones]);
     phoneRegMap = buildPhoneRegMap(dupLeads, projectMap);
   }
 
@@ -5976,7 +6026,13 @@ async function syncProject(db, projectId, opts = {}) {
   });
   const campaigns = Array.from(campaignMap.values());
 
-  const { newPhones } = await replaceProjectData(db, projectId, mappedLeads, campaigns);
+  const { newPhones, newLeadIds } = await replaceProjectData(db, projectId, mappedLeads, campaigns);
+  // Lọc theo id — lọc theo SĐT sẽ kéo cả lần đăng ký cũ của khách vào luồng báo/chia lại
+  const loadNewLeads = async () => {
+    if (!newLeadIds.length) return [];
+    const ph = newLeadIds.map(() => "?").join(",");
+    return all(db, `SELECT * FROM leads WHERE id IN (${ph}) ORDER BY id ASC`, newLeadIds);
+  };
   if (costUrl && !skipCost) {
     await run(db, "UPDATE projects SET cost_data = ? WHERE id = ?", [
       JSON.stringify(projectCost),
@@ -6001,9 +6057,7 @@ async function syncProject(db, projectId, opts = {}) {
 
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race) {
       if (newPhones && newPhones.length > 0) {
-        const normPhone = normalizePhoneKey;
-        const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
-        const newLeads = allLeads.filter(l => newPhones.includes(normPhone(l.phone)));
+        const newLeads = await loadNewLeads();
         if (newLeads.length > 0) {
           const projectRow = await get(db, "SELECT name FROM projects WHERE id = ?", [projectId]);
           const projectName = projectRow ? projectRow.name : "-";
@@ -6093,9 +6147,7 @@ async function syncProject(db, projectId, opts = {}) {
           console.log(`[syncProject] project=${projectId} outside 07:30–22:00 VN — hoãn notify ${newPhones.length} lead mới (log mode)`);
         } else {
         console.log(`[syncProject] 🔔 project=${projectId} newPhones=${newPhones.length}: [${newPhones.slice(0, 5).join(', ')}${newPhones.length > 5 ? '...' : ''}]`);
-        const normPhone = normalizePhoneKey;
-        const allLeads = await all(db, "SELECT * FROM leads WHERE project_id = ?", [projectId]);
-        const newLeads = allLeads.filter(l => newPhones.includes(normPhone(l.phone)));
+        const newLeads = await loadNewLeads();
         console.log(`[syncProject] newLeads matched from DB: ${newLeads.length}`);
 
         if (newLeads.length > 0) {
@@ -14414,6 +14466,10 @@ function sortLeadObjectsList(leads, sortKey, sortDir) {
   }[sortKey] || "id";
   return [...leads].sort((a, b) => {
     if (col === "id") return (Number(a.id) - Number(b.id)) * dir;
+    if (col === "createdAt") {
+      const diff = (parseLeadDate(a.createdAt)?.getTime() || 0) - (parseLeadDate(b.createdAt)?.getTime() || 0);
+      return (diff || Number(a.id) - Number(b.id)) * dir;
+    }
     const va = String(a[col] ?? "").toLowerCase();
     const vb = String(b[col] ?? "").toLowerCase();
     if (va < vb) return -dir;
@@ -14563,9 +14619,7 @@ app.get("/api/leads/:id/registrations", requireAuth, async (req, res) => {
       return res.status(403).json({ error: "Forbidden" });
     }
     const [rows, projectRows] = await Promise.all([
-      all(db,
-        "SELECT id, name, phone, project_id, campaign, adset_name, ad_name, created_at, notes, source, ads_id FROM leads WHERE phone = ?",
-        [lead.phone]),
+      loadLeadsByPhoneVariants(db, [lead.phone]),
       all(db, "SELECT id, name FROM projects"),
     ]);
     const projectMap = Object.fromEntries(projectRows.map(p => [p.id, p.name]));
@@ -19814,6 +19868,14 @@ if (!process.env.VERCEL) {
             console.error("[DB] v36 backfill scheduler error:", e.message);
           });
       }, 2000);
+      setTimeout(() => {
+        fillLeadCreatedTs(db, 1000)
+          .then((n) => { if (n) console.log(`[DB] created_ts backfill: ${n} lead`); })
+          .catch((e) => console.error("[DB] created_ts backfill error:", e.message));
+      }, 4000);
+      setInterval(() => {
+        fillLeadCreatedTs(db, 2).catch((e) => console.warn("[DB] created_ts fill:", e.message));
+      }, 60 * 1000);
     }
 
     // Auto-register Telegram webhooks on startup (ensures secret always matches after restart)

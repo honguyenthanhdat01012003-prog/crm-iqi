@@ -23,6 +23,7 @@
     "test:log-shuffle": "node server/logShuffle.test.js",
     "test:lead-export": "node server/leadExport.test.js",
     "test:sync-activity": "node server/syncActivity.test.js",
+    "test:sheet-lead-match": "node server/sheetLeadMatch.test.js",
     "test:lead-notify": "node src/leadNotify.test.js",
     "test:push-open-lead": "node src/pushOpenLead.test.js",
     "test:lead-scope-client": "node src/utils/leadScopeClient.test.js"

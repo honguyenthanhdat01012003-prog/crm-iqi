@@ -93,7 +93,7 @@ export function LeadDataGrid({
                           return s && s !== "chưa chia" && s !== cur;
                         }).length : 0)} />
                       )}
-                      {isAdmin && lead.regCount > 1 && (
+                      {lead.regCount > 1 && (
                         <span className="crm-status-badge crm-status-badge--reg">ĐK {lead.regIndex}</span>
                       )}
                       <span className="crm-data-grid-name-text" title={lead.name || ""}>{lead.name}</span>

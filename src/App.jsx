@@ -413,6 +413,9 @@ function assignedOrCreatedTs(lead) {
   );
 }
 
+/** Admin/quản lý chưa chọn cột sắp xếp: lead xếp theo thời điểm đăng ký, mới nhất trên đầu. */
+const DEFAULT_ADMIN_LEAD_SORT = { key: "createdAt", direction: "desc" };
+
 /** Sale: NEW + XÁO hôm nay luôn trên đầu; trong nhóm sort theo giờ chia mới nhất. */
 function sortLeadsForSaleView(leads, sortConfig) {
   const base = sortConfig?.key ? sortLeadsScope(leads, sortConfig) : [...(Array.isArray(leads) ? leads : [])];
@@ -6762,7 +6765,7 @@ const LeadsPage = (props) => {
   const sortedLeads = useMemo(() => {
     if (isSale) return sortLeadsForSaleView(tabFiltered, localScope ? sortConfig : null);
     if (!localScope) return tabFiltered;
-    return sortLeadsScope(tabFiltered, sortConfig);
+    return sortLeadsScope(tabFiltered, sortConfig.key ? sortConfig : DEFAULT_ADMIN_LEAD_SORT);
   }, [tabFiltered, localScope, sortConfig, isSale]);
 
   const hasNarrowingFilter = activeTab !== "all"
@@ -10596,7 +10599,7 @@ const LeadsPage = (props) => {
                       {isRecentLead(l) && <NewLeadBadge />}
                       {isSale && isShuffleLead(l) && <ShuffleLeadBadge passCount={getShufflePassCount(l)} />}
                       {l.distributionKind === "scheduled" && <ScheduledLeadBadge compact={isMobile} />}
-                      {isAdmin && l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
+                      {l.regCount > 1 && <span className="crm-status-badge crm-status-badge--reg">ĐK lần {l.regIndex}</span>}
                       {l.teamId && teamNameMap[l.teamId] && <span style={{ fontSize: 10, fontWeight: 800, padding: "1px 7px", borderRadius: 8, background: "#ede9fe", color: "#6d28d9", whiteSpace: "nowrap" }}>{teamNameMap[l.teamId]}</span>}
                       <span style={{ fontWeight: 700, fontSize: isMobile ? 13 : 14 }}>{l.name}</span>
                       {isSale && isShuffleLead(l) && getShufflePassCount(l) > 0 && (
@@ -11125,7 +11128,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
   }, [lead.id, lead.customerFbUrl, lead.phone2, lead.phone3, lead.adminNote]);
 
   useEffect(() => {
-    if (!isAdmin || (lead.regCount || 0) <= 1) {
+    if ((lead.regCount || 0) <= 1) {
       setRegistrations([]);
       return;
     }
@@ -11140,7 +11143,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
       .then(d => { if (!cancelled) setRegistrations(d.registrations || []); })
       .catch(() => { if (!cancelled) setRegistrations([]); });
     return () => { cancelled = true; };
-  }, [lead.id, lead.phone, lead.regCount, phoneRegistrations, isAdmin]);
+  }, [lead.id, lead.phone, lead.regCount, phoneRegistrations]);
 
   const handleViewAdPreview = async (adName) => {
     if (!adName || adName === "-") return;
@@ -11778,7 +11781,7 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
               style={{ ...detailValueStyle, color: "#2563eb", fontWeight: 700, textDecoration: "underline" }}>Mở link</a>
           </div>
         )}
-        {isAdmin && lead.regCount > 1 && (
+        {lead.regCount > 1 && (
           <div><span style={{ color: "#6b7280", fontSize: 11 }}>Số lần ĐK</span><br />
             <b style={{ fontSize: 13, color: "#d97706" }}>{lead.regCount} lần</b>
           </div>
@@ -11934,6 +11937,27 @@ function LeadDetail({ lead, projectName, isAdmin, user, applyApiData, saleNames 
           )}
         </div>
       )}
+
+      {!isAdmin && registrations.length > 1 && (() => {
+        const others = registrations.filter((reg) => reg.leadId !== lead.id);
+        if (!others.length) return null;
+        const projectNames = [...new Set(others.map((reg) => reg.projectName).filter((n) => n && n !== "-"))];
+        return (
+          <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}>
+            <div style={{ fontWeight: 800, color: "#92400e", marginBottom: 4 }}>
+              ⚠️ Lưu ý: khách này đã đăng ký {registrations.length} lần
+              {projectNames.length > 0 && <> — từng đăng ký dự án {projectNames.join(", ")}</>}
+            </div>
+            {others.map((reg) => (
+              <div key={reg.leadId} style={{ color: "#78350f", marginTop: 2 }}>
+                • <b>{reg.projectName || "-"}</b>
+                {Number(reg.projectId) === Number(lead.projectId) && " (cùng dự án)"}
+                {" — "}{reg.createdAt || "-"}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* === 2-COLUMN LAYOUT: Tương tác (left) | Chat (right) === */}
       <div style={{ display: "grid", gridTemplateColumns: layoutCompact ? "1fr" : "1fr 1fr", gap: layoutCompact ? 10 : 16, alignItems: "start" }}>
