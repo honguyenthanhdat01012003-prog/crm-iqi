@@ -1456,6 +1456,7 @@ function CRMApp({ user, updateUser, onLogout }) {
     telegramLeadNotify: false,
     distributionMode: "log",
     logShuffleMode: "rank",
+    syncMode: "auto",
     teamIdsOrdered: [],
   });
 
@@ -3153,6 +3154,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       telegramLeadNotify: false,
       distributionMode: "log",
       logShuffleMode: "rank",
+      syncMode: "auto",
       teamIdsOrdered: [],
     });
     setShowProjectModal(true);
@@ -3170,6 +3172,7 @@ function CRMApp({ user, updateUser, onLogout }) {
       telegramLeadNotify: !!p.telegramLeadNotify,
       distributionMode: p.distributionMode || "log",
       logShuffleMode: p.logShuffleMode === "random" ? "random" : "rank",
+      syncMode: ["always", "off"].includes(p.syncMode) ? p.syncMode : "auto",
       teamIdsOrdered: Array.isArray(p.teamIdsOrdered) ? p.teamIdsOrdered : [],
     });
     setShowProjectModal(true);
@@ -4130,6 +4133,28 @@ function CRMApp({ user, updateUser, onLogout }) {
           />
           <div style={{ fontSize: 11, color: "#64748b", marginTop: -6, marginBottom: 10, lineHeight: 1.45 }}>
             File → Chia sẻ → Xuất bản lên web → tab <b>Liên kết</b> (không dùng tab Nhúng) → chọn sheet có lead → định dạng <b>CSV</b> → copy link rồi Lưu lại dự án.
+          </div>
+          <label style={labelStyle}>Đồng bộ sheet tự động</label>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 4 }}>
+            {[
+              { key: "auto", label: "Tự động 30 ngày" },
+              { key: "always", label: "Luôn đồng bộ" },
+              { key: "off", label: "Ngừng đồng bộ" },
+            ].map((opt) => {
+              const active = (draftProject.syncMode || "auto") === opt.key;
+              return (
+                <button key={opt.key} type="button"
+                  onClick={() => setDraftProject((prev) => ({ ...prev, syncMode: opt.key }))}
+                  style={{ padding: "8px 6px", borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: "pointer", border: active ? "1px solid #16a34a" : "1px solid #e5e7eb", background: active ? "#ecfdf3" : "#fff", color: active ? "#15803d" : "#475569" }}>
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10, lineHeight: 1.45 }}>
+            {(draftProject.syncMode || "auto") === "auto" && "Có lead về trong 30 ngày thì đồng bộ tự động. Quá 30 ngày không có lead thì tạm ngừng để ưu tiên dự án đang chạy — bấm Đồng bộ tay hoặc chọn Luôn đồng bộ khi chạy lại."}
+            {draftProject.syncMode === "always" && "Luôn đồng bộ tự động, kể cả lâu không có lead. Dùng khi dự án cũ chạy lại."}
+            {draftProject.syncMode === "off" && "Không đồng bộ tự động. Nút Đồng bộ tay của admin vẫn quét được."}
           </div>
           <label style={labelStyle}>Cost URL (Google Sheets CSV)</label>
           <input

@@ -54,6 +54,7 @@ import {
   hadPositiveFeedback,
   buildSaleFeedbackSummary,
 } from "./leadExport.js";
+import { normalizeSyncMode, selectAutoSyncProjects, SYNC_ACTIVE_DAYS } from "./syncActivity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -82,7 +83,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-29-lead-export-good-junk";
+const BUILD_VERSION = "2026-09-30-sync-active-projects";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -632,7 +633,7 @@ async function get(client, sql, params = []) {
   return result.rows[0] ? { ...result.rows[0] } : undefined;
 }
 
-const DB_VERSION = 49; // Bump this when adding new DDL/migrations
+const DB_VERSION = 50; // Bump this when adding new DDL/migrations
 
 const SALE_PENALTY_TYPES = {
   scheduledSla24h: "scheduled_sla_24h",
@@ -1306,7 +1307,7 @@ async function initDb() {
       cost_url TEXT DEFAULT '', cost_data TEXT DEFAULT '{}', fb_code TEXT DEFAULT '', fb_person TEXT DEFAULT '',
       mgr_assign_idx INTEGER DEFAULT 0, manual_assign INTEGER DEFAULT 0, daily_report_enabled INTEGER DEFAULT 0,
       distribution_mode TEXT DEFAULT 'log', race_team_cursor INTEGER DEFAULT 0,
-      log_shuffle_mode TEXT DEFAULT 'rank')`,
+      log_shuffle_mode TEXT DEFAULT 'rank', sync_mode TEXT DEFAULT 'auto')`,
     `CREATE TABLE IF NOT EXISTS project_teams (
       project_id INTEGER NOT NULL,
       team_id INTEGER NOT NULL,
@@ -2019,6 +2020,10 @@ async function initDb() {
   if (dbVersion < 49) {
     console.log("[DB] v49 migration: projects.log_shuffle_mode (rank | random cho xáo lead log)");
     try { await run(db, "ALTER TABLE projects ADD COLUMN log_shuffle_mode TEXT NOT NULL DEFAULT 'rank'"); } catch (_) {}
+  }
+  if (dbVersion < 50) {
+    console.log("[DB] v50 migration: projects.sync_mode (auto | always | off cho đồng bộ sheet tự động)");
+    try { await run(db, "ALTER TABLE projects ADD COLUMN sync_mode TEXT NOT NULL DEFAULT 'auto'"); } catch (_) {}
   }
 
   await run(db, `INSERT INTO settings(key, value) VALUES('db_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(DB_VERSION)]);
@@ -5218,6 +5223,7 @@ async function getBootstrapPayload(db, user) {
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
       logShuffleMode: normalizeLogShuffleMode(p.log_shuffle_mode),
+      syncMode: normalizeSyncMode(p.sync_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
       teamIdsOrdered: projectTeamMap[p.id] || [],
     })),
@@ -5353,6 +5359,7 @@ async function readData(db) {
       isLegacy: Boolean(p.is_legacy),
       distributionMode: normalizeDistributionMode(p.distribution_mode),
       logShuffleMode: normalizeLogShuffleMode(p.log_shuffle_mode),
+      syncMode: normalizeSyncMode(p.sync_mode),
       raceTeamCursor: Number(p.race_team_cursor) || 0,
       teamIdsOrdered: projectTeamMap[p.id] || [],
     })),
@@ -6210,9 +6217,37 @@ function gcIfHeapHigh(thresholdMb = 2200, label = "sync") {
   } catch { /* */ }
 }
 
+const PROJECT_LAST_LEAD_CACHE_MS = 5 * 60 * 1000;
+let projectLastLeadCache = { at: 0, map: null };
+
+/** projectId → thời điểm lead mới nhất (theo lead insert sau cùng). Cache 5 phút — auto-sync chạy mỗi 30s. */
+async function getProjectLastLeadAtMap(dbConn) {
+  const now = Date.now();
+  if (projectLastLeadCache.map && now - projectLastLeadCache.at < PROJECT_LAST_LEAD_CACHE_MS) {
+    return projectLastLeadCache.map;
+  }
+  const rows = await all(dbConn,
+    `SELECT l.project_id, l.created_at FROM leads l
+     JOIN (SELECT project_id, MAX(id) AS max_id FROM leads WHERE project_id IS NOT NULL GROUP BY project_id) m
+       ON l.id = m.max_id`
+  );
+  const map = new Map();
+  for (const r of rows) {
+    const t = parseLeadDate(r.created_at)?.getTime();
+    map.set(Number(r.project_id), Number.isFinite(t) ? t : null);
+  }
+  projectLastLeadCache = { at: now, map };
+  return map;
+}
+
+function invalidateProjectLastLeadCache() {
+  projectLastLeadCache = { at: 0, map: null };
+}
+
 async function syncAllProjects(db, opts = {}) {
   const skipCost = opts.skipCost === true;
   const force = opts.force === true;
+  const activeOnly = opts.activeOnly === true;
   // Auto: mặc định ghi hết dự án có sheet đổi (ưu tiên tốc độ lead mới; RAM cao hơn OK)
   const maxWrites = Number(
     opts.maxWrites != null
@@ -6230,11 +6265,25 @@ async function syncAllProjects(db, opts = {}) {
     let deferred = 0;
     let writes = 0;
     let processed = 0;
+    let idleCount = 0;
 
-    const syncable = projects.filter((p) => !p.is_legacy && sanitizeSheetUrl(p.lead_url));
+    let syncable = projects.filter((p) => !p.is_legacy && sanitizeSheetUrl(p.lead_url));
     for (const p of projects) {
       if (p.is_legacy) skippedLegacy++;
-      else if (!sanitizeSheetUrl(p.lead_url)) errors.push(`${p.name}: thiếu lead_url`);
+      else if (!sanitizeSheetUrl(p.lead_url) && !(activeOnly && normalizeSyncMode(p.sync_mode) === "off")) {
+        errors.push(`${p.name}: thiếu lead_url`);
+      }
+    }
+    // Auto-sync: bỏ dự án lâu không có lead / admin tắt — dành lượt quét cho dự án đang chạy
+    if (activeOnly && syncable.length) {
+      try {
+        const lastLeadAt = await getProjectLastLeadAtMap(db);
+        const { active, idle } = selectAutoSyncProjects(syncable, lastLeadAt, Date.now(), SYNC_ACTIVE_DAYS);
+        syncable = active;
+        idleCount = idle.length;
+      } catch (e) {
+        console.warn("[syncAllProjects] last-lead map failed, scan all:", e.message);
+      }
     }
 
     let rotate = 0;
@@ -6290,6 +6339,7 @@ async function syncAllProjects(db, opts = {}) {
           changedCount++;
           writes++;
           newLeadTotal += Number(pr.newCount || 0);
+          if (Number(pr.newCount || 0) > 0) invalidateProjectLastLeadCache();
         }
       } catch (e) {
         processed++;
@@ -6329,6 +6379,8 @@ async function syncAllProjects(db, opts = {}) {
       changedCount,
       newLeadTotal,
       deferred,
+      activeCount: syncable.length,
+      idleCount,
       errors: errors.slice(0, 10),
       skipped: deferred ? `deferred_${deferred}` : null,
       heapMb: Math.round((process.memoryUsage().heapUsed || 0) / (1024 * 1024)),
@@ -10021,8 +10073,8 @@ app.post("/api/projects", requireAuth, requireAdminOnly, async (req, res) => {
     const cleanCost = sanitizeSheetUrl(costUrl);
     const result = await run(
       db,
-      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor, telegram_lead_notify, log_shuffle_mode) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
-      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, logShuffleMode]
+      "INSERT INTO projects(name, lead_url, cost_url, fb_code, fb_person, daily_report_enabled, distribution_mode, race_team_cursor, telegram_lead_notify, log_shuffle_mode, sync_mode) VALUES(?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)",
+      [String(name).trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, logShuffleMode, normalizeSyncMode(req.body?.syncMode)]
     );
     const newProjectId = Number(result.lastID || result.lastInsertRowid || result.lastInsertRowId);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
@@ -10147,6 +10199,10 @@ app.put("/api/projects/:id", requireAuth, requireAdminOnly, async (req, res) => 
       "UPDATE projects SET name = ?, lead_url = ?, cost_url = ?, fb_code = ?, fb_person = ?, daily_report_enabled = ?, distribution_mode = ?, telegram_lead_notify = ?, log_shuffle_mode = ? WHERE id = ?",
       [String(name || "").trim(), cleanLead, cleanCost, String(fbCode || "").trim(), String(fbPerson || "").trim(), dailyReportEnabled ? 1 : 0, distributionMode, telegramLeadNotify ? 1 : 0, logShuffleMode, id]
     );
+    // Client cũ không gửi syncMode — giữ nguyên thay vì reset về auto
+    if (req.body?.syncMode != null) {
+      await run(db, "UPDATE projects SET sync_mode = ? WHERE id = ?", [normalizeSyncMode(req.body.syncMode), id]);
+    }
     await run(db, "DELETE FROM project_teams WHERE project_id = ?", [id]);
     if (distributionMode === PROJECT_DISTRIBUTION_MODES.race && teamIdsOrdered.length) {
       for (let i = 0; i < teamIdsOrdered.length; i++) {
@@ -19799,9 +19855,9 @@ if (!process.env.VERCEL) {
     isSyncing = true;
     try {
       console.log(`[${label}] Starting (heap=${heapMb}MB)...`);
-      const result = await syncAllProjects(db, { skipCost: true, force: false });
+      const result = await syncAllProjects(db, { skipCost: true, force: false, activeOnly: true });
       console.log(
-        `[${label}] Done ok=${result.okCount || 0} changed=${result.changedCount || 0} new=${result.newLeadTotal || 0} errors=${(result.syncErrors || []).length}`
+        `[${label}] Done ok=${result.okCount || 0} changed=${result.changedCount || 0} new=${result.newLeadTotal || 0} errors=${(result.syncErrors || []).length} idle=${lastAutoSyncMeta?.idleCount || 0}`
       );
     } catch (e) {
       console.error(`[${label}] Error:`, e.message);
