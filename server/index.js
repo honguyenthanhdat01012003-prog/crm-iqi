@@ -50,6 +50,8 @@ import {
 import {
   GOOD_EXPORT_DEFAULT_STATUSES,
   normalizeExportFlow,
+  normalizeExportCampaignTypes,
+  campaignMatchesExportTypes,
   pickPriorityExportStatus,
   hadPositiveFeedback,
   buildSaleFeedbackSummary,
@@ -84,7 +86,7 @@ function loadEnvFile() {
 loadEnvFile();
 
 // Build version — used to verify deployment
-const BUILD_VERSION = "2026-09-30-lead-registrations";
+const BUILD_VERSION = "2026-10-02-export-campaign-type";
 const PORT = Number(process.env.PORT || 4000);
 const DB_DIR = path.join(__dirname, "data");
 const DB_PATH = path.join(DB_DIR, "crm.db");
@@ -8716,6 +8718,7 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
       ? req.body.statuses
       : (flow === "good" ? GOOD_EXPORT_DEFAULT_STATUSES : JUNK_EXPORT_DEFAULT_STATUSES);
     const mode = String(req.body?.mode || "single").trim() === "per_project" ? "per_project" : "single";
+    const campaignTypes = normalizeExportCampaignTypes(req.body?.campaignTypes);
     const bounds = exportDateBounds(req.body?.startDate, req.body?.endDate);
     const filePrefix = flow === "good" ? "lead-net" : "lead-te";
     const buildCsv = flow === "good" ? buildGoodLeadsCsv : buildJunkLeadsCsv;
@@ -8749,11 +8752,11 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
       // Khách nét: xét mọi lead của dự án vì trạng thái ưu tiên có thể nằm trong lịch sử sale cũ
       const leadRows = (await all(
         db,
-        `SELECT id, name, phone, product, status, admin_tab_status, project_id, sale_name, created_at
+        `SELECT id, name, phone, product, status, admin_tab_status, project_id, sale_name, created_at, campaign
          FROM leads WHERE project_id IN (${projPlaceholders})
          ORDER BY project_id ASC, id ASC`,
         projectIds
-      )).filter((l) => leadInExportRange(l, bounds));
+      )).filter((l) => leadInExportRange(l, bounds) && campaignMatchesExportTypes(l.campaign, campaignTypes));
       const historyByLead = await loadExportHistory(db, leadRows.map((l) => Number(l.id)));
       for (const l of leadRows) {
         const hist = historyByLead.get(Number(l.id)) || [];
@@ -8775,7 +8778,7 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
       const labelPlaceholders = labelArgs.map(() => "?").join(",");
       const rows = await all(
         db,
-        `SELECT l.id, l.name, l.phone, l.product, l.status, l.admin_tab_status, l.project_id, l.created_at
+        `SELECT l.id, l.name, l.phone, l.product, l.status, l.admin_tab_status, l.project_id, l.created_at, l.campaign
          FROM leads l
          WHERE l.project_id IN (${projPlaceholders})
            AND (
@@ -8789,7 +8792,7 @@ app.post("/api/leads/export-junk", requireAuth, requireAdmin, async (req, res) =
       if (rows.length > JUNK_EXPORT_MAX_ROWS) return tooMany();
       const inRange = rows
         .map((l) => ({ lead: l, st: normalizeStatus(l.admin_tab_status || l.status || "") }))
-        .filter(({ lead, st }) => statuses.includes(st) && leadInExportRange(lead, bounds));
+        .filter(({ lead, st }) => statuses.includes(st) && leadInExportRange(lead, bounds) && campaignMatchesExportTypes(lead.campaign, campaignTypes));
       const historyByLead = await loadExportHistory(db, inRange.map(({ lead }) => Number(lead.id)));
       mapped = inRange
         // Khách từng được feedback nét thuộc luồng khách nét — không lẫn vào tệp rác

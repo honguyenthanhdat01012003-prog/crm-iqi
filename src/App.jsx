@@ -243,6 +243,11 @@ const DEFAULT_GOOD_EXPORT_STATUSES = [
   "interested", "low_interest", "other_project", "consulting",
   "appointment", "booked", "booking_other", "closed",
 ];
+const EXPORT_CAMPAIGN_TYPE_OPTIONS = [
+  { key: "low_floor", label: "Thấp tầng" },
+  { key: "high_floor", label: "Cao tầng" },
+  { key: "event", label: "Event" },
+];
 const defaultExportStatuses = (flow) => [...(flow === "good" ? DEFAULT_GOOD_EXPORT_STATUSES : DEFAULT_JUNK_EXPORT_STATUSES)];
 
 const STATUS_COLORS = {
@@ -6320,6 +6325,7 @@ const LeadsPage = (props) => {
   const [junkExportFlow, setJunkExportFlow] = useState("good");
   const [junkExportFrom, setJunkExportFrom] = useState("");
   const [junkExportTo, setJunkExportTo] = useState("");
+  const [junkExportCampaignTypes, setJunkExportCampaignTypes] = useState([]);
   const [junkExportLoading, setJunkExportLoading] = useState(false);
   const adminDeskMenuRef = React.useRef(null);
   React.useEffect(() => {
@@ -7440,6 +7446,7 @@ const LeadsPage = (props) => {
           mode: junkExportMode,
           startDate: junkExportFrom || undefined,
           endDate: junkExportTo || undefined,
+          campaignTypes: junkExportCampaignTypes,
         }),
       });
       const ctype = String(res.headers.get("content-type") || "");
@@ -8593,6 +8600,23 @@ const LeadsPage = (props) => {
                   <span style={{ color: "#94a3b8" }}>→</span>
                   <input type="date" value={junkExportTo} onChange={(e) => setJunkExportTo(e.target.value)}
                     style={{ flex: "1 1 130px", padding: "8px 10px", borderRadius: 8, border: "1px solid #cbd5e1", fontSize: 13 }} />
+                </div>
+
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Loại chiến dịch</label>
+                <p style={{ margin: "0 0 8px", fontSize: 11, color: "#94a3b8", lineHeight: 1.4 }}>
+                  Lọc theo chữ trong tên camp (Thấp tầng / Cao tầng / Event). Không tick = mọi chiến dịch. Tick nhiều loại thì lấy camp khớp bất kỳ loại đã chọn, rồi mới lọc trạng thái.
+                </p>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                  {EXPORT_CAMPAIGN_TYPE_OPTIONS.map((opt) => {
+                    const checked = junkExportCampaignTypes.includes(opt.key);
+                    return (
+                      <button key={opt.key} type="button" disabled={junkExportLoading}
+                        onClick={() => setJunkExportCampaignTypes((prev) => checked ? prev.filter((x) => x !== opt.key) : [...prev, opt.key])}
+                        style={{ padding: "8px 12px", borderRadius: 10, fontSize: 13, fontWeight: 700, cursor: "pointer", border: `2px solid ${checked ? "#2563eb" : "#e2e8f0"}`, background: checked ? "#eff6ff" : "#fff", color: checked ? "#1d4ed8" : "#475569" }}>
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 <label style={{ fontSize: 12, fontWeight: 700, color: "#334155", display: "block", marginBottom: 6 }}>Dự án</label>

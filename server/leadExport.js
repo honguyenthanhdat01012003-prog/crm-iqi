@@ -21,6 +21,44 @@ export function normalizeExportFlow(value) {
   return String(value || "").trim() === "good" ? "good" : "junk";
 }
 
+/** Lọc theo chữ trong tên chiến dịch (vd. "... | BLC | Thấp tầng | NS 1M | ..."). */
+export const EXPORT_CAMPAIGN_TYPES = [
+  { key: "low_floor", label: "Thấp tầng", compact: "thaptang" },
+  { key: "high_floor", label: "Cao tầng", compact: "caotang" },
+  { key: "event", label: "Event", compact: "event" },
+];
+
+const EXPORT_CAMPAIGN_TYPE_KEYS = new Set(EXPORT_CAMPAIGN_TYPES.map((t) => t.key));
+
+function foldCampaignText(value = "") {
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[đĐ]/g, "d")
+    .toLowerCase();
+}
+
+function compactCampaignText(value = "") {
+  return foldCampaignText(value).replace(/[^a-z0-9]+/g, "");
+}
+
+export function normalizeExportCampaignTypes(raw) {
+  const list = Array.isArray(raw) ? raw : (raw == null || raw === "" ? [] : [raw]);
+  return [...new Set(list.map((v) => String(v || "").trim()).filter((k) => EXPORT_CAMPAIGN_TYPE_KEYS.has(k)))];
+}
+
+/** Không chọn loại nào = mọi chiến dịch. Nhiều loại = khớp bất kỳ loại đã tick. */
+export function campaignMatchesExportTypes(campaign, types) {
+  const selected = normalizeExportCampaignTypes(types);
+  if (!selected.length) return true;
+  const compact = compactCampaignText(campaign);
+  if (!compact) return false;
+  return selected.some((key) => {
+    const def = EXPORT_CAMPAIGN_TYPES.find((t) => t.key === key);
+    return def ? compact.includes(def.compact) : false;
+  });
+}
+
 function statusRank(status, selected) {
   const idx = EXPORT_STATUS_RANK.indexOf(status);
   if (idx >= 0) return idx;

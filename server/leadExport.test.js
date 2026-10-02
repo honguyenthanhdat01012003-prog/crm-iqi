@@ -4,6 +4,8 @@ import {
   hadPositiveFeedback,
   buildSaleFeedbackSummary,
   normalizeExportFlow,
+  campaignMatchesExportTypes,
+  normalizeExportCampaignTypes,
   GOOD_EXPORT_DEFAULT_STATUSES,
 } from "./leadExport.js";
 
@@ -63,5 +65,20 @@ assert.strictEqual(
 
 assert.strictEqual(normalizeExportFlow("good"), "good");
 assert.strictEqual(normalizeExportFlow(""), "junk");
+
+assert.deepStrictEqual(normalizeExportCampaignTypes(["low_floor", "event", "xx"]), ["low_floor", "event"]);
+assert.deepStrictEqual(normalizeExportCampaignTypes([]), []);
+
+const low = "1/10 | Lead | Video | BLC | Thấp tầng | NS 1M | 1% Data Booking BLC Page Nhà Phố Biệt Thự KD | Ghim HCM | TĐ";
+const high = "28/9 | Lead | Video | BLC | Cao tầng | NS 700 | 1% DKF | Ghim HCM | TĐ";
+const event = "30/9 | Lead | Video | BLC | Event | NS 500 | 1% DKF| Ghim HCM | TĐ";
+assert.strictEqual(campaignMatchesExportTypes(low, []), true);
+assert.strictEqual(campaignMatchesExportTypes(low, ["low_floor"]), true);
+assert.strictEqual(campaignMatchesExportTypes(low, ["high_floor"]), false);
+assert.strictEqual(campaignMatchesExportTypes(high, ["high_floor"]), true);
+assert.strictEqual(campaignMatchesExportTypes(event, ["event"]), true);
+assert.strictEqual(campaignMatchesExportTypes(low, ["low_floor", "event"]), true);
+assert.strictEqual(campaignMatchesExportTypes(high, ["low_floor", "event"]), false);
+assert.strictEqual(campaignMatchesExportTypes("BLC | THẤP TẦNG | NS 1M", ["low_floor"]), true);
 
 console.log("leadExport.test.js: ok");
